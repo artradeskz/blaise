@@ -27,14 +27,133 @@ begin
   WriteLn('Blaise Compiler v', Version);
   WriteLn('');
   WriteLn('Usage:');
-  WriteLn('  cleanpascal --source <file.pas> --output <binary>');
-  WriteLn('  cleanpascal --source <file.pas> --emit-ir');
+  WriteLn('  blaise --source <file.pas> --output <binary>');
+  WriteLn('  blaise --source <file.pas> --emit-ir');
   WriteLn('');
   WriteLn('Flags:');
   WriteLn('  --source <path>     Pascal source file');
   WriteLn('  --output <path>     Output binary path');
   WriteLn('  --target <id>       linux-x86_64 (default), macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
+end;
+
+{ Handle FPC -i query flags: -iV (version), -iTP (target processor), -iTO (target OS).
+  PasBuild probes the compiler with these before invoking a full compile. }
+procedure HandleFPCInfoQuery(const AArg: string);
+var
+  Query: string;
+begin
+  Query := Copy(AArg, 3, MaxInt);  { strip leading '-i' }
+  if Query = 'V' then
+  begin
+    WriteLn('3.2.2');
+    Halt(0);
+  end
+  else if Query = 'TP' then
+  begin
+    WriteLn('x86_64');
+    Halt(0);
+  end
+  else if Query = 'TO' then
+  begin
+    WriteLn('linux');
+    Halt(0);
+  end;
+  { Unknown -i query — ignore silently }
+end;
+
+{ Parse FPC-style arguments emitted by PasBuild when --fpc /path/to/blaise is used.
+  Handles: -iV/-iTP/-iTO, -FE<dir>, -Fu<path>, -FU<path>, -o<name>,
+           -Mobjfpc, -O<n>, -g, -gl, -CX, -d<define>, and the positional source file. }
+function ParseFPCArgs(
+  out SourceFile: string;
+  out OutputFile: string): Boolean;
+var
+  I:       Integer;
+  Arg:     string;
+  OutDir:  string;
+  OutName: string;
+begin
+  Result     := False;
+  SourceFile := '';
+  OutputFile := '';
+  OutDir     := '';
+  OutName    := '';
+
+  I := 1;
+  while I <= ParamCount do
+  begin
+    Arg := ParamStr(I);
+
+    if Copy(Arg, 1, 2) = '-i' then
+      HandleFPCInfoQuery(Arg)
+    else if Copy(Arg, 1, 3) = '-FE' then
+      OutDir := Copy(Arg, 4, MaxInt)
+    else if Copy(Arg, 1, 3) = '-FU' then
+      { unit cache directory — ignored in Phase 1 }
+    else if Copy(Arg, 1, 3) = '-Fu' then
+      { unit search path — ignored in Phase 1 }
+    else if Copy(Arg, 1, 2) = '-o' then
+      OutName := Copy(Arg, 3, MaxInt)
+    else if Copy(Arg, 1, 2) = '-M' then
+      { mode switch (e.g. -Mobjfpc) — ignored }
+    else if Copy(Arg, 1, 2) = '-O' then
+      { optimisation level — ignored }
+    else if Copy(Arg, 1, 2) = '-d' then
+      { conditional define — ignored in Phase 1 }
+    else if (Arg = '-g') or (Arg = '-gl') or (Arg = '-CX') or
+            (Arg = '-XX') or (Arg = '-Xs') then
+      { debug / linking flags — ignored }
+    else if (Arg = '--help') or (Arg = '-h') then
+    begin
+      PrintUsage;
+      Halt(0);
+    end
+    else if (Length(Arg) > 0) and (Arg[1] <> '-') then
+    begin
+      { Positional argument — the source file }
+      if SourceFile = '' then
+        SourceFile := Arg;
+    end;
+    { Any other unrecognised -X flag is silently ignored for forward-compat }
+
+    Inc(I);
+  end;
+
+  if SourceFile = '' then
+  begin
+    WriteLn(StdErr, 'Error: no source file specified');
+    Exit;
+  end;
+
+  { Build output path from -FE and -o, mirroring FPC behaviour }
+  if OutName = '' then
+    OutName := ChangeFileExt(ExtractFileName(SourceFile), '');
+  if OutDir <> '' then
+    OutputFile := IncludeTrailingPathDelimiter(OutDir) + OutName
+  else
+    OutputFile := OutName;
+
+  Result := True;
+end;
+
+{ Returns True when the argument list looks like FPC-style flags (single-dash,
+  single-letter prefix) rather than Blaise native (double-dash) flags. }
+function IsFPCStyleInvocation: Boolean;
+var
+  I: Integer;
+  Arg: string;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    Arg := ParamStr(I);
+    if (Length(Arg) >= 2) and (Arg[1] = '-') and (Arg[2] <> '-') then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
 end;
 
 function ParseArgs(
@@ -161,10 +280,22 @@ var
   IRFile: string;
 
 begin
-  if not ParseArgs(SourceFile, OutputFile, EmitIR) then
+  if IsFPCStyleInvocation then
   begin
-    PrintUsage;
-    Halt(1);
+    if not ParseFPCArgs(SourceFile, OutputFile) then
+    begin
+      PrintUsage;
+      Halt(1);
+    end;
+    EmitIR := False;
+  end
+  else
+  begin
+    if not ParseArgs(SourceFile, OutputFile, EmitIR) then
+    begin
+      PrintUsage;
+      Halt(1);
+    end;
   end;
 
   if not FileExists(SourceFile) then
