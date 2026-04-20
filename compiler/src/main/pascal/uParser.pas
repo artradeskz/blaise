@@ -313,7 +313,7 @@ var
   Node:  TBinaryExpr;
 begin
   Result := ParseFactor;
-  while Check(tkStar) or Check(tkSlash) do
+  while Check(tkStar) or Check(tkSlash) or Check(tkDiv) do
   begin
     if Check(tkStar) then Op := boMul else Op := boDiv;
     Advance;

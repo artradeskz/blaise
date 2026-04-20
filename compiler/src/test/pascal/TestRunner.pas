@@ -13,7 +13,8 @@ uses
   cp.test.lexer,
   cp.test.parser,
   cp.test.codegen,
-  cp.test.symtable;
+  cp.test.symtable,
+  cp.test.semantic;
 
 var
   Application: TTestRunner;

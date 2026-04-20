@@ -5,7 +5,7 @@ unit uAST;
 interface
 
 uses
-  Classes, SysUtils, contnrs;
+  Classes, SysUtils, contnrs, uSymbolTable;
 
 type
   { Base node — all AST nodes carry source position. }
@@ -19,7 +19,11 @@ type
   {  Expressions                                                        }
   { ------------------------------------------------------------------ }
 
-  TASTExpr = class(TASTNode);
+  { Semantic analyser fills ResolvedType on every expression node. }
+  TASTExpr = class(TASTNode)
+  public
+    ResolvedType: TTypeDesc;  { set by uSemantic; nil until analysed }
+  end;
 
   TIntLiteral = class(TASTExpr)
   public
@@ -73,8 +77,9 @@ type
 
   TVarDecl = class(TASTNode)
   public
-    Names:    TStringList;  { owned — one or more names: x, y: Integer }
-    TypeName: string;
+    Names:        TStringList;  { owned — one or more names: x, y: Integer }
+    TypeName:     string;
+    ResolvedType: TTypeDesc;    { set by uSemantic; nil until analysed }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -93,14 +98,29 @@ type
 
   TProgram = class(TASTNode)
   public
-    Name:  string;
-    UsedUnits: TStringList;  { owned — unit names from uses clause }
-    Block: TBlock;       { owned }
+    Name:        string;
+    UsedUnits:   TStringList;   { owned — unit names from uses clause }
+    Block:       TBlock;        { owned }
+    SymbolTable: TSymbolTable;  { owned after semantic analysis; nil before }
     constructor Create;
     destructor Destroy; override;
   end;
 
+function BinaryOpName(AOp: TBinaryOp): string;
+
 implementation
+
+function BinaryOpName(AOp: TBinaryOp): string;
+begin
+  case AOp of
+    boAdd: Result := '+';
+    boSub: Result := '-';
+    boMul: Result := '*';
+    boDiv: Result := 'div';
+  else
+    Result := '?';
+  end;
+end;
 
 { TBinaryExpr }
 
@@ -173,6 +193,7 @@ end;
 
 destructor TProgram.Destroy;
 begin
+  SymbolTable.Free;
   UsedUnits.Free;
   Block.Free;
   inherited Destroy;

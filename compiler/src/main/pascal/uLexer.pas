@@ -29,7 +29,8 @@ type
     tkPlus,
     tkMinus,
     tkStar,
-    tkSlash,
+    tkSlash,    { '/' — future: float division }
+    tkDiv,      { 'div' keyword — integer division }
     { Assignment and colon }
     tkAssign,     { := }
     tkColon,      { :  }
@@ -81,6 +82,7 @@ begin
   else if AUpper = 'VAR'     then Result := tkVar
   else if AUpper = 'BEGIN'   then Result := tkBegin
   else if AUpper = 'END'     then Result := tkEnd
+  else if AUpper = 'DIV'     then Result := tkDiv
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;
