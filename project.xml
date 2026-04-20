@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <name>clean-pascal</name>
+  <version>0.1.0-SNAPSHOT</version>
+  <author>Graeme Geldenhuys</author>
+  <license>BSD-3-Clause</license>
+
+  <build>
+    <packaging>pom</packaging>
+  </build>
+
+  <modules>
+    <module>rtl</module>
+    <module>compiler</module>
+    <module>tools/migration-analyser</module>
+  </modules>
+
+  <profiles>
+    <profile>
+      <id>debug</id>
+      <defines>
+        <define>DEBUG</define>
+      </defines>
+      <compilerOptions>
+        <option>-g</option>
+        <option>-gl</option>
+        <option>-Criot</option>
+        <option>-gh</option>
+      </compilerOptions>
+    </profile>
+
+    <profile>
+      <id>release</id>
+      <defines>
+        <define>RELEASE</define>
+      </defines>
+      <compilerOptions>
+        <option>-O2</option>
+        <option>-CX</option>
+        <option>-XX</option>
+        <option>-Xs</option>
+      </compilerOptions>
+    </profile>
+  </profiles>
+</project>

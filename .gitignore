@@ -1,0 +1,60 @@
+# FPC compiled output
+*.ppu
+*.o
+*.a
+*.or
+*.res
+*.rst
+*.s
+
+# Shared / dynamic libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Static libraries
+*.lib
+
+# PasBuild build output (per-module target/ directories)
+target/
+
+# FPC unit cache directories
+lib/
+units/
+
+# PasBuild output
+*.pbc
+
+# Debug symbols
+*.dbg
+*.opdf
+
+# Editor and IDE
+.vscode/settings.json
+.vscode/launch.json
+*.swp
+*.swo
+*~
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+
+# Temporary files
+*.tmp
+*.bak
+*.orig

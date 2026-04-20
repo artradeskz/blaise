@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <name>clean-pascal-rtl</name>
+  <!-- version inherited from root aggregator -->
+
+  <build>
+    <packaging>library</packaging>
+    <!-- mainSource not needed — PasBuild auto-generates bootstrap -->
+  </build>
+
+  <test>
+    <framework>fptest</framework>
+    <testSource>TestRunner.pas</testSource>
+    <frameworkOptions>
+      <option>--all</option>
+      <option>--format=plain</option>
+    </frameworkOptions>
+  </test>
+</project>

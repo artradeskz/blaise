@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <name>clean-pascal-migration</name>
+  <!-- version inherited from root aggregator -->
+
+  <build>
+    <packaging>application</packaging>
+    <mainSource>MigrationAnalyser.pas</mainSource>
+    <executableName>cp-migrate</executableName>
+
+    <manualUnitPaths>true</manualUnitPaths>
+    <unitPaths>
+      <path>src/main/pascal</path>
+    </unitPaths>
+  </build>
+
+  <test>
+    <framework>fptest</framework>
+    <testSource>TestRunner.pas</testSource>
+    <frameworkOptions>
+      <option>--all</option>
+      <option>--format=plain</option>
+    </frameworkOptions>
+  </test>
+
+  <!-- Reuses the compiler's lexer and parser units -->
+  <moduleDependencies>
+    <module>../../compiler</module>
+  </moduleDependencies>
+</project>

@@ -1,0 +1,623 @@
+= Modern Object Pascal Compiler — Clean Pascal
+:doctype: article
+:toc: left
+:toclevels: 3
+:sectnums:
+:icons: font
+:source-highlighter: rouge
+:revdate: 2026-04-20
+:revnumber: 1.0
+:status: APPROVED
+:reponame: new-pascal-compiler
+:mode: Builder / Open Source
+
+== Problem Statement
+
+The Object Pascal ecosystem in 2026 has two options: Embarcadero Delphi (proprietary,
+Windows-first, ~$3k/yr) and Free Pascal Compiler (open source but architecturally
+chaotic, stalled governance, 5 language modes, thousands of include files, 140+
+unmerged PRs). There is no modern, clean, cross-platform, open-source Object Pascal
+compiler with a living ecosystem.
+
+The author has already shipped three of the five pieces a complete Pascal ecosystem
+needs: PasBuild (build system), OPDF (debug format with CLI reference and IDE
+integration), FPTest (testing framework). The missing pieces are the compiler itself
+and an LSP server.
+
+== What Makes This Different
+
+* *The EUREKA inversion* — every previous Pascal+LLVM project failed by building the
+  compiler first then dying on the ecosystem. This project starts with the ecosystem
+  already built, inverting the historical failure mode.
+* *Single string type* — UTF-8 reference-counted string + RawBytes for binary data.
+  No ShortString, AnsiString, WideString, UnicodeString, or OpenString.
+* *Zero-GUID interfaces* — Java-style vtable mapping; no 128-bit hex strings required.
+* *Reified generics* — monomorphization (Rust/Swift style), no type erasure.
+* *Single language mode* — one clean modern Object Pascal dialect only.
+* *OPDF debugger integration* — the author designed the format; reference CLI debugger
+  and IDE support already exist. OPDF emission planned for Phase 4.
+* *PasBuild drives the compiler* — `project.xml` replaces makefiles and `.lpi`/`.dproj`.
+* *BSD 3-Clause* — maximum adoption, zero legal friction.
+
+== Constraints
+
+* Bootstrap compiler written in FPC; intermediate FPC features (classes, generics) are
+  permitted — the goal is "FPC toolchain is available," not "minimal FPC subset".
+* Phase 1 targets Linux x86_64 only. macOS ARM64 added in Phase 2. Windows in Phase 5 (LLVM).
+* TDD throughout: FPTest test suite grows alongside the compiler.
+* Self-hosting is a credibility milestone, not a day-one requirement.
+* No legacy Pascal baggage: no `with` statement, no old-style `object`, no COM GUIDs,
+  no multiple string types, no cross-platform `{$IFDEF}` hacks in the language itself.
+
+== Language Features — Drop vs. Keep
+
+=== Dropped (Deliberately Unsupported)
+
+* ShortString, AnsiString, WideString, UnicodeString, OpenString
+* `with` statement (source of symbol resolution bugs; hard to analyse)
+* Old-style `object` types (use `record` for value types, `class` for heap)
+* COM-style GUIDs on interfaces
+* Multiple language modes (no `{$mode delphi}`, `{$mode objfpc}`, etc.)
+* Archaic I/O (`assign`, `reset`, `rewrite`, `blockread`)
+* Untyped `file` and `text` file types (replace with stream-based RTL)
+
+=== Kept / Modernised
+
+* `class` with single inheritance, virtual methods, and properties
+* `record` with methods and operator overloading (advanced records)
+* `interface` without GUIDs — vtable mapping at compile time
+* Generics with monomorphization (reified, not erased)
+* ARC (Automatic Reference Counting) for strings and interfaces
+* `uses` unit system with clean dependency resolution via PasBuild
+* Inline variable declarations (`var x := 42;`)
+* Anonymous methods / lambdas
+* Attributes (custom annotations)
+* Nullable types via `T?` syntax
+
+== Premises
+
+The following premises were agreed upon before design work began:
+
+. Viable as a solo/small-team project *if* scope is ruthlessly constrained to one mode,
+  one string type, and modern semantics only — no legacy compatibility shims.
+. The biggest risk is not "can we build a compiler" but "will anyone contribute?" —
+  contributor attraction requires early visible progress and clean module boundaries.
+. LSP support comes *after* the compiler pipeline is stable — an LSP without a stable
+  compiler is useless and frustrating.
+. The migration tool (FPC/Delphi → new dialect) is the adoption unlock, but deferred
+  until the compiler can compile real programs.
+. Self-hosting is a credibility milestone, not a day-one requirement.
+
+== Backend Strategy
+
+=== QBE First, LLVM Second
+
+https://c9x.me/compile/[QBE] is a lightweight compiler backend (~13k lines of C)
+targeting x86_64, ARM64, and RISC-V. It is:
+
+* Far simpler to integrate than LLVM
+* Fast to compile with (critical during active development)
+* Stable, with no aggressive API churn
+* Used by cproc, the Hare language, and others
+
+*Why not LLVM from day one:* LLVM is not fully ABI-stable, parameter passing is not
+fully abstracted, and LLVM's toolchain is slow (hurts the development loop). For a
+new compiler, emitting `.ll` text and shelling to `llc` mitigates some of this, but
+QBE provides a simpler path to a first working binary.
+
+*When to add LLVM:* Once the compiler is self-hosting and QBE is producing correct
+code, LLVM is added as a second output adapter (see the Backend Adapter Interface
+below). LLVM unlocks WASM, industrial-grade optimisation, and the full target matrix.
+
+*QBE vendoring:* QBE source is included in the compiler repository and built from
+source as part of the bootstrap build. This eliminates API churn risk entirely — the
+compiler pins to a known-good QBE version and upgrades deliberately.
+
+=== Backend Comparison
+
+[cols="1,2,1,1,1", options="header"]
+|===
+| Backend | Targets | Optimisation | Stability | Complexity
+
+| QBE
+| x86_64, ARM64, RISC-V
+| Good
+| High
+| Very low
+
+| LLVM
+| 10+ including WASM
+| Industrial
+| Moderate
+| Very high
+
+| Custom
+| Whatever you write
+| Custom
+| High
+| Extreme
+|===
+
+=== Backend Adapter Interface
+
+Both QBE and LLVM backends implement the same `ICodeGen` interface. This boundary
+makes backend swaps clean:
+
+[source,pascal]
+----
+type
+  ICodeGen = interface
+    procedure BeginModule(const Name: string);
+    procedure EmitFunction(AFunc: TASTFunction);
+    procedure EmitGlobal(AGlobal: TASTGlobal);
+    procedure Finalise(const OutputPath: string);
+  end;
+----
+
+The AST-to-backend boundary passes a typed AST (after semantic analysis). Neither
+backend sees Pascal source; both see the same AST node types. Adding LLVM in Phase 5
+means writing `TCodeGenLLVM` that implements `ICodeGen` — no changes to the parser
+or type checker.
+
+== Approaches Considered
+
+=== Approach A: Pipeline-First (Chosen)
+
+Build the smallest possible end-to-end compiler pipeline first.
+Lexer → Parser → AST → QBE IR → native binary. Target: Hello World compiled
+via PasBuild within 4 months (Linux x86_64 first).
+
+* *Effort:* Medium
+* *Risk:* Low
+* *Pros:* Proves viability fast; testable at each phase; PasBuild integration
+  natural once compiler CLI exists; avoids premature architecture work
+* *Cons:* Generics and ARC deferred; no LSP until later
+* *Reuses:* PasBuild, OPDF (deferred but ready), FPTest
+
+=== Approach B: Architecture-First (Rejected)
+
+Design full hexagonal architecture upfront before first binary.
+
+* *Effort:* Large
+* *Risk:* Medium — architecture becomes a distraction before anything compiles
+* *Rejected because:* Architecture astronauting is the #1 killer of solo compiler
+  projects. Approach A naturally evolves into B once the pipeline is proven.
+
+=== Approach C: Integration-First (Rejected)
+
+Start with ecosystem shell (PasBuild + stub compiler + VS Code extension), build
+the real compiler inside it.
+
+* *Effort:* Medium-Large
+* *Risk:* Low-Medium
+* *Rejected because:* The stub compiler period feels hollow; a VS Code extension
+  without real parsing frustrates contributors.
+
+== Recommended Approach: Pipeline-First
+
+=== Calling Convention (ABI) — Locked Before Phase 1
+
+*Linux/macOS (x86_64):* System V AMD64 ABI (cdecl). This is QBE's default for
+the `abi` calling convention. No custom Pascal ABI required.
+
+*`var` parameters:* Caller passes a pointer to the variable; callee receives a
+pointer and dereferences it. This matches how C handles `int*` output parameters.
+
+[source]
+----
+# QBE IR for: procedure Swap(var A, B: Integer)
+# Caller passes %a_ptr and %b_ptr as pointers
+function $Swap(%a_ptr =l, %b_ptr =l) {
+@start
+  %a =w loadw %a_ptr
+  %b =w loadw %b_ptr
+  storew %b, %a_ptr
+  storew %a, %b_ptr
+  ret
+}
+----
+
+*Windows (x86_64):* Deferred to Phase 5 (LLVM backend). LLVM handles the
+Microsoft x64 calling convention automatically. QBE's Windows support is not
+production-tested; targeting Linux/macOS first avoids this risk.
+
+*ARM64 (macOS/Linux):* QBE supports ARM64 with the same `abi` calling convention
+directive; no special handling required. Added in Phase 2.
+
+=== UTF-8 String Memory Layout — Locked Before Phase 1
+
+The single string type is a managed reference type. On the heap, a string block is:
+
+....
++--[4 bytes]--+--[4 bytes]------+--[4 bytes]--+--[N bytes]--+--[1 byte]--+
+| RefCount    | Length (bytes)  | Capacity    | UTF-8 data  | NUL        |
++-------------+-----------------+-------------+-------------+------------+
+....
+
+* A `string` variable on the stack is a single pointer (8 bytes on 64-bit).
+* Nil pointer = empty string. No separate empty-string allocation.
+* String literals of length 0 compile to `nil`. All other literals allocate.
+* `_StringAddRef(nil)` and `_StringRelease(nil)` are no-ops (nil check first).
+* Concatenation with `nil` treats `nil` as an empty string.
+* ARC: compiler inserts `_StringAddRef` / `_StringRelease` at assignment and
+  scope exit. `_StringRelease` decrements RefCount; frees when RefCount reaches 0.
+* `RawBytes`: identical layout but the compiler does not insert encoding validation.
+  Assignments between `string` and `RawBytes` require explicit conversion.
+
+=== Compiler CLI Interface — Locked Before Phase 1
+
+PasBuild invokes the compiler binary as:
+
+[source,shell]
+----
+cleanpascal --project project.xml --config debug --output bin/hello
+----
+
+Or for single-file compilation during bootstrap:
+
+[source,shell]
+----
+cleanpascal --source Hello.pas --output bin/hello --target linux-x86_64
+----
+
+Supported flags:
+
+[cols="1,3", options="header"]
+|===
+| Flag | Description
+
+| `--project <path>`
+| Path to `project.xml` (PasBuild integration mode)
+
+| `--source <path>`
+| Single source file (standalone mode)
+
+| `--output <path>`
+| Output binary path
+
+| `--target <id>`
+| `linux-x86_64` (default), `macos-arm64`, `linux-arm64`
+
+| `--debug`
+| Emit OPDF debug info (Phase 4+)
+
+| `--emit-ir`
+| Emit QBE IR to stdout (useful for debugging the compiler)
+|===
+
+=== Phase 1 — Bootstrap Pipeline (Months 1–4)
+
+*Goal:* Hello World compiled to a native binary on Linux x86_64, driven by PasBuild.
+
+. *Lexer* — tokenise a minimal Pascal subset: keywords, identifiers, literals,
+  operators. Unit: `uLexer.pas`. TDD with FPTest from day one.
+
+. *Parser* — recursive-descent parser targeting a minimal AST. Handles:
+  `program`, `uses`, `var`, `begin`/`end`, `writeln`, string literals.
+  Units: `uParser.pas`, `uAST.pas`.
+
+. *QBE IR emitter* — traverse AST, emit QBE IR text. Link with `cc`.
+  Unit: `uCodeGenQBE.pas`.
++
+*Phase 1 pre-work (before parser work begins):* Spend 2–3 weeks writing QBE IR
+snippets by hand targeting libc to build fluency. QBE variadic calls require
+explicit type encoding and are non-obvious. Proof of concept:
++
+[source]
+----
+# Global string data (NUL-terminated)
+data $hello = { b "Hello, World!", b 10, b 0 }
+data $fmt_s = { b "%s", b 0 }
+
+# printf is variadic: pass fmt pointer + data pointer
+export function w $main() {
+@start
+  %fmt =l $fmt_s
+  %msg =l $hello
+  call $printf(l %fmt, ..., l %msg)
+  ret 0
+}
+----
++
+`WriteLn(s)` where `s: string` → extract UTF-8 data pointer from the string struct
+(offset 12 bytes from struct base), then call `printf` with a `"%s\n"` format string.
++
+*`var` parameters + ARC:* `var S: string` — caller passes a pointer; callee does
+*not* call `_StringRelease(S)` (does not own the reference). The Phase 1 test suite
+must include `var` parameter + string tests to catch ARC double-free bugs early.
+
+. *PasBuild integration* — `project.xml` format that drives the new compiler.
+  PasBuild invokes the compiler binary, manages unit paths, and handles
+  debug/release configurations.
+
+. *Phase 1 RTL* — minimal `System.pas`. Concrete signatures:
++
+[source,pascal]
+----
+type
+  Integer  = Int32;    // 32-bit signed (maps to QBE 'w' type)
+  Int64    = Int64;    // 64-bit signed (maps to QBE 'l' type)
+  Boolean  = (False = 0, True = 1);  // 8-bit
+  string   = ^StringHeader;          // opaque managed pointer (Phase 1: no user access)
+
+procedure Write(const S: string); overload;
+procedure WriteLn(const S: string); overload;
+procedure WriteLn; overload;        // empty line
+----
++
+Phase 1 does *not* support `WriteLn(X, Y)` multi-arg or format specifiers.
+Those are Phase 2 RTL additions alongside SysUtils.
+
+*Phase 1 minimal grammar (BNF for parser implementation):*
+
+....
+Program    ::= 'program' Ident ';' [Uses] Block '.'
+Uses       ::= 'uses' Ident {',' Ident} ';'
+Block      ::= ['var' VarBlock] 'begin' StmtList 'end'
+VarBlock   ::= VarDecl {VarDecl}
+VarDecl    ::= IdentList ':' TypeName ';'
+StmtList   ::= Stmt {';' Stmt} [';']
+Stmt       ::= ProcCall | Assignment | empty
+ProcCall   ::= Ident '(' [ExprList] ')'
+Assignment ::= Ident ':=' Expr
+ExprList   ::= Expr {',' Expr}
+Expr       ::= Term (('+' | '-') Term)*
+Term       ::= Factor (('*' | '/') Factor)*
+Factor     ::= IntLit | StringLit | Ident | '(' Expr ')'
+TypeName   ::= 'Integer' | 'Boolean' | 'string'
+....
+
+Comments: `{ ... }` and `// ...` are handled by the Lexer (skipped, not in AST). +
+Integer literals: decimal only in Phase 1. Hex (`$FF`) added in Phase 2.
+
+*Milestone:* `pasbuild build` produces a native "Hello, World" binary on Linux x86_64.
+
+*Risk:* ABI design takes 2 weeks if QBE IR generation hits unexpected issues — the
+4-month timeline includes this buffer.
+
+=== Phase 2 — Type System (Months 5–7)
+
+*Goal:* Real programs with classes and records.
+
+* Single UTF-8 string type with ARC (compile-time `_AddRef`/`_Release` insertion)
+* `class` — heap-allocated, single inheritance (explicit in this phase),
+  virtual methods, properties. Final classes first, inheritance second.
+* `record` — stack-allocated with methods and operator overloading
+* `Integer`, `Int64`, `UInt32`, `Boolean`, `Float64` — no legacy aliases
+* Unit interface/implementation sections with proper dependency ordering
+* Phase 2 RTL additions: `SysUtils` (string utilities), `Classes` (`TObject`, `TList` stub)
+* macOS ARM64 target added in this phase
+
+*Exception handling — ARC co-design:* `try`/`except`/`finally` with stack unwinding.
+ARC and exceptions are co-designed. Algorithm for stack-local ARC cleanup:
+
+. Compiler tracks all ARC-managed variables in scope at each point in the function.
+. On exception path entry, compiler emits cleanup code for all in-scope ARC variables
+  in LIFO order (last declared, first released) before jumping to the handler.
+. `var` parameter strings are *not* released by the callee (ownership stays with caller).
+. `finally` blocks always run — the generated cleanup code is emitted on both
+  normal and exception exit paths.
+
+Exception type hierarchy: `Exception` → `EInvalidOperation`, `EAccessViolation`, etc.
+(Phase 2 RTL defines the base hierarchy; not in Phase 1.)
+
+*Milestone:* A non-trivial program (e.g., a linked list using `TObject`) compiles
+and runs correctly under memory leak checking.
+
+=== Phase 3 — Generics + Interfaces (Months 8–11)
+
+*Goal:* The language becomes genuinely useful.
+
+==== Zero-GUID Interface Dispatch
+
+Each class has a compile-time *Interface Table* (an array of pointers). When
+`TMyObject` declares `implements IFoo, IBar`, the compiler assigns each interface a
+stable index within that class's table and generates a vtable stub per interface.
+
+[source,pascal]
+----
+type
+  IFoo = interface
+    procedure DoFoo;
+  end;
+  IBar = interface
+    procedure DoBar;
+  end;
+  TMyObject = class(TObject, IFoo, IBar)
+    procedure DoFoo; override;
+    procedure DoBar; override;
+  end;
+----
+
+Generated (conceptually):
+
+....
+TMyObject._InterfaceTable = [
+  0 => { IFoo_TYPEID, @TMyObject_IFoo_vtable },
+  1 => { IBar_TYPEID, @TMyObject_IBar_vtable },
+]
+....
+
+`Supports(Obj, IFoo)` at runtime walks `Obj.ClassType._InterfaceTable` and compares
+`TYPEID` (a compiler-assigned integer, not a GUID). `as IFoo` raises `EInvalidCast`
+if not found. `is IFoo` returns `False` without raising.
+
+`TYPEID` is a 32-bit integer computed as `CRC32(UnitName + '.' + InterfaceName)`.
+This is deterministic across all builds and compilation orders. If Unit A defines
+`IFoo` and Unit B imports it, both will have identical TYPEIDs regardless of
+recompilation order. Note: not a security hash — collisions are theoretically
+possible but astronomically unlikely for normal interface names.
+
+==== Monomorphization Engine
+
+`TList<T>` at compile time: when the compiler sees `TList<Integer>` in a `uses`
+clause or variable declaration, it generates a specialised type `TList__Integer`
+with all `T` replaced by `Integer`. This happens at compile time, not link time.
+
+*Code bloat mitigation:*
+
+* Only types that are *actually used* are specialised (demand-driven, not eager).
+* Linker dead-code elimination: compile with `-gc-sections` (GNU ld) or
+  `-dead_strip` (macOS ld) to remove unused specialisations from the final binary.
+* Phase 3 includes binary size benchmarks for a canonical generic library.
+
+*Scope:* Monomorphization is compile-time only. No link-time specialisation.
+Cross-unit generic instantiation: the compiler generates specialisations in the
+unit that first uses them; duplicate specialisations across units are merged by
+the linker's COMDAT-folding or deduplicated by the compiler's instantiation tracker.
+
+==== Other Phase 3 Items
+
+* ARC for interface references (with `[Weak]` attribute for cycle-breaking)
+* `is` and `as` operators using Interface Table lookup
+* `Generics.Collections`: `TList<T>`, `TDictionary<K,V>` — Phase 3 RTL additions
+
+*Milestone:* A generic `TList<Integer>` and `TDictionary<string, Integer>` compile
+and pass the FPTest suite. Binary size measured and within acceptable bounds.
+
+=== Phase 4 — OPDF Integration (Months 10–12)
+
+*Goal:* First-class debugging. Runs in parallel with Phase 3; does not block Phase 5.
+
+* Emit OPDF debug info alongside QBE IR in debug builds
+* PasBuild `debug` target automatically enables OPDF via `--debug` flag
+* Test against the existing OPDF CLI reference debugger
+* Verify source-line mapping, variable inspection, and call stacks
+
+*Milestone:* Step through a compiled program in the reference OPDF debugger,
+inspect variables, and see correct source lines.
+
+=== Phase 5 — Self-Hosting + LLVM + Windows (Months 12–18)
+
+*Goal:* Compiler credibility milestone and full platform support.
+
+*Pre-work (end of Phase 4):* Identify all FPC-specific constructs used in the
+compiler's own source that the new language does not support. Remove or replace them
+before attempting self-hosting. This sprint prevents self-hosting from revealing
+fundamental design incompatibilities too late.
+
+* Compile the compiler's own source with itself (self-hosting)
+* Add LLVM as a second backend (`TCodeGenLLVM implements ICodeGen` — adapter swap)
+* Windows x86_64 support via LLVM (LLVM handles the Microsoft x64 ABI automatically)
+* CI/CD pipeline: GitHub Actions building for Linux x86_64, macOS ARM64, Windows x86_64
+
+*Milestone:* Compiler binary produced by itself. LLVM backend producing correct
+binaries on all three platforms.
+
+=== Phase 6 — LSP + VS Code Extension (Months 15–20)
+
+*Goal:* Developer experience that attracts contributors.
+
+LSP development may begin on the FPC-bootstrapped compiler once Phase 3 is complete.
+It does not need to wait for Phase 5 self-hosting. Porting the LSP to the self-hosted
+compiler is a Phase 5 secondary milestone, not a Phase 6 blocker.
+
+* Language server built on the compiler's symbol table and type checker
+* Hover type info, go-to-definition, error squiggles
+* VS Code extension
+* Incremental compilation for fast feedback
+
+*Milestone:* Write Pascal in VS Code with full IDE support.
+
+=== Phase 7 — Migration Analyser (Months 20+)
+
+*Goal:* Unlock adoption from existing FPC/Delphi codebases.
+
+*Scope: analysis and reporting only — no automatic translation.* This tool is a
+static analyser, not a transpiler. Automatic translation adds months of scope and
+is not the unlock; the report is.
+
+* Parse FPC/Delphi source (using the new compiler's lexer/parser in a permissive mode)
+* Flag incompatible constructs: multiple string types, `with` statements, COM GUIDs,
+  old-style `object`, archaic I/O, `{$IFDEF}` patterns
+* Produce a structured migration report: incompatibility count, location, and
+  recommended modern equivalent for each
+* Does *not* attempt automatic rewriting
+
+*Milestone:* Analyse a real fpGUI unit (`uFCL.pas` or similar). Report identifies
+all incompatibilities. Human reviewer confirms no false negatives.
+
+== Open Questions
+
+. *Project name* — "CleanPascal", "ModPas", "Pasca", "Helix", "OP2" — needs a name
+  that signals a clean break without alienating the Pascal community.
+. *Package registry* — Deferred until Phase 6. Minimum viable is local file-based
+  dependencies via PasBuild `project.xml`. No registry server in scope until Phase 6+.
+
+== Committed Decisions
+
+These are not open for reconsideration:
+
+[cols="1,3", options="header"]
+|===
+| Decision | Detail
+
+| Calling convention
+| System V AMD64 ABI (cdecl) on Linux/macOS. `var` params = pointer passing.
+  Windows Microsoft x64 ABI via LLVM in Phase 5.
+
+| String layout
+| refcount (4B) + length (4B) + capacity (4B) + UTF-8 data (N bytes) + NUL (1B).
+
+| RTL scope
+| Phase 1 = `System.pas` only. Phase 2 adds `SysUtils`, `TObject`, `TList` stub.
+  Phase 3 adds `Generics.Collections`. Everything else deferred or community-contributed.
+
+| Windows support
+| Phase 5 via LLVM backend. Not in Phases 1–4.
+
+| QBE
+| Vendored in the compiler repository, built from source. Version pinned.
+
+| Interface TYPEID
+| `CRC32(UnitName + '.' + InterfaceName)` — deterministic across all builds.
+|===
+
+== Success Criteria
+
+[cols="3,1", options="header"]
+|===
+| Criterion | Phase
+
+| Hello World compiles to a native binary via PasBuild
+| Phase 1
+
+| A real library (generic list, hash map) compiles and passes tests
+| Phase 3
+
+| Compiler compiles itself (self-hosting)
+| Phase 5
+
+| A non-trivial FPC program analysed and migration report generated
+| Phase 7
+|===
+
+== Distribution Plan
+
+* *Source:* GitHub (BSD 3-Clause), releases tagged with semantic version
+* *Binaries:* GitHub Releases — pre-built for Linux x86_64, macOS ARM64, Windows x86_64
+* *CI/CD:* GitHub Actions — build + test on push; release binaries on tag
+* *Package format:* TBD — extend PasBuild's `project.xml` with dependency declarations
+
+== Immediate Next Steps
+
+. Create GitHub repository with directories: `src/`, `tests/`, `rtl/`, `tools/`,
+  and a `project.xml` for PasBuild.
+. Spend 2–3 weeks writing QBE IR by hand — emit a Hello World, a function with a
+  `var` parameter, and a struct with a pointer field. Verify each links and runs.
+. Write the *Lexer unit* (`uLexer.pas`) with FPTest tests covering all token types.
+. Write the *AST node types* (`uAST.pas`) — just enough for a `program` block with `writeln`.
+. Write the *Parser* (`uParser.pas`) targeting that minimal AST.
+. Write the *QBE IR emitter* (`uCodeGenQBE.pas`) — emit enough QBE IR to call libc `printf`.
+. Wire it all together in the compiler's main program, invokable from PasBuild.
+. Write a `Hello.pas` test program and verify it compiles and runs.
+
+== Landscape Notes
+
+* `lacsap`, `mselang`, `wanderlan/llvm-pascal` — all abandoned or incomplete.
+  Each built the compiler first and died on the ecosystem.
+* FPC 3.2.4-rc1 appeared mid-2025; development continues but slowly.
+  The governance problem (140+ unmerged PRs) is real and ongoing.
+* Oxygene (RemObjects) targets .NET — a different audience.
+* https://c9x.me/compile/[QBE] — underexplored by the Pascal community, used by
+  the Hare language. Strong fit for the bootstrap phase.

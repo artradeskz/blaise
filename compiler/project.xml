@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <name>clean-pascal-compiler</name>
+  <!-- version inherited from root aggregator -->
+
+  <build>
+    <packaging>application</packaging>
+    <mainSource>CleanPascal.pas</mainSource>
+    <executableName>cleanpascal</executableName>
+  </build>
+
+  <test>
+    <framework>fptest</framework>
+    <testSource>TestRunner.pas</testSource>
+    <frameworkOptions>
+      <option>--all</option>
+      <option>--format=plain</option>
+    </frameworkOptions>
+  </test>
+
+  <!-- compiler does not depend on rtl at build time;
+       the RTL is consumed by programs the compiler produces -->
+</project>
