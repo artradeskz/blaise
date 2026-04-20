@@ -40,6 +40,7 @@ type
     procedure EmitStmt(AStmt: TASTStmt);
     procedure EmitIfStmt(AStmt: TIfStmt);
     procedure EmitWhileStmt(AStmt: TWhileStmt);
+    procedure EmitForStmt(AStmt: TForStmt);
     procedure EmitCompoundStmt(AStmt: TCompoundStmt);
     procedure EmitAssignment(AAssign: TAssignment);
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
@@ -236,7 +237,9 @@ end;
 
 procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
 begin
-  if AStmt is TWhileStmt then
+  if AStmt is TForStmt then
+    EmitForStmt(TForStmt(AStmt))
+  else if AStmt is TWhileStmt then
     EmitWhileStmt(TWhileStmt(AStmt))
   else if AStmt is TIfStmt then
     EmitIfStmt(TIfStmt(AStmt))
@@ -285,6 +288,65 @@ begin
     EmitLine(Format('  jmp @%s', [LblEnd]));
   end;
 
+  EmitLine('@' + LblEnd);
+end;
+
+procedure TCodeGenQBE.EmitForStmt(AStmt: TForStmt);
+var
+  LblCond:  string;
+  LblBody:  string;
+  LblEnd:   string;
+  StartT:   string;
+  EndT:     string;
+  CurT:     string;
+  CmpT:     string;
+  StepT:    string;
+  CmpOp:    string;
+  StepOp:   string;
+begin
+  LblCond := AllocLabel('for_cond');
+  LblBody := AllocLabel('for_body');
+  LblEnd  := AllocLabel('for_end');
+
+  { Evaluate start and store into loop variable }
+  StartT := EmitExpr(AStmt.StartExpr);
+  EmitLine(Format('  storew %s, %%_var_%s', [StartT, AStmt.VarName]));
+
+  { Evaluate end value once into a temp }
+  EndT := EmitExpr(AStmt.EndExpr);
+
+  { Jump to condition (terminates current block) }
+  EmitLine(Format('  jmp @%s', [LblCond]));
+
+  { Condition block: test loop variable against end value }
+  EmitLine('@' + LblCond);
+  CurT := AllocTemp;
+  EmitLine(Format('  %s =w loadw %%_var_%s', [CurT, AStmt.VarName]));
+  CmpT := AllocTemp;
+  if AStmt.IsDownTo then
+    CmpOp := 'csgew'   { I >= End }
+  else
+    CmpOp := 'cslew';  { I <= End }
+  EmitLine(Format('  %s =w %s %s, %s', [CmpT, CmpOp, CurT, EndT]));
+  EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
+
+  { Body block }
+  EmitLine('@' + LblBody);
+  EmitStmt(AStmt.Body);
+
+  { Increment or decrement loop variable }
+  CurT  := AllocTemp;
+  StepT := AllocTemp;
+  EmitLine(Format('  %s =w loadw %%_var_%s', [CurT, AStmt.VarName]));
+  if AStmt.IsDownTo then
+    StepOp := 'sub'
+  else
+    StepOp := 'add';
+  EmitLine(Format('  %s =w %s %s, 1', [StepT, StepOp, CurT]));
+  EmitLine(Format('  storew %s, %%_var_%s', [StepT, AStmt.VarName]));
+  EmitLine(Format('  jmp @%s', [LblCond]));
+
+  { Continuation block }
   EmitLine('@' + LblEnd);
 end;
 

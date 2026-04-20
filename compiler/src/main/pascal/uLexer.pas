@@ -33,6 +33,9 @@ type
     tkElse,
     tkWhile,
     tkDo,
+    tkFor,
+    tkTo,
+    tkDownto,
     tkNil,
     { Identifier }
     tkIdent,
@@ -110,6 +113,9 @@ begin
   else if AUpper = 'ELSE'      then Result := tkElse
   else if AUpper = 'WHILE'     then Result := tkWhile
   else if AUpper = 'DO'        then Result := tkDo
+  else if AUpper = 'FOR'       then Result := tkFor
+  else if AUpper = 'TO'        then Result := tkTo
+  else if AUpper = 'DOWNTO'   then Result := tkDownto
   else if AUpper = 'NIL'       then Result := tkNil
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }

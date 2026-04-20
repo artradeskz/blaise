@@ -22,7 +22,8 @@ uses
   cp.test.functions,
   cp.test.procs,
   cp.test.control,
-  cp.test.inherit;
+  cp.test.inherit,
+  cp.test.forloop;
 
 var
   Application: TTestRunner;

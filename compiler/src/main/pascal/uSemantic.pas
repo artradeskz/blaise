@@ -505,12 +505,41 @@ end;
 
 procedure TSemanticAnalyser.AnalyseStmt(AStmt: TASTStmt);
 var
-  IfS:  TIfStmt;
-  CmpS: TCompoundStmt;
-  I:    Integer;
-  CondType: TTypeDesc;
+  IfS:       TIfStmt;
+  CmpS:      TCompoundStmt;
+  ForS:      TForStmt;
+  I:         Integer;
+  CondType:  TTypeDesc;
+  VarSym:    TSymbol;
+  StartType: TTypeDesc;
+  EndType:   TTypeDesc;
 begin
-  if AStmt is TWhileStmt then
+  if AStmt is TForStmt then
+  begin
+    ForS := TForStmt(AStmt);
+    VarSym := FTable.Lookup(ForS.VarName);
+    if VarSym = nil then
+      SemanticError(
+        Format('Undeclared loop variable ''%s''', [ForS.VarName]),
+        ForS.Line, ForS.Col);
+    if VarSym.Kind <> skVariable then
+      SemanticError(
+        Format('''%s'' is not a variable', [ForS.VarName]),
+        ForS.Line, ForS.Col);
+    if not VarSym.TypeDesc.IsOrdinal then
+      SemanticError(
+        Format('Loop variable ''%s'' must be an ordinal type, got ''%s''',
+          [ForS.VarName, VarSym.TypeDesc.Name]),
+        ForS.Line, ForS.Col);
+    StartType := AnalyseExpr(ForS.StartExpr);
+    CheckTypesMatch(VarSym.TypeDesc, StartType,
+      'for-loop start expression', ForS.Line, ForS.Col);
+    EndType := AnalyseExpr(ForS.EndExpr);
+    CheckTypesMatch(VarSym.TypeDesc, EndType,
+      'for-loop end expression', ForS.Line, ForS.Col);
+    AnalyseStmt(ForS.Body);
+  end
+  else if AStmt is TWhileStmt then
   begin
     with TWhileStmt(AStmt) do
     begin

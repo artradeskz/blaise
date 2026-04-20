@@ -96,6 +96,16 @@ type
     destructor Destroy; override;
   end;
 
+  TForStmt = class(TASTStmt)
+  public
+    VarName:   string;
+    StartExpr: TASTExpr;  { owned }
+    EndExpr:   TASTExpr;  { owned }
+    IsDownTo:  Boolean;
+    Body:      TASTStmt;  { owned }
+    destructor Destroy; override;
+  end;
+
   TFieldAssignment = class(TASTStmt)
   public
     RecordName:    string;
@@ -301,6 +311,16 @@ end;
 destructor TWhileStmt.Destroy;
 begin
   Condition.Free;
+  Body.Free;
+  inherited Destroy;
+end;
+
+{ TForStmt }
+
+destructor TForStmt.Destroy;
+begin
+  StartExpr.Free;
+  EndExpr.Free;
   Body.Free;
   inherited Destroy;
 end;

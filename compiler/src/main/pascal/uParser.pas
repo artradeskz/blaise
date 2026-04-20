@@ -64,6 +64,7 @@ type
     function  ParseStmt: TASTStmt;
     function  ParseIfStmt: TIfStmt;
     function  ParseWhileStmt: TWhileStmt;
+    function  ParseForStmt: TForStmt;
     function  ParseCompoundStmt: TCompoundStmt;
     function  ParseExpr: TASTExpr;
     function  ParseAddSub: TASTExpr;
@@ -509,6 +510,12 @@ begin
     Exit;
   end;
 
+  if Check(tkFor) then
+  begin
+    Result := ParseForStmt;
+    Exit;
+  end;
+
   if Check(tkBegin) then
   begin
     Result := ParseCompoundStmt;
@@ -622,6 +629,43 @@ begin
       Advance;
       Result.ElseStmt := ParseStmt;
     end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TParser.ParseForStmt: TForStmt;
+begin
+  Result := TForStmt.Create;
+  try
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Expect(tkFor);
+    if not Check(tkIdent) then
+      raise EParseError.CreateFmt('Expected loop variable at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    Result.VarName := FCurrent.Value;
+    Advance;
+    Expect(tkAssign);
+    Result.StartExpr := ParseExpr;
+    if Check(tkTo) then
+    begin
+      Result.IsDownTo := False;
+      Advance;
+    end
+    else if Check(tkDownto) then
+    begin
+      Result.IsDownTo := True;
+      Advance;
+    end
+    else
+      raise EParseError.CreateFmt(
+        'Expected ''to'' or ''downto'' at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    Result.EndExpr := ParseExpr;
+    Expect(tkDo);
+    Result.Body := ParseStmt;
   except
     Result.Free;
     raise;
