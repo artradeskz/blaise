@@ -16,7 +16,7 @@ program Blaise;
 
 uses
   SysUtils, Classes, Process,
-  uLexer, uParser, uAST, uCodeGenQBE;
+  uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
 
 const
   Version = '0.1.0-alpha';
@@ -272,10 +272,11 @@ var
   SourceFile, OutputFile: string;
   EmitIR: Boolean;
   Source: TStringList;
-  Lexer:  TLexer;
-  Parser: TParser;
-  Prog:   TProgram;
-  CG:     TCodeGenQBE;
+  Lexer:    TLexer;
+  Parser:   TParser;
+  Prog:     TProgram;
+  Semantic: TSemanticAnalyser;
+  CG:       TCodeGenQBE;
   IR:     string;
   IRFile: string;
 
@@ -315,10 +316,11 @@ begin
     end;
   end;
 
-  Lexer  := nil;
-  Parser := nil;
-  Prog   := nil;
-  CG     := nil;
+  Lexer    := nil;
+  Parser   := nil;
+  Prog     := nil;
+  Semantic := nil;
+  CG       := nil;
   try
     try
       Lexer  := TLexer.Create(Source.Text);
@@ -328,6 +330,17 @@ begin
       on E: Exception do
       begin
         WriteLn(StdErr, 'Parse error: ', E.Message);
+        Halt(1);
+      end;
+    end;
+
+    try
+      Semantic := TSemanticAnalyser.Create;
+      Semantic.Analyse(Prog);
+    except
+      on E: ESemanticError do
+      begin
+        WriteLn(StdErr, 'Semantic error: ', E.Message);
         Halt(1);
       end;
     end;
@@ -345,6 +358,7 @@ begin
     end;
   finally
     CG.Free;
+    Semantic.Free;
     Prog.Free;
     Parser.Free;
     Lexer.Free;
