@@ -135,8 +135,9 @@ begin
   IR := GenerateIR('program P; begin WriteLn(''Hi'') end.');
   AssertTrue('Calls printf with s_nl format',
     IRContains(IR, '$__fmt_s_nl'));
-  AssertTrue('Passes string pointer',
-    IRContains(IR, '..., l $__s0'));
+  { String header is 12 bytes; char data is accessed via add $__s0, 12 }
+  AssertTrue('Offsets past string header',
+    IRContains(IR, 'add $__s0, 12'));
 end;
 
 procedure TCodeGenTests.TestWriteLn_IntExpr_CallsPrintfInt;

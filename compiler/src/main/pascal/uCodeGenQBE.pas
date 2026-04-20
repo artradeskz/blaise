@@ -109,14 +109,20 @@ end;
 
 procedure TCodeGenQBE.EmitDataSection;
 var
-  I: Integer;
+  I:       Integer;
+  StrLen:  Integer;
 begin
   if FStrLits.Count = 0 then
     Exit;
   EmitLine('# String literals');
+  { Each literal has a 12-byte ARC header: refcnt=-1 (immortal), length, capacity.
+    The string pointer IS the header pointer; char data begins at ptr+12. }
   for I := 0 to FStrLits.Count - 1 do
-    EmitLine(Format('data $__s%d = { b "%s", b 0 }',
-      [I, QbeEscapeString(FStrLits[I])]));
+  begin
+    StrLen := Length(FStrLits[I]);
+    EmitLine(Format('data $__s%d = { w -1, w %d, w %d, b "%s", b 0 }',
+      [I, StrLen, StrLen, QbeEscapeString(FStrLits[I])]));
+  end;
   EmitLine('data $__fmt_s_nl = { b "%s\n", b 0 }');
   EmitLine('data $__fmt_s    = { b "%s", b 0 }');
   EmitLine('data $__fmt_d_nl = { b "%d\n", b 0 }');
@@ -873,6 +879,7 @@ procedure TCodeGenQBE.EmitWrite(ACall: TProcCall; ANewline: Boolean);
 var
   ArgExpr:  TASTExpr;
   ArgTemp:  string;
+  CharPtr:  string;
   FmtLabel: string;
   IsString: Boolean;
 begin
@@ -897,7 +904,12 @@ begin
     FmtLabel := IfThen(ANewline, '$__fmt_d_nl', '$__fmt_d');
 
   if IsString then
-    EmitLine(Format('  call $printf(l %s, ..., l %s)', [FmtLabel, ArgTemp]))
+  begin
+    { String pointer is the header pointer; char data starts at ptr+12. }
+    CharPtr := AllocTemp;
+    EmitLine(Format('  %s =l add %s, 12', [CharPtr, ArgTemp]));
+    EmitLine(Format('  call $printf(l %s, ..., l %s)', [FmtLabel, CharPtr]));
+  end
   else
     EmitLine(Format('  call $printf(l %s, ..., w %s)', [FmtLabel, ArgTemp]));
 end;
