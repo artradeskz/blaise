@@ -36,6 +36,7 @@ type
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     procedure AnalyseProcCall(ACall: TProcCall);
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
+    function  AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
     function  AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
     function  AnalyseBinaryExpr(ABin: TBinaryExpr): TTypeDesc;
     function  AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
@@ -176,7 +177,7 @@ begin
         TD.Line, TD.Col);
     end;
 
-    { Index class methods and resolve param types }
+    { Index class methods and resolve param/return types }
     if MethodList <> nil then
       for J := 0 to MethodList.Count - 1 do
       begin
@@ -194,6 +195,17 @@ begin
                 [Par.TypeName, Par.ParamName]),
               MDecl.Line, MDecl.Col);
           Par.ResolvedType := ParType;
+        end;
+
+        if MDecl.ReturnTypeName <> '' then
+        begin
+          ParType := FTable.FindType(MDecl.ReturnTypeName);
+          if ParType = nil then
+            SemanticError(
+              Format('Unknown return type ''%s'' for method ''%s''',
+                [MDecl.ReturnTypeName, MDecl.Name]),
+              MDecl.Line, MDecl.Col);
+          MDecl.ResolvedReturnType := ParType;
         end;
       end;
   end;
@@ -234,6 +246,13 @@ begin
     { Define Self as a variable of the class type }
     Sym := TSymbol.Create('Self', skVariable, AClassType);
     FTable.Define(Sym);
+
+    { For function methods, define Result as a writable variable }
+    if AMethod.ResolvedReturnType <> nil then
+    begin
+      Sym := TSymbol.Create('Result', skVariable, AMethod.ResolvedReturnType);
+      FTable.Define(Sym);
+    end;
 
     { Define explicit parameters }
     for I := 0 to AMethod.Params.Count - 1 do
@@ -453,6 +472,61 @@ begin
     AnalyseExpr(TASTExpr(ACall.Args[I]));
 end;
 
+function TSemanticAnalyser.AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
+var
+  ObjSym:  TSymbol;
+  RT:      TRecordTypeDesc;
+  MDecl:   TMethodDecl;
+  Par:     TMethodParam;
+  ArgType: TTypeDesc;
+  I:       Integer;
+begin
+  ObjSym := FTable.Lookup(AExpr.ObjectName);
+  if ObjSym = nil then
+    SemanticError(
+      Format('Undeclared variable ''%s''', [AExpr.ObjectName]),
+      AExpr.Line, AExpr.Col);
+  if ObjSym.Kind <> skVariable then
+    SemanticError(
+      Format('''%s'' is not a variable', [AExpr.ObjectName]),
+      AExpr.Line, AExpr.Col);
+  if ObjSym.TypeDesc.Kind <> tyClass then
+    SemanticError(
+      Format('''%s'' is not a class variable', [AExpr.ObjectName]),
+      AExpr.Line, AExpr.Col);
+
+  RT    := TRecordTypeDesc(ObjSym.TypeDesc);
+  MDecl := FindMethodDecl(RT.Name, AExpr.Name);
+  if MDecl = nil then
+    SemanticError(
+      Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
+      AExpr.Line, AExpr.Col);
+  if MDecl.ResolvedReturnType = nil then
+    SemanticError(
+      Format('Method ''%s.%s'' is a procedure (no return value)',
+        [RT.Name, AExpr.Name]),
+      AExpr.Line, AExpr.Col);
+
+  if AExpr.Args.Count <> MDecl.Params.Count then
+    SemanticError(
+      Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+        [RT.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+      AExpr.Line, AExpr.Col);
+
+  for I := 0 to AExpr.Args.Count - 1 do
+  begin
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args[I]));
+    Par     := TMethodParam(MDecl.Params[I]);
+    CheckTypesMatch(Par.ResolvedType, ArgType,
+      Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
+      AExpr.Line, AExpr.Col);
+  end;
+
+  AExpr.ResolvedClassType := RT;
+  AExpr.ResolvedMethod    := MDecl;
+  Result := MDecl.ResolvedReturnType;
+end;
+
 function TSemanticAnalyser.AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
 var
   Sym: TSymbol;
@@ -470,6 +544,8 @@ begin
         AExpr.Line, AExpr.Col);
     Result := Sym.TypeDesc;
   end
+  else if AExpr is TMethodCallExpr then
+    Result := AnalyseMethodCallExpr(TMethodCallExpr(AExpr))
   else if AExpr is TFieldAccessExpr then
     Result := AnalyseFieldAccess(TFieldAccessExpr(AExpr))
   else if AExpr is TBinaryExpr then

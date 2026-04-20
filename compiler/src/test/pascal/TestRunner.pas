@@ -18,7 +18,8 @@ uses
   cp.test.records,
   cp.test.classes,
   cp.test.arc,
-  cp.test.methods;
+  cp.test.methods,
+  cp.test.functions;
 
 var
   Application: TTestRunner;

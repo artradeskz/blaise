@@ -149,9 +149,22 @@ type
 
   TMethodDecl = class(TASTNode)
   public
-    Name:   string;    { method name }
-    Params: TObjectList;  { owned TMethodParam }
-    Body:   TBlock;       { owned }
+    Name:               string;      { method name }
+    Params:             TObjectList; { owned TMethodParam }
+    ReturnTypeName:     string;      { empty = procedure }
+    ResolvedReturnType: TTypeDesc;   { set by uSemantic; nil = procedure }
+    Body:               TBlock;      { owned }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  TMethodCallExpr = class(TASTExpr)
+  public
+    ObjectName:        string;
+    Name:              string;     { method name }
+    Args:              TObjectList; { owned TASTExpr }
+    ResolvedClassType: TTypeDesc;   { not owned; set by uSemantic }
+    ResolvedMethod:    TObject;     { TMethodDecl — not owned }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -318,6 +331,20 @@ destructor TMethodDecl.Destroy;
 begin
   Params.Free;
   Body.Free;
+  inherited Destroy;
+end;
+
+{ TMethodCallExpr }
+
+constructor TMethodCallExpr.Create;
+begin
+  inherited Create;
+  Args := TObjectList.Create(True);
+end;
+
+destructor TMethodCallExpr.Destroy;
+begin
+  Args.Free;
   inherited Destroy;
 end;
 

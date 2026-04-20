@@ -55,7 +55,7 @@ type
     function  ParseRecordDef: TRecordTypeDef;
     function  ParseClassDef: TClassTypeDef;
     procedure ParseFieldDecl(AFields: TObjectList);
-    function  ParseMethodDecl: TMethodDecl;
+    function  ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
     procedure ParseParamList(AParams: TObjectList);
     procedure ParseVarBlock(ABlock: TBlock);
     procedure ParseVarDecl(ABlock: TBlock);
@@ -260,8 +260,13 @@ begin
     end;
     while Check(tkIdent) do
       ParseFieldDecl(Result.Fields);
-    while Check(tkProcedure) do
-      Result.Methods.Add(ParseMethodDecl);
+    while Check(tkProcedure) or Check(tkFunction) do
+    begin
+      if Check(tkFunction) then
+        Result.Methods.Add(ParseMethodDecl(True))
+      else
+        Result.Methods.Add(ParseMethodDecl(False));
+    end;
     Expect(tkEnd);
   except
     Result.Free;
@@ -269,13 +274,16 @@ begin
   end;
 end;
 
-function TParser.ParseMethodDecl: TMethodDecl;
+function TParser.ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
 begin
   Result := TMethodDecl.Create;
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
-    Expect(tkProcedure);
+    if IsFunction then
+      Expect(tkFunction)
+    else
+      Expect(tkProcedure);
     if not Check(tkIdent) then
       raise EParseError.CreateFmt('Expected method name at line %d col %d',
         [FCurrent.Line, FCurrent.Col]);
@@ -287,6 +295,15 @@ begin
       if not Check(tkRParen) then
         ParseParamList(Result.Params);
       Expect(tkRParen);
+    end;
+    if IsFunction then
+    begin
+      Expect(tkColon);
+      if not Check(tkIdent) then
+        raise EParseError.CreateFmt('Expected return type at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+      Result.ReturnTypeName := FCurrent.Value;
+      Advance;
     end;
     Expect(tkSemicolon);
     Result.Body := ParseBlock;
@@ -608,8 +625,10 @@ var
   StrNode:    TStringLiteral;
   IdNode:     TIdentExpr;
   FldNode:    TFieldAccessExpr;
+  MCallNode:  TMethodCallExpr;
   Inner:      TASTExpr;
   Name:       string;
+  SecondName: string;
   Line, Col:  Integer;
 begin
   case FCurrent.Kind of
@@ -639,18 +658,43 @@ begin
         Advance;
         if Check(tkDot) then
         begin
-          { Field access: Ident '.' Ident }
           Advance;
           if not Check(tkIdent) then
-            raise EParseError.CreateFmt('Expected field name at line %d col %d',
+            raise EParseError.CreateFmt('Expected field or method name at line %d col %d',
               [FCurrent.Line, FCurrent.Col]);
-          FldNode            := TFieldAccessExpr.Create;
-          FldNode.Line       := Line;
-          FldNode.Col        := Col;
-          FldNode.RecordName := Name;
-          FldNode.FieldName  := FCurrent.Value;
+          SecondName := FCurrent.Value;
           Advance;
-          Result := FldNode;
+          if Check(tkLParen) then
+          begin
+            { IDENT '.' IDENT '(' ... ')' — method call expression }
+            MCallNode            := TMethodCallExpr.Create;
+            MCallNode.Line       := Line;
+            MCallNode.Col        := Col;
+            MCallNode.ObjectName := Name;
+            MCallNode.Name       := SecondName;
+            Advance;
+            if not Check(tkRParen) then
+            begin
+              MCallNode.Args.Add(ParseExpr);
+              while Check(tkComma) do
+              begin
+                Advance;
+                MCallNode.Args.Add(ParseExpr);
+              end;
+            end;
+            Expect(tkRParen);
+            Result := MCallNode;
+          end
+          else
+          begin
+            { IDENT '.' IDENT — field access or constructor call }
+            FldNode            := TFieldAccessExpr.Create;
+            FldNode.Line       := Line;
+            FldNode.Col        := Col;
+            FldNode.RecordName := Name;
+            FldNode.FieldName  := SecondName;
+            Result := FldNode;
+          end;
         end
         else
         begin

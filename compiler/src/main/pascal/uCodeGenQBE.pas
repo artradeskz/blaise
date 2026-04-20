@@ -388,10 +388,12 @@ var
   I:        Integer;
   Par:      TMethodParam;
   FuncName: string;
-  Sym:      TSymbol;
-  RT:       TRecordTypeDesc;
+  IsFunc:   Boolean;
+  RetQType: string;
+  RetTemp:  string;
 begin
   FuncName := '$' + ATypeName + '_' + AMethod.Name;
+  IsFunc   := AMethod.ResolvedReturnType <> nil;
 
   { Build parameter signature: l %_par_Self [, qtype %_par_Name ...] }
   Sig := 'l %_par_Self';
@@ -402,18 +404,46 @@ begin
       [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
   end;
 
-  EmitLine(Format('function %s(%s) {', [FuncName, Sig]));
-  EmitLine('@start');
+  if IsFunc then
+  begin
+    RetQType := QbeTypeOf(AMethod.ResolvedReturnType);
+    EmitLine(Format('function %s %s(%s) {', [RetQType, FuncName, Sig]));
+  end
+  else
+    EmitLine(Format('function %s(%s) {', [FuncName, Sig]));
 
-  { Allocate stack slots for Self and params, then emit body }
-  RT := nil;
-  { We need the class type descriptor for EmitParamAllocs — obtain from AMethod }
-  { AMethod.Body is already resolved; RT is referenced via Self symbol in the body.
-    We pass nil for RT here since EmitParamAllocs only needs it for Self size (always l). }
+  EmitLine('@start');
   EmitParamAllocs(AMethod, nil);
+
+  { For function methods, allocate a zero-initialised Result slot }
+  if IsFunc then
+  begin
+    if RetQType = 'w' then
+    begin
+      EmitLine('  %_var_Result =l alloc4 1');
+      EmitLine('  storew 0, %_var_Result');
+    end
+    else
+    begin
+      EmitLine('  %_var_Result =l alloc8 1');
+      EmitLine('  storel 0, %_var_Result');
+    end;
+  end;
+
   EmitBlock(AMethod.Body);
 
-  EmitLine('  ret');
+  if IsFunc then
+  begin
+    RetTemp := AllocTemp;
+    if RetQType = 'w' then
+      EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
+    else
+      EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
+    EmitLine(Format('  ret %s', [RetTemp]));
+  end
+  else
+    EmitLine('  ret');
+
   EmitLine('}');
   EmitLine('');
 end;
@@ -488,10 +518,46 @@ var
   Op:         string;
   BinExpr:    TBinaryExpr;
   FldAccess:  TFieldAccessExpr;
+  MCallExpr:  TMethodCallExpr;
   Ptr:        string;
   QType:      string;
   LoadInstr:  string;
+  SelfTemp:   string;
+  ArgLine:    string;
+  ArgTemp:    string;
+  Par:        TMethodParam;
+  MDecl:      TMethodDecl;
+  RT:         TRecordTypeDesc;
+  FuncName:   string;
+  I:          Integer;
 begin
+  if AExpr is TMethodCallExpr then
+  begin
+    MCallExpr := TMethodCallExpr(AExpr);
+    RT        := TRecordTypeDesc(MCallExpr.ResolvedClassType);
+    MDecl     := TMethodDecl(MCallExpr.ResolvedMethod);
+    FuncName  := '$' + RT.Name + '_' + MCallExpr.Name;
+    QType     := QbeTypeOf(MDecl.ResolvedReturnType);
+
+    { Load the object pointer (Self) }
+    SelfTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, MCallExpr.ObjectName]));
+
+    { Build argument string }
+    ArgLine := Format('l %s', [SelfTemp]);
+    for I := 0 to MCallExpr.Args.Count - 1 do
+    begin
+      Par     := TMethodParam(MDecl.Params[I]);
+      ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
+      ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+    end;
+
+    T := AllocTemp;
+    EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
+    Result := T;
+    Exit;
+  end;
+
   if AExpr is TIntLiteral then
   begin
     T := AllocTemp;
