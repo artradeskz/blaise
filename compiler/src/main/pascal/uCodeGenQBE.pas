@@ -702,6 +702,7 @@ var
   IsFunc:   Boolean;
   RetQType: string;
   RetTemp:  string;
+  ValTemp:  string;
   Prefix:   string;
 begin
   FuncName := '$' + ADecl.Name;
@@ -756,6 +757,18 @@ begin
     end;
   end;
 
+  { ARC: addref string value params on entry (callee owns a copy) }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    Par := TMethodParam(ADecl.Params[I]);
+    if (not Par.IsVarParam) and (Par.ResolvedType.Kind = tyString) then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_StringAddRef(l %s)', [ValTemp]));
+    end;
+  end;
+
   if IsFunc then
   begin
     if RetQType = 'w' then
@@ -771,6 +784,18 @@ begin
   end;
 
   EmitBlock(ADecl.Body);
+
+  { ARC: release string value params on exit }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    Par := TMethodParam(ADecl.Params[I]);
+    if (not Par.IsVarParam) and (Par.ResolvedType.Kind = tyString) then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_StringRelease(l %s)', [ValTemp]));
+    end;
+  end;
 
   if IsFunc then
   begin
@@ -1043,6 +1068,15 @@ begin
     L := EmitExpr(BinExpr.Left);
     R := EmitExpr(BinExpr.Right);
     T := AllocTemp;
+    { String concatenation: delegate to RTL }
+    if (BinExpr.Op = boAdd) and
+       (BinExpr.Left.ResolvedType <> nil) and
+       BinExpr.Left.ResolvedType.IsString then
+    begin
+      EmitLine(Format('  %s =l call $_StringConcat(l %s, l %s)', [T, L, R]));
+      Result := T;
+      Exit;
+    end;
     { Use long (pointer) comparison instructions when operands are class/nil }
     if (BinExpr.Left.ResolvedType <> nil) and
        (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil]) then

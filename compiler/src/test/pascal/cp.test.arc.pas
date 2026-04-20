@@ -32,6 +32,18 @@ type
 
     { String variable passed to WriteLn (load + printf) }
     procedure TestARC_WriteLn_StringVar_Works;
+
+    { String value parameter: addref on entry, release on exit }
+    procedure TestARC_StringValueParam_AddRefOnEntry;
+    procedure TestARC_StringValueParam_ReleaseOnExit;
+
+    { String var parameter: no addref, no release }
+    procedure TestARC_StringVarParam_NoAddRef;
+    procedure TestARC_StringVarParam_NoRelease;
+
+    { String concatenation: calls RTL concat function }
+    procedure TestARC_StringConcat_SemanticOK;
+    procedure TestARC_StringConcat_CallsRTL;
   end;
 
 implementation
@@ -196,6 +208,88 @@ begin
     '  WriteLn(s)'       + LineEnding +
     'end.');
   AssertTrue('printf called', IRContains(IR, 'call $printf'));
+end;
+
+const
+  SrcValParam =
+    'program P;'                  + LineEnding +
+    'procedure Greet(S: string);' + LineEnding +
+    'begin end;'                  + LineEnding +
+    'begin end.';
+
+  SrcVarParam =
+    'program P;'                      + LineEnding +
+    'procedure Greet(var S: string);' + LineEnding +
+    'begin end;'                      + LineEnding +
+    'begin end.';
+
+  SrcConcat =
+    'program P;'              + LineEnding +
+    'var a, b, c: string;'   + LineEnding +
+    'begin'                   + LineEnding +
+    '  c := a + b'            + LineEnding +
+    'end.';
+
+procedure TARCTests.TestARC_StringValueParam_AddRefOnEntry;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcValParam);
+  AssertTrue('addref for string value param', IRContains(IR, 'call $_StringAddRef'));
+end;
+
+procedure TARCTests.TestARC_StringValueParam_ReleaseOnExit;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcValParam);
+  AssertTrue('release for string value param', IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TARCTests.TestARC_StringVarParam_NoAddRef;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcVarParam);
+  AssertFalse('no addref for string var param', IRContains(IR, 'call $_StringAddRef'));
+end;
+
+procedure TARCTests.TestARC_StringVarParam_NoRelease;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcVarParam);
+  AssertFalse('no release for string var param', IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TARCTests.TestARC_StringConcat_SemanticOK;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  A:  TSemanticAnalyser;
+begin
+  L  := TLexer.Create(SrcConcat);
+  P  := TParser.Create(L);
+  Pr := P.Parse;
+  A  := TSemanticAnalyser.Create;
+  try
+    A.Analyse(Pr);
+    AssertTrue('semantic analysis completed without error', True);
+  finally
+    A.Free;
+    Pr.Free;
+    P.Free;
+    L.Free;
+  end;
+end;
+
+procedure TARCTests.TestARC_StringConcat_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConcat);
+  AssertTrue('string concat calls RTL', IRContains(IR, '$_StringConcat'));
 end;
 
 initialization

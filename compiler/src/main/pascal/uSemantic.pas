@@ -1143,6 +1143,13 @@ begin
   end
   else
   begin
+    { String concatenation: s1 + s2 → string }
+    if (ABin.Op = boAdd) and LType.IsString and RType.IsString then
+    begin
+      Result := FTable.TypeString;
+      Exit;
+    end;
+
     if not LType.IsNumeric then
       SemanticError(
         Format('Left operand of ''%s'' must be numeric, got ''%s''',
