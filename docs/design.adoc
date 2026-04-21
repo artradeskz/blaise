@@ -670,6 +670,31 @@ Phase 1 (bootstrap pipeline) is complete. Phase 2 type-system work is in progres
   static methods retain direct `call $T_M` dispatch; subtype assignment
   (`TDerived := TBase`) allowed via parent-chain walk in semantic pass
 
+| `is`/`as` type tests
+| Done
+| `_IsInstance` RTL helper; typeinfo pointer stored at vtable slot 0;
+  `is` emits `call $_IsInstance` returning boolean; `as` adds a checked
+  downcast with `_Raise_InvalidCast` on failure; BlaiseTypeInfo struct in RTL
+
+| ARC cleanup on exception paths
+| Done
+| `EmitExcPathArcCleanup` walks in-scope variable declarations and emits
+  `_StringRelease` + `storel 0` for each string var on the `@fin_exc` path,
+  before `_Reraise`; slot zeroing prevents double-release in nested handlers
+
+| Separate method implementations
+| Done
+| `procedure TFoo.Bar(...)` outside the class definition; parser detects
+  qualified names (`TypeName.MethodName`) in `ParseMethodDecl`; body optional
+  for forward-only class declarations; `LinkClassMethodImpls` transfers bodies
+  to class method declarations before `AnalyseMethodBodies` runs
+
+| `Free` built-in
+| Done
+| `Obj.Free` with no user-defined `Free` method emits `call $free(l ptr)`;
+  semantic pass sets `ResolvedMethod := nil` as signal; codegen handles nil
+  method as built-in free before normal dispatch path
+
 | macOS ARM64 target
 | Pending
 | —
@@ -679,11 +704,6 @@ Phase 1 (bootstrap pipeline) is complete. Phase 2 type-system work is in progres
 
 . macOS ARM64 target — QBE supports it; compiler driver needs target detection
   and Darwin-specific link flags.
-. `is`/`as` type tests — runtime type identity check and checked downcast,
-  requires storing type metadata alongside the vtable.
-. ARC cleanup on exception paths — release in-scope ARC-managed variables on the
-  exception path inside try/finally before re-raising (requires scope-chain
-  tracking in the code generator).
 
 == Landscape Notes
 

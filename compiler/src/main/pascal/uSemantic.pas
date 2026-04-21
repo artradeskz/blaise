@@ -28,6 +28,7 @@ type
 
     procedure AnalyseBlock(ABlock: TBlock);
     procedure AnalyseTypeDecls(ABlock: TBlock);
+    procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure AnalyseMethodBodies(ABlock: TBlock);
     procedure AnalyseMethodDecl(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
@@ -270,12 +271,46 @@ begin
   end;
 end;
 
+procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);
+var
+  I:    Integer;
+  Decl: TMethodDecl;
+  Key:  string;
+  Idx:  Integer;
+  CD:   TMethodDecl;
+begin
+  for I := 0 to ABlock.ProcDecls.Count - 1 do
+  begin
+    Decl := TMethodDecl(ABlock.ProcDecls[I]);
+    if Decl.OwnerTypeName = '' then Continue;
+    Key := Decl.OwnerTypeName + '.' + Decl.Name;
+    Idx := FMethodIndex.IndexOf(Key);
+    if Idx < 0 then
+      SemanticError(
+        Format('Method ''%s'' is not declared in class ''%s''',
+          [Decl.Name, Decl.OwnerTypeName]),
+        Decl.Line, Decl.Col);
+    CD := TMethodDecl(FMethodIndex.Objects[Idx]);
+    if CD.Body <> nil then
+      SemanticError(
+        Format('Method ''%s.%s'' already has an inline body',
+          [Decl.OwnerTypeName, Decl.Name]),
+        Decl.Line, Decl.Col);
+    { Transfer the body; after this, AnalyseMethodBodies will find and analyse it }
+    CD.Body   := Decl.Body;
+    Decl.Body := nil;
+  end;
+end;
+
 procedure TSemanticAnalyser.AnalyseBlock(ABlock: TBlock);
 begin
   { Type declarations are registered in the outer scope so they remain visible
     after the block scope is popped — needed for var declarations and the
     transferred symbol table used by codegen. }
   AnalyseTypeDecls(ABlock);
+  { Link standalone TTypeName.MethodName implementations to their class method
+    declarations, transferring the body so AnalyseMethodBodies can process it. }
+  LinkClassMethodImpls(ABlock);
   AnalyseMethodBodies(ABlock);
   FTable.PushScope;
   try
@@ -565,6 +600,8 @@ begin
   for I := 0 to ABlock.ProcDecls.Count - 1 do
   begin
     ADecl := TMethodDecl(ABlock.ProcDecls[I]);
+    { Class method implementations have their body transferred; skip them here }
+    if ADecl.OwnerTypeName <> '' then Continue;
 
     { Resolve parameter types }
     for J := 0 to ADecl.Params.Count - 1 do
@@ -650,10 +687,16 @@ end;
 
 procedure TSemanticAnalyser.AnalyseStandaloneBodies(ABlock: TBlock);
 var
-  I: Integer;
+  I:     Integer;
+  ADecl: TMethodDecl;
 begin
   for I := 0 to ABlock.ProcDecls.Count - 1 do
-    AnalyseStandaloneDecl(TMethodDecl(ABlock.ProcDecls[I]));
+  begin
+    ADecl := TMethodDecl(ABlock.ProcDecls[I]);
+    { Class method implementations have their body transferred; skip them here }
+    if ADecl.OwnerTypeName <> '' then Continue;
+    AnalyseStandaloneDecl(ADecl);
+  end;
 end;
 
 procedure TSemanticAnalyser.AnalyseVarDecls(ABlock: TBlock);
@@ -840,9 +883,18 @@ begin
   RT    := TRecordTypeDesc(ObjSym.TypeDesc);
   MDecl := FindMethodDecl(RT.Name, ACall.Name);
   if MDecl = nil then
+  begin
+    { Free is a built-in: if Self <> nil then free(Self). No user-defined method needed. }
+    if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) then
+    begin
+      ACall.ResolvedClassType := RT;
+      ACall.ResolvedMethod    := nil;  { nil signals built-in Free to codegen }
+      Exit;
+    end;
     SemanticError(
       Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
       ACall.Line, ACall.Col);
+  end;
 
   if ACall.Args.Count <> MDecl.Params.Count then
     SemanticError(

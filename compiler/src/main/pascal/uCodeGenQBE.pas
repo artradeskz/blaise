@@ -639,6 +639,15 @@ var
   FPtrTemp: string;
   SlotOff:  Integer;
 begin
+  { Built-in Free: load Self pointer and call C free() }
+  if (ACall.ResolvedMethod = nil) and SameText(ACall.Name, 'Free') then
+  begin
+    SelfTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, ACall.ObjectName]));
+    EmitLine(Format('  call $free(l %s)', [SelfTemp]));
+    Exit;
+  end;
+
   RT    := TRecordTypeDesc(ACall.ResolvedClassType);
   MDecl := TMethodDecl(ACall.ResolvedMethod);
 
@@ -853,7 +862,8 @@ begin
       Continue;
     CD := TClassTypeDef(TD.Def);
     for J := 0 to CD.Methods.Count - 1 do
-      EmitMethodDef(TD.Name, TMethodDecl(CD.Methods[J]));
+      if TMethodDecl(CD.Methods[J]).Body <> nil then
+        EmitMethodDef(TD.Name, TMethodDecl(CD.Methods[J]));
   end;
 end;
 
@@ -984,10 +994,17 @@ end;
 
 procedure TCodeGenQBE.EmitStandaloneDefs(AProg: TProgram);
 var
-  I: Integer;
+  I:    Integer;
+  Decl: TMethodDecl;
 begin
   for I := 0 to AProg.Block.ProcDecls.Count - 1 do
-    EmitStandaloneDef(TMethodDecl(AProg.Block.ProcDecls[I]));
+  begin
+    Decl := TMethodDecl(AProg.Block.ProcDecls[I]);
+    { Class method impls (OwnerTypeName != '') had their body transferred to the
+      class method decl — skip them here; EmitMethodDefs handles them. }
+    if Decl.OwnerTypeName <> '' then Continue;
+    EmitStandaloneDef(Decl);
+  end;
 end;
 
 procedure TCodeGenQBE.EmitProcCall(ACall: TProcCall);

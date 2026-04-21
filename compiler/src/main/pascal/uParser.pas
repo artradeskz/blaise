@@ -304,6 +304,17 @@ begin
         [FCurrent.Line, FCurrent.Col]);
     Result.Name := FCurrent.Value;
     Advance;
+    { Qualified name: TypeName.MethodName (standalone class method implementation) }
+    if Check(tkDot) then
+    begin
+      Advance;
+      if not Check(tkIdent) then
+        raise EParseError.CreateFmt('Expected method name after ''.'' at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+      Result.OwnerTypeName := Result.Name;
+      Result.Name          := FCurrent.Value;
+      Advance;
+    end;
     if Check(tkLParen) then
     begin
       Advance;
@@ -333,8 +344,13 @@ begin
       Advance;
       Expect(tkSemicolon);
     end;
-    Result.Body := ParseBlock;
-    Expect(tkSemicolon);
+    { Body is optional — present for standalone impls and inline class methods,
+      absent for class forward declarations (no begin/var/type follows) }
+    if Check(tkBegin) or Check(tkVar) or Check(tkType) then
+    begin
+      Result.Body := ParseBlock;
+      Expect(tkSemicolon);
+    end;
   except
     Result.Free;
     raise;

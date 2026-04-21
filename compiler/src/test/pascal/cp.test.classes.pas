@@ -53,6 +53,20 @@ type
     procedure TestCodegen_Constructor_CallsMalloc;
     procedure TestCodegen_ClassFieldStore_LoadsPointer;
     procedure TestCodegen_ClassFieldLoad_LoadsPointer;
+
+    { ------------------------------------------------------------------ }
+    { Separate method implementations                                      }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_SeparateImpl_ForwardDeclNoBody;
+    procedure TestParse_SeparateImpl_QualifiedName;
+    procedure TestSemantic_SeparateImpl_OK;
+    procedure TestCodegen_SeparateImpl_EmitsMethod;
+
+    { ------------------------------------------------------------------ }
+    { Free built-in                                                        }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Free_OK;
+    procedure TestCodegen_Free_CallsCFree;
   end;
 
 implementation
@@ -552,6 +566,104 @@ begin
     'end.');
   AssertTrue('loads pointer', Pos('loadl %_var_F', IR) > 0);
   AssertTrue('loads field',   Pos('loadw', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Separate method implementations                                      }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcSeparateImpl =
+    'program P;'                        + LineEnding +
+    'type'                              + LineEnding +
+    '  TFoo = class'                    + LineEnding +
+    '    X: Integer;'                   + LineEnding +
+    '    procedure SetX(AVal: Integer);' + LineEnding +
+    '  end;'                            + LineEnding +
+    'procedure TFoo.SetX(AVal: Integer);' + LineEnding +
+    'begin'                             + LineEnding +
+    '  Self.X := AVal'                  + LineEnding +
+    'end;'                              + LineEnding +
+    'var F: TFoo;'                      + LineEnding +
+    'begin'                             + LineEnding +
+    '  F := TFoo.Create;'               + LineEnding +
+    '  F.SetX(42)'                      + LineEnding +
+    'end.';
+
+procedure TClassTests.TestParse_SeparateImpl_ForwardDeclNoBody;
+var
+  Prog: TProgram;
+  CD:   TClassTypeDef;
+  MD:   TMethodDecl;
+begin
+  Prog := ParseSrc(SrcSeparateImpl);
+  try
+    CD := TClassTypeDef(TTypeDecl(Prog.Block.TypeDecls[0]).Def);
+    MD := TMethodDecl(CD.Methods[0]);
+    AssertNull('class method forward decl has no body', MD.Body);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TClassTests.TestParse_SeparateImpl_QualifiedName;
+var
+  Prog: TProgram;
+  MD:   TMethodDecl;
+begin
+  Prog := ParseSrc(SrcSeparateImpl);
+  try
+    { First ProcDecl in block is the standalone impl }
+    MD := TMethodDecl(Prog.Block.ProcDecls[0]);
+    AssertEquals('owner type name', 'TFoo', MD.OwnerTypeName);
+    AssertEquals('method name', 'SetX', MD.Name);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TClassTests.TestSemantic_SeparateImpl_OK;
+begin
+  AnalyseSrc(SrcSeparateImpl).Free;
+end;
+
+procedure TClassTests.TestCodegen_SeparateImpl_EmitsMethod;
+var IR: string;
+begin
+  IR := GenIR(SrcSeparateImpl);
+  { The method body must appear in the IR as TFoo_SetX }
+  AssertTrue('TFoo_SetX emitted', Pos('$TFoo_SetX', IR) > 0);
+  { The call site must use it }
+  AssertTrue('call to TFoo_SetX', Pos('call $TFoo_SetX', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Free built-in                                                        }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcFree =
+    'program P;'             + LineEnding +
+    'type'                   + LineEnding +
+    '  TFoo = class'         + LineEnding +
+    '    X: Integer;'        + LineEnding +
+    '  end;'                 + LineEnding +
+    'var F: TFoo;'           + LineEnding +
+    'begin'                  + LineEnding +
+    '  F := TFoo.Create;'    + LineEnding +
+    '  F.Free'               + LineEnding +
+    'end.';
+
+procedure TClassTests.TestSemantic_Free_OK;
+begin
+  AnalyseSrc(SrcFree).Free;
+end;
+
+procedure TClassTests.TestCodegen_Free_CallsCFree;
+var IR: string;
+begin
+  IR := GenIR(SrcFree);
+  AssertTrue('calls C free()', Pos('call $free', IR) > 0);
 end;
 
 initialization
