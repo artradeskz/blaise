@@ -17,10 +17,11 @@ type
 
   TCodeGenQBE = class
   private
-    FOutput:     TStringList;
-    FStrLits:    TStringList;  { index → raw value; label = $__s<index> }
-    FTempCount:  Integer;
-    FLabelCount: Integer;
+    FOutput:       TStringList;
+    FStrLits:      TStringList;  { index → raw value; label = $__s<index> }
+    FTempCount:    Integer;
+    FLabelCount:   Integer;
+    FCurrentBlock: TBlock;       { block currently being emitted; set by EmitBlock }
 
     function  AllocTemp: string;
     function  AllocLabel(const APrefix: string): string;
@@ -40,6 +41,7 @@ type
     procedure EmitVarAllocs(ABlock: TBlock);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitStringCleanup(ABlock: TBlock);
+    procedure EmitExcPathArcCleanup(ABlock: TBlock);
     procedure EmitStmt(AStmt: TASTStmt);
     procedure EmitIfStmt(AStmt: TIfStmt);
     procedure EmitWhileStmt(AStmt: TWhileStmt);
@@ -244,10 +246,35 @@ procedure TCodeGenQBE.EmitBlock(ABlock: TBlock);
 var
   I: Integer;
 begin
+  FCurrentBlock := ABlock;
   EmitVarAllocs(ABlock);
   for I := 0 to ABlock.Stmts.Count - 1 do
     EmitStmt(TASTStmt(ABlock.Stmts[I]));
   EmitStringCleanup(ABlock);
+end;
+
+procedure TCodeGenQBE.EmitExcPathArcCleanup(ABlock: TBlock);
+var
+  I, J:    Integer;
+  Decl:    TVarDecl;
+  VarName: string;
+  ValTemp: string;
+begin
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.Decls.Count - 1 do
+  begin
+    Decl := TVarDecl(ABlock.Decls[I]);
+    if (Decl.ResolvedType <> nil) and Decl.ResolvedType.IsString then
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names[J];
+        ValTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+        EmitLine(Format('  call $_StringRelease(l %s)', [ValTemp]));
+        { Zero the slot so nested exception handlers get a no-op release }
+        EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+      end;
+  end;
 end;
 
 procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
@@ -346,13 +373,15 @@ begin
     EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts[I]));
   EmitLine(Format('  jmp @%s', [LblEnd]));
 
-  { Exception path: capture exception, pop frame, run finally body, re-raise }
+  { Exception path: capture exception, pop frame, run finally body, release
+    in-scope ARC vars (prevent leaks on unwind), then re-raise }
   EmitLine('@' + LblFinExc);
   ExcTemp := AllocTemp;
   EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
   EmitLine('  call $_PopExcFrame()');
   for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts[I]));
+  EmitExcPathArcCleanup(FCurrentBlock);
   EmitLine(Format('  call $_Reraise(l %s)', [ExcTemp]));
   EmitLine(Format('  jmp @%s', [LblEnd]));  { unreachable — satisfies QBE block exit }
 

@@ -10,7 +10,7 @@
   </build>
 
   <test>
-    <framework>fptest</framework>
+    <framework>auto</framework>
     <testSource>TestRunner.pas</testSource>
     <frameworkOptions>
       <option>--all</option>

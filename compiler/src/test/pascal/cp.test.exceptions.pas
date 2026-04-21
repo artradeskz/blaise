@@ -85,6 +85,12 @@ type
     procedure TestCodegen_TryFinally_PushesExcFrame;
     procedure TestCodegen_TryFinally_CallsReraise;
     procedure TestCodegen_TryFinally_FinallyOnBothPaths;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — ARC cleanup on exception paths                            }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_TryFinally_ArcRelease_BeforeReraise;
+    procedure TestCodegen_TryFinally_ArcRelease_ZerosVar;
   end;
 
 implementation
@@ -536,6 +542,64 @@ begin
     Inc(Idx);
   end;
   AssertTrue('finally body appears on both paths (>= 2 occurrences)', N >= 2);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen — ARC cleanup on exception paths                            }
+{ ------------------------------------------------------------------ }
+
+const
+  { String assignment is ONLY inside the try body — no pre-try assignment.
+    This ensures there is no assignment-site _StringRelease before @fin_exc
+    that could produce a false positive in the position tests below. }
+  SrcTryFinallyWithStr =
+    'program P;'               + LineEnding +
+    'var S: string;'           + LineEnding +
+    'begin'                    + LineEnding +
+    '  try'                    + LineEnding +
+    '    S := ''world'''       + LineEnding +
+    '  finally'                + LineEnding +
+    '  end'                    + LineEnding +
+    'end.';
+
+procedure TExceptionTests.TestCodegen_TryFinally_ArcRelease_BeforeReraise;
+var
+  IR:         string;
+  PosFinExc:  Integer;
+  PosRelease: Integer;
+  PosReraise: Integer;
+begin
+  IR := GenIR(SrcTryFinallyWithStr);
+  { Locate the exception handler block and _Reraise }
+  PosFinExc  := Pos('@fin_exc', IR);
+  PosReraise := Pos('call $_Reraise', IR);
+  AssertTrue('@fin_exc label present', PosFinExc > 0);
+  AssertTrue('_Reraise present', PosReraise > 0);
+  { _StringRelease must appear INSIDE the exception handler, i.e. between
+    @fin_exc and _Reraise — not just anywhere in the IR }
+  PosRelease := PosEx('call $_StringRelease', IR, PosFinExc);
+  AssertTrue('_StringRelease in exception handler (after @fin_exc)', PosRelease > 0);
+  AssertTrue('_StringRelease before _Reraise', PosRelease < PosReraise);
+end;
+
+procedure TExceptionTests.TestCodegen_TryFinally_ArcRelease_ZerosVar;
+var
+  IR:         string;
+  PosFinExc:  Integer;
+  PosReraise: Integer;
+  PosZero:    Integer;
+begin
+  IR := GenIR(SrcTryFinallyWithStr);
+  { Locate exception handler boundaries }
+  PosFinExc  := Pos('@fin_exc', IR);
+  PosReraise := Pos('call $_Reraise', IR);
+  AssertTrue('@fin_exc label present', PosFinExc > 0);
+  AssertTrue('_Reraise present', PosReraise > 0);
+  { After _StringRelease, the slot must be zeroed (storel 0) to prevent
+    double-release if a nested handler also walks the same scope }
+  PosZero := PosEx('storel 0,', IR, PosFinExc);
+  AssertTrue('storel 0 in exception handler (after @fin_exc)', PosZero > 0);
+  AssertTrue('storel 0 before _Reraise', PosZero < PosReraise);
 end;
 
 initialization
