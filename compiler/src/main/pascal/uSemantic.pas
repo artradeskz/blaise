@@ -23,8 +23,13 @@ type
   TSemanticAnalyser = class
   private
     FTable:       TSymbolTable;
+    FProg:        TProgram;      { current program being analysed; set in Analyse }
     FMethodIndex: TStringList;  { 'TypeName.MethodName' → TMethodDecl (not owned) }
     FProcIndex:   TStringList;  { 'ProcName' → TMethodDecl (not owned) }
+
+    { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
+    function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
+    function  InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
 
     procedure AnalyseBlock(ABlock: TBlock);
     procedure AnalyseTypeDecls(ABlock: TBlock);
@@ -139,6 +144,7 @@ end;
 
 procedure TSemanticAnalyser.Analyse(AProg: TProgram);
 begin
+  FProg := AProg;
   AnalyseBlock(AProg.Block);
   { Transfer symbol table ownership to the program so that TTypeDesc
     objects (referenced by ResolvedType pointers on AST nodes) outlive
@@ -313,6 +319,221 @@ begin
   end;
 end;
 
+function TSemanticAnalyser.FindTypeOrInstantiate(const AName: string): TTypeDesc;
+begin
+  Result := FTable.FindType(AName);
+  if (Result = nil) and (Pos('<', AName) > 0) then
+    Result := InstantiateGeneric(AName);
+end;
+
+function TSemanticAnalyser.InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
+var
+  BracPos:  Integer;
+  BaseName: string;
+  ArgsStr:  string;
+  Args:     TStringList;
+  Templ:    TGenericTypeDef;
+  ClonedCD: TClassTypeDef;
+  I, J, K:  Integer;
+  FDecl:    TFieldDecl;
+  NewFDecl: TFieldDecl;
+  MDecl:    TMethodDecl;
+  NewMDecl: TMethodDecl;
+  Par:      TMethodParam;
+  NewPar:   TMethodParam;
+  Sym:      TSymbol;
+  Key:      string;
+  FldType:  TTypeDesc;
+  FldName:  string;
+  ParType:  TTypeDesc;
+  RT:       TRecordTypeDesc;
+  GI:       TGenericInstance;
+  Subst:    string;
+begin
+  Result := nil;
+
+  { Parse 'BaseName<Arg1,Arg2>' }
+  BracPos := Pos('<', ATypeName);
+  if BracPos = 0 then Exit;
+  BaseName := Copy(ATypeName, 1, BracPos - 1);
+  ArgsStr  := Copy(ATypeName, BracPos + 1, Length(ATypeName) - BracPos - 1);
+
+  Args := TStringList.Create;
+  try
+    while ArgsStr <> '' do
+    begin
+      BracPos := Pos(',', ArgsStr);
+      if BracPos > 0 then
+      begin
+        Args.Add(Trim(Copy(ArgsStr, 1, BracPos - 1)));
+        ArgsStr := Trim(Copy(ArgsStr, BracPos + 1, MaxInt));
+      end
+      else
+      begin
+        Args.Add(Trim(ArgsStr));
+        ArgsStr := '';
+      end;
+    end;
+
+    Templ := TGenericTypeDef(FTable.FindGeneric(BaseName));
+    if Templ = nil then Exit;
+    if Args.Count <> Templ.ParamNames.Count then Exit;
+
+    { Create the concrete class type descriptor — defined globally so the
+      symbol survives scope pops and is visible after analysis completes. }
+    RT  := FTable.NewClassType(ATypeName);
+    Sym := TSymbol.Create(ATypeName, skType, RT);
+    FTable.DefineGlobal(Sym);
+
+    { Build substituted clone of the class definition }
+    ClonedCD             := TClassTypeDef.Create;
+    ClonedCD.ParentName  := Templ.ClassDef.ParentName;
+    for I := 0 to Templ.ClassDef.ImplementsNames.Count - 1 do
+      ClonedCD.ImplementsNames.Add(Templ.ClassDef.ImplementsNames[I]);
+
+    { Clone fields with type-param substitution }
+    for I := 0 to Templ.ClassDef.Fields.Count - 1 do
+    begin
+      FDecl    := TFieldDecl(Templ.ClassDef.Fields[I]);
+      NewFDecl := TFieldDecl.Create;
+      for J := 0 to FDecl.Names.Count - 1 do
+        NewFDecl.Names.Add(FDecl.Names[J]);
+      Subst := FDecl.TypeName;
+      for K := 0 to Templ.ParamNames.Count - 1 do
+        if SameText(Subst, Templ.ParamNames[K]) then
+        begin
+          Subst := Args[K];
+          Break;
+        end;
+      NewFDecl.TypeName := Subst;
+      ClonedCD.Fields.Add(NewFDecl);
+    end;
+
+    { Clone method declarations (shared body — OwnBody = False) }
+    for I := 0 to Templ.ClassDef.Methods.Count - 1 do
+    begin
+      MDecl            := TMethodDecl(Templ.ClassDef.Methods[I]);
+      NewMDecl         := TMethodDecl.Create;
+      NewMDecl.Name          := MDecl.Name;
+      NewMDecl.OwnerTypeName := ATypeName;
+      NewMDecl.IsVirtual     := MDecl.IsVirtual;
+      NewMDecl.IsOverride    := MDecl.IsOverride;
+      NewMDecl.Body          := MDecl.Body;
+      NewMDecl.OwnBody       := False;
+
+      for J := 0 to MDecl.Params.Count - 1 do
+      begin
+        Par    := TMethodParam(MDecl.Params[J]);
+        NewPar := TMethodParam.Create;
+        NewPar.ParamName  := Par.ParamName;
+        NewPar.IsVarParam := Par.IsVarParam;
+        Subst := Par.TypeName;
+        for K := 0 to Templ.ParamNames.Count - 1 do
+          if SameText(Subst, Templ.ParamNames[K]) then
+          begin
+            Subst := Args[K];
+            Break;
+          end;
+        NewPar.TypeName := Subst;
+        NewMDecl.Params.Add(NewPar);
+      end;
+
+      Subst := MDecl.ReturnTypeName;
+      for K := 0 to Templ.ParamNames.Count - 1 do
+        if SameText(Subst, Templ.ParamNames[K]) then
+        begin
+          Subst := Args[K];
+          Break;
+        end;
+      NewMDecl.ReturnTypeName := Subst;
+
+      ClonedCD.Methods.Add(NewMDecl);
+    end;
+
+    { Pre-pass: vtable slots (before fields so vptr is counted in offsets) }
+    for J := 0 to ClonedCD.Methods.Count - 1 do
+    begin
+      NewMDecl := TMethodDecl(ClonedCD.Methods[J]);
+      if NewMDecl.IsVirtual then
+        RT.AddVTableSlot(NewMDecl.Name, '$' + ATypeName + '_' + NewMDecl.Name)
+      else if NewMDecl.IsOverride then
+        RT.OverrideVTableSlot(
+          RT.FindVTableSlot(NewMDecl.Name),
+          '$' + ATypeName + '_' + NewMDecl.Name);
+    end;
+
+    { Resolve fields }
+    for J := 0 to ClonedCD.Fields.Count - 1 do
+    begin
+      NewFDecl := TFieldDecl(ClonedCD.Fields[J]);
+      FldType  := FindTypeOrInstantiate(NewFDecl.TypeName);
+      if FldType = nil then
+        SemanticError(
+          Format('Unknown type ''%s'' for field in ''%s''', [NewFDecl.TypeName, ATypeName]),
+          0, 0);
+      NewFDecl.ResolvedType := FldType;
+      for K := 0 to NewFDecl.Names.Count - 1 do
+      begin
+        FldName := NewFDecl.Names[K];
+        RT.AddField(FldName, FldType);
+      end;
+    end;
+
+    { Resolve method signatures and index them }
+    for J := 0 to ClonedCD.Methods.Count - 1 do
+    begin
+      NewMDecl := TMethodDecl(ClonedCD.Methods[J]);
+      Key      := ATypeName + '.' + NewMDecl.Name;
+      FMethodIndex.AddObject(Key, NewMDecl);
+
+      if NewMDecl.IsVirtual or NewMDecl.IsOverride then
+        NewMDecl.VTableSlot := RT.FindVTableSlot(NewMDecl.Name);
+
+      for K := 0 to NewMDecl.Params.Count - 1 do
+      begin
+        Par     := TMethodParam(NewMDecl.Params[K]);
+        ParType := FindTypeOrInstantiate(Par.TypeName);
+        if ParType = nil then
+          SemanticError(
+            Format('Unknown type ''%s'' for param ''%s'' in ''%s''',
+              [Par.TypeName, Par.ParamName, ATypeName]),
+            0, 0);
+        Par.ResolvedType := ParType;
+      end;
+
+      if NewMDecl.ReturnTypeName <> '' then
+      begin
+        ParType := FindTypeOrInstantiate(NewMDecl.ReturnTypeName);
+        if ParType = nil then
+          SemanticError(
+            Format('Unknown return type ''%s'' for method ''%s'' in ''%s''',
+              [NewMDecl.ReturnTypeName, NewMDecl.Name, ATypeName]),
+            0, 0);
+        NewMDecl.ResolvedReturnType := ParType;
+      end;
+    end;
+
+    { Analyse method bodies with concrete types in scope }
+    for J := 0 to ClonedCD.Methods.Count - 1 do
+    begin
+      NewMDecl := TMethodDecl(ClonedCD.Methods[J]);
+      if NewMDecl.Body <> nil then
+        AnalyseMethodDecl(NewMDecl, RT);
+    end;
+
+    { Register the instantiation for codegen }
+    GI          := TGenericInstance.Create;
+    GI.TypeName := ATypeName;
+    GI.ClassDef := ClonedCD;
+    GI.TypeDesc := RT;
+    FProg.GenericInstances.Add(GI);
+
+    Result := RT;
+  finally
+    Args.Free;
+  end;
+end;
+
 procedure TSemanticAnalyser.AnalyseBlock(ABlock: TBlock);
 begin
   { Type declarations are registered in the outer scope so they remain visible
@@ -369,6 +590,12 @@ begin
       RT := FTable.NewRecordType(TD.Name)
     else if TD.Def is TClassTypeDef then
       RT := FTable.NewClassType(TD.Name)
+    else if TD.Def is TGenericTypeDef then
+    begin
+      { Register as template — no concrete type symbol; instantiated on demand }
+      FTable.RegisterGeneric(TD.Name, TD.Def);
+      Continue;
+    end
     else if TD.Def is TInterfaceTypeDef then
     begin
       IntfDesc := FTable.NewInterfaceType(TD.Name);
@@ -398,6 +625,9 @@ begin
   for I := 0 to ABlock.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(ABlock.TypeDecls[I]);
+
+    { Generic templates have no concrete descriptor — skip }
+    if TD.Def is TGenericTypeDef then Continue;
 
     { Interface types: register methods and resolve optional parent }
     if TD.Def is TInterfaceTypeDef then
@@ -798,7 +1028,7 @@ begin
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
 
-    Typ := FTable.FindType(Decl.TypeName);
+    Typ := FindTypeOrInstantiate(Decl.TypeName);
     if Typ = nil then
       SemanticError(
         Format('Unknown type ''%s''', [Decl.TypeName]),

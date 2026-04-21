@@ -166,6 +166,7 @@ type
   private
     FScopeStack: TObjectList;   { owned TScope, index 0 = global }
     FAllTypes:   TObjectList;   { owned TTypeDesc }
+    FGenerics:   TStringList;   { non-owning: base name → TGenericTypeDef* (void ptr) }
 
     FTypeInteger: TTypeDesc;
     FTypeInt64:   TTypeDesc;
@@ -192,6 +193,8 @@ type
 
     { Symbol management — owns ASymbol on success; caller must free on False }
     function Define(ASymbol: TSymbol): Boolean;
+    { Define in global (outermost) scope regardless of current push depth. }
+    function DefineGlobal(ASymbol: TSymbol): Boolean;
     function Lookup(const AName: string): TSymbol;
 
     { Type lookup — case-insensitive, returns nil if not found }
@@ -206,6 +209,11 @@ type
 
     { Creates a new interface type descriptor (tyInterface). }
     function NewInterfaceType(const AName: string): TInterfaceTypeDesc;
+
+    { Generic template registry — stores TGenericTypeDef as TObject to avoid
+      circular unit dependency with uAST. Callers cast the result. }
+    procedure RegisterGeneric(const AName: string; ATempl: TObject);
+    function  FindGeneric(const AName: string): TObject;
 
     { Convenience type accessors }
     property TypeInteger: TTypeDesc read FTypeInteger;
@@ -577,6 +585,8 @@ begin
   inherited Create;
   FScopeStack := TObjectList.Create(True);
   FAllTypes   := TObjectList.Create(True);
+  FGenerics   := TStringList.Create;
+  FGenerics.CaseSensitive := True;
   { Global scope — parent = nil }
   FScopeStack.Add(TScope.Create(nil));
   RegisterBuiltins;
@@ -584,6 +594,7 @@ end;
 
 destructor TSymbolTable.Destroy;
 begin
+  FGenerics.Free;
   FScopeStack.Free;
   FAllTypes.Free;
   inherited Destroy;
@@ -613,6 +624,22 @@ function TSymbolTable.NewInterfaceType(const AName: string): TInterfaceTypeDesc;
 begin
   Result := TInterfaceTypeDesc.Create(AName);
   FAllTypes.Add(Result);
+end;
+
+procedure TSymbolTable.RegisterGeneric(const AName: string; ATempl: TObject);
+begin
+  FGenerics.AddObject(AName, ATempl);
+end;
+
+function TSymbolTable.FindGeneric(const AName: string): TObject;
+var
+  Idx: Integer;
+begin
+  Idx := FGenerics.IndexOf(AName);
+  if Idx >= 0 then
+    Result := FGenerics.Objects[Idx]
+  else
+    Result := nil;
 end;
 
 procedure TSymbolTable.RegisterBuiltins;
@@ -648,6 +675,11 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('WriteLn', skProcedure, nil);
   Define(Sym);
+end;
+
+function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;
+begin
+  Result := TScope(FScopeStack[0]).Define(ASymbol);
 end;
 
 function TSymbolTable.GetCurrentScope: TScope;

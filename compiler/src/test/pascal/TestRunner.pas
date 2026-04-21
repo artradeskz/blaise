@@ -29,7 +29,8 @@ uses
   cp.test.varparams,
   cp.test.vtable,
   cp.test.typetests,
-  cp.test.interfaces;
+  cp.test.interfaces,
+  cp.test.generics;
 
 var
   Application: TTestRunner;

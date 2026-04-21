@@ -62,6 +62,8 @@ type
     function  FieldPtr(const ARecordVar: string; AOffset: Integer): string;
     function  QbeTypeOf(AType: TTypeDesc): string;
     function  QbeEscapeString(const AStr: string): string;
+    { Mangle a type name for use in QBE symbols: '<' → '_', '>' → '', ',' → '_' }
+    function  QBEMangle(const AName: string): string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -887,8 +889,10 @@ var
   TD:        TTypeDecl;
   TDesc:     TTypeDesc;
   RT:        TRecordTypeDesc;
+  GI:        TGenericInstance;
   ParentStr: string;
   ImplStr:   string;
+  MName:     string;
 begin
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -908,6 +912,21 @@ begin
     EmitLine('data $typeinfo_' + TD.Name +
              ' = { l ' + ParentStr + ', l ' + ImplStr + ' }');
   end;
+
+  { Generic instances }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI    := TGenericInstance(AProg.GenericInstances[I]);
+    RT    := TRecordTypeDesc(GI.TypeDesc);
+    MName := QBEMangle(GI.TypeName);
+    if RT.Parent <> nil then
+      ParentStr := '$typeinfo_' + QBEMangle(RT.Parent.Name)
+    else
+      ParentStr := '0';
+    ImplStr := '0';
+    EmitLine('data $typeinfo_' + MName + ' = { l ' + ParentStr + ', l ' + ImplStr + ' }');
+  end;
+
   EmitLine('');
 end;
 
@@ -919,8 +938,10 @@ var
   TD:    TTypeDecl;
   TDesc: TTypeDesc;
   RT:    TRecordTypeDesc;
+  GI:    TGenericInstance;
   E:     TVTableEntry;
   Line:  string;
+  MName: string;
 begin
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -940,6 +961,24 @@ begin
     Line := Line + ' }';
     EmitLine(Line);
   end;
+
+  { Generic instances }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI    := TGenericInstance(AProg.GenericInstances[I]);
+    RT    := TRecordTypeDesc(GI.TypeDesc);
+    if not RT.HasVTable then Continue;
+    MName := QBEMangle(GI.TypeName);
+    Line  := 'data $vtable_' + MName + ' = { l $typeinfo_' + MName;
+    for S := 0 to RT.VTableCount - 1 do
+    begin
+      E    := RT.VTableEntryAt(S);
+      Line := Line + ', l ' + QBEMangle(E.ImplName);
+    end;
+    Line := Line + ' }';
+    EmitLine(Line);
+  end;
+
   EmitLine('');
 end;
 
@@ -1014,9 +1053,11 @@ end;
 
 procedure TCodeGenQBE.EmitMethodDefs(AProg: TProgram);
 var
-  I, J: Integer;
-  TD:   TTypeDecl;
-  CD:   TClassTypeDef;
+  I, J:  Integer;
+  TD:    TTypeDecl;
+  CD:    TClassTypeDef;
+  GI:    TGenericInstance;
+  MDecl: TMethodDecl;
 begin
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -1027,6 +1068,18 @@ begin
     for J := 0 to CD.Methods.Count - 1 do
       if TMethodDecl(CD.Methods[J]).Body <> nil then
         EmitMethodDef(TD.Name, TMethodDecl(CD.Methods[J]));
+  end;
+
+  { Generic instances — emit with mangled type name }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances[I]);
+    for J := 0 to GI.ClassDef.Methods.Count - 1 do
+    begin
+      MDecl := TMethodDecl(GI.ClassDef.Methods[J]);
+      if MDecl.Body <> nil then
+        EmitMethodDef(QBEMangle(GI.TypeName), MDecl);
+    end;
   end;
 end;
 
@@ -1524,6 +1577,21 @@ begin
   ResTemp := AllocTemp;
   EmitLine(Format('  %s =l loadl %s', [ResTemp, SlotTemp]));
   Result := ResTemp;
+end;
+
+function TCodeGenQBE.QBEMangle(const AName: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 1 to Length(AName) do
+    case AName[I] of
+      '<': Result := Result + '_';
+      '>': { skip — closing bracket dropped };
+      ',': Result := Result + '_';
+    else
+      Result := Result + AName[I];
+    end;
 end;
 
 function TCodeGenQBE.QbeEscapeString(const AStr: string): string;

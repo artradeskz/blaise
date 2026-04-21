@@ -237,7 +237,8 @@ type
     Params:             TObjectList; { owned TMethodParam }
     ReturnTypeName:     string;      { empty = procedure }
     ResolvedReturnType: TTypeDesc;   { set by uSemantic; nil = procedure }
-    Body:               TBlock;      { owned }
+    Body:               TBlock;      { owned unless OwnBody = False }
+    OwnBody:            Boolean;     { False for cloned generic method stubs that share the body }
     IsVirtual:          Boolean;     { declared with 'virtual' directive }
     IsOverride:         Boolean;     { declared with 'override' directive }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
@@ -262,6 +263,26 @@ type
     ImplementsNames: TStringList;  { owned — names of implemented interfaces }
     Fields:          TObjectList;  { owned TFieldDecl }
     Methods:         TObjectList;  { owned TMethodDecl }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  { Generic type template: type TBox<T> = class ... end }
+  TGenericTypeDef = class(TASTTypeDef)
+  public
+    ParamNames: TStringList;   { owned — type parameter names, e.g. ['T'] or ['K','V'] }
+    ClassDef:   TClassTypeDef; { owned — template class body with unresolved param types }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  { One concrete instantiation produced by monomorphization — stored on TProgram.
+    Codegen iterates this list to emit typeinfo, vtables, and method bodies. }
+  TGenericInstance = class
+  public
+    TypeName: string;        { raw e.g. 'TBox<Integer>' }
+    ClassDef: TClassTypeDef; { owned — cloned class body with substituted type names }
+    TypeDesc: TTypeDesc;     { non-owned — points to TRecordTypeDesc in SymbolTable }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -297,10 +318,11 @@ type
 
   TProgram = class(TASTNode)
   public
-    Name:        string;
-    UsedUnits:   TStringList;   { owned }
-    Block:       TBlock;        { owned }
-    SymbolTable: TSymbolTable;  { owned after semantic analysis; nil before }
+    Name:             string;
+    UsedUnits:        TStringList;    { owned }
+    Block:            TBlock;         { owned }
+    SymbolTable:      TSymbolTable;   { owned after semantic analysis; nil before }
+    GenericInstances: TObjectList;    { owned TGenericInstance — populated by uSemantic }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -543,12 +565,13 @@ begin
   inherited Create;
   Params     := TObjectList.Create(True);
   VTableSlot := -1;
+  OwnBody    := True;
 end;
 
 destructor TMethodDecl.Destroy;
 begin
   Params.Free;
-  Body.Free;
+  if OwnBody then Body.Free;
   inherited Destroy;
 end;
 
@@ -598,6 +621,36 @@ begin
   inherited Destroy;
 end;
 
+{ TGenericTypeDef }
+
+constructor TGenericTypeDef.Create;
+begin
+  inherited Create;
+  ParamNames := TStringList.Create;
+  ClassDef   := TClassTypeDef.Create;
+end;
+
+destructor TGenericTypeDef.Destroy;
+begin
+  ClassDef.Free;
+  ParamNames.Free;
+  inherited Destroy;
+end;
+
+{ TGenericInstance }
+
+constructor TGenericInstance.Create;
+begin
+  inherited Create;
+  ClassDef := TClassTypeDef.Create;
+end;
+
+destructor TGenericInstance.Destroy;
+begin
+  ClassDef.Free;
+  inherited Destroy;
+end;
+
 { TTypeDecl }
 
 destructor TTypeDecl.Destroy;
@@ -631,11 +684,13 @@ end;
 constructor TProgram.Create;
 begin
   inherited Create;
-  UsedUnits := TStringList.Create;
+  UsedUnits        := TStringList.Create;
+  GenericInstances := TObjectList.Create(True);
 end;
 
 destructor TProgram.Destroy;
 begin
+  GenericInstances.Free;
   SymbolTable.Free;
   UsedUnits.Free;
   Block.Free;

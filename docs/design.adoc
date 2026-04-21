@@ -708,8 +708,9 @@ macOS ARM64 is deferred to Phase 5 alongside self-hosting.
 == Phase 3 — Implementation Status
 
 Phase 2 is complete. Phase 3 (type system extensions) is in progress.
-Implementation order: interfaces first, then generics (interface constraints
-are required for correct generic type bounds).
+Implementation order: interfaces first (complete), then generics (core
+monomorphization complete; `TList<T>` / `TDictionary<K,V>` RTL additions
+and standalone generic methods remain pending).
 
 === Interfaces
 
@@ -787,24 +788,31 @@ are required for correct generic type bounds).
 | Item | Status | Notes
 
 | Generic type declaration parsing
-| Pending
-| `type TList<T> = class ... end;` — type parameter list; constraint syntax
-  `T: IComparable` (requires interfaces to be complete first)
+| Done
+| `type TBox<T> = class ... end;` — Delphi syntax (no `generic`/`specialize`);
+  single and multiple type parameters; inline method bodies with `Self.field`
+  access pattern.  Parsed as `TGenericTypeDef` in the AST.
 
 | Generic method declaration parsing
 | Pending
 | `function Min<T: IComparable>(A, B: T): T;`
 
 | Monomorphization: instantiation registry
-| Pending
-| Demand-driven: on first use of `TList<Integer>`, compiler creates a fully
-  substituted copy of the generic AST and analyses it; registry prevents
-  duplicate instantiations
+| Done
+| Demand-driven: on first use of `TBox<Integer>` in a var declaration, the
+  semantic analyser creates a substituted clone of the class AST, resolves all
+  field and method types with concrete args, analyses method bodies with the
+  concrete class type in scope, and registers the instance in
+  `TProgram.GenericInstances`.  Registry in `TSymbolTable.FGenerics` prevents
+  duplicate instantiations.  Symbol is defined in the global scope so it
+  survives nested scope pops.
 
 | Codegen: monomorphized type emission
-| Pending
-| Each instantiation emits its own QBE type and functions with mangled names
-  (e.g., `TList__Integer_`, `TList__Integer__Add`)
+| Done
+| Each instantiation emits its own QBE typeinfo, vtable (if virtual methods
+  present), and method bodies.  Type names are mangled with `QBEMangle`:
+  `TBox<Integer>` → `TBox_Integer`, `TPair<string,Integer>` →
+  `TPair_string_Integer`.
 
 | `TList<T>` in RTL
 | Pending

@@ -40,12 +40,15 @@ type
 
   TParser = class
   private
-    FLexer:   TLexer;
-    FCurrent: TToken;
+    FLexer:     TLexer;
+    FCurrent:   TToken;
+    FLookahead: TToken;  { one-token lookahead for generic disambiguation }
 
     procedure Advance;
+    function  PeekKind: TTokenKind;
     procedure Expect(AKind: TTokenKind);
     function  Check(AKind: TTokenKind): Boolean;
+    function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
 
     function  ParseProgram: TProgram;
     procedure ParseUses(AProg: TProgram);
@@ -87,13 +90,55 @@ implementation
 constructor TParser.Create(ALexer: TLexer);
 begin
   inherited Create;
-  FLexer   := ALexer;
-  FCurrent := FLexer.Next;
+  FLexer     := ALexer;
+  FCurrent   := FLexer.Next;
+  FLookahead := FLexer.Next;
 end;
 
 procedure TParser.Advance;
 begin
-  FCurrent := FLexer.Next;
+  FCurrent   := FLookahead;
+  FLookahead := FLexer.Next;
+end;
+
+function TParser.PeekKind: TTokenKind;
+begin
+  Result := FLookahead.Kind;
+end;
+
+{ Parse a type name, including generic instantiations.
+  Returns 'Integer', 'TBox<Integer>', 'TPair<string,Integer>', etc.
+  Spaces around commas are stripped for a canonical representation. }
+function TParser.ParseTypeName: string;
+begin
+  if not Check(tkIdent) then
+    raise EParseError.CreateFmt('Expected type name at line %d col %d',
+      [FCurrent.Line, FCurrent.Col]);
+  Result := FCurrent.Value;
+  Advance;
+  if Check(tkLessThan) then
+  begin
+    Advance;  { consume '<' }
+    Result := Result + '<';
+    if not Check(tkIdent) then
+      raise EParseError.CreateFmt(
+        'Expected type argument after ''<'' at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    Result := Result + FCurrent.Value;
+    Advance;
+    while Check(tkComma) do
+    begin
+      Advance;
+      if not Check(tkIdent) then
+        raise EParseError.CreateFmt(
+          'Expected type argument after '','' at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+      Result := Result + ',' + FCurrent.Value;
+      Advance;
+    end;
+    Expect(tkGreaterThan);
+    Result := Result + '>';
+  end;
 end;
 
 procedure TParser.Expect(AKind: TTokenKind);
@@ -213,7 +258,10 @@ end;
 
 procedure TParser.ParseTypeDecl(ABlock: TBlock);
 var
-  TD: TTypeDecl;
+  TD:         TTypeDecl;
+  GD:         TGenericTypeDef;
+  ParamNames: TStringList;
+  IsGeneric:  Boolean;
 begin
   TD := TTypeDecl.Create;
   TD.Line := FCurrent.Line;
@@ -224,17 +272,60 @@ begin
         [FCurrent.Line, FCurrent.Col]);
     TD.Name := FCurrent.Value;
     Advance;
-    Expect(tkEquals);
-    if Check(tkRecord) then
-      TD.Def := ParseRecordDef
-    else if Check(tkClass) then
-      TD.Def := ParseClassDef
-    else if Check(tkIntf) then
-      TD.Def := ParseInterfaceDef
+    { Check for generic type parameters: TBox<T> or TPair<K, V> }
+    IsGeneric := Check(tkLessThan);
+    if IsGeneric then
+    begin
+      Advance;  { consume '<' }
+      ParamNames := TStringList.Create;
+      try
+        if not Check(tkIdent) then
+          raise EParseError.CreateFmt(
+            'Expected type parameter name at line %d col %d',
+            [FCurrent.Line, FCurrent.Col]);
+        ParamNames.Add(FCurrent.Value);
+        Advance;
+        while Check(tkComma) do
+        begin
+          Advance;
+          if not Check(tkIdent) then
+            raise EParseError.CreateFmt(
+              'Expected type parameter name at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+          ParamNames.Add(FCurrent.Value);
+          Advance;
+        end;
+        Expect(tkGreaterThan);
+        Expect(tkEquals);
+        if not Check(tkClass) then
+          raise EParseError.CreateFmt(
+            'Generic type must be a class at line %d col %d',
+            [FCurrent.Line, FCurrent.Col]);
+        GD            := TGenericTypeDef.Create;
+        GD.Line       := TD.Line;
+        GD.Col        := TD.Col;
+        GD.ParamNames.AddStrings(ParamNames);
+        GD.ClassDef.Free;
+        GD.ClassDef := ParseClassDef;
+        TD.Def := GD;
+      finally
+        ParamNames.Free;
+      end;
+    end
     else
-      raise EParseError.CreateFmt(
-        'Expected ''record'', ''class'', or ''interface'' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]);
+    begin
+      Expect(tkEquals);
+      if Check(tkRecord) then
+        TD.Def := ParseRecordDef
+      else if Check(tkClass) then
+        TD.Def := ParseClassDef
+      else if Check(tkIntf) then
+        TD.Def := ParseInterfaceDef
+      else
+        raise EParseError.CreateFmt(
+          'Expected ''record'', ''class'', or ''interface'' at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+    end;
     Expect(tkSemicolon);
     ABlock.TypeDecls.Add(TD);
   except
@@ -369,11 +460,7 @@ begin
     if IsFunction then
     begin
       Expect(tkColon);
-      if not Check(tkIdent) then
-        raise EParseError.CreateFmt('Expected return type at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]);
-      Result.ReturnTypeName := FCurrent.Value;
-      Advance;
+      Result.ReturnTypeName := ParseTypeName;
     end;
     Expect(tkSemicolon);
     if Check(tkVirtual) then
@@ -429,11 +516,7 @@ begin
         Advance;
       end;
       Expect(tkColon);
-      if not Check(tkIdent) then
-        raise EParseError.CreateFmt('Expected type name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]);
-      TypeN := FCurrent.Value;
-      Advance;
+      TypeN := ParseTypeName;
       for I := 0 to Names.Count - 1 do
       begin
         Par            := TMethodParam.Create;
@@ -485,11 +568,7 @@ begin
       Advance;
     end;
     Expect(tkColon);
-    if not Check(tkIdent) then
-      raise EParseError.CreateFmt('Expected type name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]);
-    Fld.TypeName := FCurrent.Value;
-    Advance;
+    Fld.TypeName := ParseTypeName;
     Expect(tkSemicolon);
     AFields.Add(Fld);
   except
@@ -532,11 +611,7 @@ begin
       Advance;
     end;
     Expect(tkColon);
-    if not Check(tkIdent) then
-      raise EParseError.CreateFmt('Expected type name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]);
-    Decl.TypeName := FCurrent.Value;
-    Advance;
+    Decl.TypeName := ParseTypeName;
     Expect(tkSemicolon);
     ABlock.Decls.Add(Decl);
   except
@@ -948,11 +1023,7 @@ begin
     if IsFunction then
     begin
       Expect(tkColon);
-      if not Check(tkIdent) then
-        raise EParseError.CreateFmt('Expected return type at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]);
-      Result.ReturnTypeName := FCurrent.Value;
-      Advance;
+      Result.ReturnTypeName := ParseTypeName;
     end;
     Expect(tkSemicolon);
     { Body remains nil — forward declaration }
@@ -1152,6 +1223,29 @@ begin
         Line := FCurrent.Line;
         Col  := FCurrent.Col;
         Advance;
+        { Generic constructor: TypeName<Args>.Method
+          Heuristic: '<' followed by identifier is treated as generic type args.
+          This means 'A < SomeName > .X' cannot appear as a comparison in expressions,
+          which is a known Phase 3 limitation. }
+        if Check(tkLessThan) and (PeekKind = tkIdent) then
+        begin
+          Advance;  { consume '<' }
+          Name := Name + '<' + FCurrent.Value;
+          Advance;
+          while Check(tkComma) do
+          begin
+            Advance;
+            Name := Name + ',' + FCurrent.Value;
+            Advance;
+          end;
+          Expect(tkGreaterThan);
+          Name := Name + '>';
+          { Generic type args must be followed by '.' (constructor or class method) }
+          if not Check(tkDot) then
+            raise EParseError.CreateFmt(
+              'Expected ''.'' after generic type arguments at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+        end;
         if Check(tkDot) then
         begin
           Advance;
