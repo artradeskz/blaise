@@ -7,7 +7,7 @@ unit cp.test.exceptions;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, StrUtils, fpcunit, testregistry,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -75,6 +75,16 @@ type
     { Codegen — raise                                                      }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Raise_CallsRTL;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — setjmp-based real dispatch                                 }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_TryExcept_PushesExcFrame;
+    procedure TestCodegen_TryExcept_CallsSetjmp;
+    procedure TestCodegen_TryExcept_PopsFrame;
+    procedure TestCodegen_TryFinally_PushesExcFrame;
+    procedure TestCodegen_TryFinally_CallsReraise;
+    procedure TestCodegen_TryFinally_FinallyOnBothPaths;
   end;
 
 implementation
@@ -467,6 +477,65 @@ begin
   IR := GenIR(SrcRaise);
   { raise emits a call to the RTL raise function }
   AssertTrue('call $_Raise in IR', Pos('call $_Raise', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen — setjmp-based real dispatch                                 }
+{ ------------------------------------------------------------------ }
+
+procedure TExceptionTests.TestCodegen_TryExcept_PushesExcFrame;
+var IR: string;
+begin
+  IR := GenIR(SrcTryExcept);
+  AssertTrue('try/except pushes exc frame', Pos('call $_PushExcFrame', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TryExcept_CallsSetjmp;
+var IR: string;
+begin
+  IR := GenIR(SrcTryExcept);
+  AssertTrue('try/except calls setjmp', Pos('call $setjmp', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TryExcept_PopsFrame;
+var IR: string;
+begin
+  IR := GenIR(SrcTryExcept);
+  AssertTrue('try/except pops exc frame', Pos('call $_PopExcFrame', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TryFinally_PushesExcFrame;
+var IR: string;
+begin
+  IR := GenIR(SrcTryFinally);
+  AssertTrue('try/finally pushes exc frame', Pos('call $_PushExcFrame', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TryFinally_CallsReraise;
+var IR: string;
+begin
+  IR := GenIR(SrcTryFinally);
+  AssertTrue('try/finally re-raises on exception path', Pos('call $_Reraise', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TryFinally_FinallyOnBothPaths;
+var
+  IR:   string;
+  N:    Integer;
+  Idx:  Integer;
+begin
+  { finally body (copy 2) must appear on both the normal and exception paths }
+  IR  := GenIR(SrcTryFinally);
+  N   := 0;
+  Idx := 1;
+  while True do
+  begin
+    Idx := PosEx('copy 2', IR, Idx);
+    if Idx = 0 then Break;
+    Inc(N);
+    Inc(Idx);
+  end;
+  AssertTrue('finally body appears on both paths (>= 2 occurrences)', N >= 2);
 end;
 
 initialization

@@ -652,13 +652,23 @@ Phase 1 (bootstrap pipeline) is complete. Phase 2 type-system work is in progres
   `make install` copies `blaise_rtl.a` next to the compiler binary for auto-linking
 
 | `try`/`except`/`finally` (IR structure)
-| Partial
-| Basic block structure emitted; `_Raise` RTL stub called; real stack unwinding
-  and ARC cleanup on exception paths requires RTL support (Phase 3)
+| Done
+| setjmp/longjmp-based dispatch: compiler emits `alloc16 32` (512 B) frame on
+  Pascal stack, `_PushExcFrame` + `setjmp` at try entry, `jnz` to handler on
+  non-zero return; `try/finally` emits finally body on both normal and exception
+  paths and calls `_Reraise` to propagate; `try/except` pops frame before handler
+  body; `raise Obj` calls `_Raise`; RTL (`blaise_exc.c`) provides
+  `_PushExcFrame`, `_PopExcFrame`, `_Raise`, `_CurrentException`, `_Reraise`;
+  ARC cleanup on exception paths deferred to Phase 3
 
 | Virtual method dispatch
-| Pending
-| vtable generation and `callv` in QBE IR not yet implemented
+| Done
+| `virtual`/`override` directives parsed; vtable slots assigned before field layout
+  so vptr (8 bytes at offset 0) shifts all field offsets correctly;
+  `data $vtable_T = { l $fn, ... }` emitted per class; constructor stores vptr
+  after `malloc`; virtual calls use `loadl` vptr + indirect `call %fptr`;
+  static methods retain direct `call $T_M` dispatch; subtype assignment
+  (`TDerived := TBase`) allowed via parent-chain walk in semantic pass
 
 | macOS ARM64 target
 | Pending
@@ -667,12 +677,13 @@ Phase 1 (bootstrap pipeline) is complete. Phase 2 type-system work is in progres
 
 === Immediate Next Steps
 
-. Implement virtual method dispatch — vtable layout per class, `callv` in QBE IR,
-  and `is`/`as` type tests.
-. Implement `try`/`except`/`finally` with real stack unwinding and ARC cleanup
-  on exception paths (requires RTL landing-pad support).
 . macOS ARM64 target — QBE supports it; compiler driver needs target detection
   and Darwin-specific link flags.
+. `is`/`as` type tests — runtime type identity check and checked downcast,
+  requires storing type metadata alongside the vtable.
+. ARC cleanup on exception paths — release in-scope ARC-managed variables on the
+  exception path inside try/finally before re-raising (requires scope-chain
+  tracking in the code generator).
 
 == Landscape Notes
 

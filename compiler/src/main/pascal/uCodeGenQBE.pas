@@ -311,34 +311,83 @@ end;
 
 procedure TCodeGenQBE.EmitTryFinallyStmt(AStmt: TTryFinallyStmt);
 var
-  I: Integer;
+  LblTry:    string;
+  LblFinExc: string;
+  LblEnd:    string;
+  FrameTemp: string;
+  SjrTemp:   string;
+  ExcTemp:   string;
+  I:         Integer;
 begin
-  { Simplified model: emit try body then finally body sequentially.
-    Full stack-unwinding requires RTL support (future phase). }
+  LblTry    := AllocLabel('try_body');
+  LblFinExc := AllocLabel('fin_exc');
+  LblEnd    := AllocLabel('fin_end');
+
+  { Stack-allocate exception frame (512 bytes, 16-byte aligned).
+    jbuf is at offset 0 so frame ptr can be passed directly to setjmp.
+    512 bytes accommodates jmp_buf on Linux x86_64 (200 B) and macOS ARM64 (~312 B). }
+  FrameTemp := AllocTemp;
+  EmitLine(Format('  %s =l alloc16 32', [FrameTemp]));
+  EmitLine(Format('  call $_PushExcFrame(l %s)', [FrameTemp]));
+
+  SjrTemp := AllocTemp;
+  EmitLine(Format('  %s =w call $setjmp(l %s)', [SjrTemp, FrameTemp]));
+  EmitLine(Format('  jnz %s, @%s, @%s', [SjrTemp, LblFinExc, LblTry]));
+
+  { Normal path: run try body, pop frame, run finally body }
+  EmitLine('@' + LblTry);
   for I := 0 to AStmt.TryBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.TryBody.Stmts[I]));
+  EmitLine('  call $_PopExcFrame()');
   for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts[I]));
+  EmitLine(Format('  jmp @%s', [LblEnd]));
+
+  { Exception path: capture exception, pop frame, run finally body, re-raise }
+  EmitLine('@' + LblFinExc);
+  ExcTemp := AllocTemp;
+  EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
+  EmitLine('  call $_PopExcFrame()');
+  for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
+    EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts[I]));
+  EmitLine(Format('  call $_Reraise(l %s)', [ExcTemp]));
+  EmitLine(Format('  jmp @%s', [LblEnd]));  { unreachable — satisfies QBE block exit }
+
+  EmitLine('@' + LblEnd);
 end;
 
 procedure TCodeGenQBE.EmitTryExceptStmt(AStmt: TTryExceptStmt);
 var
+  LblTry:    string;
   LblExcept: string;
   LblEnd:    string;
+  FrameTemp: string;
+  SjrTemp:   string;
   I:         Integer;
 begin
+  LblTry    := AllocLabel('try_body');
   LblExcept := AllocLabel('except_handler');
   LblEnd    := AllocLabel('except_end');
 
-  { Emit try body — exception dispatch requires RTL support (future phase) }
+  { Stack-allocate exception frame }
+  FrameTemp := AllocTemp;
+  EmitLine(Format('  %s =l alloc16 32', [FrameTemp]));
+  EmitLine(Format('  call $_PushExcFrame(l %s)', [FrameTemp]));
+
+  SjrTemp := AllocTemp;
+  EmitLine(Format('  %s =w call $setjmp(l %s)', [SjrTemp, FrameTemp]));
+  EmitLine(Format('  jnz %s, @%s, @%s', [SjrTemp, LblExcept, LblTry]));
+
+  { Normal path: run try body, pop frame on clean exit }
+  EmitLine('@' + LblTry);
   for I := 0 to AStmt.TryBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.TryBody.Stmts[I]));
-
-  { Skip except handler in normal execution }
+  EmitLine('  call $_PopExcFrame()');
   EmitLine(Format('  jmp @%s', [LblEnd]));
 
-  { Except handler block — reachable only via raise dispatch (future) }
+  { Exception path: frame still at top (exception set), pop then handle }
   EmitLine('@' + LblExcept);
+  EmitLine('  call $_PopExcFrame()');
   for I := 0 to AStmt.ExceptBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.ExceptBody.Stmts[I]));
   EmitLine(Format('  jmp @%s', [LblEnd]));

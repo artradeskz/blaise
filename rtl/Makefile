@@ -9,7 +9,8 @@ LIB     = $(OBJ_DIR)/blaise_rtl.a
 # driver finds it automatically next to itself.
 COMPILER_BIN = ../compiler/target/bin
 
-SRCS = $(SRC_DIR)/blaise_arc.c
+SRCS = $(SRC_DIR)/blaise_arc.c \
+       $(SRC_DIR)/blaise_exc.c
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 
 .PHONY: all install clean
