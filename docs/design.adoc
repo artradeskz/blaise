@@ -724,10 +724,12 @@ are required for correct generic type bounds).
   (zero-GUID design); `TInterfaceTypeDef` AST node; `tkIntf` token reused from
   unit interface section (context disambiguates)
 
-| TYPEID generation
+| TYPEID generation + impllist
 | Done
-| `data $typeinfo_IFoo = { l 0 }` — address of block IS the identity token;
-  emitted by `EmitInterfaceDefs`; used for future `is`/`as` interface checks
+| `data $typeinfo_IFoo = { l 0 }` — address IS identity token; class typeinfo
+  extended to 2 fields `{ l parent, l impllist }` where impllist is a
+  NULL-terminated `{typeinfo*, itab*}` pair array; emitted by `EmitInterfaceDefs`
+  / `EmitTypeInfoDefs`
 
 | Interface type in symbol table
 | Done
@@ -761,19 +763,20 @@ are required for correct generic type bounds).
   slot (slot × 8); indirect `call %fptr(l obj)` — same pattern as virtual dispatch
 
 | `as` cast to interface
-| Pending
-| Checked downcast: verify class implements interface via typeinfo pointer walk;
-  raise `EInvalidCast` on failure
+| Done
+| `F := T as IFoo` — codegen calls `_GetItab(obj, $typeinfo_IFoo)`; non-nil
+  result stored to `F_itab`; nil triggers `_Raise_InvalidCast`; handled
+  inline in `EmitAssignment` (fat-pointer LHS + TAsExpr RHS)
 
 | `is` test against interface
-| Pending
-| Runtime check: walk class `implements` list for matching typeinfo pointer;
-  return boolean
+| Done
+| `T is IFoo` — codegen calls `_ImplementsInterface(obj, $typeinfo_IFoo)`;
+  walks class typeinfo impllist chain; RTL in `blaise_exc.c`
 
 | RTL: `IInterface` base
-| Pending
-| Minimal `IInterface` declaration in `System.pas` stub:
-  `QueryInterface`, `_AddRef`, `_Release`; Blaise ARC replaces COM ref-counting
+| Done
+| `IInterface` pre-registered as built-in interface type in
+  `TSymbolTable.RegisterBuiltins`; no methods (ARC replaces COM ref-counting)
 
 |===
 
