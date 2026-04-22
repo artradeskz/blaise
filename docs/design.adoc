@@ -465,6 +465,67 @@ Cross-unit generic instantiation: the compiler generates specialisations in the
 unit that first uses them; duplicate specialisations across units are merged by
 the linker's COMDAT-folding or deduplicated by the compiler's instantiation tracker.
 
+==== Property Declarations
+
+Classes support Delphi-style `property` declarations with field-backed or
+method-backed read/write access.
+
+[source,pascal]
+----
+type
+  TCounter = class
+    FCount: Integer;
+    function GetCount: Integer;
+    procedure SetCount(AValue: Integer);
+    property Count: Integer read FCount write FCount;  { field-backed }
+    property CountVia: Integer read GetCount write SetCount; { method-backed }
+  end;
+----
+
+* **Field-backed read/write**: redirected at semantic analysis time; codegen
+  emits a plain field load or store.
+* **Method-backed read**: `PropRead`/`PropOwnerType` set on `TFieldAccessExpr`;
+  codegen emits a getter method call.
+* **Read-only enforcement**: assigning to a property with no `write` clause raises
+  `ESemanticError` at compile time.
+* **Soft-keyword detection**: `property` is not a reserved word; the parser
+  detects it contextually inside the class body loop to avoid lexer conflicts.
+
+Implementation status (as of 2026-04-21): field-backed and method-backed reads
+and writes are fully operational. 14 tests in `cp.test.properties.pas` —
+all passing (527 total, 0 failures).
+
+==== Standalone Generic Functions
+
+Standalone functions can declare type parameters using the same Delphi syntax as
+generic classes.
+
+[source,pascal]
+----
+function Identity<T>(Val: T): T;
+begin
+  Result := Val;
+end;
+
+var X: Integer;
+begin
+  X := Identity<Integer>(42);
+end;
+----
+
+* **On-demand instantiation**: the function template is registered during
+  `AnalyseStandaloneDecls` but not analysed until a call site with concrete type
+  args is encountered.
+* **Shared body**: concrete instances re-use the template's `TBlock` with
+  `OwnBody = False`; each instantiation re-annotates the body nodes with the
+  current concrete types (same documented limitation as generic class methods).
+* **QBE mangling**: the call site emits `call $Identity_Integer` and the function
+  body is emitted as `function w $Identity_Integer(w %_par_Val)`.
+
+Implementation status (as of 2026-04-21): single-type-parameter functions with
+value params are fully operational. 14 tests in `cp.test.genericfuncs.pas` — all
+passing (541 total, 0 failures).
+
 ==== Other Phase 3 Items
 
 * ARC for interface references (with `[Weak]` attribute for cycle-breaking)

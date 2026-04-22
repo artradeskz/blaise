@@ -70,7 +70,8 @@ type
     tkRParen,
     tkComma,
     tkSemicolon,
-    tkDot
+    tkDot,
+    tkCaret          { ^ — pointer dereference / pointer type prefix }
   );
 
   TToken = record
@@ -245,6 +246,7 @@ begin
         else if text = '-'  then Result.Kind := tkMinus
         else if text = '*'  then Result.Kind := tkStar
         else if text = '/'  then Result.Kind := tkSlash
+        else if text = '^'  then Result.Kind := tkCaret
         else
           raise Exception.CreateFmt(
             'Unexpected symbol ''%s'' at line %d col %d',

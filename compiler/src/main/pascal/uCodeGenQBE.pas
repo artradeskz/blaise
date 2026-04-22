@@ -55,6 +55,7 @@ type
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
     procedure EmitMethodCall(ACall: TMethodCallStmt);
     procedure EmitProcCall(ACall: TProcCall);
+    procedure EmitPointerWrite(AStmt: TPointerWriteStmt);
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     function  EmitExpr(AExpr: TASTExpr): string;
     function  EmitIsExpr(AExpr: TIsExpr): string;
@@ -159,6 +160,7 @@ begin
     tyInt64, tyString:                      Result := 'l';
     tyRecord:                               Result := 'l';  { pointer to aggregate }
     tyClass:                                Result := 'l';  { heap pointer }
+    tyPointer:                              Result := 'l';  { pointer (typed or untyped) }
   else
     Result := 'w';
   end;
@@ -211,6 +213,13 @@ begin
         tyClass:
           begin
             { Class var holds a heap pointer — allocate one pointer slot, nil-init }
+            EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
+            EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+          end;
+
+        tyPointer:
+          begin
+            { Pointer var (typed or untyped) — allocate one pointer slot, nil-init }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
@@ -307,6 +316,8 @@ begin
     EmitCompoundStmt(TCompoundStmt(AStmt))
   else if AStmt is TFieldAssignment then
     EmitFieldAssignment(TFieldAssignment(AStmt))
+  else if AStmt is TPointerWriteStmt then
+    EmitPointerWrite(TPointerWriteStmt(AStmt))
   else if AStmt is TAssignment then
     EmitAssignment(TAssignment(AStmt))
   else if AStmt is TMethodCallStmt then
@@ -1266,9 +1277,29 @@ begin
     EmitWrite(ACall, True)
   else if UCaseName = 'WRITE' then
     EmitWrite(ACall, False)
+  else if UCaseName = 'FREEMEM' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
+    EmitLine(Format('  call $free(l %s)', [ArgTemp]));
+  end
   else
     raise ECodeGenError.CreateFmt(
       'Unknown procedure ''%s'' at line %d', [ACall.Name, ACall.Line]);
+end;
+
+procedure TCodeGenQBE.EmitPointerWrite(AStmt: TPointerWriteStmt);
+var
+  PtrTemp:    string;
+  ValTemp:    string;
+  QType:      string;
+  StoreInstr: string;
+begin
+  PtrTemp := EmitExpr(AStmt.PtrExpr);
+  ValTemp := EmitExpr(AStmt.ValExpr);
+  QType   := QbeTypeOf(AStmt.BaseTy);
+  if QType = 'w' then StoreInstr := 'storew'
+                 else StoreInstr := 'storel';
+  EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, PtrTemp]));
 end;
 
 procedure TCodeGenQBE.EmitWrite(ACall: TProcCall; ANewline: Boolean);
@@ -1334,6 +1365,46 @@ begin
     { Standalone function call expression }
     with TFuncCallExpr(AExpr) do
     begin
+      { GetMem(N) → malloc(N) → pointer }
+      if SameText(Name, 'GetMem') then
+      begin
+        ArgTemp := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        { Extend arg to l for malloc }
+        L := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [L, ArgTemp]));
+        EmitLine(Format('  %s =l call $malloc(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      { ReallocMem(P, N) → realloc(P, N) → pointer }
+      if SameText(Name, 'ReallocMem') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        R := EmitExpr(TASTExpr(Args[1]));
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [ArgTemp, R]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $realloc(l %s, l %s)', [T, L, ArgTemp]));
+        Result := T;
+        Exit;
+      end;
+
+      { Type cast TypeName(Expr) — ResolvedDecl is nil; just copy with target QBE type }
+      if ResolvedDecl = nil then
+      begin
+        ArgTemp := EmitExpr(TASTExpr(Args[0]));
+        T       := AllocTemp;
+        QType   := QbeTypeOf(ResolvedType);
+        if QType = 'w' then
+          EmitLine(Format('  %s =w copy %s', [T, ArgTemp]))
+        else
+          EmitLine(Format('  %s =l copy %s', [T, ArgTemp]));
+        Result := T;
+        Exit;
+      end;
+
       MDecl    := TMethodDecl(ResolvedDecl);
       QType    := QbeTypeOf(MDecl.ResolvedReturnType);
       FuncName := '$' + QBEMangle(Name);
@@ -1501,6 +1572,21 @@ begin
       Result := T;
       Exit;
     end;
+    { Pointer arithmetic: Pointer +/- Integer — scale offset by sizeof(base) }
+    if (BinExpr.Op in [boAdd, boSub]) and
+       (BinExpr.Left.ResolvedType <> nil) and
+       (BinExpr.Left.ResolvedType.Kind = tyPointer) then
+    begin
+      { Scale the integer offset to bytes.  QBE pointer/int ops are both l. }
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l extsw %s', [ArgTemp, R]));
+      if BinExpr.Op = boAdd then
+        EmitLine(Format('  %s =l add %s, %s', [T, L, ArgTemp]))
+      else
+        EmitLine(Format('  %s =l sub %s, %s', [T, L, ArgTemp]));
+      Result := T;
+      Exit;
+    end;
     { Use long (pointer) comparison instructions when operands are class/nil }
     if (BinExpr.Left.ResolvedType <> nil) and
        (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil]) then
@@ -1532,6 +1618,18 @@ begin
       EmitLine(Format('  %s =w %s %s, %s', [T, Op, L, R]));
     end;
     Result := T;
+  end
+  else if AExpr is TDerefExpr then
+  begin
+    { P^ — load the value at the pointer address }
+    T     := EmitExpr(TDerefExpr(AExpr).Expr);
+    QType := QbeTypeOf(AExpr.ResolvedType);
+    L     := AllocTemp;
+    if QType = 'w' then
+      EmitLine(Format('  %s =w loadw %s', [L, T]))
+    else
+      EmitLine(Format('  %s =l loadl %s', [L, T]));
+    Result := L;
   end
   else if AExpr is TIsExpr then
     Result := EmitIsExpr(TIsExpr(AExpr))

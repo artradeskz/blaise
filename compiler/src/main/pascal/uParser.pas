@@ -112,6 +112,13 @@ end;
   Spaces around commas are stripped for a canonical representation. }
 function TParser.ParseTypeName: string;
 begin
+  { Pointer-to type: '^TypeName' }
+  if Check(tkCaret) then
+  begin
+    Advance;  { consume '^' }
+    Result := '^' + Self.ParseTypeName;  { Self. forces recursive call, not result-var read }
+    Exit;
+  end;
   if not Check(tkIdent) then
     raise EParseError.CreateFmt('Expected type name at line %d col %d',
       [FCurrent.Line, FCurrent.Col]);
@@ -715,6 +722,8 @@ var
   Assign:      TAssignment;
   FldAssign:   TFieldAssignment;
   MCall:       TMethodCallStmt;
+  PtrWrite:    TPointerWriteStmt;
+  PtrIdNode:   TIdentExpr;
   SecondIdent: string;
 begin
   Result := nil;
@@ -768,7 +777,23 @@ begin
   Col  := FCurrent.Col;
   Advance;
 
-  if Check(tkDot) then
+  if Check(tkCaret) then
+  begin
+    { Pointer dereference assignment: Ident^ := Expr }
+    Advance;  { consume '^' }
+    Expect(tkAssign);
+    PtrWrite         := TPointerWriteStmt.Create;
+    PtrWrite.Line    := Line;
+    PtrWrite.Col     := Col;
+    PtrIdNode        := TIdentExpr.Create;
+    PtrIdNode.Line   := Line;
+    PtrIdNode.Col    := Col;
+    PtrIdNode.Name   := Name;
+    PtrWrite.PtrExpr := PtrIdNode;
+    PtrWrite.ValExpr := ParseExpr;
+    Result := PtrWrite;
+  end
+  else if Check(tkDot) then
   begin
     Advance;
     if not Check(tkIdent) then
@@ -1252,6 +1277,7 @@ var
   FldNode:    TFieldAccessExpr;
   MCallNode:  TMethodCallExpr;
   FCallNode:  TFuncCallExpr;
+  DerefNode:  TDerefExpr;
   Inner:      TASTExpr;
   Name:       string;
   SecondName: string;
@@ -1381,13 +1407,34 @@ begin
           IdNode.Name := Name;
           Result := IdNode;
         end;
+        { Postfix dereference: Expr^ }
+        if Check(tkCaret) then
+        begin
+          Advance;
+          DerefNode      := TDerefExpr.Create;
+          DerefNode.Line := Line;
+          DerefNode.Col  := Col;
+          DerefNode.Expr := Result;
+          Result         := DerefNode;
+        end;
       end;
     tkLParen:
       begin
         Advance;
         Inner := ParseExpr;
         Expect(tkRParen);
-        Result := Inner;
+        { Postfix dereference: (Expr)^ }
+        if Check(tkCaret) then
+        begin
+          Advance;
+          DerefNode      := TDerefExpr.Create;
+          DerefNode.Line := FCurrent.Line;
+          DerefNode.Col  := FCurrent.Col;
+          DerefNode.Expr := Inner;
+          Result         := DerefNode;
+        end
+        else
+          Result := Inner;
       end;
   else
     raise EParseError.CreateFmt(

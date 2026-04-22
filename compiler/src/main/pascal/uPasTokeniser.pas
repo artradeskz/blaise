@@ -526,14 +526,8 @@ begin
     Exit;
   end;
 
-  { Strings: ' or # or ^ }
+  { Strings: ' or # — Clean Pascal does not support ^X control-char string escapes }
   if c in ['''', '#'] then
-  begin
-    ReadString;
-    Result := FToken;
-    Exit;
-  end;
-  if (c = '^') and (PeekAt(1) in ['A'..'Z', 'a'..'z']) then
   begin
     ReadString;
     Result := FToken;

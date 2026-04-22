@@ -156,6 +156,15 @@ type
     destructor Destroy; override;
   end;
 
+  { Write a value through a pointer: 'PtrExpr^ := ValueExpr' }
+  TPointerWriteStmt = class(TASTStmt)
+  public
+    PtrExpr:  TASTExpr;  { owned — pointer expression }
+    ValExpr:  TASTExpr;  { owned — value to store }
+    BaseTy:   TTypeDesc; { non-owned — element type; set by uSemantic }
+    destructor Destroy; override;
+  end;
+
   TProcCall = class(TASTStmt)
   public
     Name:         string;
@@ -171,6 +180,13 @@ type
     Args:         TObjectList;  { owned TASTExpr items }
     ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic }
     constructor Create;
+    destructor Destroy; override;
+  end;
+
+  { Pointer dereference expression: 'PtrExpr^' — result type is BaseType of pointer }
+  TDerefExpr = class(TASTExpr)
+  public
+    Expr: TASTExpr;  { owned — the pointer expression }
     destructor Destroy; override;
   end;
 
@@ -493,6 +509,23 @@ end;
 { TFieldAssignment }
 
 destructor TFieldAssignment.Destroy;
+begin
+  Expr.Free;
+  inherited Destroy;
+end;
+
+{ TPointerWriteStmt }
+
+destructor TPointerWriteStmt.Destroy;
+begin
+  PtrExpr.Free;
+  ValExpr.Free;
+  inherited Destroy;
+end;
+
+{ TDerefExpr }
+
+destructor TDerefExpr.Destroy;
 begin
   Expr.Free;
   inherited Destroy;

@@ -23,7 +23,8 @@ type
     tyClass,      { Heap-allocated, single-inheritance (Phase 2) }
     tyInterface,  { Zero-GUID interface reference (Phase 3) }
     tyVoid,       { No value — used as procedure return type }
-    tyNil         { Pseudo-type for the nil literal; compatible with tyClass }
+    tyNil,        { Pseudo-type for the nil literal; compatible with tyClass }
+    tyPointer     { Typed or untyped pointer — QBE 'l'; see TPointerTypeDesc }
   );
 
   TTypeDesc = class
@@ -38,6 +39,13 @@ type
     function ByteSize: Integer;
     { QBE alloc alignment: 4 for integer-only records, 8 for pointer/string. }
     function AllocAlign: Integer;
+  end;
+
+  { Typed or untyped pointer descriptor.
+    BaseType = nil means untyped 'Pointer'; non-nil means '^BaseType'. }
+  TPointerTypeDesc = class(TTypeDesc)
+  public
+    BaseType: TTypeDesc;  { not owned; nil = untyped Pointer }
   end;
 
   { Field entry inside a record type descriptor. }
@@ -192,6 +200,7 @@ type
     FTypeString:  TTypeDesc;
     FTypeVoid:    TTypeDesc;
     FTypeNil:     TTypeDesc;
+    FTypePointer: TPointerTypeDesc;  { untyped Pointer }
 
     function GetCurrentScope: TScope;
     function GetScopeDepth: Integer;
@@ -226,6 +235,9 @@ type
     { Creates a new interface type descriptor (tyInterface). }
     function NewInterfaceType(const AName: string): TInterfaceTypeDesc;
 
+    { Creates a typed pointer descriptor '^BaseType'. Registered in FAllTypes. }
+    function NewPointerType(const AName: string; ABase: TTypeDesc): TPointerTypeDesc;
+
     { Generic template registry — stores TGenericTypeDef as TObject to avoid
       circular unit dependency with uAST. Callers cast the result. }
     procedure RegisterGeneric(const AName: string; ATempl: TObject);
@@ -238,8 +250,9 @@ type
     property TypeByte:    TTypeDesc read FTypeByte;
     property TypeBoolean: TTypeDesc read FTypeBoolean;
     property TypeString:  TTypeDesc read FTypeString;
-    property TypeVoid:    TTypeDesc read FTypeVoid;
-    property TypeNil:     TTypeDesc read FTypeNil;
+    property TypeVoid:    TTypeDesc    read FTypeVoid;
+    property TypeNil:     TTypeDesc    read FTypeNil;
+    property TypePointer: TPointerTypeDesc read FTypePointer;
   end;
 
 implementation
@@ -662,6 +675,15 @@ begin
   FAllTypes.Add(Result);
 end;
 
+function TSymbolTable.NewPointerType(const AName: string; ABase: TTypeDesc): TPointerTypeDesc;
+begin
+  Result          := TPointerTypeDesc.Create;
+  Result.Kind     := tyPointer;
+  Result.Name     := AName;
+  Result.BaseType := ABase;
+  FAllTypes.Add(Result);
+end;
+
 procedure TSymbolTable.RegisterGeneric(const AName: string; ATempl: TObject);
 begin
   FGenerics.AddObject(AName, ATempl);
@@ -691,6 +713,7 @@ begin
   FTypeString  := NewType(tyString,  'string');
   FTypeVoid    := NewType(tyVoid,    'void');
   FTypeNil     := NewType(tyNil,     'nil');
+  FTypePointer := NewPointerType('Pointer', nil);  { untyped pointer }
 
   { Register type names as skType symbols in global scope }
   Define(TSymbol.Create('Integer', skType, FTypeInteger));
@@ -699,6 +722,7 @@ begin
   Define(TSymbol.Create('Byte',    skType, FTypeByte));
   Define(TSymbol.Create('Boolean', skType, FTypeBoolean));
   Define(TSymbol.Create('string',  skType, FTypeString));
+  Define(TSymbol.Create('Pointer', skType, FTypePointer));
 
   { TObject — root of the class hierarchy; no fields, no parent }
   Define(TSymbol.Create('TObject', skType, NewClassType('TObject')));
@@ -710,6 +734,14 @@ begin
   Sym := TSymbol.Create('Write',   skProcedure, nil);
   Define(Sym);
   Sym := TSymbol.Create('WriteLn', skProcedure, nil);
+  Define(Sym);
+
+  { Built-in memory management }
+  Sym := TSymbol.Create('GetMem',     skFunction,  FTypePointer);
+  Define(Sym);
+  Sym := TSymbol.Create('ReallocMem', skFunction,  FTypePointer);
+  Define(Sym);
+  Sym := TSymbol.Create('FreeMem',    skProcedure, nil);
   Define(Sym);
 end;
 

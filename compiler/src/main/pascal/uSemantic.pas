@@ -57,6 +57,8 @@ type
     function  AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
     function  AnalyseIsExpr(AExpr: TIsExpr): TTypeDesc;
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
+    function  AnalyseDerefExpr(AExpr: TDerefExpr): TTypeDesc;
+    procedure AnalysePointerWriteStmt(AStmt: TPointerWriteStmt);
 
     procedure AnalyseCompoundBody(ABody: TCompoundStmt);
     function  FindMethodDecl(const ATypeName, AMethodName: string): TMethodDecl;
@@ -327,9 +329,29 @@ begin
 end;
 
 function TSemanticAnalyser.FindTypeOrInstantiate(const AName: string): TTypeDesc;
+var
+  BaseName: string;
+  BaseType: TTypeDesc;
+  PT:       TPointerTypeDesc;
+  Sym:      TSymbol;
 begin
   Result := FTable.FindType(AName);
-  if (Result = nil) and (Pos('<', AName) > 0) then
+  if Result <> nil then Exit;
+  { Typed pointer: '^TypeName' — create on demand }
+  if (Length(AName) > 1) and (AName[1] = '^') then
+  begin
+    BaseName := Copy(AName, 2, MaxInt);
+    BaseType := FindTypeOrInstantiate(BaseName);
+    if BaseType <> nil then
+    begin
+      PT := FTable.NewPointerType(AName, BaseType);
+      Sym := TSymbol.Create(AName, skType, PT);
+      FTable.DefineGlobal(Sym);
+      Result := PT;
+    end;
+    Exit;
+  end;
+  if Pos('<', AName) > 0 then
     Result := InstantiateGeneric(AName);
 end;
 
@@ -1328,6 +1350,8 @@ begin
     AnalyseAssignment(TAssignment(AStmt))
   else if AStmt is TMethodCallStmt then
     AnalyseMethodCall(TMethodCallStmt(AStmt))
+  else if AStmt is TPointerWriteStmt then
+    AnalysePointerWriteStmt(TPointerWriteStmt(AStmt))
   else if AStmt is TProcCall then
     AnalyseProcCall(TProcCall(AStmt));
 end;
@@ -1578,10 +1602,33 @@ begin
         Format('Undeclared function ''%s''', [AExpr.Name]),
         AExpr.Line, AExpr.Col);
   end;
+  { Type cast: TypeName(Expr) — single-argument call to a type name }
+  if Sym.Kind = skType then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError(
+        Format('Type cast ''%s'' expects exactly one argument', [AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := Sym.TypeDesc;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if Sym.Kind <> skFunction then
     SemanticError(
       Format('''%s'' is not a function', [AExpr.Name]),
       AExpr.Line, AExpr.Col);
+
+  { Built-in memory functions: GetMem / ReallocMem }
+  if SameText(AExpr.Name, 'GetMem') or SameText(AExpr.Name, 'ReallocMem') then
+  begin
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args[I]));
+    Result := FTable.TypePointer;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
 
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
@@ -1697,6 +1744,8 @@ begin
     Result := AnalyseIsExpr(TIsExpr(AExpr))
   else if AExpr is TAsExpr then
     Result := AnalyseAsExpr(TAsExpr(AExpr))
+  else if AExpr is TDerefExpr then
+    Result := AnalyseDerefExpr(TDerefExpr(AExpr))
   else
     SemanticError('Unknown expression node', AExpr.Line, AExpr.Col);
 
@@ -1813,6 +1862,18 @@ begin
       Exit;
     end;
 
+    { Pointer arithmetic: Pointer + Integer or Integer + Pointer → Pointer }
+    if (ABin.Op in [boAdd, boSub]) and (LType.Kind = tyPointer) and RType.IsNumeric then
+    begin
+      Result := LType;
+      Exit;
+    end;
+    if (ABin.Op = boAdd) and LType.IsNumeric and (RType.Kind = tyPointer) then
+    begin
+      Result := RType;
+      Exit;
+    end;
+
     if not LType.IsNumeric then
       SemanticError(
         Format('Left operand of ''%s'' must be numeric, got ''%s''',
@@ -1873,6 +1934,42 @@ begin
       AExpr.Line, AExpr.Col);
 
   Result := TargetType;
+end;
+
+function TSemanticAnalyser.AnalyseDerefExpr(AExpr: TDerefExpr): TTypeDesc;
+var
+  PtrType: TTypeDesc;
+begin
+  PtrType := AnalyseExpr(AExpr.Expr);
+  if PtrType.Kind <> tyPointer then
+    SemanticError(
+      Format('Dereference operator ''%s^'' requires a pointer type',
+        [PtrType.Name]),
+      AExpr.Line, AExpr.Col);
+  if TPointerTypeDesc(PtrType).BaseType = nil then
+    SemanticError(
+      'Cannot dereference untyped ''Pointer'' — use a typed pointer (e.g. ^Integer)',
+      AExpr.Line, AExpr.Col);
+  Result := TPointerTypeDesc(PtrType).BaseType;
+end;
+
+procedure TSemanticAnalyser.AnalysePointerWriteStmt(AStmt: TPointerWriteStmt);
+var
+  PtrType: TTypeDesc;
+  ValType: TTypeDesc;
+begin
+  PtrType := AnalyseExpr(AStmt.PtrExpr);
+  if PtrType.Kind <> tyPointer then
+    SemanticError(
+      Format('Pointer write requires a pointer type, got ''%s''', [PtrType.Name]),
+      AStmt.Line, AStmt.Col);
+  if TPointerTypeDesc(PtrType).BaseType = nil then
+    SemanticError(
+      'Cannot write through untyped ''Pointer'' — use a typed pointer (e.g. ^Integer)',
+      AStmt.Line, AStmt.Col);
+  AStmt.BaseTy := TPointerTypeDesc(PtrType).BaseType;
+  ValType := AnalyseExpr(AStmt.ValExpr);
+  CheckTypesMatch(AStmt.BaseTy, ValType, 'pointer write', AStmt.Line, AStmt.Col);
 end;
 
 end.
