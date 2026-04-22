@@ -218,13 +218,13 @@ begin
   List.Add(40);
   List.Add(50);
 
-  Write('list.count='); WriteLn(List.Count);    { 5 }
-  Write('list[0]=');    WriteLn(List.Get(0));    { 10 }
-  Write('list[4]=');    WriteLn(List.Get(4));    { 50 }
+  WriteLn('list.count=', List.Count);    { 5 }
+  WriteLn('list[0]=', List.Get(0));      { 10 }
+  WriteLn('list[4]=', List.Get(4));      { 50 }
 
   List.Delete(1);
-  Write('count_after_delete='); WriteLn(List.Count);  { 4 }
-  Write('list[1]_after_delete='); WriteLn(List.Get(1)); { 30 }
+  WriteLn('count_after_delete=', List.Count);    { 4 }
+  WriteLn('list[1]_after_delete=', List.Get(1)); { 30 }
 
   List.Free;
 
@@ -235,22 +235,22 @@ begin
   Dict.Add('gamma', 3);
   Dict.Add('delta', 4);
 
-  Write('dict.count='); WriteLn(Dict.Count);     { 4 }
+  WriteLn('dict.count=', Dict.Count);     { 4 }
 
   Found := Dict.TryGetValue('beta', V);
-  Write('beta='); WriteLn(V);                    { 2 }
+  WriteLn('beta=', V);                    { 2 }
 
   Found := Dict.ContainsKey('gamma');
-  Write('has_gamma='); WriteLn(Found);           { 1 }
+  WriteLn('has_gamma=', Found);           { 1 }
 
   Dict.Add('beta', 99);
   Found := Dict.TryGetValue('beta', V);
-  Write('beta_after_update='); WriteLn(V);       { 99 }
+  WriteLn('beta_after_update=', V);       { 99 }
 
   Dict.Remove('alpha');
-  Write('count_after_remove='); WriteLn(Dict.Count);  { 3 }
+  WriteLn('count_after_remove=', Dict.Count);  { 3 }
   Found := Dict.ContainsKey('alpha');
-  Write('has_alpha_after_remove='); WriteLn(Found);   { 0 }
+  WriteLn('has_alpha_after_remove=', Found);   { 0 }
 
   Dict.Free
 end.

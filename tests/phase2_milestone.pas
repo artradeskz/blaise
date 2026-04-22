@@ -102,10 +102,10 @@ begin
   N := Self.FHead;
   while N <> nil do
   begin
-    Write('  value=');  WriteLn(N.Value);
-    Write('  tag=');    WriteLn(N.GetTag());
+    WriteLn('  value=', N.Value);
+    WriteLn('  tag=', N.GetTag());
     Marked := N is TMarkedNode;
-    Write('  marked='); WriteLn(Marked);
+    WriteLn('  marked=', Marked);
     N := N.Next
   end
 end;
@@ -142,17 +142,17 @@ begin
     List.PushMarked(30);
     List.Push(40);
 
-    Write('count='); WriteLn(List.Count);   { 4 }
+    WriteLn('count=', List.Count);          { 4 }
     WriteLn('--- walk ---');
     List.Walk;                               { 40/tag0, 30/tag1/marked, 20/tag0, 10/tag0 }
 
     { Pop two values off the front }
     V := List.Pop();
-    Write('pop='); WriteLn(V);              { 40 }
+    WriteLn('pop=', V);                     { 40 }
     V := List.Pop();
-    Write('pop='); WriteLn(V);              { 30 }
+    WriteLn('pop=', V);                     { 30 }
 
-    Write('count_after_pops='); WriteLn(List.Count);   { 2 }
+    WriteLn('count_after_pops=', List.Count);   { 2 }
   finally
     List.Clear;
     List.Free
