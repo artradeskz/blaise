@@ -52,6 +52,21 @@ void _StringRelease(void* ptr) {
 }
 
 /*
+ * Content-equality comparison.  Returns 1 if the two strings have identical
+ * byte content, 0 otherwise.  nil is treated as the empty string.
+ */
+int32_t _StringEquals(void* s1, void* s2) {
+    if (s1 == s2) return 1;
+    int32_t len1 = s1 ? hdr(s1)->length : 0;
+    int32_t len2 = s2 ? hdr(s2)->length : 0;
+    if (len1 != len2) return 0;
+    if (len1 == 0) return 1;
+    const char* c1 = (const char*)s1 + sizeof(BlaiseStrHdr);
+    const char* c2 = (const char*)s2 + sizeof(BlaiseStrHdr);
+    return memcmp(c1, c2, len1) == 0 ? 1 : 0;
+}
+
+/*
  * Concatenate two Blaise strings.  Either or both may be nil.
  * Returns a new header with RefCount = 0 (caller takes ownership via AddRef).
  * Returns nil if both inputs are nil.

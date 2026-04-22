@@ -1651,6 +1651,21 @@ begin
       Result := T;
       Exit;
     end;
+    { String equality/inequality: content comparison via RTL helper }
+    if (BinExpr.Left.ResolvedType <> nil) and
+       BinExpr.Left.ResolvedType.IsString and
+       (BinExpr.Op in [boEQ, boNE]) then
+    begin
+      EmitLine(Format('  %s =w call $_StringEquals(l %s, l %s)', [T, L, R]));
+      if BinExpr.Op = boNE then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =w ceqw %s, 0', [ArgTemp, T]));
+        T := ArgTemp;
+      end;
+      Result := T;
+      Exit;
+    end;
     { Use long (pointer) comparison instructions when operands are class/nil }
     if (BinExpr.Left.ResolvedType <> nil) and
        (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil]) then
