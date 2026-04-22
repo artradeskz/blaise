@@ -1045,7 +1045,7 @@ begin
     for J := 0 to FieldList.Count - 1 do
     begin
       FDecl   := TFieldDecl(FieldList[J]);
-      FldType := FTable.FindType(FDecl.TypeName);
+      FldType := FindTypeOrInstantiate(FDecl.TypeName);
       if FldType = nil then
         SemanticError(
           Format('Unknown type ''%s'' for field', [FDecl.TypeName]),

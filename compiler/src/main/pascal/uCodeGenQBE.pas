@@ -188,10 +188,16 @@ begin
       VarName := Decl.Names[J];
       case Decl.ResolvedType.Kind of
         tyInteger, tyUInt32, tyBoolean, tyByte:
-          EmitLine(Format('  %%_var_%s =l alloc4 1', [VarName]));
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc4 1', [VarName]));
+            EmitLine(Format('  storew 0, %%_var_%s', [VarName]));
+          end;
 
         tyInt64:
-          EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
+            EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+          end;
 
         tyString:
           begin
@@ -802,6 +808,14 @@ begin
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params[I]);
+    if Par.IsVarParam then
+    begin
+      { Var param arrives as a pointer — spill pointer into a local slot }
+      EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+      EmitLine(Format('  storel %%_par_%s, %%_var_%s',
+        [Par.ParamName, Par.ParamName]));
+    end
+    else
     case Par.ResolvedType.Kind of
       tyInteger, tyUInt32, tyBoolean, tyByte:
         begin
@@ -842,8 +856,11 @@ begin
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params[I]);
-    Sig := Sig + Format(', %s %%_par_%s',
-      [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
+    if Par.IsVarParam then
+      Sig := Sig + Format(', l %%_par_%s', [Par.ParamName])
+    else
+      Sig := Sig + Format(', %s %%_par_%s',
+        [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
   end;
 
   if IsFunc then
@@ -1502,9 +1519,16 @@ begin
     ArgLine := Format('l %s', [SelfTemp]);
     for I := 0 to MCallExpr.Args.Count - 1 do
     begin
-      Par     := TMethodParam(MDecl.Params[I]);
-      ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
-      ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+      Par := TMethodParam(MDecl.Params[I]);
+      if Par.IsVarParam then
+        { Pass address of the variable directly — do not load through it }
+        ArgLine := ArgLine + Format(', l %%_var_%s',
+          [TIdentExpr(TASTExpr(MCallExpr.Args[I])).Name])
+      else
+      begin
+        ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
+        ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+      end;
     end;
 
     T := AllocTemp;
