@@ -73,7 +73,16 @@ type
     { Free built-in                                                        }
     { ------------------------------------------------------------------ }
     procedure TestSemantic_Free_OK;
-    procedure TestCodegen_Free_CallsClassFree;
+    procedure TestCodegen_Free_CallsClassRelease;
+
+    { ------------------------------------------------------------------ }
+    { ARC on class variables and fields                                    }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_ClassVarAssign_InsertsAddRefRelease;
+    procedure TestCodegen_ClassVarScopeExit_EmitsRelease;
+    procedure TestCodegen_ClassFieldAssign_InsertsAddRefRelease;
+    procedure TestCodegen_FieldCleanup_EmittedPerClass;
+    procedure TestCodegen_FieldCleanup_ReleasesClassField;
   end;
 
 implementation
@@ -671,16 +680,116 @@ begin
   AnalyseSrc(SrcFree).Free;
 end;
 
-procedure TClassTests.TestCodegen_Free_CallsClassFree;
+procedure TClassTests.TestCodegen_Free_CallsClassRelease;
 var IR: string;
 begin
-  { Obj.Free is currently lowered to _ClassFree (an RTL helper that bypasses
-    the refcount).  Task 4 switches this to _ClassRelease once the full ARC
-    insertion pass lands; for now it preserves legacy "free immediately"
-    semantics while accounting for the hidden 8-byte header. }
+  { Obj.Free is a sanctioned synonym for immediate release under ARC: it
+    decrements the refcount (freeing the block and running the field
+    cleanup fn at zero) and nil-outs the slot so the scope-exit release
+    becomes a no-op. }
   IR := GenIR(SrcFree);
-  AssertTrue('calls _ClassFree', Pos('call $_ClassFree', IR) > 0);
+  AssertTrue('calls _ClassRelease',     Pos('call $_ClassRelease', IR) > 0);
+  AssertTrue('nil-outs slot after Free', Pos('storel 0, %_var_',   IR) > 0);
   AssertTrue('does not call C free() directly', Pos('call $free(', IR) = 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ ARC on class variables and fields                                    }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcArcBasic =
+    'program P;'                  + LineEnding +
+    'type'                        + LineEnding +
+    '  TFoo = class'              + LineEnding +
+    '    X: Integer;'             + LineEnding +
+    '  end;'                      + LineEnding +
+    'var F: TFoo;'                + LineEnding +
+    'begin'                       + LineEnding +
+    '  F := TFoo.Create'          + LineEnding +
+    'end.';
+
+  SrcArcFieldClass =
+    'program P;'                  + LineEnding +
+    'type'                        + LineEnding +
+    '  TInner = class'            + LineEnding +
+    '    V: Integer;'             + LineEnding +
+    '  end;'                      + LineEnding +
+    '  TOuter = class'            + LineEnding +
+    '    Child: TInner;'          + LineEnding +
+    '  end;'                      + LineEnding +
+    'var A, B: TOuter;'           + LineEnding +
+    'begin'                       + LineEnding +
+    '  A := TOuter.Create;'       + LineEnding +
+    '  B := TOuter.Create;'       + LineEnding +
+    '  A.Child := TInner.Create;' + LineEnding +
+    '  B.Child := A.Child'        + LineEnding +
+    'end.';
+
+procedure TClassTests.TestCodegen_ClassVarAssign_InsertsAddRefRelease;
+var IR: string;
+begin
+  IR := GenIR(SrcArcBasic);
+  AssertTrue('addref on new class RHS',
+    Pos('call $_ClassAddRef', IR) > 0);
+  AssertTrue('release on old class LHS',
+    Pos('call $_ClassRelease', IR) > 0);
+end;
+
+procedure TClassTests.TestCodegen_ClassVarScopeExit_EmitsRelease;
+var IR: string;
+begin
+  { The variable F must be released at block exit (main_exit label).
+    Emitted as part of EmitArcCleanup. }
+  IR := GenIR(SrcArcBasic);
+  AssertTrue('release at scope exit',
+    Pos('call $_ClassRelease', IR) > 0);
+  { Two releases: one from overwriting the nil slot during F := Create
+    (old=nil, noop at runtime but still emitted), one at scope exit. }
+  AssertTrue('at least two class releases emitted',
+    (Pos('call $_ClassRelease',
+         Copy(IR, Pos('call $_ClassRelease', IR) + 1, MaxInt)) > 0));
+end;
+
+procedure TClassTests.TestCodegen_ClassFieldAssign_InsertsAddRefRelease;
+var IR: string;
+begin
+  { A.Child := TInner.Create should load old A.Child, release it, addref the
+    new Inner, and store.  The insertion pattern mirrors variable ARC but
+    targets a heap-field slot rather than a local. }
+  IR := GenIR(SrcArcFieldClass);
+  AssertTrue('class field assignment addrefs',
+    Pos('call $_ClassAddRef', IR) > 0);
+  AssertTrue('class field assignment releases old',
+    Pos('call $_ClassRelease', IR) > 0);
+end;
+
+procedure TClassTests.TestCodegen_FieldCleanup_EmittedPerClass;
+var IR: string;
+begin
+  IR := GenIR(SrcArcFieldClass);
+  AssertTrue('cleanup fn emitted for TInner',
+    Pos('function $_FieldCleanup_TInner', IR) > 0);
+  AssertTrue('cleanup fn emitted for TOuter',
+    Pos('function $_FieldCleanup_TOuter', IR) > 0);
+end;
+
+procedure TClassTests.TestCodegen_FieldCleanup_ReleasesClassField;
+var IR, OuterBody: string;
+  StartPos, EndPos: Integer;
+begin
+  { TOuter.Child is a TInner — its cleanup fn must release the field.
+    Isolate _FieldCleanup_TOuter's body and assert a _ClassRelease appears
+    inside it (not in some sibling function). }
+  IR       := GenIR(SrcArcFieldClass);
+  StartPos := Pos('function $_FieldCleanup_TOuter', IR);
+  AssertTrue('TOuter cleanup present', StartPos > 0);
+  OuterBody := Copy(IR, StartPos, MaxInt);
+  EndPos   := Pos(LineEnding + '}', OuterBody);
+  AssertTrue('TOuter cleanup has end', EndPos > 0);
+  OuterBody := Copy(OuterBody, 1, EndPos);
+  AssertTrue('TOuter cleanup releases class-typed field',
+    Pos('call $_ClassRelease', OuterBody) > 0);
 end;
 
 initialization

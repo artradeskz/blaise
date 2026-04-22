@@ -311,11 +311,10 @@ var IR: string;
 begin
   IR := GenIR(SrcSelfRef);
   { TNode has Integer (4 bytes) + TNode pointer (8 bytes) = 12 bytes,
-    aligned to 8 → 12 bytes total.  The user-visible instance size passed
-    to _ClassAlloc is TotalSize; _ClassAlloc internally adds the 8-byte
-    refcount prefix. }
-  AssertTrue('_ClassAlloc 12 bytes for TNode',
-    Pos('call $_ClassAlloc(l 12)', IR) > 0);
+    aligned to 8 → 12 bytes total.  _ClassAlloc is called with TotalSize
+    plus a pointer to the class's field-cleanup function. }
+  AssertTrue('_ClassAlloc 12 bytes for TNode with cleanup fn',
+    Pos('call $_ClassAlloc(l 12, l $_FieldCleanup_TNode)', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }
@@ -355,10 +354,10 @@ procedure TInheritTests.TestCodegen_Inherit_Create_AllocatesTotalSize;
 var IR: string;
 begin
   IR := GenIR(SrcInherit);
-  { TDog.Create passes TotalSize (8 bytes: Age + Legs) to _ClassAlloc;
-    _ClassAlloc internally adds the 8-byte refcount prefix. }
-  AssertTrue('_ClassAlloc 8 bytes for TDog',
-    Pos('call $_ClassAlloc(l 8)', IR) > 0);
+  { TDog.Create passes TotalSize (8 bytes: Age + Legs) to _ClassAlloc along
+    with its per-class field-cleanup function. }
+  AssertTrue('_ClassAlloc 8 bytes for TDog with cleanup fn',
+    Pos('call $_ClassAlloc(l 8, l $_FieldCleanup_TDog)', IR) > 0);
 end;
 
 procedure TInheritTests.TestCodegen_Inherit_ParentFieldOffset;

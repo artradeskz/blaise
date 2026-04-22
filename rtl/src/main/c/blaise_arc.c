@@ -69,25 +69,29 @@ int32_t _StringEquals(void* s1, void* s2) {
 /*
  * Class instance ARC support.
  *
- * Every Blaise class instance carries a hidden 8-byte prefix before the user
- * pointer: a 4-byte refcount and 4 bytes of padding to keep the user pointer
- * 8-byte aligned (so the vptr at offset 0 remains naturally aligned).
+ * Every Blaise class instance carries a hidden 16-byte prefix before the user
+ * pointer:
  *
- *   +--[4 bytes]--+--[4 bytes]--+--[N bytes]-------+
- *   | RefCount    | (padding)   | vptr + fields    |
- *   +-------------+-------------+------------------+
- *                               ^--- user pointer
+ *   +--[4 bytes]--+--[4 bytes]--+--[8 bytes]-------------+
+ *   | RefCount    | (padding)   | cleanup fn pointer     |
+ *   +-------------+-------------+------------------------+
+ *                                                        ^--- user pointer
+ *
+ * The cleanup function, emitted by the compiler as $_FieldCleanup_<TypeName>,
+ * releases every ARC-managed field the object holds (string and class fields,
+ * chained up the inheritance tree).  It runs before free() when the refcount
+ * reaches zero and may be null for classes that hold no ARC-managed fields.
  *
  * RefCount starts at 0; the compiler inserts _ClassAddRef on assignment
- * (mirroring the string ARC convention).  Until the full ARC insertion pass
- * lands, _ClassFree provides a legacy "free without refcount check" entry
- * point for the existing Obj.Free code path — Task 4 rewires Obj.Free to
- * _ClassRelease, at which point _ClassFree becomes internal.
+ * (mirroring the string ARC convention).
  */
 
+typedef void (*BlaiseFieldCleanupFn)(void*);
+
 typedef struct {
-    int32_t refcnt;
-    int32_t _pad;
+    int32_t              refcnt;
+    int32_t              _pad;
+    BlaiseFieldCleanupFn cleanup;
 } BlaiseObjHdr;
 
 #define CLASS_HDR_SIZE (sizeof(BlaiseObjHdr))
@@ -96,9 +100,11 @@ static inline BlaiseObjHdr* obj_hdr(void* user_ptr) {
     return (BlaiseObjHdr*)((char*)user_ptr - CLASS_HDR_SIZE);
 }
 
-void* _ClassAlloc(size_t size) {
+void* _ClassAlloc(size_t size, BlaiseFieldCleanupFn cleanup) {
     char* base = (char*)calloc(1, size + CLASS_HDR_SIZE);
     if (!base) return NULL;
+    BlaiseObjHdr* h = (BlaiseObjHdr*)base;
+    h->cleanup = cleanup;
     /* refcnt starts at 0; first assignment's _ClassAddRef brings it to 1 */
     return base + CLASS_HDR_SIZE;
 }
@@ -113,17 +119,11 @@ void _ClassAddRef(void* user_ptr) {
     obj_hdr(user_ptr)->refcnt++;
 }
 
-/*
- * Decrement the refcount; free the instance when it reaches zero.
- *
- * A user-invoked destructor is not called here: Blaise does not yet expose a
- * user-defined Destroy mechanism.  When that lands the dispatch will happen
- * via the vptr's destructor slot before the free() below.
- */
 void _ClassRelease(void* user_ptr) {
     if (!user_ptr) return;
     BlaiseObjHdr* h = obj_hdr(user_ptr);
     if (--h->refcnt == 0) {
+        if (h->cleanup) h->cleanup(user_ptr);
         free((char*)user_ptr - CLASS_HDR_SIZE);
     }
 }

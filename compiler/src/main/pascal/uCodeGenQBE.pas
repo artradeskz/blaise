@@ -43,6 +43,9 @@ type
     procedure EmitVTableDefs(AProg: TProgram);
     procedure EmitMethodDefs(AProg: TProgram);
     procedure EmitInterfaceDefs(AProg: TProgram);
+    procedure EmitFieldCleanupDefs(AProg: TProgram);
+    procedure EmitFieldCleanupFn(const AMangledName: string;
+                                 ARec: TRecordTypeDesc);
     procedure EmitMethodDef(const ATypeName: string; AMethod: TMethodDecl);
     procedure EmitStandaloneDefs(AProg: TProgram);
     procedure EmitStandaloneDef(ADecl: TMethodDecl);
@@ -50,7 +53,7 @@ type
     procedure EmitBlock(ABlock: TBlock);
     procedure EmitVarAllocs(ABlock: TBlock);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
-    procedure EmitStringCleanup(ABlock: TBlock);
+    procedure EmitArcCleanup(ABlock: TBlock);
     procedure EmitExcPathArcCleanup(ABlock: TBlock);
     procedure EmitStmt(AStmt: TASTStmt);
     procedure EmitIfStmt(AStmt: TIfStmt);
@@ -275,24 +278,35 @@ begin
   end;
 end;
 
-procedure TCodeGenQBE.EmitStringCleanup(ABlock: TBlock);
+procedure TCodeGenQBE.EmitArcCleanup(ABlock: TBlock);
+{ Release every ARC-managed local variable (string or class) at block exit.
+  Mirrors the insertion pattern used at assignment sites: each slot holds one
+  retained reference from the initial storel 0 / first assignment; scope exit
+  must balance that with one release. }
 var
   I, J:    Integer;
   Decl:    TVarDecl;
   VarName: string;
   ValTemp: string;
+  RelFn:   string;
 begin
   for I := 0 to ABlock.Decls.Count - 1 do
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
-    if (Decl.ResolvedType <> nil) and Decl.ResolvedType.IsString then
-      for J := 0 to Decl.Names.Count - 1 do
-      begin
-        VarName := Decl.Names[J];
-        ValTemp := AllocTemp;
-        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
-        EmitLine(Format('  call $_StringRelease(l %s)', [ValTemp]));
-      end;
+    if Decl.ResolvedType = nil then Continue;
+    if Decl.ResolvedType.IsString then
+      RelFn := '$_StringRelease'
+    else if Decl.ResolvedType.Kind = tyClass then
+      RelFn := '$_ClassRelease'
+    else
+      Continue;
+    for J := 0 to Decl.Names.Count - 1 do
+    begin
+      VarName := Decl.Names[J];
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+      EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
+    end;
   end;
 end;
 
@@ -310,7 +324,7 @@ begin
     EmitLine(Format('  jmp @%s', [FExitLabel]));
     EmitLine('@' + FExitLabel);
   end;
-  EmitStringCleanup(ABlock);
+  EmitArcCleanup(ABlock);
 end;
 
 procedure TCodeGenQBE.EmitExcPathArcCleanup(ABlock: TBlock);
@@ -319,21 +333,28 @@ var
   Decl:    TVarDecl;
   VarName: string;
   ValTemp: string;
+  RelFn:   string;
 begin
   if ABlock = nil then Exit;
   for I := 0 to ABlock.Decls.Count - 1 do
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
-    if (Decl.ResolvedType <> nil) and Decl.ResolvedType.IsString then
-      for J := 0 to Decl.Names.Count - 1 do
-      begin
-        VarName := Decl.Names[J];
-        ValTemp := AllocTemp;
-        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
-        EmitLine(Format('  call $_StringRelease(l %s)', [ValTemp]));
-        { Zero the slot so nested exception handlers get a no-op release }
-        EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
-      end;
+    if Decl.ResolvedType = nil then Continue;
+    if Decl.ResolvedType.IsString then
+      RelFn := '$_StringRelease'
+    else if Decl.ResolvedType.Kind = tyClass then
+      RelFn := '$_ClassRelease'
+    else
+      Continue;
+    for J := 0 to Decl.Names.Count - 1 do
+    begin
+      VarName := Decl.Names[J];
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+      EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
+      { Zero the slot so nested exception handlers get a no-op release }
+      EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+    end;
   end;
 end;
 
@@ -712,6 +733,17 @@ begin
     EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
     EmitLine(Format('  storel %s, %%_var_%s', [ValTemp, AAssign.Name]));
   end
+  else if AAssign.Expr.ResolvedType.Kind = tyClass then
+  begin
+    { ARC: load old class reference, evaluate new, retain new, release old,
+      store new.  Matches the string ARC idiom one-for-one. }
+    OldTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s', [OldTemp, AAssign.Name]));
+    ValTemp := EmitExpr(AAssign.Expr);
+    EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+    EmitLine(Format('  storel %s, %%_var_%s', [ValTemp, AAssign.Name]));
+  end
   else
   begin
     QType   := QbeTypeOf(AAssign.Expr.ResolvedType);
@@ -808,7 +840,9 @@ end;
 
 procedure TCodeGenQBE.EmitFieldAssignment(AAssign: TFieldAssignment);
 var
-  Ptr, PtrTemp, ValTemp, QType, StoreInstr: string;
+  Ptr, PtrTemp, ValTemp, OldTemp, QType, StoreInstr: string;
+  IsArc: Boolean;
+  IsStr: Boolean;
 begin
   if AAssign.FieldInfo = nil then
     raise ECodeGenError.CreateFmt(
@@ -833,10 +867,33 @@ begin
   else
     Ptr := FieldPtr(AAssign.RecordName, AAssign.FieldInfo.Offset);
 
-  QType := QbeTypeOf(AAssign.FieldInfo.TypeDesc);
-  if QType = 'w' then StoreInstr := 'storew'
-                 else StoreInstr := 'storel';
-  EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, Ptr]));
+  IsStr := AAssign.FieldInfo.TypeDesc.IsString;
+  IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass);
+  if IsArc then
+  begin
+    { ARC for ARC-managed field storage: retain the new value and release the
+      old field contents before overwriting, so neither reference leaks. }
+    OldTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s', [OldTemp, Ptr]));
+    if IsStr then
+    begin
+      EmitLine(Format('  call $_StringAddRef(l %s)',  [ValTemp]));
+      EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
+    end
+    else
+    begin
+      EmitLine(Format('  call $_ClassAddRef(l %s)',   [ValTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)',  [OldTemp]));
+    end;
+    EmitLine(Format('  storel %s, %s', [ValTemp, Ptr]));
+  end
+  else
+  begin
+    QType := QbeTypeOf(AAssign.FieldInfo.TypeDesc);
+    if QType = 'w' then StoreInstr := 'storew'
+                   else StoreInstr := 'storel';
+    EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, Ptr]));
+  end;
 end;
 
 procedure TCodeGenQBE.EmitMethodCall(ACall: TMethodCallStmt);
@@ -878,15 +935,17 @@ begin
     Exit;
   end;
 
-  { Built-in Free: load Self pointer and release the instance.  _ClassFree
-    currently bypasses the refcount (legacy behaviour); Task 4 will switch
-    this to _ClassRelease so Free becomes a sanctioned synonym for immediate
-    release under the full ARC rules. }
+  { Built-in Free: release the instance (decrement refcount; free at zero)
+    and nil out the slot.  Under universal ARC, Free is a sanctioned synonym
+    for immediate release — if other references remain, the block survives
+    until their scope exits release them too.  Zeroing the slot makes a
+    subsequent scope-exit release a safe no-op. }
   if (ACall.ResolvedMethod = nil) and SameText(ACall.Name, 'Free') then
   begin
     SelfTemp := AllocTemp;
     EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, ACall.ObjectName]));
-    EmitLine(Format('  call $_ClassFree(l %s)', [SelfTemp]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
+    EmitLine(Format('  storel 0, %%_var_%s', [ACall.ObjectName]));
     Exit;
   end;
 
@@ -985,6 +1044,7 @@ var
   RetQType:      string;
   RetTemp:       string;
   SavedExitLbl:  string;
+  ValTemp:       string;
 begin
   FuncName := '$' + ATypeName + '_' + AMethod.Name;
   IsFunc   := AMethod.ResolvedReturnType <> nil;
@@ -1012,6 +1072,22 @@ begin
   EmitLine('@start');
   EmitParamAllocs(AMethod, nil);
 
+  { ARC: addref class value params on entry — balances the release pass at
+    method exit.  Strings in method params are not ARC-managed yet (existing
+    gap); classes are covered here because the whole Phase 3 follow-up is
+    specifically about class ARC parity. }
+  for I := 0 to AMethod.Params.Count - 1 do
+  begin
+    Par := TMethodParam(AMethod.Params[I]);
+    if Par.IsVarParam then Continue;
+    if Par.ResolvedType.Kind = tyClass then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+    end;
+  end;
+
   { For function methods, allocate a zero-initialised Result slot }
   if IsFunc then
   begin
@@ -1033,6 +1109,19 @@ begin
     EmitBlock(AMethod.Body);
   finally
     FExitLabel := SavedExitLbl;
+  end;
+
+  { ARC: release class value params on exit. }
+  for I := 0 to AMethod.Params.Count - 1 do
+  begin
+    Par := TMethodParam(AMethod.Params[I]);
+    if Par.IsVarParam then Continue;
+    if Par.ResolvedType.Kind = tyClass then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
+    end;
   end;
 
   if IsFunc then
@@ -1234,6 +1323,83 @@ begin
   EmitLine('');
 end;
 
+procedure TCodeGenQBE.EmitFieldCleanupFn(const AMangledName: string;
+                                         ARec: TRecordTypeDesc);
+{ Emit a QBE function $_FieldCleanup_<Name>(l %self) that releases every
+  ARC-managed field the instance holds.  The function is invoked from
+  _ClassRelease at refcount zero, before the backing block is freed.
+
+  The most-derived class's cleanup is authoritative: inherited fields are
+  already merged into this class's Fields list by the semantic analyser
+  (see uSemantic.pas — parent fields are copied into the derived
+  TRecordTypeDesc during Pass 2), so iterating Fields here covers own and
+  inherited fields uniformly.  We therefore do not chain to a parent
+  cleanup — doing so would release each inherited field twice.
+
+  A cleanup function is emitted for every class even when it has no
+  ARC-managed fields — the no-op call keeps the constructor call site
+  uniform and is negligible at runtime. }
+var
+  I:      Integer;
+  F:      TFieldInfo;
+  Temp:   string;
+  PtrT:   string;
+begin
+  EmitLine(Format('function $_FieldCleanup_%s(l %%self) {', [AMangledName]));
+  EmitLine('@start');
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields[I]);
+    if F.TypeDesc = nil then Continue;
+    if not (F.TypeDesc.IsString or (F.TypeDesc.Kind = tyClass)) then
+      Continue;
+    Temp := AllocTemp;
+    if F.Offset > 0 then
+    begin
+      PtrT := AllocTemp;
+      EmitLine(Format('  %s =l add %%self, %d', [PtrT, F.Offset]));
+    end
+    else
+      PtrT := '%self';
+    EmitLine(Format('  %s =l loadl %s', [Temp, PtrT]));
+    if F.TypeDesc.IsString then
+      EmitLine(Format('  call $_StringRelease(l %s)', [Temp]))
+    else
+      EmitLine(Format('  call $_ClassRelease(l %s)', [Temp]));
+  end;
+  EmitLine('  ret');
+  EmitLine('}');
+  EmitLine('');
+end;
+
+procedure TCodeGenQBE.EmitFieldCleanupDefs(AProg: TProgram);
+{ Emit a _FieldCleanup_<T> function for every declared class and every
+  generic class instantiation.  The constructor lowering references these
+  functions by name; see the _ClassAlloc call in EmitExpr. }
+var
+  I:     Integer;
+  TD:    TTypeDecl;
+  TDesc: TTypeDesc;
+  RT:    TRecordTypeDesc;
+  GI:    TGenericInstance;
+begin
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    RT := TRecordTypeDesc(TDesc);
+    EmitFieldCleanupFn(TD.Name, RT);
+  end;
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances[I]);
+    RT := TRecordTypeDesc(GI.TypeDesc);
+    EmitFieldCleanupFn(QBEMangle(GI.TypeName), RT);
+  end;
+end;
+
 procedure TCodeGenQBE.EmitMethodDefs(AProg: TProgram);
 var
   I, J:  Integer;
@@ -1331,15 +1497,23 @@ begin
     end;
   end;
 
-  { ARC: addref string value params on entry (callee owns a copy) }
+  { ARC: addref string and class value params on entry (callee owns a
+    retained copy that is balanced by the release pass at function exit). }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params[I]);
-    if (not Par.IsVarParam) and (Par.ResolvedType.Kind = tyString) then
+    if Par.IsVarParam then Continue;
+    if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_StringAddRef(l %s)', [ValTemp]));
+    end
+    else if Par.ResolvedType.Kind = tyClass then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     end;
   end;
 
@@ -1365,15 +1539,23 @@ begin
     FExitLabel := SavedExitLbl;
   end;
 
-  { ARC: release string value params on exit }
+  { ARC: release string and class value params on exit (balances the
+    addref inserted at function entry). }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params[I]);
-    if (not Par.IsVarParam) and (Par.ResolvedType.Kind = tyString) then
+    if Par.IsVarParam then Continue;
+    if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_StringRelease(l %s)', [ValTemp]));
+    end
+    else if Par.ResolvedType.Kind = tyClass then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
     end;
   end;
 
@@ -1748,12 +1930,16 @@ begin
     if FldAccess.IsConstructorCall then
     begin
       { TypeName.Create — allocate zeroed instance on heap.  _ClassAlloc
-        prefixes an 8-byte refcount header before the returned pointer (see
-        blaise_arc.c).  The user pointer still points at the vptr, so field
-        offsets are unchanged. }
+        prefixes a 16-byte header (refcount + field-cleanup fn pointer)
+        before the returned pointer (see blaise_arc.c).  The user pointer
+        still points at the vptr, so field offsets are unchanged.  The
+        cleanup fn is invoked by _ClassRelease before free() when the
+        refcount reaches zero and is responsible for releasing any
+        ARC-managed fields. }
       T := AllocTemp;
-      EmitLine(Format('  %s =l call $_ClassAlloc(l %d)',
-        [T, TRecordTypeDesc(FldAccess.ResolvedType).TotalSize]));
+      EmitLine(Format('  %s =l call $_ClassAlloc(l %d, l $_FieldCleanup_%s)',
+        [T, TRecordTypeDesc(FldAccess.ResolvedType).TotalSize,
+         QBEMangle(FldAccess.ResolvedType.Name)]));
       { Store vtable pointer at offset 0 if this class has virtual methods }
       if TRecordTypeDesc(FldAccess.ResolvedType).HasVTable then
         EmitLine(Format('  storel $vtable_%s, %s',
@@ -2050,6 +2236,7 @@ begin
     SavedOutput := FOutput;
     FOutput := Body;
     try
+      EmitFieldCleanupDefs(AProg);
       EmitMethodDefs(AProg);
       EmitStandaloneDefs(AProg);
       FExitLabel := 'main_exit';

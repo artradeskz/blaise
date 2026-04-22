@@ -405,11 +405,11 @@ var
   IR: string;
 begin
   { TPoint has one Integer field (4 bytes) + vptr (8 bytes) = 12 bytes.
-    _ClassAlloc receives TotalSize; the 8-byte refcount prefix is added
-    internally and does not appear in the TotalSize argument. }
+    _ClassAlloc receives TotalSize and a cleanup-fn pointer; the hidden
+    refcount header is added internally and does not appear in the size. }
   IR := GenIR(SrcBaseWithField);
   AssertTrue('_ClassAlloc includes vptr size',
-    IRContains(IR, 'call $_ClassAlloc(l 12)'));
+    IRContains(IR, 'call $_ClassAlloc(l 12, l $_FieldCleanup_'));
 end;
 
 procedure TVTableTests.TestCodegen_FieldOffset_ShiftedByEight;
