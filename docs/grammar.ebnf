@@ -1,20 +1,20 @@
 (* Blaise Language Grammar — EBNF
  *
- * This grammar reflects the language as implemented in Phase 2 of the
- * Blaise compiler.  It is derived directly from uParser.pas and serves
- * as the authoritative reference for the parser, language tooling, and
- * future extensions.
+ * This grammar reflects the language as implemented through Phase 3 of the
+ * Blaise compiler.  It is derived directly from uParser.pas and serves as
+ * the authoritative reference for the parser, language tooling, and future
+ * extensions.
  *
  * Notation
  * --------
  *   { x }      zero or more repetitions of x
  *   [ x ]      optional x (zero or one)
  *   ( x | y )  alternation
- *   "..."       terminal — literal token text
+ *   "..."       terminal — literal token text (case-insensitive keywords)
  *   UPPER       terminal — token class defined in the Tokens section
  *
- * Tokens section defines the terminal vocabulary produced by the lexer.
- * Grammar section defines the syntactic structure.
+ * The Tokens section defines the terminal vocabulary produced by the lexer.
+ * The Grammar section defines the syntactic structure.
  *)
 
 
@@ -26,44 +26,80 @@
 INT_LIT    = digit { digit } ;
 STRING_LIT = "'" { char | "''" } "'" ;
 
-(* Identifiers and keywords (case-insensitive) *)
+(* Identifiers (case-insensitive) *)
 IDENT    = letter { letter | digit | "_" } ;
 
-PROGRAM  = "program"  ;
-USES     = "uses"     ;
-TYPE     = "type"     ;
-RECORD   = "record"   ;
-CLASS    = "class"    ;
-VAR      = "var"      ;
-BEGIN    = "begin"    ;
-END      = "end"      ;
-DIV      = "div"      ;
+(* Keywords — all case-insensitive *)
+PROGRAM        = "program"        ;
+UNIT           = "unit"           ;
+INTERFACE      = "interface"      ;
+IMPLEMENTATION = "implementation" ;
+USES           = "uses"           ;
+TYPE           = "type"           ;
+RECORD         = "record"         ;
+CLASS          = "class"          ;
+VAR            = "var"            ;
+BEGIN          = "begin"          ;
+END            = "end"            ;
+IF             = "if"             ;
+THEN           = "then"           ;
+ELSE           = "else"           ;
+WHILE          = "while"          ;
+DO             = "do"             ;
+FOR            = "for"            ;
+TO             = "to"             ;
+DOWNTO         = "downto"         ;
+TRY            = "try"            ;
+EXCEPT         = "except"         ;
+FINALLY        = "finally"        ;
+RAISE          = "raise"          ;
+NIL            = "nil"            ;
+IS             = "is"             ;
+AS             = "as"             ;
+DIV            = "div"            ;
+VIRTUAL        = "virtual"        ;
+OVERRIDE       = "override"       ;
+PROCEDURE      = "procedure"      ;
+FUNCTION       = "function"       ;
+
+(* Context-sensitive soft keywords — IDENT that is treated as a keyword in a
+ * specific position but may be used as an identifier elsewhere *)
+PROPERTY       = "property" ;   (* only in class bodies *)
+READ           = "read"     ;   (* only in property declarations *)
+WRITE          = "write"    ;   (* only in property declarations *)
 
 (* Operators and punctuation *)
-ASSIGN   = ":="  ;
-EQUALS   = "="   ;
-COLON    = ":"   ;
-PLUS     = "+"   ;
-MINUS    = "-"   ;
-STAR     = "*"   ;
-SLASH    = "/"   ;
-LPAREN   = "("   ;
-RPAREN   = ")"   ;
-COMMA    = ","   ;
-SEMICOLON = ";"  ;
-DOT      = "."   ;
+ASSIGN        = ":="  ;
+EQUALS        = "="   ;
+NOT_EQUALS    = "<>"  ;
+LESS          = "<"   ;
+GREATER       = ">"   ;
+LESS_EQ       = "<="  ;
+GREATER_EQ    = ">="  ;
+COLON         = ":"   ;
+PLUS          = "+"   ;
+MINUS         = "-"   ;
+STAR          = "*"   ;
+SLASH         = "/"   ;
+LPAREN        = "("   ;
+RPAREN        = ")"   ;
+COMMA         = ","   ;
+SEMICOLON     = ";"   ;
+DOT           = "."   ;
+CARET         = "^"   ;   (* pointer dereference / pointer type prefix *)
 
 (* Ignored by the lexer *)
-WHITESPACE = { " " | "\t" | "\r" | "\n" } ;
-LINE_COMMENT = "//" { char } newline ;
+WHITESPACE    = { " " | "\t" | "\r" | "\n" } ;
+LINE_COMMENT  = "//" { char } newline ;
 BLOCK_COMMENT = "{" { char } "}" | "(*" { char } "*)" ;
+DIRECTIVE     = "{$" { char } "}" ;   (* compiler directives — skipped *)
 
 
 (* ═══════════════════════════════════════════════════════════════════════════
- * GRAMMAR
+ * COMPILATION UNITS
  * ═══════════════════════════════════════════════════════════════════════════ *)
 
-(* ── Top level ──────────────────────────────────────────────────────────── *)
+(* A source file is either a program or a unit. *)
 
 Program
     = PROGRAM IDENT SEMICOLON
@@ -72,26 +108,60 @@ Program
       DOT
     ;
 
+Unit
+    = UNIT IDENT SEMICOLON
+      InterfaceSection
+      ImplementationSection
+      DOT
+    ;
+
+InterfaceSection
+    = INTERFACE
+      [ UsesClause ]
+      { ProcSignature }
+    ;
+
+ImplementationSection
+    = IMPLEMENTATION
+      [ UsesClause ]
+      { StandaloneDecl }
+    ;
+
 UsesClause
     = USES IDENT { COMMA IDENT } SEMICOLON
     ;
 
-(* ── Block ──────────────────────────────────────────────────────────────── *)
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * BLOCK
+ * ═══════════════════════════════════════════════════════════════════════════ *)
 
 Block
     = [ TypeSection ]
-      [ VarSection ]
+      { VarSection | StandaloneDecl }
       BEGIN StmtList END
     ;
 
-(* ── Type section ───────────────────────────────────────────────────────── *)
+(* VarSection and StandaloneDecl may be interleaved with each other. *)
+
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * TYPE SECTION
+ * ═══════════════════════════════════════════════════════════════════════════ *)
 
 TypeSection
     = TYPE TypeDecl { TypeDecl }
     ;
 
 TypeDecl
-    = IDENT EQUALS ( RecordDef | ClassDef ) SEMICOLON
+    = IDENT EQUALS TypeDef SEMICOLON
+    ;
+
+TypeDef
+    = RecordDef
+    | ClassDef
+    | GenericClassDef
+    | InterfaceDef
     ;
 
 RecordDef
@@ -99,28 +169,36 @@ RecordDef
     ;
 
 ClassDef
-    = CLASS [ LPAREN IDENT RPAREN ] FieldList MethodList END
+    = CLASS [ LPAREN IDENT RPAREN ]       (* optional parent class *)
+             [ ImplementsClause ]
+             FieldList
+             MethodDeclList
+             END
     ;
 
-(* LPAREN IDENT RPAREN — optional parent class name, e.g. class(TObject) *)
-
-MethodList
-    = { MethodDecl }
+(* ImplementsClause — zero-GUID interface list, Delphi-style *)
+ImplementsClause
+    = IDENT { COMMA IDENT }               (* interface name(s) after class(Parent) *)
     ;
 
-MethodDecl
-    = PROCEDURE IDENT [ LPAREN ParamList RPAREN ] SEMICOLON Block SEMICOLON
+(* Note: the parser reads "class(Parent, IFoo, IBar)" where Parent is optional.
+ * The first non-interface identifier is treated as the parent class; subsequent
+ * identifiers that resolve to interface types are treated as the implements list.
+ * This is handled by semantic analysis, not the parser. *)
+
+GenericClassDef
+    = CLASS LESS TypeParamList GREATER     (* generic template, e.g. class<T> *)
+      [ LPAREN IDENT RPAREN ]
+      FieldList
+      MethodDeclList
+      END
     ;
 
-(* Body is declared inline in the class definition.
- * An implicit 'Self' parameter of the class type is available inside the body. *)
-
-ParamList
-    = ParamGroup { SEMICOLON ParamGroup }
-    ;
-
-ParamGroup
-    = IdentList COLON TypeName
+InterfaceDef
+    = INTERFACE
+      [ LPAREN IDENT RPAREN ]             (* optional parent interface *)
+      MethodSignatureList
+      END
     ;
 
 FieldList
@@ -131,7 +209,70 @@ FieldDecl
     = IdentList COLON TypeName SEMICOLON
     ;
 
-(* ── Variable section ───────────────────────────────────────────────────── *)
+MethodDeclList
+    = { MethodDecl | PropertyDecl }
+    ;
+
+MethodDecl
+    = ( PROCEDURE | FUNCTION ) IDENT
+      [ LESS TypeParamList GREATER ]      (* optional generic type params *)
+      [ LPAREN ParamList RPAREN ]
+      [ COLON TypeName ]                  (* return type for functions *)
+      SEMICOLON
+      [ VIRTUAL | OVERRIDE ] SEMICOLON
+      [ Block SEMICOLON ]                 (* body optional — declared without body in intf *)
+    ;
+
+(* Standalone procedure/function — top-level or within a block. *)
+StandaloneDecl
+    = ( PROCEDURE | FUNCTION ) IDENT
+      [ DOT IDENT ]                       (* TTypeName.MethodName implementation form *)
+      [ LESS TypeParamList GREATER ]      (* optional generic type params *)
+      [ LPAREN ParamList RPAREN ]
+      [ COLON TypeName ]
+      SEMICOLON
+      Block SEMICOLON
+    ;
+
+ProcSignature
+    = ( PROCEDURE | FUNCTION ) IDENT
+      [ LPAREN ParamList RPAREN ]
+      [ COLON TypeName ]
+      SEMICOLON
+    ;
+
+MethodSignatureList
+    = { ProcSignature }
+    ;
+
+PropertyDecl
+    = "property" IDENT COLON TypeName
+      [ "read"  IDENT ]
+      [ "write" IDENT ]
+      SEMICOLON
+    ;
+
+(* "property", "read", "write" are contextual soft keywords; they may be used
+ * as identifiers outside a class body. *)
+
+ParamList
+    = ParamGroup { SEMICOLON ParamGroup }
+    ;
+
+ParamGroup
+    = [ VAR ] IdentList COLON TypeName
+    ;
+
+(* VAR prefix marks a by-reference (var) parameter. *)
+
+TypeParamList
+    = IDENT { COMMA IDENT }
+    ;
+
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * VARIABLE SECTION
+ * ═══════════════════════════════════════════════════════════════════════════ *)
 
 VarSection
     = VAR VarDecl { VarDecl }
@@ -141,28 +282,81 @@ VarDecl
     = IdentList COLON TypeName SEMICOLON
     ;
 
-(* ── Shared helpers ─────────────────────────────────────────────────────── *)
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * SHARED HELPERS
+ * ═══════════════════════════════════════════════════════════════════════════ *)
 
 IdentList
     = IDENT { COMMA IDENT }
     ;
 
 TypeName
-    = IDENT
+    = CARET TypeName              (* pointer-to type: ^Integer, ^T, ^^T  *)
+    | IDENT LESS TypeArgList GREATER   (* generic instantiation: TList<Integer> *)
+    | IDENT                       (* simple type or built-in *)
     ;
 
-(* ── Statements ─────────────────────────────────────────────────────────── *)
+TypeArgList
+    = IDENT { COMMA IDENT }
+    ;
+
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * STATEMENTS
+ * ═══════════════════════════════════════════════════════════════════════════ *)
 
 StmtList
     = { Stmt SEMICOLON } [ Stmt ]
     ;
 
 Stmt
-    = FieldAssignment
+    = IfStmt
+    | WhileStmt
+    | ForStmt
+    | TryFinallyStmt
+    | TryExceptStmt
+    | RaiseStmt
+    | CompoundStmt
+    | PointerWriteStmt
+    | FieldAssignment
     | MethodCall
     | Assignment
     | ProcCall
     | (* empty *)
+    ;
+
+IfStmt
+    = IF Expr THEN Stmt [ ELSE Stmt ]
+    ;
+
+WhileStmt
+    = WHILE Expr DO Stmt
+    ;
+
+ForStmt
+    = FOR IDENT ASSIGN Expr ( TO | DOWNTO ) Expr DO Stmt
+    ;
+
+TryFinallyStmt
+    = TRY StmtList FINALLY StmtList END
+    ;
+
+TryExceptStmt
+    = TRY StmtList EXCEPT StmtList END
+    ;
+
+RaiseStmt
+    = RAISE [ Expr ]
+    ;
+
+CompoundStmt
+    = BEGIN StmtList END
+    ;
+
+(* Pointer write: P^ := Expr — store through pointer *)
+PointerWriteStmt
+    = IDENT CARET ASSIGN Expr
     ;
 
 FieldAssignment
@@ -174,12 +368,8 @@ MethodCall
     ;
 
 (* Semantic disambiguation of  IDENT DOT IDENT  in Stmt:
- *   - Followed by :=  → FieldAssignment
- *   - Otherwise       → MethodCall                    *)
-
-(* Resolved by semantic analysis:
- *   - If IDENT names a record variable  → record field write
- *   - If IDENT names a class variable   → heap pointer deref + field write   *)
+ *   - Followed by ASSIGN  → FieldAssignment
+ *   - Otherwise           → MethodCall                   *)
 
 Assignment
     = IDENT ASSIGN Expr
@@ -193,9 +383,22 @@ ArgList
     = Expr { COMMA Expr }
     ;
 
-(* ── Expressions ────────────────────────────────────────────────────────── *)
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * EXPRESSIONS
+ * ═══════════════════════════════════════════════════════════════════════════ *)
 
 Expr
+    = Comparison [ ( IS | AS ) IDENT ]
+    ;
+
+(* IS and AS have the lowest precedence.  IDENT is the target type name. *)
+
+Comparison
+    = Additive [ ( EQUALS | NOT_EQUALS | LESS | GREATER | LESS_EQ | GREATER_EQ ) Additive ]
+    ;
+
+Additive
     = Term { ( PLUS | MINUS ) Term }
     ;
 
@@ -206,29 +409,88 @@ Term
 Factor
     = INT_LIT
     | STRING_LIT
-    | IDENT DOT IDENT        (* field access  OR  constructor call     *)
-    | IDENT                  (* variable reference  OR  procedure name *)
+    | NIL
+    | IDENT DOT IDENT [ LPAREN [ ArgList ] RPAREN ]  (* field/constructor/method *)
+    | IDENT LESS TypeArgList GREATER LPAREN [ ArgList ] RPAREN   (* generic func call *)
+    | IDENT [ LPAREN [ ArgList ] RPAREN ]             (* variable, func call, type cast *)
     | LPAREN Expr RPAREN
     ;
 
-(* Semantic disambiguation of  IDENT DOT IDENT  in Factor:
- *   - Left IDENT resolves to a type symbol   → constructor call (e.g. TFoo.Create)
- *   - Left IDENT resolves to a class variable → class field read (heap deref)
- *   - Left IDENT resolves to a record variable → record field read (inline)       *)
+(* Pointer dereference P^ is a postfix on any Factor result:
+ *
+ *   Deref
+ *       = Factor CARET
+ *       ;
+ *
+ * For simplicity this is shown as a postfix suffix on Factor above rather
+ * than a separate rule; the parser handles it by wrapping the parsed Factor
+ * in a TDerefExpr node when CARET follows.
+ *
+ * Type cast: TypeName LPAREN Expr RPAREN — parsed as an IDENT followed by
+ * LPAREN, identical to a function call.  The semantic pass distinguishes casts
+ * from calls by checking whether the symbol resolves to a type or a function.
+ *)
 
 
 (* ═══════════════════════════════════════════════════════════════════════════
- * BUILT-IN PROCEDURES AND TYPES
+ * BUILT-IN PROCEDURES, FUNCTIONS, AND TYPES
  * ═══════════════════════════════════════════════════════════════════════════ *)
 
-(* Built-in procedures (recognised by the code generator, not the parser)
+(*
+ * Built-in procedures (recognised by the code generator, not the parser):
  *
- *   WriteLn ( Expr { COMMA Expr } )
+ *   WriteLn  ( [ Expr ] )   — print with trailing newline; calls libc printf
+ *   Write    ( [ Expr ] )   — print without newline
+ *   FreeMem  ( Pointer )    — calls libc free()
  *
- * Built-in types (pre-populated in the symbol table)
+ * Built-in functions (recognised by the code generator):
  *
- *   Integer   — 64-bit signed integer   (QBE type: l)
+ *   GetMem    ( Integer ) : Pointer    — calls libc malloc()
+ *   ReallocMem( Pointer, Integer ) : Pointer  — calls libc realloc()
+ *
+ * Built-in types (pre-populated in the symbol table):
+ *
+ *   Integer   — 32-bit signed integer   (QBE type: w)
+ *   Int64     — 64-bit signed integer   (QBE type: l)
+ *   UInt32    — 32-bit unsigned integer (QBE type: w)
+ *   Boolean   — 32-bit boolean          (QBE type: w; 0 = false, 1 = true)
+ *   Byte      — 8-bit unsigned integer  (QBE type: w)
  *   String    — ARC-managed UTF-8 string pointer (QBE type: l)
+ *   Pointer   — untyped pointer         (QBE type: l)
+ *   ^T        — typed pointer to T; created on demand (QBE type: l)
+ *)
+
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * SEMANTIC DISAMBIGUATION NOTES
+ * ═══════════════════════════════════════════════════════════════════════════ *)
+
+(*
+ * IDENT LPAREN ArgList RPAREN in Factor:
+ *   - Symbol resolves to a function/procedure → function call
+ *   - Symbol resolves to a type → type cast (e.g. Integer(x), Pointer(p))
+ *
+ * IDENT DOT IDENT in Factor:
+ *   - Left IDENT resolves to a type symbol → constructor call (TypeName.Create)
+ *   - Left IDENT resolves to a class variable → class field read
+ *   - Left IDENT resolves to a record variable → record field read
+ *
+ * IDENT DOT IDENT in Stmt:
+ *   - Followed by ASSIGN → FieldAssignment (record/class field write)
+ *   - Otherwise → MethodCall
+ *
+ * Generic instantiation vs. comparison:
+ *   IDENT LESS ... is disambiguated by one-token lookahead.  If IDENT is a
+ *   known generic type/function AND the token after LESS is an IDENT, it is
+ *   treated as a type argument list.  Otherwise LESS is a comparison operator.
+ *
+ * Virtual dispatch vs. static call:
+ *   Determined at semantic time from the VTableSlot field on the resolved
+ *   method declaration.  Grammar is identical for both cases.
+ *
+ * Interface method call:
+ *   IDENT DOT IDENT where the left IDENT resolves to an interface variable.
+ *   Generates an indirect call through the itab pointer at the appropriate slot.
  *)
 
 
@@ -236,18 +498,21 @@ Factor
  * ARC IMPLICIT OPERATIONS
  * ═══════════════════════════════════════════════════════════════════════════ *)
 
-(* The compiler inserts reference-counting calls automatically around
- * string assignments.  These are not visible in source syntax but are
- * part of the language semantics:
+(*
+ * The compiler inserts reference-counting calls automatically.
+ * These are not visible in source syntax but are part of the language semantics.
  *
- *   On  Assignment  where the target has type String:
- *       _StringAddRef  ( new_value )
- *       _StringRelease ( old_value )
- *       store new_value → target
+ * String assignment:
+ *   _StringAddRef  ( new_value )
+ *   _StringRelease ( old_value )
+ *   store new_value → target
  *
- *   On  block exit  for every String variable in scope:
- *       _StringRelease ( variable )
+ * Block exit — for every String variable in scope:
+ *   _StringRelease ( variable )
  *
- * Phase 2: _StringAddRef and _StringRelease are no-op RTL stubs.
- * Phase 3: real reference counting using the locked string header layout.
+ * Exception path (try/finally, try/except):
+ *   _StringRelease called and slot zeroed on exception unwind.
+ *
+ * String literal layout: { w -1, w len, w cap, b "data", b 0 }
+ *   refcount = -1 → immortal (never released); char data starts at ptr+12.
  *)
