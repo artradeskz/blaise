@@ -40,12 +40,14 @@ type
 
   TParser = class
   private
-    FLexer:     TLexer;
-    FCurrent:   TToken;
-    FLookahead: TToken;  { one-token lookahead for generic disambiguation }
+    FLexer:      TLexer;
+    FCurrent:    TToken;
+    FLookahead:  TToken;  { one-token lookahead }
+    FLookahead2: TToken;  { two-token lookahead for generic disambiguation }
 
     procedure Advance;
     function  PeekKind: TTokenKind;
+    function  PeekKind2: TTokenKind;  { two tokens ahead }
     procedure Expect(AKind: TTokenKind);
     function  Check(AKind: TTokenKind): Boolean;
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
@@ -92,20 +94,27 @@ implementation
 constructor TParser.Create(ALexer: TLexer);
 begin
   inherited Create;
-  FLexer     := ALexer;
-  FCurrent   := FLexer.Next;
-  FLookahead := FLexer.Next;
+  FLexer      := ALexer;
+  FCurrent    := FLexer.Next;
+  FLookahead  := FLexer.Next;
+  FLookahead2 := FLexer.Next;
 end;
 
 procedure TParser.Advance;
 begin
-  FCurrent   := FLookahead;
-  FLookahead := FLexer.Next;
+  FCurrent    := FLookahead;
+  FLookahead  := FLookahead2;
+  FLookahead2 := FLexer.Next;
 end;
 
 function TParser.PeekKind: TTokenKind;
 begin
   Result := FLookahead.Kind;
+end;
+
+function TParser.PeekKind2: TTokenKind;
+begin
+  Result := FLookahead2.Kind;
 end;
 
 { Parse a type name, including generic instantiations.
@@ -1337,8 +1346,26 @@ var
   Name:       string;
   SecondName: string;
   Line, Col:  Integer;
+  ZeroNode:   TIntLiteral;
+  NegNode:    TBinaryExpr;
 begin
   case FCurrent.Kind of
+    tkMinus:
+      begin
+        { Unary minus: synthesise as 0 - Factor }
+        ZeroNode       := TIntLiteral.Create;
+        ZeroNode.Line  := FCurrent.Line;
+        ZeroNode.Col   := FCurrent.Col;
+        ZeroNode.Value := 0;
+        NegNode        := TBinaryExpr.Create;
+        NegNode.Line   := FCurrent.Line;
+        NegNode.Col    := FCurrent.Col;
+        NegNode.Op     := boSub;
+        NegNode.Left   := ZeroNode;
+        Advance;  { consume '-' }
+        NegNode.Right  := Self.ParseFactor;  { Self. forces recursive call, not result-var read }
+        Result         := NegNode;
+      end;
     tkNil:
       begin
         NilNode      := TNilLiteral.Create;
@@ -1372,10 +1399,11 @@ begin
         Col  := FCurrent.Col;
         Advance;
         { Generic constructor: TypeName<Args>.Method
-          Heuristic: '<' followed by identifier is treated as generic type args.
-          This means 'A < SomeName > .X' cannot appear as a comparison in expressions,
-          which is a known Phase 3 limitation. }
-        if Check(tkLessThan) and (PeekKind = tkIdent) then
+          Heuristic: '<' followed by IDENT followed by '>' or ',' is treated as
+          generic type args.  If the token two ahead is neither '>' nor ',', the
+          '<' is a comparison operator (e.g. "if A < B then"). }
+        if Check(tkLessThan) and (PeekKind = tkIdent) and
+           (PeekKind2 in [tkGreaterThan, tkComma]) then
         begin
           Advance;  { consume '<' }
           Name := Name + '<' + FCurrent.Value;
