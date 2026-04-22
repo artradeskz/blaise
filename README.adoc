@@ -23,6 +23,10 @@ This compiler takes a different approach:
 
 * *One language mode.* No `{$mode}` switches; no legacy dialect support.
 * *One string type.* UTF-8 reference-counted string. `RawBytes` for binary data.
+* *One memory model.* Automatic reference counting applies uniformly to
+  strings, classes, and interfaces. No manual/auto split between `TObject`
+  and `TInterfacedObject`; `[Weak]` breaks cycles. `Free` is retained as a
+  synonym for immediate release.
 * *Clean interfaces.* No COM GUIDs; interface dispatch via compile-time vtable mapping.
 * *Reified generics.* Monomorphization at compile time — no type erasure.
 * *Modern build system.* PasBuild with `project.xml`; no makefiles.
@@ -81,7 +85,7 @@ never committed to the repository.
 
 | 3
 | Generics + zero-GUID interfaces
-| In progress
+| Complete
 
 | 4
 | OPDF debug info emission
@@ -180,6 +184,10 @@ compiler/target/blaise --source Hello.pas --emit-ir
 
 | `assign`, `reset`, `rewrite`, `blockread`
 | Replaced by a stream-based I/O RTL
+
+| `TObject` vs `TInterfacedObject` split
+| One unified class model under automatic reference counting; `[Weak]`
+  breaks cycles
 |===
 
 == Licence

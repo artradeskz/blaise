@@ -768,13 +768,13 @@ macOS ARM64 is deferred to Phase 5 alongside self-hosting.
 
 == Phase 3 — Implementation Status
 
-Phase 2 is complete. Phase 3 is substantially complete.
-Interfaces are fully done. Generics: monomorphization, RTL collections
-(`TList<T>`, `TDictionary<K,V>`), `Generics.Defaults`, and generic class
-method implementations in separate blocks are all done.  Two items remain:
-generic standalone function type parameters (`function Min<T>`) and the
-formal milestone valgrind run with `TDictionary<string,Integer>` (which
-requires a `_StringEquals` RTL helper for content-aware key comparison).
+Phase 2 is complete. Phase 3 is complete except for one item deferred
+pending a class-ownership design decision (see *ARC for interface
+references* below). Interfaces, monomorphization, RTL collections
+(`TList<T>`, `TDictionary<K,V>` including string keys), `Generics.Defaults`,
+generic class method implementations in separate blocks, generic standalone
+functions with constraint syntax, and the `TDictionary<string,Integer>`
+zero-leak valgrind milestone are all done.
 
 === Interfaces
 
@@ -865,11 +865,11 @@ requires a `_StringEquals` RTL helper for content-aware key comparison).
   non-generic qualified names.  RTL units use this form exclusively.
 
 | Generic standalone function type parameters
-| Pending
+| Done
 | `function Min<T>(A, B: T): T;` — template registration and on-demand
-  instantiation at call sites.  Partially done (14 tests in
-  `cp.test.genericfuncs.pas` passing); constraint syntax (`T: IComparable`)
-  is not yet supported.
+  instantiation at call sites. Constraint syntax (`T: class`,
+  `T: ISomeInterface`) landed alongside the boolean operator work.
+  Tests in `cp.test.genericfuncs.pas`.
 
 | Monomorphization: instantiation registry
 | Done
@@ -896,11 +896,10 @@ requires a `_StringEquals` RTL helper for content-aware key comparison).
 
 | `TDictionary<K, V>` in RTL
 | Done
-| `Generics.Collections` unit: parallel-array linear-scan map.  `Grow`,
+| `Generics.Collections` unit: parallel-array linear-scan map. `Grow`,
   `FindKey`, `Add` (upsert), `TryGetValue`, `ContainsKey`, `Remove`, `Count`
-  property.  Integer keys tested.  String key support deferred — requires a
-  content-aware `_StringEquals` RTL helper (pointer equality via `ceql` is
-  not sufficient for string content comparison).
+  property. Integer and string keys both supported; content-aware
+  comparison uses the `_StringEquals` RTL helper for string types.
 
 | `Generics.Defaults` in RTL
 | Done
@@ -909,30 +908,190 @@ requires a `_StringEquals` RTL helper for content-aware key comparison).
   13 tests in `cp.test.genericdefaults.pas` — all passing.
 
 | `True` / `False` built-in constants
-| Pending
-| Not yet registered in `TSymbolTable.RegisterBuiltins`.  Workaround: use
-  comparison expressions (`Result := X >= 0`) instead of literal `True`/`False`
-  in Blaise source.  5-minute fix; blocking `TryGetValue` idiomatic style.
+| Done
+| Registered in `TSymbolTable.RegisterBuiltins` as `skConstant` of
+  `FTypeBoolean`. Usable as literal Boolean values anywhere a Boolean
+  expression is expected.
 
 | ARC for interface references
-| Deferred
-| `[Weak]` attribute for cycle-breaking not yet implemented.
-  Slot zeroing on exception paths done; full ARC insert/release on
-  interface assignment deferred to Phase 3 follow-up.
+| Planned — option A chosen
+| Interface variables are currently non-owning fat pointers (obj + itab).
+  The class-ownership model has been decided in favour of universal ARC
+  on `TObject` (option A). Implementation is scheduled as a Phase 3
+  follow-up and covers: refcount header on every class allocation,
+  compiler-inserted addref/release on class and interface assignment,
+  `[Weak]` attribute for cycle-breaking, and retention of `Free` as a
+  sanctioned synonym for immediate release. See
+  *Class-Ownership Model — Decision Record* below for the full rationale.
 
 |===
 
 *Phase 3 milestone:* `TList<Integer>` and `TDictionary<string, Integer>` compile
-and pass a functional test suite. A program using both under valgrind shows zero leaks.
+and pass a functional test suite. A program using both under valgrind shows
+zero leaks. Achieved on 2026-04-22 (commit `d49ebb4`).
 
-*Milestone blockers (as of 2026-04-22):*
+*Outstanding Phase 3 follow-up:* ARC for interface references. The
+class-ownership model has been decided (option A — universal ARC on
+`TObject`); see the decision record below. All other Phase 3 items are
+complete.
 
-. `TDictionary<string, Integer>` string key support — needs `_StringEquals` RTL
-  helper and codegen integration so `Ptr^ = Key` uses content comparison for
-  string types rather than pointer equality.
-. `True` / `False` built-in constants — needed for idiomatic Boolean return values.
-. Formal valgrind run — a standalone `.pas` program exercising both collections
-  must compile to a native binary and show zero leaks.
+== Class-Ownership Model — Decision Record
+
+:revdate-decision: 2026-04-23
+:status-decision: APPROVED
+
+Interface references in Blaise must eventually participate in automatic
+reference counting. Doing so requires first deciding how classes
+themselves are managed, because interface ARC and class lifetime cannot
+be designed independently. Three options were considered.
+
+=== Option A — Universal ARC on `TObject`
+
+Every class carries a refcount header. Assignment of a class or
+interface variable addrefs; scope exit releases. `Free` is retained as
+a sanctioned synonym for immediate release rather than removed.
+
+Pros:
+
+* One lifetime rule across the whole language — strings, classes, and
+  interfaces all behave the same. Matches the "one clean dialect" ethos.
+* Eliminates the entire class of use-after-free and leak bugs that
+  Delphi still ships with.
+* No dual class hierarchy; `IFoo := Obj` always works without the
+  developer having to know which base class the object inherits from.
+* `[Weak]` is a single, uniformly-applied concept rather than a
+  subset-of-classes concern.
+* Removes the best-known Object Pascal inconsistency — that strings and
+  interfaces are ARC-managed but classes are not.
+
+Cons:
+
+* Severe porting friction for Delphi/FPC codebases that rely on explicit
+  `try..finally Obj.Free`. Mitigated by retaining `Free` as release and
+  by migration-analyser support (Phase 7).
+* Small per-allocation cost (refcount header) and per-assignment cost
+  (addref/release pair) on every class, not only interfaced ones.
+* Cycles become a pervasive concern across any non-trivial object graph,
+  raising the floor of language knowledge required to write correct code.
+* Destructor timing becomes refcount-driven rather than programmer-driven,
+  changing the subjective feel of `Destroy` compared with Delphi.
+* Existing Blaise RTL (`TList<T>`, `TDictionary<K,V>`) uses explicit
+  `Free` and must be reworked under the new rules.
+
+=== Option B — `TInterfacedObject` alongside `TObject` (Delphi model)
+
+`TObject` stays manually managed. A separate `TInterfacedObject` base
+class carries the refcount. Interface references addref/release only
+when the backing object descends from `TInterfacedObject`.
+
+Pros:
+
+* Direct Delphi compatibility — ported code works largely as-is and
+  developer muscle memory transfers without retraining.
+* Developer opt-in; ARC costs are paid only where the developer chose
+  them.
+* `try..finally Obj.Free` patterns continue to work everywhere they
+  work today.
+* `[Weak]` scope is smaller — only the interfaced-object subtree.
+* Lowest-friction adoption path for the existing Object Pascal
+  community.
+
+Cons:
+
+* Two lifetime models coexist in a single language. This is the same
+  category of legacy wart that the project was founded to remove
+  (multiple string types, multiple language modes, multiple object
+  models).
+* "Which base class do I inherit from?" becomes a papercut on every new
+  class, and wrong choices are expensive to reverse later.
+* Preserves the classic Delphi footgun: holding a plain `TObject`
+  through an interface reference either leaks or double-frees depending
+  on which side of the split is trusted.
+* Interface-assignment codegen needs to branch on whether the backing
+  class is refcounted, increasing ABI-boundary complexity.
+
+=== Option C — Non-owning interface references
+
+Interface references are borrowed views; they never addref or release.
+Lifetime is controlled exclusively by the concrete class reference held
+elsewhere in the program.
+
+Pros:
+
+* Simplest implementation — matches Blaise's current behaviour; almost
+  no additional work required.
+* Zero runtime cost on interface assignment.
+* No cycle problem, because there is no ARC to cycle on.
+* Consistent with the explicit `Obj.Free` philosophy as it stands today.
+
+Cons:
+
+* Silently incompatible with Delphi semantics. Code that relies on an
+  `IFoo` reference keeping its object alive (factory methods, DI
+  containers, observer lists, RAII-style resource wrappers) will compile
+  cleanly and crash at runtime.
+* Introduces dangling-reference hazards into a language that otherwise
+  has none. Regresses Pascal's safety story.
+* Interfaces collapse to a polymorphism and type-erasure tool only,
+  losing their role as lifetime contracts. Large bodies of idiomatic
+  Object Pascal become inexpressible.
+* `[Weak]` becomes meaningless, since there is no strong reference to
+  contrast with.
+
+=== Decision — Option A
+
+Blaise will adopt universal ARC on `TObject`. Every class allocation
+includes a refcount header; the compiler inserts addref and release
+calls at class and interface assignment sites and at scope exit; `Free`
+is retained as a sanctioned synonym for immediate release.
+
+The decision rests on three reasons:
+
+Consistency with decisions already made::
+The project has already accepted comparable compatibility costs in
+pursuit of simplification — a single string type, removal of the `with`
+statement, removal of old-style `object`, removal of COM GUIDs,
+collapse to a single language mode. Option B would be the one place
+that the project preserves a 1980s wart for convenience, and the wart
+in question (classes are manual, interfaces are ARC) is arguably the
+single most widely criticised inconsistency in modern Object Pascal.
+Resolving it is precisely the kind of cleanup this project exists to do.
+
+Porting cost is mostly deletion, not translation::
+The dominant Delphi pattern is
+`try Obj := TFoo.Create; ... finally Obj.Free; end`. Under option A the
+`finally` arm simply disappears, and the migration analyser (Phase 7)
+flags the sites. That is the cheapest class of migration available.
+The genuinely difficult work — lifetime auditing, cycle identification —
+has to be done under option B as well, the moment a codebase touches
+interfaces; option B does not actually spare a careful porter from any
+of it.
+
+Pays forward for new code, not backward for old::
+Option B optimises for developers porting existing Delphi code once.
+Option A optimises for every developer writing new Blaise code for the
+life of the language. Given the project premise is that Object Pascal
+in 2026 needs a fresh start rather than another FPC, the future cohort
+is the right constituency to favour.
+
+Constraints attached to the decision:
+
+* `Free` is retained as a keyword-level synonym for immediate release
+  and nil-out. It is neither an error nor a silent no-op. This preserves
+  developer muscle memory and reduces mechanical migration cost to
+  near-zero.
+* `[Weak]` must land in the same release as universal ARC. ARC without
+  a cycle-breaker would be a liability.
+* The Blaise RTL is rewritten to match the new rules as part of the
+  same work package.
+* The documentation frames this as a deliberate break with Delphi's
+  manual-class model, in the same register as the single-string-type
+  decision — not as an accident of implementation.
+
+The decision flips to option B only on evidence that migrating existing
+Delphi codebases is the project's primary adoption channel. Current
+premises assume the primary channel is new developers writing new code,
+so option A stands.
 
 == Landscape Notes
 
