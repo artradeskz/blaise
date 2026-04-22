@@ -31,6 +31,8 @@ type
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
     function  InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
+    function  SubstTypeParam(const ATypeName: string;
+                AParamNames, AArgs: TStringList): string;
 
     { Generic function instantiation: resolves 'Identity<Integer>' on demand. }
     function  InstantiateGenericFunc(const AInstName: string): TMethodDecl;
@@ -131,9 +133,19 @@ var
 begin
   if AExpected = AActual then
     Exit;
-  { nil is compatible with any class or interface type }
-  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface]) then
+  { nil is compatible with any class, interface, or pointer type }
+  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface, tyPointer]) then
     Exit;
+  { Two pointer types are compatible when:
+      - either is untyped (Pointer), or
+      - both are typed pointers to the same base type }
+  if (AExpected.Kind = tyPointer) and (AActual.Kind = tyPointer) then
+  begin
+    if (TPointerTypeDesc(AExpected).BaseType = nil) or
+       (TPointerTypeDesc(AActual).BaseType = nil) or
+       (TPointerTypeDesc(AExpected).BaseType = TPointerTypeDesc(AActual).BaseType) then
+      Exit;
+  end;
   { subtype assignment: TDerived → TBase is allowed }
   if IsSubtypeOf(AActual, AExpected) then
     Exit;
@@ -355,6 +367,24 @@ begin
     Result := InstantiateGeneric(AName);
 end;
 
+function TSemanticAnalyser.SubstTypeParam(const ATypeName: string;
+  AParamNames, AArgs: TStringList): string;
+var
+  I: Integer;
+begin
+  Result := ATypeName;
+  { Direct match: T → Integer }
+  for I := 0 to AParamNames.Count - 1 do
+    if SameText(Result, AParamNames[I]) then
+    begin
+      Result := AArgs[I];
+      Exit;
+    end;
+  { Prefix caret: ^T → ^Integer, ^^T → ^^Integer, etc. }
+  if (Length(Result) > 0) and (Result[1] = '^') then
+    Result := '^' + Self.SubstTypeParam(Copy(Result, 2, MaxInt), AParamNames, AArgs);
+end;
+
 function TSemanticAnalyser.InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
 var
   BracPos:  Integer;
@@ -376,8 +406,9 @@ var
   FldName:  string;
   ParType:  TTypeDesc;
   RT:       TRecordTypeDesc;
-  GI:       TGenericInstance;
-  Subst:    string;
+  GI:        TGenericInstance;
+  Subst:     string;
+  ConcrType: TTypeDesc;
 begin
   Result := nil;
 
@@ -420,21 +451,14 @@ begin
     for I := 0 to Templ.ClassDef.ImplementsNames.Count - 1 do
       ClonedCD.ImplementsNames.Add(Templ.ClassDef.ImplementsNames[I]);
 
-    { Clone fields with type-param substitution }
+    { Clone fields with type-param substitution (handles ^T → ^Integer etc.) }
     for I := 0 to Templ.ClassDef.Fields.Count - 1 do
     begin
       FDecl    := TFieldDecl(Templ.ClassDef.Fields[I]);
       NewFDecl := TFieldDecl.Create;
       for J := 0 to FDecl.Names.Count - 1 do
         NewFDecl.Names.Add(FDecl.Names[J]);
-      Subst := FDecl.TypeName;
-      for K := 0 to Templ.ParamNames.Count - 1 do
-        if SameText(Subst, Templ.ParamNames[K]) then
-        begin
-          Subst := Args[K];
-          Break;
-        end;
-      NewFDecl.TypeName := Subst;
+      NewFDecl.TypeName := SubstTypeParam(FDecl.TypeName, Templ.ParamNames, Args);
       ClonedCD.Fields.Add(NewFDecl);
     end;
 
@@ -456,25 +480,12 @@ begin
         NewPar := TMethodParam.Create;
         NewPar.ParamName  := Par.ParamName;
         NewPar.IsVarParam := Par.IsVarParam;
-        Subst := Par.TypeName;
-        for K := 0 to Templ.ParamNames.Count - 1 do
-          if SameText(Subst, Templ.ParamNames[K]) then
-          begin
-            Subst := Args[K];
-            Break;
-          end;
-        NewPar.TypeName := Subst;
+        NewPar.TypeName   := SubstTypeParam(Par.TypeName, Templ.ParamNames, Args);
         NewMDecl.Params.Add(NewPar);
       end;
 
-      Subst := MDecl.ReturnTypeName;
-      for K := 0 to Templ.ParamNames.Count - 1 do
-        if SameText(Subst, Templ.ParamNames[K]) then
-        begin
-          Subst := Args[K];
-          Break;
-        end;
-      NewMDecl.ReturnTypeName := Subst;
+      NewMDecl.ReturnTypeName :=
+        SubstTypeParam(MDecl.ReturnTypeName, Templ.ParamNames, Args);
 
       ClonedCD.Methods.Add(NewMDecl);
     end;
@@ -542,12 +553,28 @@ begin
       end;
     end;
 
-    { Analyse method bodies with concrete types in scope }
-    for J := 0 to ClonedCD.Methods.Count - 1 do
-    begin
-      NewMDecl := TMethodDecl(ClonedCD.Methods[J]);
-      if NewMDecl.Body <> nil then
-        AnalyseMethodDecl(NewMDecl, RT);
+    { Analyse method bodies with concrete types in scope.
+      Push type-param bindings (T=Integer etc.) so that SizeOf(T) and
+      local var declarations like 'var P: ^T' resolve to concrete types. }
+    FTable.PushScope;
+    try
+      for K := 0 to Templ.ParamNames.Count - 1 do
+      begin
+        ConcrType := FindTypeOrInstantiate(Args[K]);
+        if ConcrType <> nil then
+        begin
+          Sym := TSymbol.Create(Templ.ParamNames[K], skType, ConcrType);
+          FTable.Define(Sym);
+        end;
+      end;
+      for J := 0 to ClonedCD.Methods.Count - 1 do
+      begin
+        NewMDecl := TMethodDecl(ClonedCD.Methods[J]);
+        if NewMDecl.Body <> nil then
+          AnalyseMethodDecl(NewMDecl, RT);
+      end;
+    finally
+      FTable.PopScope;
     end;
 
     { Register the instantiation for codegen }
@@ -1590,6 +1617,22 @@ var
   Idx:     Integer;
   I:       Integer;
 begin
+  { SizeOf(TypeName) — compile-time type size, returns Integer }
+  if SameText(AExpr.Name, 'SizeOf') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('SizeOf requires exactly one argument', AExpr.Line, AExpr.Col);
+    if AExpr.Args[0] is TIdentExpr then
+    begin
+      Sym := FTable.Lookup(TIdentExpr(AExpr.Args[0]).Name);
+      if (Sym <> nil) and (Sym.Kind = skType) then
+        TIdentExpr(AExpr.Args[0]).ResolvedType := Sym.TypeDesc;
+    end;
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   Sym := FTable.Lookup(AExpr.Name);
   if Sym = nil then
   begin
@@ -1842,11 +1885,12 @@ begin
 
   if IsComparisonOp(ABin.Op) then
   begin
-    { nil can be compared with class types }
+    { nil can be compared with class, interface, or pointer types }
     if not (
       (LType = RType) or
-      ((LType.Kind = tyNil) and (RType.Kind = tyClass)) or
-      ((LType.Kind = tyClass) and (RType.Kind = tyNil))
+      ((LType.Kind = tyNil) and (RType.Kind in [tyClass, tyInterface, tyPointer])) or
+      ((RType.Kind = tyNil) and (LType.Kind in [tyClass, tyInterface, tyPointer])) or
+      ((LType.Kind = tyPointer) and (RType.Kind = tyPointer))
     ) then
       CheckTypesMatch(LType, RType,
         Format('comparison ''%s''', [BinaryOpName(ABin.Op)]),

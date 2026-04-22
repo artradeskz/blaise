@@ -528,7 +528,7 @@ begin
     'begin'               + LineEnding +
     '  F := TFoo.Create'  + LineEnding +
     'end.');
-  AssertTrue('calls malloc', Pos('call $malloc', IR) > 0);
+  AssertTrue('calls calloc', Pos('call $calloc', IR) > 0);
   AssertTrue('stores pointer', Pos('storel', IR) > 0);
 end;
 

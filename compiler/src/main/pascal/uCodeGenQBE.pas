@@ -1365,6 +1365,16 @@ begin
     { Standalone function call expression }
     with TFuncCallExpr(AExpr) do
     begin
+      { SizeOf(TypeName) → integer literal = byte size of the type }
+      if SameText(Name, 'SizeOf') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =w copy %d',
+          [T, TASTExpr(Args[0]).ResolvedType.ByteSize]));
+        Result := T;
+        Exit;
+      end;
+
       { GetMem(N) → malloc(N) → pointer }
       if SameText(Name, 'GetMem') then
       begin
@@ -1476,9 +1486,9 @@ begin
     FldAccess := TFieldAccessExpr(AExpr);
     if FldAccess.IsConstructorCall then
     begin
-      { TypeName.Create — allocate instance on heap }
+      { TypeName.Create — allocate zeroed instance on heap (calloc zeros all fields) }
       T := AllocTemp;
-      EmitLine(Format('  %s =l call $malloc(l %d)',
+      EmitLine(Format('  %s =l call $calloc(l 1, l %d)',
         [T, TRecordTypeDesc(FldAccess.ResolvedType).TotalSize]));
       { Store vtable pointer at offset 0 if this class has virtual methods }
       if TRecordTypeDesc(FldAccess.ResolvedType).HasVTable then

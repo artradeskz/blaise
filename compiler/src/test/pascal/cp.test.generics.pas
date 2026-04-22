@@ -487,7 +487,7 @@ var
   IR: string;
 begin
   IR := GenIR(SrcGenericUsage);
-  AssertTrue('constructor calls malloc', Pos('call $malloc', IR) > 0);
+  AssertTrue('constructor calls calloc', Pos('call $calloc', IR) > 0);
 end;
 
 procedure TGenericsTests.TestCodegen_Generic_MethodEmitted;

@@ -305,7 +305,7 @@ begin
   IR := GenIR(SrcSelfRef);
   { TNode has Integer (4 bytes) + TNode pointer (8 bytes) = 12 bytes,
     but aligned to 8 → 12 bytes total. malloc(12) }
-  AssertTrue('malloc 12 bytes for TNode', Pos('call $malloc(l 12)', IR) > 0);
+  AssertTrue('calloc 12 bytes for TNode', Pos('call $calloc(l 1, l 12)', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }
@@ -346,7 +346,7 @@ var IR: string;
 begin
   IR := GenIR(SrcInherit);
   { TDog.Create should malloc 8 bytes (Age + Legs) }
-  AssertTrue('malloc 8 bytes for TDog', Pos('call $malloc(l 8)', IR) > 0);
+  AssertTrue('calloc 8 bytes for TDog', Pos('call $calloc(l 1, l 8)', IR) > 0);
 end;
 
 procedure TInheritTests.TestCodegen_Inherit_ParentFieldOffset;

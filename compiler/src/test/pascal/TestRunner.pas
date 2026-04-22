@@ -33,7 +33,8 @@ uses
   cp.test.generics,
   cp.test.properties,
   cp.test.genericfuncs,
-  cp.test.pointers;
+  cp.test.pointers,
+  cp.test.tlist;
 
 var
   Application: TTestRunner;

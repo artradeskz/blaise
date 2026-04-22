@@ -399,8 +399,8 @@ var
 begin
   { TPoint has one Integer field (4 bytes) + vptr (8 bytes) = 12 bytes }
   IR := GenIR(SrcBaseWithField);
-  AssertTrue('malloc includes vptr size',
-    IRContains(IR, 'call $malloc(l 12)'));
+  AssertTrue('calloc includes vptr size',
+    IRContains(IR, 'call $calloc(l 1, l 12)'));
 end;
 
 procedure TVTableTests.TestCodegen_FieldOffset_ShiftedByEight;
