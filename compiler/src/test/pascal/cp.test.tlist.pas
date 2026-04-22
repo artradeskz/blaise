@@ -41,6 +41,7 @@ type
     procedure TestCodegen_SizeOf_Int64_EmitsEight;
     procedure TestCodegen_TList_Compiles;
     procedure TestCodegen_TList_AddGet_IR;
+    procedure TestCodegen_TList_Grow_EmitsRealloc;
   end;
 
 implementation
@@ -143,6 +144,54 @@ const
     'begin'                                                  + LineEnding +
     '  L := TList<Integer>.Create;'                          + LineEnding +
     '  L.Add(42);'                                           + LineEnding +
+    '  V := L.Get(0)'                                        + LineEnding +
+    'end.';
+
+  SrcTListFull =
+    'program P;'                                             + LineEnding +
+    'type'                                                   + LineEnding +
+    '  TList<T> = class'                                     + LineEnding +
+    '    FData: ^T;'                                         + LineEnding +
+    '    FCount: Integer;'                                   + LineEnding +
+    '    FCapacity: Integer;'                                + LineEnding +
+    '    procedure Grow;'                                    + LineEnding +
+    '    var'                                                + LineEnding +
+    '      NewCap: Integer;'                                 + LineEnding +
+    '    begin'                                              + LineEnding +
+    '      if Self.FCapacity = 0 then'                       + LineEnding +
+    '        NewCap := 4'                                    + LineEnding +
+    '      else'                                             + LineEnding +
+    '        NewCap := Self.FCapacity * 2;'                  + LineEnding +
+    '      Self.FData := ReallocMem(Self.FData,'             + LineEnding +
+    '        NewCap * SizeOf(T));'                           + LineEnding +
+    '      Self.FCapacity := NewCap'                         + LineEnding +
+    '    end;'                                               + LineEnding +
+    '    procedure Add(Value: T);'                           + LineEnding +
+    '    var'                                                + LineEnding +
+    '      Dest: ^T;'                                        + LineEnding +
+    '    begin'                                              + LineEnding +
+    '      if Self.FCount = Self.FCapacity then'             + LineEnding +
+    '        Self.Grow;'                                     + LineEnding +
+    '      Dest := Self.FData + Self.FCount * SizeOf(T);'   + LineEnding +
+    '      Dest^ := Value;'                                  + LineEnding +
+    '      Self.FCount := Self.FCount + 1'                   + LineEnding +
+    '    end;'                                               + LineEnding +
+    '    function Get(AIndex: Integer): T;'                  + LineEnding +
+    '    var'                                                + LineEnding +
+    '      Src: ^T;'                                         + LineEnding +
+    '    begin'                                              + LineEnding +
+    '      Src := Self.FData + AIndex * SizeOf(T);'         + LineEnding +
+    '      Result := Src^'                                   + LineEnding +
+    '    end;'                                               + LineEnding +
+    '    property Count: Integer read FCount;'               + LineEnding +
+    '  end;'                                                 + LineEnding +
+    'var'                                                    + LineEnding +
+    '  L: TList<Integer>;'                                   + LineEnding +
+    '  V: Integer;'                                          + LineEnding +
+    'begin'                                                  + LineEnding +
+    '  L := TList<Integer>.Create;'                          + LineEnding +
+    '  L.Add(10);'                                           + LineEnding +
+    '  L.Add(20);'                                           + LineEnding +
     '  V := L.Get(0)'                                        + LineEnding +
     'end.';
 
@@ -338,6 +387,19 @@ begin
   AssertTrue('Get emits loadw', Pos('loadw', IR) > 0);
   { Memory allocation via calloc }
   AssertTrue('Create emits calloc', Pos('calloc', IR) > 0);
+end;
+
+procedure TTListTests.TestCodegen_TList_Grow_EmitsRealloc;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcTListFull);
+  { Grow method calls realloc for dynamic resizing }
+  AssertTrue('Grow emits realloc', Pos('call $realloc', IR) > 0);
+  { Add method stores elements }
+  AssertTrue('Add emits storew for Integer elements', Pos('storew', IR) > 0);
+  { Get method loads elements }
+  AssertTrue('Get emits loadw for Integer elements', Pos('loadw', IR) > 0);
 end;
 
 initialization
