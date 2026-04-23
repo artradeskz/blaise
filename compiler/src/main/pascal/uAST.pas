@@ -109,6 +109,10 @@ type
     Expr:            TASTExpr;   { owned }
     IsVarParam:      Boolean;    { set by uSemantic — True if target is a var parameter }
     ResolvedLhsType: TTypeDesc;  { set by uSemantic — type of the target variable }
+    IsWeakLhs:       Boolean;    { set by uSemantic — True if the LHS symbol
+                                   was declared [Weak]; codegen emits a
+                                   _WeakAssign in place of the strong
+                                   addref/release pattern. }
     destructor Destroy; override;
   end;
 
@@ -235,6 +239,14 @@ type
     Names:        TStringList;  { owned — one or more names: x, y: Integer }
     TypeName:     string;
     ResolvedType: TTypeDesc;    { set by uSemantic; nil until analysed }
+    Attributes:   TStringList;  { owned — raw attribute names as written in
+                                  source, e.g. 'Weak', 'SomeOther'; the
+                                  Attribute suffix (if present) is preserved
+                                  verbatim — normalisation happens in
+                                  semantic analysis. }
+    IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved
+                                  on this declaration.  Codegen keys off
+                                  this instead of walking Attributes. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -251,6 +263,8 @@ type
     Names:        TStringList;  { owned — e.g. X, Y: Integer }
     TypeName:     string;
     ResolvedType: TTypeDesc;    { set by uSemantic }
+    Attributes:   TStringList;  { owned — see TVarDecl.Attributes. }
+    IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -646,11 +660,14 @@ end;
 constructor TVarDecl.Create;
 begin
   inherited Create;
-  Names := TStringList.Create;
+  Names      := TStringList.Create;
+  Attributes := TStringList.Create;
+  IsWeak     := False;
 end;
 
 destructor TVarDecl.Destroy;
 begin
+  Attributes.Free;
   Names.Free;
   inherited Destroy;
 end;
@@ -660,11 +677,14 @@ end;
 constructor TFieldDecl.Create;
 begin
   inherited Create;
-  Names := TStringList.Create;
+  Names      := TStringList.Create;
+  Attributes := TStringList.Create;
+  IsWeak     := False;
 end;
 
 destructor TFieldDecl.Destroy;
 begin
+  Attributes.Free;
   Names.Free;
   inherited Destroy;
 end;

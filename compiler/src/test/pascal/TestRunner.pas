@@ -51,6 +51,7 @@ uses
   cp.test.multiwrite,
   cp.test.chainedfields,
   cp.test.genericconstraints,
+  cp.test.weakref,
   cp.test.e2e;
 
 var

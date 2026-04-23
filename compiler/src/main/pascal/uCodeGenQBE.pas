@@ -283,23 +283,41 @@ procedure TCodeGenQBE.EmitArcCleanup(ABlock: TBlock);
   block exit.  Mirrors the insertion pattern used at assignment sites: each
   slot holds one retained reference from its first assignment; scope exit
   must balance that with one release.  Interface vars carry a fat pointer
-  (obj + itab); only the obj slot is refcounted. }
+  (obj + itab); only the obj slot is refcounted.  Weak vars use _WeakClear
+  against the slot address rather than a strong release on the slot value. }
 var
   I, J:    Integer;
   Decl:    TVarDecl;
   VarName: string;
   ValTemp: string;
   RelFn:   string;
+  IsIntf:  Boolean;
 begin
   for I := 0 to ABlock.Decls.Count - 1 do
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
     if Decl.ResolvedType = nil then Continue;
+    IsIntf := Decl.ResolvedType.Kind = tyInterface;
+    if Decl.IsWeak then
+    begin
+      { Weak class or interface local — unregister from the weak table
+        without touching refcounts.  The zero-out happens automatically
+        as _WeakClear writes 0 to *slot. }
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names[J];
+        if IsIntf then
+          EmitLine(Format('  call $_WeakClear(l %%_var_%s_obj)', [VarName]))
+        else
+          EmitLine(Format('  call $_WeakClear(l %%_var_%s)', [VarName]));
+      end;
+      Continue;
+    end;
     if Decl.ResolvedType.IsString then
       RelFn := '$_StringRelease'
     else if Decl.ResolvedType.Kind = tyClass then
       RelFn := '$_ClassRelease'
-    else if Decl.ResolvedType.Kind = tyInterface then
+    else if IsIntf then
       RelFn := '$_ClassRelease'  { obj slot release; itab is static }
     else
       Continue;
@@ -307,7 +325,7 @@ begin
     begin
       VarName := Decl.Names[J];
       ValTemp := AllocTemp;
-      if Decl.ResolvedType.Kind = tyInterface then
+      if IsIntf then
         EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, VarName]))
       else
         EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
@@ -347,16 +365,27 @@ begin
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
     if Decl.ResolvedType = nil then Continue;
-    IsIntf := False;
+    IsIntf := Decl.ResolvedType.Kind = tyInterface;
+    if Decl.IsWeak then
+    begin
+      { Weak locals on an exception path: unregister and zero the slot
+        so a subsequent nested handler's cleanup sees nil. }
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names[J];
+        if IsIntf then
+          EmitLine(Format('  call $_WeakClear(l %%_var_%s_obj)', [VarName]))
+        else
+          EmitLine(Format('  call $_WeakClear(l %%_var_%s)', [VarName]));
+      end;
+      Continue;
+    end;
     if Decl.ResolvedType.IsString then
       RelFn := '$_StringRelease'
     else if Decl.ResolvedType.Kind = tyClass then
       RelFn := '$_ClassRelease'
-    else if Decl.ResolvedType.Kind = tyInterface then
-    begin
-      RelFn  := '$_ClassRelease';
-      IsIntf := True;
-    end
+    else if IsIntf then
+      RelFn := '$_ClassRelease'
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
@@ -720,11 +749,17 @@ begin
     EmitLine('  call $_Raise_InvalidCast()');
     EmitLine(Format('  jmp @%s', [LblEnd]));
     EmitLine('@' + LblOk);
-    OldTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
-    EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
-    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %%_var_%s_obj',  [ObjTemp, AAssign.Name]));
+    if AAssign.IsWeakLhs then
+      EmitLine(Format('  call $_WeakAssign(l %%_var_%s_obj, l %s)',
+        [AAssign.Name, ObjTemp]))
+    else
+    begin
+      OldTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %%_var_%s_obj',  [ObjTemp, AAssign.Name]));
+    end;
     EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
     EmitLine('@' + LblEnd);
     Exit;
@@ -732,7 +767,8 @@ begin
 
   { Interface direct assignment: F := T where T is a class implementing the
     interface.  Under ARC, the obj slot co-owns the backing class instance
-    and must be retained on store / released when overwritten. }
+    and must be retained on store / released when overwritten — or, for
+    weak interface references, routed through _WeakAssign. }
   if (AAssign.ResolvedLhsType <> nil) and
      (AAssign.ResolvedLhsType.Kind = tyInterface) and
      (AAssign.Expr.ResolvedType.Kind = tyClass) then
@@ -741,18 +777,25 @@ begin
     ClassRT  := TRecordTypeDesc(AAssign.Expr.ResolvedType);
     ItabName := '$itab_' + ClassRT.Name + '_' + IntfDesc.Name;
     ValTemp  := EmitExpr(AAssign.Expr);
-    OldTemp  := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
-    EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
-    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %%_var_%s_obj',  [ValTemp, AAssign.Name]));
+    if AAssign.IsWeakLhs then
+      EmitLine(Format('  call $_WeakAssign(l %%_var_%s_obj, l %s)',
+        [AAssign.Name, ValTemp]))
+    else
+    begin
+      OldTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %%_var_%s_obj',  [ValTemp, AAssign.Name]));
+    end;
     EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabName, AAssign.Name]));
     Exit;
   end;
 
   { Interface-to-interface direct assignment: F := G where both sides are
-    interface-typed.  Copy obj and itab from G's fat pointer to F's; retain
-    the backing object and release F's prior obj reference. }
+    interface-typed.  Copy obj and itab from G's fat pointer to F's; for
+    strong F, retain the backing object and release F's prior obj ref;
+    for weak F, route the obj through _WeakAssign. }
   if (AAssign.ResolvedLhsType <> nil) and
      (AAssign.ResolvedLhsType.Kind = tyInterface) and
      (AAssign.Expr.ResolvedType.Kind = tyInterface) and
@@ -764,6 +807,13 @@ begin
       [ObjTemp, TIdentExpr(AAssign.Expr).Name]));
     EmitLine(Format('  %s =l loadl %%_var_%s_itab',
       [ItabTemp, TIdentExpr(AAssign.Expr).Name]));
+    if AAssign.IsWeakLhs then
+    begin
+      EmitLine(Format('  call $_WeakAssign(l %%_var_%s_obj, l %s)',
+        [AAssign.Name, ObjTemp]));
+      EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
+      Exit;
+    end;
     OldTemp := AllocTemp;
     EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
     EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
@@ -793,6 +843,16 @@ begin
     EmitLine(Format('  call $_StringAddRef(l %s)', [ValTemp]));
     EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
     EmitLine(Format('  storel %s, %%_var_%s', [ValTemp, AAssign.Name]));
+  end
+  else if AAssign.IsWeakLhs and (AAssign.Expr.ResolvedType.Kind = tyClass) then
+  begin
+    { Weak class-typed assignment: bypass the strong refcount entirely.
+      _WeakAssign takes the slot *address* (so it can zero it later when
+      the target is released) and the new value; it handles unregistering
+      any prior registration for this slot. }
+    ValTemp := EmitExpr(AAssign.Expr);
+    EmitLine(Format('  call $_WeakAssign(l %%_var_%s, l %s)',
+      [AAssign.Name, ValTemp]));
   end
   else if AAssign.Expr.ResolvedType.Kind = tyClass then
   begin
@@ -930,7 +990,13 @@ begin
 
   IsStr := AAssign.FieldInfo.TypeDesc.IsString;
   IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass);
-  if IsArc then
+  if AAssign.FieldInfo.IsWeak then
+  begin
+    { Weak class field: store through _WeakAssign so the runtime can zero
+      the field slot if the target is freed while the weak ref is live. }
+    EmitLine(Format('  call $_WeakAssign(l %s, l %s)', [Ptr, ValTemp]));
+  end
+  else if IsArc then
   begin
     { ARC for ARC-managed field storage: retain the new value and release the
       old field contents before overwriting, so neither reference leaks. }
@@ -1422,7 +1488,6 @@ begin
     if F.TypeDesc = nil then Continue;
     if not (F.TypeDesc.IsString or (F.TypeDesc.Kind = tyClass)) then
       Continue;
-    Temp := AllocTemp;
     if F.Offset > 0 then
     begin
       PtrT := AllocTemp;
@@ -1430,6 +1495,14 @@ begin
     end
     else
       PtrT := '%self';
+    if F.IsWeak then
+    begin
+      { Weak field: unregister from the weak table without decrementing
+        any refcount.  _WeakClear zeros *Ptr for us. }
+      EmitLine(Format('  call $_WeakClear(l %s)', [PtrT]));
+      Continue;
+    end;
+    Temp := AllocTemp;
     EmitLine(Format('  %s =l loadl %s', [Temp, PtrT]));
     if F.TypeDesc.IsString then
       EmitLine(Format('  call $_StringRelease(l %s)', [Temp]))

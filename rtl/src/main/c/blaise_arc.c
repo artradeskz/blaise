@@ -119,10 +119,17 @@ void _ClassAddRef(void* user_ptr) {
     obj_hdr(user_ptr)->refcnt++;
 }
 
+/* Forward declaration — implemented in blaise_weak.c. */
+extern void _WeakZeroSlots(void* target);
+
 void _ClassRelease(void* user_ptr) {
     if (!user_ptr) return;
     BlaiseObjHdr* h = obj_hdr(user_ptr);
     if (--h->refcnt == 0) {
+        /* Zero every registered weak reference before the object's
+         * storage goes away — otherwise a weak reader would see a
+         * dangling pointer. */
+        _WeakZeroSlots(user_ptr);
         if (h->cleanup) h->cleanup(user_ptr);
         free((char*)user_ptr - CLASS_HDR_SIZE);
     }

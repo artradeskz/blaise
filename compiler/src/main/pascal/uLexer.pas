@@ -80,6 +80,8 @@ type
     { Grouping and punctuation }
     tkLParen,
     tkRParen,
+    tkLBracket,      { [  — attribute list / future array indexing }
+    tkRBracket,      { ]  — attribute list / future array indexing }
     tkComma,
     tkSemicolon,
     tkDot,
@@ -258,6 +260,8 @@ begin
         else if text = ':'  then Result.Kind := tkColon
         else if text = '('  then Result.Kind := tkLParen
         else if text = ')'  then Result.Kind := tkRParen
+        else if text = '['  then Result.Kind := tkLBracket
+        else if text = ']'  then Result.Kind := tkRBracket
         else if text = ','  then Result.Kind := tkComma
         else if text = ';'  then Result.Kind := tkSemicolon
         else if text = '.'  then Result.Kind := tkDot

@@ -10,7 +10,8 @@ LIB     = $(OBJ_DIR)/blaise_rtl.a
 COMPILER_BIN = ../compiler/target/bin
 
 SRCS = $(SRC_DIR)/blaise_arc.c \
-       $(SRC_DIR)/blaise_exc.c
+       $(SRC_DIR)/blaise_exc.c \
+       $(SRC_DIR)/blaise_weak.c
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 
 .PHONY: all install clean

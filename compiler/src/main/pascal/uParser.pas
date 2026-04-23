@@ -69,6 +69,7 @@ type
     function  ParseClassDef: TClassTypeDef;
     function  ParseInterfaceDef: TInterfaceTypeDef;
     procedure ParseFieldDecl(AFields: TObjectList);
+    procedure ParseAttributeList(AAttrs: TStringList);
     function  ParsePropertyDecl: TPropertyDecl;
     function  ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
     procedure ParseParamList(AParams: TObjectList);
@@ -435,7 +436,7 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkRecord);
-    while Check(tkIdent) do
+    while Check(tkIdent) or Check(tkLBracket) do
       ParseFieldDecl(Result.Fields);
     Expect(tkEnd);
   except
@@ -489,11 +490,13 @@ begin
       end;
       Expect(tkRParen);
     end;
-    { Class body: fields, properties, and methods in any order }
+    { Class body: fields, properties, and methods in any order.  A field
+      declaration may be preceded by an attribute list, so accept
+      `[` as a legal field-start token too. }
     repeat
       if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
         Result.Properties.Add(ParsePropertyDecl)
-      else if Check(tkIdent) then
+      else if Check(tkIdent) or Check(tkLBracket) then
         ParseFieldDecl(Result.Fields)
       else if Check(tkFunction) then
         Result.Methods.Add(ParseMethodDecl(True))
@@ -780,6 +783,44 @@ begin
   end;
 end;
 
+procedure TParser.ParseAttributeList(AAttrs: TStringList);
+{ Parse zero or more `[Ident]` or `[Ident(...)]` attributes and append the
+  bare identifier names to AAttrs.  Argument lists are consumed but
+  currently discarded — only the attribute name drives compiler behaviour
+  today.  Unknown attributes are accepted silently for forward
+  compatibility with user-defined attributes.  Call at sites where an
+  attribute list may legally appear (before var and field declarations).  }
+var
+  Depth: Integer;
+begin
+  while Check(tkLBracket) do
+  begin
+    Advance;  { consume [ }
+    if not Check(tkIdent) then
+      raise EParseError.CreateFmt(
+        'Expected attribute name after ''['' at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    AAttrs.Add(FCurrent.Value);
+    Advance;  { consume attribute name }
+    { Optional argument list: (args, ...).  We simply count parens until
+      balanced.  Expression-level parsing of attribute arguments is
+      deferred until RTTI lands; capturing the name is enough to drive
+      the compiler-recognised attribute set today. }
+    if Check(tkLParen) then
+    begin
+      Depth := 1;
+      Advance;
+      while (Depth > 0) and (FCurrent.Kind <> tkEOF) do
+      begin
+        if      Check(tkLParen) then Inc(Depth)
+        else if Check(tkRParen) then Dec(Depth);
+        Advance;
+      end;
+    end;
+    Expect(tkRBracket);
+  end;
+end;
+
 procedure TParser.ParseFieldDecl(AFields: TObjectList);
 var
   Fld: TFieldDecl;
@@ -788,6 +829,7 @@ begin
   Fld.Line := FCurrent.Line;
   Fld.Col  := FCurrent.Col;
   try
+    ParseAttributeList(Fld.Attributes);
     if not Check(tkIdent) then
       raise EParseError.CreateFmt('Expected field name at line %d col %d',
         [FCurrent.Line, FCurrent.Col]);
@@ -819,7 +861,7 @@ end;
 procedure TParser.ParseVarBlock(ABlock: TBlock);
 begin
   Expect(tkVar);
-  while Check(tkIdent) do
+  while Check(tkIdent) or Check(tkLBracket) do
     ParseVarDecl(ABlock);
 end;
 
@@ -831,6 +873,7 @@ begin
   Decl.Line := FCurrent.Line;
   Decl.Col  := FCurrent.Col;
   try
+    ParseAttributeList(Decl.Attributes);
     if not Check(tkIdent) then
       raise EParseError.CreateFmt('Expected variable name at line %d col %d',
         [FCurrent.Line, FCurrent.Col]);

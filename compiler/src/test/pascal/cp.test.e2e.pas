@@ -89,6 +89,12 @@ type
       class-ownership follow-up and assert leak-freedom. }
     procedure TestRun_ClassArc_NoExplicitFree_Valgrind;
     procedure TestRun_InterfaceArc_CarriesLifetime_Valgrind;
+
+    { [Weak] cycle-break: two class instances referencing each other
+      through a [Weak] field stay cycle-free and are valgrind-clean on
+      scope exit.  This is the functional proof that the weak-ref
+      insertion pass does what it says on the tin. }
+    procedure TestRun_WeakRef_BreaksCycle_Valgrind;
   end;
 
 implementation
@@ -690,6 +696,31 @@ const
     '  F.Emit'                                          + LE +
     'end.';
 
+  { [Weak] cycle-break: two TNode instances reference each other through a
+    [Weak] Other field.  Under strong ARC this would be a refcount cycle
+    and leak both nodes; with [Weak] neither side contributes to the
+    other's refcount, so scope exit releases both cleanly and the weak
+    slots are zeroed before their storage is reclaimed. }
+  SrcWeakCycle =
+    'program P;'                                        + LE +
+    'type'                                              + LE +
+    '  TNode = class'                                   + LE +
+    '    Value: Integer;'                               + LE +
+    '    [Weak] Other: TNode;'                          + LE +
+    '  end;'                                            + LE +
+    'var'                                               + LE +
+    '  A, B: TNode;'                                    + LE +
+    'begin'                                             + LE +
+    '  A := TNode.Create;'                              + LE +
+    '  B := TNode.Create;'                              + LE +
+    '  A.Value := 1;'                                   + LE +
+    '  B.Value := 2;'                                   + LE +
+    '  A.Other := B;'                                   + LE +
+    '  B.Other := A;'                                   + LE +
+    '  WriteLn(A.Value);'                               + LE +
+    '  WriteLn(B.Value)'                                + LE +
+    'end.';
+
   { Chained READ: Pascal zero-initialises records, so O.I.Value defaults
     to 0 without any write.  Exercising the read path is enough for this
     smoke test; chained-WRITE support is tracked separately. }
@@ -816,6 +847,30 @@ begin
     Exit;
   end;
   OK := RunUnderValgrind(SrcInterfaceArcLifetime, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
+    Fail('valgrind reported errors or leaks:' + LE + Log);
+  end;
+end;
+
+procedure TE2ETests.TestRun_WeakRef_BreaksCycle_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcWeakCycle, Output, RCode, []));
+  AssertEquals('exit 0',                0,              RCode);
+  AssertEquals('values printed via A/B', '1' + LE + '2' + LE, Output);
+  if RunProc('valgrind', ['--version'], Log, True) <> 0 then
+  begin
+    Ignore('valgrind not installed');
+    Exit;
+  end;
+  OK := RunUnderValgrind(SrcWeakCycle, Log);
   if not OK then
   begin
     if Log = '' then Log := '(valgrind produced no output — exit nonzero)';

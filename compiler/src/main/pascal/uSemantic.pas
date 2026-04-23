@@ -74,6 +74,12 @@ type
 
     procedure AnalyseCompoundBody(ABody: TCompoundStmt);
     function  FindMethodDecl(const ATypeName, AMethodName: string): TMethodDecl;
+    { Attribute helpers.  AttrMatches performs the Delphi-style suffix-drop
+      lookup: [Weak] and [WeakAttribute] both resolve to the recognised
+      attribute 'Weak'.  HasWeakAttribute scans an attribute list for
+      any form of the Weak marker. }
+    function  AttrMatches(const AAttrName, ACanonical: string): Boolean;
+    function  HasWeakAttribute(AAttrs: TStringList): Boolean;
 
     procedure SemanticError(const AMsg: string; ALine, ACol: Integer);
     procedure CheckTypesMatch(AExpected, AActual: TTypeDesc;
@@ -119,6 +125,31 @@ end;
 procedure TSemanticAnalyser.SemanticError(const AMsg: string; ALine, ACol: Integer);
 begin
   raise ESemanticError.CreateFmt('%s at line %d col %d', [AMsg, ALine, ACol]);
+end;
+
+function TSemanticAnalyser.AttrMatches(const AAttrName, ACanonical: string): Boolean;
+{ An attribute name matches a canonical form if it equals the canonical
+  name case-insensitively, or if it equals <canonical>Attribute (the
+  Delphi suffix convention).  This lets [Weak] and [WeakAttribute]
+  resolve to the same compiler-recognised attribute. }
+var
+  Suffix: string;
+begin
+  if SameText(AAttrName, ACanonical) then
+    Exit(True);
+  Suffix := ACanonical + 'Attribute';
+  Result := SameText(AAttrName, Suffix);
+end;
+
+function TSemanticAnalyser.HasWeakAttribute(AAttrs: TStringList): Boolean;
+var
+  I: Integer;
+begin
+  if AAttrs = nil then Exit(False);
+  for I := 0 to AAttrs.Count - 1 do
+    if AttrMatches(AAttrs[I], 'Weak') then
+      Exit(True);
+  Result := False;
 end;
 
 procedure TSemanticAnalyser.CheckTypeParamConstraint(
@@ -1162,10 +1193,25 @@ begin
           Format('Unknown type ''%s'' for field', [FDecl.TypeName]),
           FDecl.Line, FDecl.Col);
       FDecl.ResolvedType := FldType;
+      { Resolve [Weak] on fields.  Same type constraint as local vars. }
+      if HasWeakAttribute(FDecl.Attributes) then
+      begin
+        if not ((FldType.Kind = tyClass) or (FldType.Kind = tyInterface)) then
+          SemanticError(
+            Format('[Weak] can only be applied to class or interface ' +
+                   'fields, not ''%s''', [FDecl.TypeName]),
+            FDecl.Line, FDecl.Col);
+        FDecl.IsWeak := True;
+      end;
       for K := 0 to FDecl.Names.Count - 1 do
       begin
         FldName := FDecl.Names[K];
         RT.AddField(FldName, FldType);
+        { Propagate the weak flag to the just-added field info so codegen
+          and the field cleanup emitter can consult it without walking
+          back to the AST. }
+        if FDecl.IsWeak then
+          RT.FindField(FldName).IsWeak := True;
       end;
     end;
 
@@ -1538,10 +1584,25 @@ begin
 
     Decl.ResolvedType := Typ;
 
+    { Resolve [Weak].  Only reference types carry strong refcounts, so
+      weakness is meaningful only on classes and interfaces.  Rejecting
+      it elsewhere catches misuse at the declaration site rather than
+      later when the user wonders why the attribute had no effect. }
+    if HasWeakAttribute(Decl.Attributes) then
+    begin
+      if not ((Typ.Kind = tyClass) or (Typ.Kind = tyInterface)) then
+        SemanticError(
+          Format('[Weak] can only be applied to class or interface types, ' +
+                 'not ''%s''', [Decl.TypeName]),
+          Decl.Line, Decl.Col);
+      Decl.IsWeak := True;
+    end;
+
     for J := 0 to Decl.Names.Count - 1 do
     begin
       VarName := Decl.Names[J];
       Sym := TSymbol.Create(VarName, skVariable, Typ);
+      Sym.IsWeak := Decl.IsWeak;
       if not FTable.Define(Sym) then
       begin
         Sym.Free;
@@ -1787,6 +1848,7 @@ begin
 
   AAssign.IsVarParam      := (VarSym.Kind = skVarParameter);
   AAssign.ResolvedLhsType := VarSym.TypeDesc;
+  AAssign.IsWeakLhs       := VarSym.IsWeak;
 
   ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(VarSym.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);

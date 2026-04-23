@@ -61,6 +61,9 @@ type
     Name:     string;
     TypeDesc: TTypeDesc;  { not owned }
     Offset:   Integer;    { byte offset from record base }
+    IsWeak:   Boolean;    { set when the class field was declared [Weak];
+                            field cleanup emits _WeakClear for weak fields
+                            and field assignment bypasses addref/release. }
   end;
 
   { One entry in a class vtable — tracks slot index and implementing method. }
@@ -171,6 +174,9 @@ type
     TypeDesc:   TTypeDesc;    { not owned; nil for procedures }
     Params:     TObjectList;  { owned TParamDesc; populated for procedures/functions }
     ConstValue: Int64;        { valid when Kind = skConstant }
+    IsWeak:     Boolean;      { true for variables declared [Weak]; codegen
+                                keys off this to emit _WeakAssign instead
+                                of the strong addref/release pattern. }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;
@@ -576,6 +582,7 @@ begin
   Kind     := AKind;
   TypeDesc := AType;
   Params   := TObjectList.Create(True);
+  IsWeak   := False;
 end;
 
 destructor TSymbol.Destroy;
