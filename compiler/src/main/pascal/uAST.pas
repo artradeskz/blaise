@@ -354,6 +354,7 @@ type
     Args:              TObjectList; { owned TASTExpr }
     ResolvedClassType: TTypeDesc;   { not owned; set by uSemantic }
     ResolvedMethod:    TObject;     { TMethodDecl — not owned }
+    IsConstructorCall: Boolean;    { set by uSemantic — TypeName.Create(args) }
     constructor Create;
     destructor Destroy; override;
   end;

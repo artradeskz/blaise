@@ -2317,7 +2317,36 @@ begin
       Exit;
     end;
 
-    RT        := TRecordTypeDesc(MCallExpr.ResolvedClassType);
+    RT := TRecordTypeDesc(MCallExpr.ResolvedClassType);
+
+    { Constructor call with args: TypeName.Create(args) }
+    if MCallExpr.IsConstructorCall then
+    begin
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l call $_ClassAlloc(l %d, l $_FieldCleanup_%s)',
+        [SelfTemp, RT.TotalSize, RT.Name]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [SelfTemp]));
+      { If there's a user-defined Create method, call it }
+      if MCallExpr.ResolvedMethod <> nil then
+      begin
+        MDecl   := TMethodDecl(MCallExpr.ResolvedMethod);
+        ArgLine := Format('l %s', [SelfTemp]);
+        for I := 0 to MCallExpr.Args.Count - 1 do
+        begin
+          Par     := TMethodParam(MDecl.Params[I]);
+          ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
+          ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+        end;
+        if MDecl.OwnerTypeName <> '' then
+          FuncName := '$' + MDecl.OwnerTypeName + '_Create'
+        else
+          FuncName := '$' + RT.Name + '_Create';
+        EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+      end;
+      Result := SelfTemp;
+      Exit;
+    end;
+
     MDecl     := TMethodDecl(MCallExpr.ResolvedMethod);
     if MDecl.OwnerTypeName <> '' then
       FuncName := '$' + MDecl.OwnerTypeName + '_' + MCallExpr.Name

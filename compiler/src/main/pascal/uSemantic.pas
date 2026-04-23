@@ -2377,8 +2377,27 @@ begin
   ObjSym := FTable.Lookup(AExpr.ObjectName);
   if ObjSym = nil then
     SemanticError(
-      Format('Undeclared variable ''%s''', [AExpr.ObjectName]),
+      Format('Undeclared identifier ''%s''', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
+
+  { Constructor call with args: TypeName.Create(arg1, arg2, ...) }
+  if (ObjSym.Kind = skType) and SameText(AExpr.Name, 'Create') then
+  begin
+    if ObjSym.TypeDesc.Kind <> tyClass then
+      SemanticError(
+        Format('Cannot construct non-class type ''%s''', [AExpr.ObjectName]),
+        AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args[I]));
+    { Try to find a user-defined Create method for type checking }
+    MDecl := FindMethodDecl(AExpr.ObjectName, 'Create');
+    AExpr.ResolvedMethod    := MDecl;
+    AExpr.ResolvedClassType := ObjSym.TypeDesc;
+    AExpr.IsConstructorCall := True;
+    Result := ObjSym.TypeDesc;
+    Exit;
+  end;
+
   if ObjSym.Kind <> skVariable then
     SemanticError(
       Format('''%s'' is not a variable', [AExpr.ObjectName]),
