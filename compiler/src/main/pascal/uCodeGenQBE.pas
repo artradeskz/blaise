@@ -279,10 +279,11 @@ begin
 end;
 
 procedure TCodeGenQBE.EmitArcCleanup(ABlock: TBlock);
-{ Release every ARC-managed local variable (string or class) at block exit.
-  Mirrors the insertion pattern used at assignment sites: each slot holds one
-  retained reference from the initial storel 0 / first assignment; scope exit
-  must balance that with one release. }
+{ Release every ARC-managed local variable (string, class, or interface) at
+  block exit.  Mirrors the insertion pattern used at assignment sites: each
+  slot holds one retained reference from its first assignment; scope exit
+  must balance that with one release.  Interface vars carry a fat pointer
+  (obj + itab); only the obj slot is refcounted. }
 var
   I, J:    Integer;
   Decl:    TVarDecl;
@@ -298,13 +299,18 @@ begin
       RelFn := '$_StringRelease'
     else if Decl.ResolvedType.Kind = tyClass then
       RelFn := '$_ClassRelease'
+    else if Decl.ResolvedType.Kind = tyInterface then
+      RelFn := '$_ClassRelease'  { obj slot release; itab is static }
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
     begin
       VarName := Decl.Names[J];
       ValTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+      if Decl.ResolvedType.Kind = tyInterface then
+        EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, VarName]))
+      else
+        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
       EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
     end;
   end;
@@ -334,26 +340,44 @@ var
   VarName: string;
   ValTemp: string;
   RelFn:   string;
+  IsIntf:  Boolean;
 begin
   if ABlock = nil then Exit;
   for I := 0 to ABlock.Decls.Count - 1 do
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
     if Decl.ResolvedType = nil then Continue;
+    IsIntf := False;
     if Decl.ResolvedType.IsString then
       RelFn := '$_StringRelease'
     else if Decl.ResolvedType.Kind = tyClass then
       RelFn := '$_ClassRelease'
+    else if Decl.ResolvedType.Kind = tyInterface then
+    begin
+      RelFn  := '$_ClassRelease';
+      IsIntf := True;
+    end
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
     begin
       VarName := Decl.Names[J];
       ValTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
-      EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
-      { Zero the slot so nested exception handlers get a no-op release }
-      EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+      if IsIntf then
+      begin
+        EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, VarName]));
+        EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
+        { Zero only the obj slot; the itab slot holds a static pointer
+          and nilling it would break a subsequent method call on this
+          variable if it survives the unwind. }
+        EmitLine(Format('  storel 0, %%_var_%s_obj', [VarName]));
+      end
+      else
+      begin
+        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+        EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
+        EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+      end;
     end;
   end;
 end;
@@ -670,7 +694,11 @@ begin
     raise ECodeGenError.CreateFmt(
       'Expression in assignment to ''%s'' has no resolved type', [AAssign.Name]);
 
-  { Interface as-cast: F := T as IFoo — use _GetItab for runtime itab lookup }
+  { Interface as-cast: F := T as IFoo — use _GetItab for runtime itab lookup.
+    ARC: the obj slot holds a strong reference to the backing class instance,
+    so retain the new obj and release the prior contents of F's obj slot
+    before storing.  The itab slot is a pointer to static rodata and is not
+    refcounted. }
   if (AAssign.ResolvedLhsType <> nil) and
      (AAssign.ResolvedLhsType.Kind = tyInterface) and
      (AAssign.Expr is TAsExpr) and
@@ -692,13 +720,19 @@ begin
     EmitLine('  call $_Raise_InvalidCast()');
     EmitLine(Format('  jmp @%s', [LblEnd]));
     EmitLine('@' + LblOk);
+    OldTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+    EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
     EmitLine(Format('  storel %s, %%_var_%s_obj',  [ObjTemp, AAssign.Name]));
     EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
     EmitLine('@' + LblEnd);
     Exit;
   end;
 
-  { Interface direct assignment: F := T where T is a class implementing the interface }
+  { Interface direct assignment: F := T where T is a class implementing the
+    interface.  Under ARC, the obj slot co-owns the backing class instance
+    and must be retained on store / released when overwritten. }
   if (AAssign.ResolvedLhsType <> nil) and
      (AAssign.ResolvedLhsType.Kind = tyInterface) and
      (AAssign.Expr.ResolvedType.Kind = tyClass) then
@@ -707,8 +741,35 @@ begin
     ClassRT  := TRecordTypeDesc(AAssign.Expr.ResolvedType);
     ItabName := '$itab_' + ClassRT.Name + '_' + IntfDesc.Name;
     ValTemp  := EmitExpr(AAssign.Expr);
+    OldTemp  := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+    EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
     EmitLine(Format('  storel %s, %%_var_%s_obj',  [ValTemp, AAssign.Name]));
     EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabName, AAssign.Name]));
+    Exit;
+  end;
+
+  { Interface-to-interface direct assignment: F := G where both sides are
+    interface-typed.  Copy obj and itab from G's fat pointer to F's; retain
+    the backing object and release F's prior obj reference. }
+  if (AAssign.ResolvedLhsType <> nil) and
+     (AAssign.ResolvedLhsType.Kind = tyInterface) and
+     (AAssign.Expr.ResolvedType.Kind = tyInterface) and
+     (AAssign.Expr is TIdentExpr) then
+  begin
+    ObjTemp  := AllocTemp;
+    ItabTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s_obj',
+      [ObjTemp, TIdentExpr(AAssign.Expr).Name]));
+    EmitLine(Format('  %s =l loadl %%_var_%s_itab',
+      [ItabTemp, TIdentExpr(AAssign.Expr).Name]));
+    OldTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+    EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+    EmitLine(Format('  storel %s, %%_var_%s_obj',  [ObjTemp, AAssign.Name]));
+    EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
     Exit;
   end;
 
@@ -931,7 +992,7 @@ begin
       EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
       EmitLine(Format('  %s =l loadl %s',   [FPtrTemp, ArgTemp]));
     end;
-    EmitLine(Format('  call %%%s(l %s)', [FPtrTemp, SelfTemp]));
+    EmitLine(Format('  call %s(l %s)', [FPtrTemp, SelfTemp]));
     Exit;
   end;
 
@@ -977,7 +1038,7 @@ begin
     ArgTemp  := AllocTemp;
     EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
     EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
-    EmitLine(Format('  call %%%s(%s)', [FPtrTemp, ArgLine]));
+    EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
   end
   else
   begin
@@ -1144,7 +1205,13 @@ procedure TCodeGenQBE.EmitTypeInfoDefs(AProg: TProgram);
 { Emit one $typeinfo_T data item per class type.
   Layout: { l parent_typeinfo_or_zero, l impllist_or_zero }
   TypeInfo is at vtable slot 0; _IsInstance walks parent chain.
-  impllist is NULL-terminated array of {typeinfo_intf, itab} pairs for _ImplementsInterface. }
+  impllist is NULL-terminated array of {typeinfo_intf, itab} pairs for _ImplementsInterface.
+
+  TObject is the built-in root class; any user class with an explicit
+  `class(TObject, IFoo)` parent list resolves Parent to TObject's
+  TRecordTypeDesc, so we emit a typeinfo stub for TObject unconditionally
+  to satisfy the linker.  Its parent slot is nil and its impllist slot
+  is nil because TObject implements no interfaces. }
 var
   I:         Integer;
   TD:        TTypeDecl;
@@ -1155,6 +1222,8 @@ var
   ImplStr:   string;
   MName:     string;
 begin
+  EmitLine('data $typeinfo_TObject = { l 0, l 0 }');
+
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(AProg.Block.TypeDecls[I]);
@@ -1830,7 +1899,7 @@ begin
         ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
       end;
       T := AllocTemp;
-      EmitLine(Format('  %s =w call %%%s(%s)', [T, FPtrTemp, ArgLine]));
+      EmitLine(Format('  %s =w call %s(%s)', [T, FPtrTemp, ArgLine]));
       Result := T;
       Exit;
     end;

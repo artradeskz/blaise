@@ -83,6 +83,12 @@ type
     procedure TestRun_ForBreak_StopsAtFiveHalt;
     procedure TestRun_ExitFromFunction_ReturnsImmediately;
     procedure TestRun_ChainedRecordField_LoadsInner;
+
+    { Universal-ARC e2e coverage: class/interface lifetime under valgrind.
+      These programs exercise the insertion passes introduced in the
+      class-ownership follow-up and assert leak-freedom. }
+    procedure TestRun_ClassArc_NoExplicitFree_Valgrind;
+    procedure TestRun_InterfaceArc_CarriesLifetime_Valgrind;
   end;
 
 implementation
@@ -624,6 +630,66 @@ const
     '  WriteLn(FirstPositive(0 - 9))'         + LE +
     'end.';
 
+  { Universal-ARC on classes: allocate, assign between vars, drop out of
+    scope without calling Free.  Under the new rules every variable slot
+    holds one retained reference balanced by a scope-exit release.  The
+    program is leak-free only if both the per-variable release and the
+    per-class field cleanup fire correctly at refcount zero.  We stage
+    writes through a local (chained field *writes* are not yet in the
+    language; chained reads are). }
+  SrcClassArcNoFree =
+    'program P;'                                        + LE +
+    'type'                                              + LE +
+    '  TInner = class'                                  + LE +
+    '    V: Integer;'                                   + LE +
+    '  end;'                                            + LE +
+    '  TOuter = class'                                  + LE +
+    '    Child: TInner;'                                + LE +
+    '  end;'                                            + LE +
+    'var'                                               + LE +
+    '  A, B: TOuter;'                                   + LE +
+    '  I:    TInner;'                                   + LE +
+    'begin'                                             + LE +
+    '  A       := TOuter.Create;'                       + LE +
+    '  I       := TInner.Create;'                       + LE +
+    '  I.V     := 42;'                                  + LE +
+    '  A.Child := I;'                                   + LE +
+    '  B       := A;'                                   + LE +
+    '  WriteLn(B.Child.V)'                              + LE +
+    'end.';
+
+  { Universal-ARC on interface references: assigning a class through an
+    interface variable addrefs the backing class; on scope exit the
+    interface obj slot is released, and the class's final release fires
+    its field-cleanup chain.  Without interface-obj ARC this program
+    either leaks the backing class or double-frees it on exit.
+    Interface *function* calls in expression position are not yet
+    supported; we invoke a procedure on the interface which writes
+    directly, which is enough to cover the ARC lifetime. }
+  SrcInterfaceArcLifetime =
+    'program P;'                                        + LE +
+    'type'                                              + LE +
+    '  IThing = interface'                              + LE +
+    '    procedure Emit;'                               + LE +
+    '  end;'                                            + LE +
+    '  TThing = class(TObject, IThing)'                 + LE +
+    '    FValue: Integer;'                              + LE +
+    '    procedure Emit;'                               + LE +
+    '  end;'                                            + LE +
+    'procedure TThing.Emit;'                            + LE +
+    'begin'                                             + LE +
+    '  WriteLn(Self.FValue)'                            + LE +
+    'end;'                                              + LE +
+    'var'                                               + LE +
+    '  T: TThing;'                                      + LE +
+    '  F: IThing;'                                      + LE +
+    'begin'                                             + LE +
+    '  T        := TThing.Create;'                      + LE +
+    '  T.FValue := 17;'                                 + LE +
+    '  F        := T;'                                  + LE +
+    '  F.Emit'                                          + LE +
+    'end.';
+
   { Chained READ: Pascal zero-initialises records, so O.I.Value defaults
     to 0 without any write.  Exercising the read path is enough for this
     smoke test; chained-WRITE support is tracked separately. }
@@ -704,6 +770,57 @@ begin
   AssertTrue(CompileAndRun(SrcChainedRecord, Output, RCode, []));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('chained read of zero-initialised field', '0' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ClassArc_NoExplicitFree_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  { Sanity: program runs and prints 42 }
+  AssertTrue(CompileAndRun(SrcClassArcNoFree, Output, RCode, []));
+  AssertEquals('exit 0',       0,         RCode);
+  AssertEquals('field reread', '42' + LE, Output);
+  { Leak-freedom: under valgrind, every class instance must be reclaimed
+    by scope-exit releases alone (no Free calls anywhere in the source). }
+  if RunProc('valgrind', ['--version'], Log, True) <> 0 then
+  begin
+    Ignore('valgrind not installed');
+    Exit;
+  end;
+  OK := RunUnderValgrind(SrcClassArcNoFree, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
+    Fail('valgrind reported errors or leaks:' + LE + Log);
+  end;
+end;
+
+procedure TE2ETests.TestRun_InterfaceArc_CarriesLifetime_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcInterfaceArcLifetime, Output, RCode, []));
+  AssertEquals('exit 0',                  0,         RCode);
+  AssertEquals('interface method result', '17' + LE, Output);
+  if RunProc('valgrind', ['--version'], Log, True) <> 0 then
+  begin
+    Ignore('valgrind not installed');
+    Exit;
+  end;
+  OK := RunUnderValgrind(SrcInterfaceArcLifetime, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
+    Fail('valgrind reported errors or leaks:' + LE + Log);
+  end;
 end;
 
 initialization

@@ -67,6 +67,14 @@ type
     procedure TestCodegen_Impllist_Emitted;
     procedure TestCodegen_IsExpr_Interface_CallsImplementsInterface;
     procedure TestCodegen_AsExpr_Interface_CallsGetItab;
+
+    { ------------------------------------------------------------------ }
+    { ARC on interface references                                          }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_InterfaceAssign_ClassSrc_AddrefsObj;
+    procedure TestCodegen_InterfaceAssign_AsCast_ReleasesOldObj;
+    procedure TestCodegen_InterfaceToInterface_TransfersBothSlots;
+    procedure TestCodegen_InterfaceVar_ScopeExit_ReleasesObjOnly;
   end;
 
 implementation
@@ -612,6 +620,86 @@ var
 begin
   IR := GenIR(SrcAsExprInterface);
   AssertTrue('as IFoo calls _GetItab', Pos('call $_GetItab', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ ARC on interface references                                          }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcIntfToIntf =
+    'program P;'                               + LineEnding +
+    'type'                                     + LineEnding +
+    '  IFoo = interface'                       + LineEnding +
+    '    procedure DoIt;'                      + LineEnding +
+    '  end;'                                   + LineEnding +
+    '  TFoo = class(TObject, IFoo)'            + LineEnding +
+    '    procedure DoIt;'                      + LineEnding +
+    '  end;'                                   + LineEnding +
+    'procedure TFoo.DoIt;'                     + LineEnding +
+    'begin'                                    + LineEnding +
+    'end;'                                     + LineEnding +
+    'var'                                      + LineEnding +
+    '  T:    TFoo;'                            + LineEnding +
+    '  F, G: IFoo;'                            + LineEnding +
+    'begin'                                    + LineEnding +
+    '  T := TFoo.Create;'                      + LineEnding +
+    '  F := T;'                                + LineEnding +
+    '  G := F'                                 + LineEnding +
+    'end.';
+
+procedure TInterfaceTests.TestCodegen_InterfaceAssign_ClassSrc_AddrefsObj;
+var IR: string;
+begin
+  { F := T where T is class and F is interface: obj slot co-owns the class
+    instance, so addref new obj and release old obj on assignment. }
+  IR := GenIR(SrcInterfaceVar);
+  AssertTrue('addref obj on interface assign',
+    Pos('call $_ClassAddRef', IR) > 0);
+  AssertTrue('release old obj on interface assign',
+    Pos('call $_ClassRelease', IR) > 0);
+  AssertTrue('stores obj slot',
+    Pos('storel', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceAssign_AsCast_ReleasesOldObj;
+var IR: string;
+begin
+  IR := GenIR(SrcAsExprInterface);
+  AssertTrue('as-cast path addrefs new obj',
+    Pos('call $_ClassAddRef', IR) > 0);
+  AssertTrue('as-cast path releases old obj',
+    Pos('call $_ClassRelease', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceToInterface_TransfersBothSlots;
+var IR: string;
+begin
+  { G := F where both are interface: copy obj and itab from F's slots to G's,
+    retaining the obj and releasing G's prior contents.  Assert that both
+    _F_obj and _F_itab are loaded for the read side and both _G_obj and
+    _G_itab are stored on the write side. }
+  IR := GenIR(SrcIntfToIntf);
+  AssertTrue('reads F_obj',  Pos('loadl %_var_F_obj',   IR) > 0);
+  AssertTrue('reads F_itab', Pos('loadl %_var_F_itab',  IR) > 0);
+  AssertTrue('writes G_obj', Pos('storel ', IR) > 0);
+  AssertTrue('writes G_itab slot', Pos('%_var_G_itab', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceVar_ScopeExit_ReleasesObjOnly;
+var IR: string;
+begin
+  { At the main block exit (main_exit label) the interface variable F must
+    have its obj slot released.  itab is a static pointer and is not
+    refcounted, so it must NOT be released. }
+  IR := GenIR(SrcInterfaceVar);
+  { Look for "loadl %_var_F_obj" followed by _ClassRelease somewhere after
+    main_exit — ensures the scope-exit release pass covered interface vars. }
+  AssertTrue('scope-exit loads obj slot of interface var',
+    Pos('loadl %_var_F_obj', IR) > 0);
+  AssertTrue('no StringRelease or direct free on itab slot',
+    Pos('loadl %_var_F_itab', IR) > 0);  { itab is read during the method
+                                            call path but never released. }
 end;
 
 initialization
