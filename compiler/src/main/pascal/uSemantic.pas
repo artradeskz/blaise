@@ -2185,6 +2185,17 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'Format') then
+  begin
+    if AExpr.Args.Count < 1 then
+      SemanticError('Format requires at least one argument', AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args[I]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
     SemanticError(

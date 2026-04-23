@@ -784,6 +784,8 @@ begin
   Define(Sym);
 
   { Built-in string operations }
+  Sym := TSymbol.Create('Format',    skFunction, FTypeString);
+  Define(Sym);
   Sym := TSymbol.Create('Length',    skFunction, FTypeInteger);
   Define(Sym);
   Sym := TSymbol.Create('Pos',       skFunction, FTypeInteger);

@@ -73,6 +73,17 @@ type
     procedure TestSemantic_StrToInt_OK;
     procedure TestSemantic_StrToInt_ReturnsInteger;
     procedure TestCodegen_StrToInt_CallsRTL;
+
+    { ------------------------------------------------------------------ }
+    { Format                                                               }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Format_OneIntArg_OK;
+    procedure TestSemantic_Format_OneStringArg_OK;
+    procedure TestSemantic_Format_MixedArgs_OK;
+    procedure TestSemantic_Format_ReturnsString;
+    procedure TestCodegen_Format_CallsRTL;
+    procedure TestCodegen_Format_IntArgUsesTagZero;
+    procedure TestCodegen_Format_StringArgUsesTagOne;
   end;
 
 implementation
@@ -534,6 +545,103 @@ var IR: string;
 begin
   IR := GenIR(SrcStrToInt);
   AssertTrue('call $_StrToInt in IR', IRContains(IR, 'call $_StrToInt'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Format tests                                                         }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcFormatOneInt =
+    'program P;'                          + LineEnding +
+    'var n: Integer;'                     + LineEnding +
+    'var s: string;'                      + LineEnding +
+    'begin'                               + LineEnding +
+    '  n := 42;'                          + LineEnding +
+    '  s := Format(''value=%d'', n)'      + LineEnding +
+    'end.';
+
+  SrcFormatOneStr =
+    'program P;'                          + LineEnding +
+    'var t: string;'                      + LineEnding +
+    'var s: string;'                      + LineEnding +
+    'begin'                               + LineEnding +
+    '  t := ''hello'';'                   + LineEnding +
+    '  s := Format(''say %s'', t)'        + LineEnding +
+    'end.';
+
+  SrcFormatMixed =
+    'program P;'                              + LineEnding +
+    'var name: string;'                       + LineEnding +
+    'var age: Integer;'                       + LineEnding +
+    'var s: string;'                          + LineEnding +
+    'begin'                                   + LineEnding +
+    '  name := ''Bob'';'                      + LineEnding +
+    '  age  := 30;'                           + LineEnding +
+    '  s := Format(''%s is %d'', name, age)'  + LineEnding +
+    'end.';
+
+procedure TStringOpsTests.TestSemantic_Format_OneIntArg_OK;
+begin
+  SemanticOK(SrcFormatOneInt);
+end;
+
+procedure TStringOpsTests.TestSemantic_Format_OneStringArg_OK;
+begin
+  SemanticOK(SrcFormatOneStr);
+end;
+
+procedure TStringOpsTests.TestSemantic_Format_MixedArgs_OK;
+begin
+  SemanticOK(SrcFormatMixed);
+end;
+
+procedure TStringOpsTests.TestSemantic_Format_ReturnsString;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  A:  TSemanticAnalyser;
+  Assign: TAssignment;
+begin
+  L  := TLexer.Create(SrcFormatOneInt);
+  P  := TParser.Create(L);
+  Pr := P.Parse;
+  A  := TSemanticAnalyser.Create;
+  try
+    A.Analyse(Pr);
+    Assign := TAssignment(Pr.Block.Stmts[1]);
+    AssertEquals('Format returns string',
+      Ord(tyString), Ord(Assign.Expr.ResolvedType.Kind));
+  finally
+    A.Free;
+    Pr.Free;
+    P.Free;
+    L.Free;
+  end;
+end;
+
+procedure TStringOpsTests.TestCodegen_Format_CallsRTL;
+var IR: string;
+begin
+  IR := GenIR(SrcFormatOneInt);
+  AssertTrue('call $_StringFormat in IR', IRContains(IR, 'call $_StringFormat'));
+end;
+
+procedure TStringOpsTests.TestCodegen_Format_IntArgUsesTagZero;
+var IR: string;
+begin
+  IR := GenIR(SrcFormatOneInt);
+  { Integer args are preceded by tag 0 }
+  AssertTrue('tag 0 for int arg', IRContains(IR, 'w 0,'));
+end;
+
+procedure TStringOpsTests.TestCodegen_Format_StringArgUsesTagOne;
+var IR: string;
+begin
+  IR := GenIR(SrcFormatOneStr);
+  { String args are preceded by tag 1 }
+  AssertTrue('tag 1 for str arg', IRContains(IR, 'w 1,'));
 end;
 
 initialization

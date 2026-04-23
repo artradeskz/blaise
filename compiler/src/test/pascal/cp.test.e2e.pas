@@ -118,6 +118,9 @@ type
     procedure TestRun_StringOps_SameText;
     procedure TestRun_StringOps_IntToStr;
     procedure TestRun_StringOps_StrToInt;
+    procedure TestRun_StringOps_Format_IntArg;
+    procedure TestRun_StringOps_Format_StrArg;
+    procedure TestRun_StringOps_Format_MixedArgs;
   end;
 
 implementation
@@ -1263,6 +1266,69 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcStringStrToInt, Output, RCode, []));
   AssertEquals('StrToInt(''123'') = 123', '123', Trim(Output));
+end;
+
+const
+  SrcFormatIntArg =
+    'program P;'                           + LineEnding +
+    'var n: Integer;'                      + LineEnding +
+    'var s: string;'                       + LineEnding +
+    'begin'                                + LineEnding +
+    '  n := 42;'                           + LineEnding +
+    '  s := Format(''val=%d'', n);'        + LineEnding +
+    '  WriteLn(s)'                         + LineEnding +
+    'end.';
+
+  SrcFormatStrArg =
+    'program P;'                           + LineEnding +
+    'var t: string;'                       + LineEnding +
+    'var s: string;'                       + LineEnding +
+    'begin'                                + LineEnding +
+    '  t := ''world'';'                    + LineEnding +
+    '  s := Format(''hello %s'', t);'      + LineEnding +
+    '  WriteLn(s)'                         + LineEnding +
+    'end.';
+
+  SrcFormatMixedArgs =
+    'program P;'                                 + LineEnding +
+    'var name: string;'                          + LineEnding +
+    'var age: Integer;'                          + LineEnding +
+    'var s: string;'                             + LineEnding +
+    'begin'                                      + LineEnding +
+    '  name := ''Alice'';'                       + LineEnding +
+    '  age  := 30;'                              + LineEnding +
+    '  s := Format(''%s=%d'', name, age);'       + LineEnding +
+    '  WriteLn(s)'                               + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_StringOps_Format_IntArg;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcFormatIntArg, Output, RCode, []));
+  AssertEquals('Format int arg', 'val=42', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_Format_StrArg;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcFormatStrArg, Output, RCode, []));
+  AssertEquals('Format str arg', 'hello world', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_Format_MixedArgs;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcFormatMixedArgs, Output, RCode, []));
+  AssertEquals('Format mixed args', 'Alice=30', Trim(Output));
 end;
 
 initialization

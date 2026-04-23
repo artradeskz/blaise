@@ -2023,6 +2023,29 @@ begin
         Exit;
       end;
 
+      { Format(fmt, arg0, arg1, ...) → $_StringFormat(l fmt, ..., tag val, ...)
+        Each arg is emitted as a (w tag, w/l value) pair after the variadic
+        marker.  tag=0 for integer types, tag=1 for string/pointer types. }
+      if SameText(Name, 'Format') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        { Build variadic arg pairs: "..., w tag, w/l val, ..." }
+        ArgLine := Format('l %s, ...', [L]);
+        for I := 1 to Args.Count - 1 do
+        begin
+          ArgTemp := EmitExpr(TASTExpr(Args[I]));
+          if TASTExpr(Args[I]).ResolvedType.Kind in
+             [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64] then
+            ArgLine := ArgLine + Format(', w 0, w %s', [ArgTemp])
+          else
+            ArgLine := ArgLine + Format(', w 1, l %s', [ArgTemp]);
+        end;
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringFormat(%s)', [T, ArgLine]));
+        Result := T;
+        Exit;
+      end;
+
       { Type cast TypeName(Expr) — ResolvedDecl is nil; just copy with target QBE type }
       if ResolvedDecl = nil then
       begin
