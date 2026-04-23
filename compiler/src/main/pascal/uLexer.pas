@@ -60,6 +60,7 @@ type
     tkNot,
     tkExit,
     tkBreak,
+    tkInherited,
     { Identifier }
     tkIdent,
     { Arithmetic operators }
@@ -159,6 +160,7 @@ begin
   else if AUpper = 'NOT'            then Result := tkNot
   else if AUpper = 'EXIT'           then Result := tkExit
   else if AUpper = 'BREAK'          then Result := tkBreak
+  else if AUpper = 'INHERITED'      then Result := tkInherited
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;

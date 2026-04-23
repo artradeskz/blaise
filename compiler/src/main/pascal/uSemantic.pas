@@ -35,6 +35,7 @@ type
     FProcIndex:            TStringList;  { 'ProcName' → TMethodDecl (not owned) }
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
     FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
+    FCurrentClass:         TRecordTypeDesc;  { class being analysed (set in AnalyseMethodDecl) }
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
@@ -62,6 +63,7 @@ type
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     procedure AnalyseProcCall(ACall: TProcCall);
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
+    procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     function  AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
     function  AnalyseFuncCallExpr(AExpr: TFuncCallExpr): TTypeDesc;
     function  AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
@@ -1369,10 +1371,13 @@ end;
 procedure TSemanticAnalyser.AnalyseMethodDecl(
   AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
 var
-  I:    Integer;
-  Par:  TMethodParam;
-  Sym:  TSymbol;
+  I:          Integer;
+  Par:        TMethodParam;
+  Sym:        TSymbol;
+  SavedClass: TRecordTypeDesc;
 begin
+  SavedClass    := FCurrentClass;
+  FCurrentClass := AClassType;
   FTable.PushScope;
   try
     { Define Self as a variable of the class type }
@@ -1411,6 +1416,7 @@ begin
     AnalyseBlock(AMethod.Body);
   finally
     FTable.PopScope;
+    FCurrentClass := SavedClass;
   end;
 end;
 
@@ -1757,6 +1763,8 @@ begin
     AnalyseAssignment(TAssignment(AStmt))
   else if AStmt is TMethodCallStmt then
     AnalyseMethodCall(TMethodCallStmt(AStmt))
+  else if AStmt is TInheritedCallStmt then
+    AnalyseInheritedCall(TInheritedCallStmt(AStmt))
   else if AStmt is TPointerWriteStmt then
     AnalysePointerWriteStmt(TPointerWriteStmt(AStmt))
   else if AStmt is TProcCall then
@@ -1856,6 +1864,51 @@ begin
 
   ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(VarSym.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
+end;
+
+procedure TSemanticAnalyser.AnalyseInheritedCall(ACall: TInheritedCallStmt);
+var
+  ParentType: TRecordTypeDesc;
+  MDecl:      TMethodDecl;
+  ArgType:    TTypeDesc;
+  Par:        TMethodParam;
+  I:          Integer;
+begin
+  if FCurrentClass = nil then
+    SemanticError('''inherited'' used outside a method body',
+      ACall.Line, ACall.Col);
+
+  if FCurrentClass.Parent = nil then
+    SemanticError(
+      Format('Class ''%s'' has no parent; ''inherited'' is not valid',
+        [FCurrentClass.Name]),
+      ACall.Line, ACall.Col);
+
+  ParentType := FCurrentClass.Parent;
+  MDecl := FindMethodDecl(ParentType.Name, ACall.Name);
+  if MDecl = nil then
+    SemanticError(
+      Format('Parent class ''%s'' has no method ''%s''',
+        [ParentType.Name, ACall.Name]),
+      ACall.Line, ACall.Col);
+
+  if ACall.Args.Count <> MDecl.Params.Count then
+    SemanticError(
+      Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+        [ParentType.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+      ACall.Line, ACall.Col);
+
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    ArgType := AnalyseExpr(TASTExpr(ACall.Args[I]));
+    Par     := TMethodParam(MDecl.Params[I]);
+    CheckTypesMatch(Par.ResolvedType, ArgType,
+      Format('argument %d of inherited ''%s''', [I + 1, ACall.Name]),
+      ACall.Line, ACall.Col);
+  end;
+
+  ACall.ResolvedParentType := ParentType;
+  ACall.ResolvedMethod     := MDecl;
 end;
 
 procedure TSemanticAnalyser.AnalyseFieldAssignment(AAssign: TFieldAssignment);

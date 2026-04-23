@@ -83,6 +83,7 @@ type
     function  ParseForStmt: TForStmt;
     function  ParseTryStmt: TASTStmt;
     function  ParseRaiseStmt: TRaiseStmt;
+    function  ParseInheritedStmt: TInheritedCallStmt;
     function  ParseForwardDecl(IsFunction: Boolean): TMethodDecl;
     function  ParseCompoundStmt: TCompoundStmt;
     function  ParseExpr: TASTExpr;
@@ -983,6 +984,12 @@ begin
     Exit;
   end;
 
+  if Check(tkInherited) then
+  begin
+    Result := ParseInheritedStmt;
+    Exit;
+  end;
+
   if Check(tkBegin) then
   begin
     Result := ParseCompoundStmt;
@@ -1256,6 +1263,39 @@ begin
     if not (Check(tkSemicolon) or Check(tkEnd) or Check(tkEOF) or
             Check(tkFinally) or Check(tkExcept) or Check(tkElse)) then
       Result.Expr := ParseExpr;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TParser.ParseInheritedStmt: TInheritedCallStmt;
+begin
+  Result := TInheritedCallStmt.Create;
+  try
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Expect(tkInherited);
+    if not Check(tkIdent) then
+      raise EParseError.CreateFmt(
+        'Expected method name after ''inherited'' at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    Result.Name := FCurrent.Value;
+    Advance;
+    if Check(tkLParen) then
+    begin
+      Advance;
+      if not Check(tkRParen) then
+      begin
+        Result.Args.Add(ParseExpr);
+        while Check(tkComma) do
+        begin
+          Advance;
+          Result.Args.Add(ParseExpr);
+        end;
+      end;
+      Expect(tkRParen);
+    end;
   except
     Result.Free;
     raise;

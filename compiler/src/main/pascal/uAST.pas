@@ -230,6 +230,20 @@ type
     destructor Destroy; override;
   end;
 
+  { Static dispatch to the parent class's method: 'inherited MethodName(args)'.
+    Legal only inside a method body; resolved by uSemantic using the enclosing
+    class's parent chain. }
+  TInheritedCallStmt = class(TASTStmt)
+  public
+    Name:               string;        { parent method name to call }
+    Args:               TObjectList;   { owned TASTExpr items }
+    { Set by uSemantic: }
+    ResolvedParentType: TObject;       { TRecordTypeDesc — not owned }
+    ResolvedMethod:     TObject;       { TMethodDecl — not owned }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   { ------------------------------------------------------------------ }
   {  Declarations                                                       }
   { ------------------------------------------------------------------ }
@@ -650,6 +664,20 @@ begin
 end;
 
 destructor TMethodCallStmt.Destroy;
+begin
+  Args.Free;
+  inherited Destroy;
+end;
+
+{ TInheritedCallStmt }
+
+constructor TInheritedCallStmt.Create;
+begin
+  inherited Create;
+  Args := TObjectList.Create(True);
+end;
+
+destructor TInheritedCallStmt.Destroy;
 begin
   Args.Free;
   inherited Destroy;

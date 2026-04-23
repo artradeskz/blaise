@@ -66,6 +66,7 @@ type
     procedure EmitAssignment(AAssign: TAssignment);
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
     procedure EmitMethodCall(ACall: TMethodCallStmt);
+    procedure EmitInheritedCall(ACall: TInheritedCallStmt);
     procedure EmitProcCall(ACall: TProcCall);
     procedure EmitPointerWrite(AStmt: TPointerWriteStmt);
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
@@ -437,6 +438,8 @@ begin
     EmitAssignment(TAssignment(AStmt))
   else if AStmt is TMethodCallStmt then
     EmitMethodCall(TMethodCallStmt(AStmt))
+  else if AStmt is TInheritedCallStmt then
+    EmitInheritedCall(TInheritedCallStmt(AStmt))
   else if AStmt is TProcCall then
     EmitProcCall(TProcCall(AStmt))
   else if AStmt is TExitStmt then
@@ -1115,6 +1118,37 @@ begin
       FuncName := '$' + RT.Name + '_' + ACall.Name;
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
   end;
+end;
+
+procedure TCodeGenQBE.EmitInheritedCall(ACall: TInheritedCallStmt);
+var
+  MDecl:    TMethodDecl;
+  SelfTemp: string;
+  ArgLine:  string;
+  ArgTemp:  string;
+  Par:      TMethodParam;
+  QType:    string;
+  I:        Integer;
+begin
+  MDecl := TMethodDecl(ACall.ResolvedMethod);
+
+  { Load Self from the current method's local slot }
+  SelfTemp := AllocTemp;
+  EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+
+  { Build arg string: l Self, then each explicit arg }
+  ArgLine := Format('l %s', [SelfTemp]);
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    Par     := TMethodParam(MDecl.Params[I]);
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
+    QType   := QbeTypeOf(Par.ResolvedType);
+    ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+  end;
+
+  { Always a direct (static) call — inherited bypasses vtable dispatch }
+  EmitLine(Format('  call $%s_%s(%s)',
+    [MDecl.OwnerTypeName, ACall.Name, ArgLine]));
 end;
 
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;

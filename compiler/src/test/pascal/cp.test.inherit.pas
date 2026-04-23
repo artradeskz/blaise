@@ -59,6 +59,16 @@ type
     procedure TestSemantic_Inherit_MethodCallOnChild_Resolves;
     procedure TestSemantic_Inherit_UnknownMethod_RaisesError;
     procedure TestCodegen_Inherit_MethodCallUsesParentFunctionName;
+
+    { ------------------------------------------------------------------ }
+    { 'inherited' keyword                                                  }
+    { ------------------------------------------------------------------ }
+    procedure TestLexer_Inherited_IsOwnToken;
+    procedure TestParse_Inherited_NoArgs_CreatesNode;
+    procedure TestSemantic_Inherited_NoArgs_OK;
+    procedure TestSemantic_Inherited_WithArgs_OK;
+    procedure TestCodegen_Inherited_NoArgs_CallsParentMethod;
+    procedure TestCodegen_Inherited_WithArgs_ForwardsArgs;
   end;
 
 implementation
@@ -416,6 +426,113 @@ begin
     Pos('call $TBase_SetX', IR) > 0);
   AssertFalse('no $TChild_SetX emitted',
     Pos('$TChild_SetX', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ 'inherited' keyword tests                                          }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcInheritedNoArgs =
+    'program P;'                      + LineEnding +
+    'type'                            + LineEnding +
+    '  TBase = class'                 + LineEnding +
+    '    X: Integer;'                 + LineEnding +
+    '    procedure Init;'             + LineEnding +
+    '  end;'                          + LineEnding +
+    '  TChild = class(TBase)'         + LineEnding +
+    '    Y: Integer;'                 + LineEnding +
+    '    procedure Init;'             + LineEnding +
+    '  end;'                          + LineEnding +
+    'procedure TBase.Init;'           + LineEnding +
+    'begin'                           + LineEnding +
+    '  Self.X := 0'                   + LineEnding +
+    'end;'                            + LineEnding +
+    'procedure TChild.Init;'          + LineEnding +
+    'begin'                           + LineEnding +
+    '  inherited Init;'               + LineEnding +
+    '  Self.Y := 0'                   + LineEnding +
+    'end;'                            + LineEnding +
+    'var C: TChild;'                  + LineEnding +
+    'begin'                           + LineEnding +
+    '  C := TChild.Create'            + LineEnding +
+    'end.';
+
+  SrcInheritedWithArgs =
+    'program P;'                      + LineEnding +
+    'type'                            + LineEnding +
+    '  TBase = class'                 + LineEnding +
+    '    X: Integer;'                 + LineEnding +
+    '    procedure SetX(V: Integer);' + LineEnding +
+    '  end;'                          + LineEnding +
+    '  TChild = class(TBase)'         + LineEnding +
+    '    procedure SetX(V: Integer);' + LineEnding +
+    '  end;'                          + LineEnding +
+    'procedure TBase.SetX(V: Integer);' + LineEnding +
+    'begin'                           + LineEnding +
+    '  Self.X := V'                   + LineEnding +
+    'end;'                            + LineEnding +
+    'procedure TChild.SetX(V: Integer);' + LineEnding +
+    'begin'                           + LineEnding +
+    '  inherited SetX(V)'             + LineEnding +
+    'end;'                            + LineEnding +
+    'var C: TChild;'                  + LineEnding +
+    'begin'                           + LineEnding +
+    '  C := TChild.Create'            + LineEnding +
+    'end.';
+
+procedure TInheritTests.TestLexer_Inherited_IsOwnToken;
+var L: TLexer; T: TToken;
+begin
+  L := TLexer.Create('inherited');
+  try
+    T := L.Next;
+    AssertEquals('inherited token kind', Ord(tkInherited), Ord(T.Kind));
+  finally L.Free; end;
+end;
+
+procedure TInheritTests.TestParse_Inherited_NoArgs_CreatesNode;
+var
+  Prog:  TProgram;
+  MDecl: TMethodDecl;
+  Stmt:  TASTStmt;
+begin
+  Prog := ParseSrc(SrcInheritedNoArgs);
+  try
+    { TChild.Init is the second standalone proc (ProcDecls[1]) }
+    AssertTrue('at least 2 ProcDecls', Prog.Block.ProcDecls.Count >= 2);
+    MDecl := TMethodDecl(Prog.Block.ProcDecls[1]);
+    AssertNotNull('TChild.Init found', MDecl);
+    AssertTrue('body has at least one stmt', MDecl.Body.Stmts.Count >= 1);
+    Stmt := TASTStmt(MDecl.Body.Stmts[0]);
+    AssertTrue('first stmt is TInheritedCallStmt', Stmt is TInheritedCallStmt);
+    AssertEquals('method name is Init',
+      'Init', TInheritedCallStmt(Stmt).Name);
+  finally Prog.Free; end;
+end;
+
+procedure TInheritTests.TestSemantic_Inherited_NoArgs_OK;
+begin
+  AnalyseSrc(SrcInheritedNoArgs).Free;
+end;
+
+procedure TInheritTests.TestSemantic_Inherited_WithArgs_OK;
+begin
+  AnalyseSrc(SrcInheritedWithArgs).Free;
+end;
+
+procedure TInheritTests.TestCodegen_Inherited_NoArgs_CallsParentMethod;
+var IR: string;
+begin
+  IR := GenIR(SrcInheritedNoArgs);
+  AssertTrue('call $TBase_Init in IR', Pos('call $TBase_Init', IR) > 0);
+end;
+
+procedure TInheritTests.TestCodegen_Inherited_WithArgs_ForwardsArgs;
+var IR: string;
+begin
+  IR := GenIR(SrcInheritedWithArgs);
+  AssertTrue('call $TBase_SetX in IR', Pos('call $TBase_SetX', IR) > 0);
 end;
 
 initialization
