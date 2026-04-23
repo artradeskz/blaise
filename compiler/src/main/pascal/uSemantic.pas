@@ -48,6 +48,7 @@ type
     function  InstantiateGenericFunc(const AInstName: string): TMethodDecl;
 
     procedure AnalyseBlock(ABlock: TBlock);
+    procedure AnalyseConstDecls(ABlock: TBlock);
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
@@ -998,6 +999,7 @@ begin
   { Type declarations are registered in the outer scope so they remain visible
     after the block scope is popped — needed for var declarations and the
     transferred symbol table used by codegen. }
+  AnalyseConstDecls(ABlock);
   AnalyseTypeDecls(ABlock);
   { Link standalone TTypeName.MethodName implementations to their class method
     declarations, transferring the body so AnalyseMethodBodies can process it. }
@@ -1014,6 +1016,27 @@ begin
     AnalyseStmts(ABlock);
   finally
     FTable.PopScope;
+  end;
+end;
+
+procedure TSemanticAnalyser.AnalyseConstDecls(ABlock: TBlock);
+var
+  I:    Integer;
+  CD:   TConstDecl;
+  Sym:  TSymbol;
+  TD:   TTypeDesc;
+begin
+  for I := 0 to ABlock.ConstDecls.Count - 1 do
+  begin
+    CD := TConstDecl(ABlock.ConstDecls[I]);
+    if CD.IsString then
+      TD := FTable.TypeString
+    else
+      TD := FTable.TypeInteger;
+    Sym            := TSymbol.Create(CD.Name, skConstant, TD);
+    Sym.ConstValue := CD.IntVal;
+    if not FTable.Define(Sym) then
+      Sym.Free;  { duplicate const — silently ignore }
   end;
 end;
 

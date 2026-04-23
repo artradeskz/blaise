@@ -445,16 +445,26 @@ type
     destructor Destroy; override;
   end;
 
+  { Constant declaration: const Name = Value; — integer or string literal }
+  TConstDecl = class(TASTNode)
+  public
+    Name:    string;
+    IntVal:  Int64;    { used when IsString = False }
+    StrVal:  string;   { used when IsString = True }
+    IsString: Boolean;
+  end;
+
   { ------------------------------------------------------------------ }
   {  Block and Program                                                  }
   { ------------------------------------------------------------------ }
 
   TBlock = class(TASTNode)
   public
-    TypeDecls: TObjectList;  { owned TTypeDecl }
-    Decls:     TObjectList;  { owned TVarDecl }
-    ProcDecls: TObjectList;  { owned TMethodDecl — standalone procs/funcs }
-    Stmts:     TObjectList;  { owned TASTStmt }
+    TypeDecls:  TObjectList;  { owned TTypeDecl }
+    ConstDecls: TObjectList;  { owned TConstDecl }
+    Decls:      TObjectList;  { owned TVarDecl }
+    ProcDecls:  TObjectList;  { owned TMethodDecl — standalone procs/funcs }
+    Stmts:      TObjectList;  { owned TASTStmt }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -918,15 +928,17 @@ end;
 constructor TBlock.Create;
 begin
   inherited Create;
-  TypeDecls := TObjectList.Create(True);
-  Decls     := TObjectList.Create(True);
-  ProcDecls := TObjectList.Create(True);
-  Stmts     := TObjectList.Create(True);
+  TypeDecls  := TObjectList.Create(True);
+  ConstDecls := TObjectList.Create(True);
+  Decls      := TObjectList.Create(True);
+  ProcDecls  := TObjectList.Create(True);
+  Stmts      := TObjectList.Create(True);
 end;
 
 destructor TBlock.Destroy;
 begin
   TypeDecls.Free;
+  ConstDecls.Free;
   Decls.Free;
   ProcDecls.Free;
   Stmts.Free;

@@ -64,6 +64,7 @@ type
     function  ParseBlock: TBlock;
     procedure ParseTypeSection(ABlock: TBlock);
     procedure ParseTypeDecl(ABlock: TBlock);
+    procedure ParseConstBlock(ABlock: TBlock);
     function  ParseEnumDef: TEnumTypeDef;
     function  ParseRecordDef: TRecordTypeDef;
     function  ParseGenericName: string;  { reads IDENT optionally followed by '<' TypeArgs '>' }
@@ -277,12 +278,15 @@ begin
 
     { Accept any number of type/var/procedure/function sections in any order,
       as required when concatenating multiple Pascal units into one file. }
-    while Check(tkType) or Check(tkVar) or Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkType) or Check(tkVar) or Check(tkProcedure) or
+          Check(tkFunction) or Check(tkConst) do
     begin
       if Check(tkType) then
         ParseTypeSection(Result)
       else if Check(tkVar) then
         ParseVarBlock(Result)
+      else if Check(tkConst) then
+        ParseConstBlock(Result)
       else
         ParseStandaloneDecl(Result);
     end;
@@ -432,6 +436,50 @@ begin
   except
     TD.Free;
     raise;
+  end;
+end;
+
+procedure TParser.ParseConstBlock(ABlock: TBlock);
+var
+  CD: TConstDecl;
+begin
+  Expect(tkConst);
+  while Check(tkIdent) do
+  begin
+    CD      := TConstDecl.Create;
+    CD.Line := FCurrent.Line;
+    CD.Col  := FCurrent.Col;
+    CD.Name := FCurrent.Value;
+    Advance;
+    Expect(tkEquals);
+    if Check(tkMinus) then
+    begin
+      Advance;
+      if not Check(tkIntLit) then
+        raise EParseError.CreateFmt('Expected integer after minus in const at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+      CD.IntVal  := -StrToInt(FCurrent.Value);
+      CD.IsString := False;
+      Advance;
+    end
+    else if Check(tkIntLit) then
+    begin
+      CD.IntVal   := StrToInt(FCurrent.Value);
+      CD.IsString := False;
+      Advance;
+    end
+    else if Check(tkStringLit) then
+    begin
+      CD.StrVal   := FCurrent.Value;
+      CD.IsString := True;
+      Advance;
+    end
+    else
+      raise EParseError.CreateFmt(
+        'Expected integer or string constant at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    Expect(tkSemicolon);
+    ABlock.ConstDecls.Add(CD);
   end;
 end;
 

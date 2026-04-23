@@ -63,6 +63,7 @@ type
     tkInherited,
     tkCase,
     tkOf,
+    tkConst,
     { Identifier }
     tkIdent,
     { Arithmetic operators }
@@ -164,6 +165,7 @@ begin
   else if AUpper = 'BREAK'          then Result := tkBreak
   else if AUpper = 'CASE'           then Result := tkCase
   else if AUpper = 'OF'             then Result := tkOf
+  else if AUpper = 'CONST'          then Result := tkConst
   else if AUpper = 'INHERITED'      then Result := tkInherited
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
@@ -239,6 +241,7 @@ begin
         else if text = 'BREAK'    then Result.Kind := tkBreak
         else if text = 'CASE'     then Result.Kind := tkCase
         else if text = 'OF'       then Result.Kind := tkOf
+        else if text = 'CONST'    then Result.Kind := tkConst
         else                           Result.Kind := tkIdent;
         Result.Value := FTok.TokenText;
       end;
