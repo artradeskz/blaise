@@ -914,15 +914,22 @@ zero-leak valgrind milestone are all done.
   expression is expected.
 
 | ARC for interface references
-| Planned — option A chosen
-| Interface variables are currently non-owning fat pointers (obj + itab).
-  The class-ownership model has been decided in favour of universal ARC
-  on `TObject` (option A). Implementation is scheduled as a Phase 3
-  follow-up and covers: refcount header on every class allocation,
-  compiler-inserted addref/release on class and interface assignment,
-  `[Weak]` attribute for cycle-breaking, and retention of `Free` as a
-  sanctioned synonym for immediate release. See
-  *Class-Ownership Model — Decision Record* below for the full rationale.
+| Done
+| Refcount header on every class allocation (`_ClassAlloc` / `_ClassRelease`);
+  compiler inserts addref/release on class and interface assignment and at
+  scope exit; `Free` retained as a sanctioned synonym for `_ClassRelease`
+  with slot nil-out; `[Weak]` attribute for cycle-breaking via
+  `_WeakAssign` / `_WeakClear` / `_WeakZeroSlots`; RTL rewritten to use
+  `Destroy` as the destructor hook (replaces `Free` on collections).
+
+| RTL rewrite under ARC rules
+| Done
+| `TList<T>` and `TDictionary<K,V>` in `Generics.Collections` replace
+  `procedure Free` with `procedure Destroy`; `Destroy` frees internal
+  raw buffers (`FData` / `FKeys` / `FValues`) and nils them;
+  `EmitFieldCleanupFn` invokes `Destroy` before field-level ARC cleanup
+  whenever `HasDestroyMethod` is set; `tests/phase3_milestone.pas` updated
+  to ARC rules; four new e2e valgrind tests added.
 
 |===
 
@@ -930,10 +937,9 @@ zero-leak valgrind milestone are all done.
 and pass a functional test suite. A program using both under valgrind shows
 zero leaks. Achieved on 2026-04-22 (commit `d49ebb4`).
 
-*Outstanding Phase 3 follow-up:* ARC for interface references. The
-class-ownership model has been decided (option A — universal ARC on
-`TObject`); see the decision record below. All other Phase 3 items are
-complete.
+*Phase 3 complete.* All items — including universal ARC on `TObject`,
+`[Weak]` cycle-breaking, and RTL rewrite under ARC rules — are done as of
+2026-04-23.
 
 == Class-Ownership Model — Decision Record
 
