@@ -217,14 +217,17 @@ procedure TBooleanOpsTests.TestCodegen_And_EmitsAnd;
 var IR: string;
 begin
   IR := GenIR(SrcAnd);
-  AssertTrue('emits =w and', Pos('=w and ', IR) > 0);
+  { Short-circuit and: LHS jumps to RHS on non-zero, to end on zero }
+  AssertTrue('emits sc_rhs label', Pos('@sc_rhs', IR) > 0);
+  AssertTrue('emits sc_end label', Pos('@sc_end', IR) > 0);
 end;
 
 procedure TBooleanOpsTests.TestCodegen_Or_EmitsOr;
 var IR: string;
 begin
   IR := GenIR(SrcOr);
-  AssertTrue('emits =w or', Pos('=w or ', IR) > 0);
+  AssertTrue('emits sc_rhs label', Pos('@sc_rhs', IR) > 0);
+  AssertTrue('emits sc_end label', Pos('@sc_end', IR) > 0);
 end;
 
 procedure TBooleanOpsTests.TestCodegen_Not_EmitsXor;

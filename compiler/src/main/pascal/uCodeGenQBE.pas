@@ -1456,14 +1456,10 @@ begin
 
   if AAssign.ObjExpr <> nil then
   begin
-    { Receiver is an arbitrary expression — emit it, then offset to the field }
+    { Receiver is an arbitrary expression — emit it, then offset to the field.
+      EmitExpr already returns the class instance pointer value for class-typed
+      expressions, so no extra dereference is needed here. }
     PtrTemp := EmitExpr(AAssign.ObjExpr);
-    if AAssign.IsClassAccess then
-    begin
-      Ptr := AllocTemp;
-      EmitLine(Format('  %s =l loadl %s', [Ptr, PtrTemp]));
-      PtrTemp := Ptr;
-    end;
     if AAssign.FieldInfo.Offset > 0 then
     begin
       Ptr := AllocTemp;
@@ -3517,6 +3513,32 @@ begin
   else if AExpr is TBinaryExpr then
   begin
     BinExpr := TBinaryExpr(AExpr);
+    { Short-circuit boolean and/or: evaluate LHS, then skip RHS when the
+      result is already determined.  FPC and Delphi use short-circuit by
+      default, and the compiler source relies on it for guarded nil-checks
+      like "(P <> nil) and P.IsX". }
+    if (BinExpr.Op = boAnd) or (BinExpr.Op = boOr) then
+    begin
+      SelfTemp := AllocTemp;   { slot holding the boolean result }
+      EmitLine(Format('  %s =l alloc4 1', [SelfTemp]));
+      L := EmitExpr(BinExpr.Left);
+      EmitLine(Format('  storew %s, %s', [L, SelfTemp]));
+      FuncName := AllocLabel('sc_rhs');   { reuse local; acts as RHS label }
+      ArgLine  := AllocLabel('sc_end');   { reuse local; acts as end label }
+      if BinExpr.Op = boAnd then
+        EmitLine(Format('  jnz %s, @%s, @%s', [L, FuncName, ArgLine]))
+      else
+        EmitLine(Format('  jnz %s, @%s, @%s', [L, ArgLine, FuncName]));
+      EmitLine('@' + FuncName);
+      R := EmitExpr(BinExpr.Right);
+      EmitLine(Format('  storew %s, %s', [R, SelfTemp]));
+      EmitLine(Format('  jmp @%s', [ArgLine]));
+      EmitLine('@' + ArgLine);
+      T := AllocTemp;
+      EmitLine(Format('  %s =w loadw %s', [T, SelfTemp]));
+      Result := T;
+      Exit;
+    end;
     L := EmitExpr(BinExpr.Left);
     R := EmitExpr(BinExpr.Right);
     T := AllocTemp;
