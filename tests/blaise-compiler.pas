@@ -1441,36 +1441,56 @@ begin
 end;
 
 function TLexer.UnescapeString(const ARaw: string): string;
-
-
-
-
 var
-  I, Len: Integer;
+  I, Len, N, C: Integer;
 begin
   Result := '';
   Len := Length(ARaw);
-  if (Len >= 2) and (OrdAt(ARaw, 1) = 39) then
+  I := 1;
+  while I <= Len do
   begin
-    I := 2;
-    while I <= Len do
+    C := OrdAt(ARaw, I);
+    if C = 39 then
     begin
-      if OrdAt(ARaw, I) = 39 then
+      I := I + 1;
+      while I <= Len do
       begin
-        if (I < Len) and (OrdAt(ARaw, I + 1) = 39) then
+        C := OrdAt(ARaw, I);
+        if C = 39 then
         begin
-          Result := Result + '''';
-          I := I + 2;
+          if (I < Len) and (OrdAt(ARaw, I + 1) = 39) then
+          begin
+            Result := Result + '''';
+            I := I + 2;
+          end
+          else
+          begin
+            I := I + 1;
+            Break;
+          end;
         end
         else
-          I := I + 1;  
-      end
-      else
+        begin
+          Result := Result + Chr(C);
+          I := I + 1;
+        end;
+      end;
+    end
+    else if C = 35 then
+    begin
+      I := I + 1;
+      N := 0;
+      while I <= Len do
       begin
-        Result := Result + Copy(ARaw, I, 1);
+        C := OrdAt(ARaw, I);
+        if (C < 48) or (C > 57) then Break;
+        N := N * 10 + (C - 48);
         I := I + 1;
       end;
-    end;
+      Result := Result + Chr(N);
+    end
+    else
+      I := I + 1;
   end;
 end;
 
@@ -2430,6 +2450,8 @@ begin
   Sym := TSymbol.Create('CompareText', skFunction, FTypeInteger);
   Define(Sym);
   Sym := TSymbol.Create('OrdAt',       skFunction, FTypeInteger);
+  Define(Sym);
+  Sym := TSymbol.Create('Chr',         skFunction, FTypeString);
   Define(Sym);
   
   Sym := TSymbol.Create('ZeroMem',      skProcedure, nil); Define(Sym);
@@ -8145,6 +8167,16 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'Chr') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Chr requires exactly 1 argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Get(0)));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'CompareStr') or SameText(AExpr.Name, 'CompareText') then
   begin
     if AExpr.Args.Count <> 2 then
@@ -8702,11 +8734,12 @@ begin
         Format('Unknown class method ''%s'' on type ''%s''', AAccess.FieldName, AAccess.RecordName),
         AAccess.Line, AAccess.Col);
     AAccess.IsConstructorCall := True;
+    AAccess.ResolvedMethod    := FindMethodDecl(TRecordTypeDesc(RecSym.TypeDesc).Name, 'Create');
     Result := RecSym.TypeDesc;
     Exit;
   end;
 
-  
+
   if not (((RecSym.Kind = skVariable) or (RecSym.Kind = skParameter) or (RecSym.Kind = skVarParameter))) then
     SemanticError(
       Format('''%s'' is not a variable or type', AAccess.RecordName),
@@ -9786,6 +9819,20 @@ begin
         ExtTemp := AllocTemp;
         EmitLine(Format('  %s =l extsw %s', ExtTemp, ValTemp));
         ValTemp := ExtTemp;
+      end;
+      if ISFld.TypeDesc.IsString then
+      begin
+        OldTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', OldTemp, ObjTemp));
+        EmitLine(Format('  call $_StringAddRef(l %s)', ValTemp));
+        EmitLine(Format('  call $_StringRelease(l %s)', OldTemp));
+      end
+      else if ISFld.TypeDesc.Kind = tyClass then
+      begin
+        OldTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', OldTemp, ObjTemp));
+        EmitLine(Format('  call $_ClassAddRef(l %s)', ValTemp));
+        EmitLine(Format('  call $_ClassRelease(l %s)', OldTemp));
       end;
       EmitLine(Format('  storel %s, %s', ValTemp, ObjTemp));
     end;
@@ -11691,6 +11738,15 @@ begin
         Exit;
       end;
 
+      if SameText(TFuncCallExpr(AExpr).Name, 'Chr') then
+      begin
+        L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_Chr(w %s)', T, L));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(TFuncCallExpr(AExpr).Name, 'CompareStr') then
       begin
         L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
@@ -12130,19 +12186,20 @@ begin
     end
     else if FldAccess.IsConstructorCall then
     begin
-      
-
-
-
-
-
-
       T := AllocTemp;
       EmitLine(Format('  %s =l call $_ClassAlloc(l %d, l $_FieldCleanup_%s)', T, TRecordTypeDesc(FldAccess.ResolvedType).TotalSize,
          QBEMangle(FldAccess.ResolvedType.Name)));
-      
       if TRecordTypeDesc(FldAccess.ResolvedType).HasVTable then
         EmitLine(Format('  storel $vtable_%s, %s', QBEMangle(FldAccess.ResolvedType.Name), T));
+      if FldAccess.ResolvedMethod <> nil then
+      begin
+        MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+        if MDecl.OwnerTypeName <> '' then
+          FuncName := '$' + MDecl.OwnerTypeName + '_' + FldAccess.FieldName
+        else
+          FuncName := '$' + QBEMangle(FldAccess.ResolvedType.Name) + '_' + FldAccess.FieldName;
+        EmitLine(Format('  call %s(l %s)', FuncName, T));
+      end;
       Result := T;
     end
     else if FldAccess.PropRead <> nil then
