@@ -56,7 +56,8 @@ uses
   cp.test.collections,
   cp.test.caseenum,
   cp.test.selfhosting,
-  cp.test.e2e;
+  cp.test.e2e,
+  cp.test.multifile;
 
 var
   Application: TTestRunner;

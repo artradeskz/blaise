@@ -35,7 +35,7 @@ and an LSP server.
 * *Reified generics* — monomorphization (Rust/Swift style), no type erasure.
 * *Single language mode* — one clean modern Object Pascal dialect only.
 * *OPDF debugger integration* — the author designed the format; reference CLI debugger
-  and IDE support already exist. OPDF emission planned for Phase 4.
+  and IDE support already exist. OPDF emission planned for Phase 5.
 * *PasBuild drives the compiler* — `project.xml` replaces makefiles and `.lpi`/`.dproj`.
 * *BSD 3-Clause* — maximum adoption, zero legal friction.
 
@@ -43,11 +43,15 @@ and an LSP server.
 
 * Bootstrap compiler written in FPC; intermediate FPC features (classes, generics) are
   permitted — the goal is "FPC toolchain is available," not "minimal FPC subset".
-* Phase 1 targets Linux x86_64 only. macOS ARM64 added in Phase 5 alongside self-hosting. Windows in Phase 5 (LLVM).
+* Phase 1 targets Linux x86_64 only. macOS ARM64 added in Phase 6. Windows in Phase 6 (LLVM).
 * TDD throughout: FPTest test suite grows alongside the compiler.
 * Self-hosting is a credibility milestone, not a day-one requirement.
 * No legacy Pascal baggage: no `with` statement, no old-style `object`, no COM GUIDs,
   no multiple string types, no cross-platform `{$IFDEF}` hacks in the language itself.
+* Build-tool-drives-compiler: the compiler accepts `--unit-path` search directories and
+  resolves `uses` clauses itself. PasBuild (or make, shell scripts, or any other tool)
+  passes the appropriate flags; no project-file format is embedded in the compiler binary.
+  This decouples Blaise from any single build tool.
 
 == Language Features — Drop vs. Keep
 
@@ -155,7 +159,7 @@ type
 ----
 
 The AST-to-backend boundary passes a typed AST (after semantic analysis). Neither
-backend sees Pascal source; both see the same AST node types. Adding LLVM in Phase 5
+backend sees Pascal source; both see the same AST node types. Adding LLVM in Phase 6
 means writing `TCodeGenLLVM` that implements `ICodeGen` — no changes to the parser
 or type checker.
 
@@ -217,7 +221,7 @@ function $Swap(%a_ptr =l, %b_ptr =l) {
 }
 ----
 
-*Windows (x86_64):* Deferred to Phase 5 (LLVM backend). LLVM handles the
+*Windows (x86_64):* Deferred to Phase 6 (LLVM backend). LLVM handles the
 Microsoft x64 calling convention automatically. QBE's Windows support is not
 production-tested; targeting Linux/macOS first avoids this risk.
 
@@ -250,7 +254,9 @@ PasBuild invokes the compiler binary as:
 
 [source,shell]
 ----
-blaise --project project.xml --config debug --output bin/hello
+blaise --source Hello.pas \
+       --unit-path src/main/pascal \
+       --output bin/hello
 ----
 
 Or for single-file compilation during bootstrap:
@@ -260,17 +266,21 @@ Or for single-file compilation during bootstrap:
 blaise --source Hello.pas --output bin/hello --target linux-x86_64
 ----
 
+The compiler resolves `uses` clauses itself via `--unit-path` search directories.
+PasBuild (or any other build tool) reads `project.xml` and passes the appropriate
+flags; no project-file format is embedded in the compiler binary.
+
 Supported flags:
 
 [cols="1,3", options="header"]
 |===
 | Flag | Description
 
-| `--project <path>`
-| Path to `project.xml` (PasBuild integration mode)
-
 | `--source <path>`
-| Single source file (standalone mode)
+| Single entry-point source file
+
+| `--unit-path <dir>`
+| Add directory to the unit search path (repeatable; maps to `-Fu` in FPC-style invocation)
 
 | `--output <path>`
 | Output binary path
@@ -279,7 +289,7 @@ Supported flags:
 | `linux-x86_64` (default), `macos-arm64`, `linux-arm64`
 
 | `--debug`
-| Emit OPDF debug info (Phase 4+)
+| Emit OPDF debug info (Phase 5+)
 
 | `--emit-ir`
 | Emit QBE IR to stdout (useful for debugging the compiler)
@@ -535,9 +545,34 @@ passing (541 total, 0 failures).
 *Milestone:* A generic `TList<Integer>` and `TDictionary<string, Integer>` compile
 and pass the FPTest suite. Binary size measured and within acceptable bounds.
 
-=== Phase 4 — OPDF Integration (Months 10–12)
+=== Phase 4 — Multi-file Compilation (v0.2.0)
 
-*Goal:* First-class debugging. Runs in parallel with Phase 3; does not block Phase 5.
+*Goal:* Compile real multi-file Pascal source — the compiler's own source — using
+itself. Retire the single-file hand source (`tests/blaise-compiler.pas`).
+
+NOTE: Single-file bootstrap and self-hosting fixpoint were achieved at v0.1.0.
+The three-stage bootstrap (FPC → hand-source → self-hosted) confirmed that the
+compiler can compile a representative Pascal programme with itself.
+
+Architecture: whole-programme compilation — all units compiled from source every
+build, single combined QBE IR output, no `.ppu` cache.
+
+* `TUnitLoader` — resolves `uses` clauses to source files via `--unit-path` search
+  directories; performs post-order DFS for dependency ordering; detects cycles
+* `AnalyseUnitForExport` on `TSemanticAnalyser` — promotes interface-section symbols
+  to global scope so subsequent units and the programme can reference them
+* `AppendUnit`/`AppendProgram` on `TCodeGenQBE` — accumulates multi-unit IR into a
+  single output buffer with globally-unique string-literal labels
+* `--unit-path <dir>` CLI flag (repeatable); FPC-style `-Fu<dir>` also honoured
+
+*Milestone:* `pasbuild test -m blaise-compiler` passes with the compiler compiling
+its own multi-unit source (uLexer, uParser, uAST, uSymbolTable, uSemantic,
+uCodeGenQBE, uUnitLoader) via `uses` resolution, producing an identical binary.
+Hand source retired.
+
+=== Phase 5 — OPDF Integration (previously Phase 4)
+
+*Goal:* First-class debugging. Runs in parallel with Phase 4; does not block Phase 6.
 
 * Emit OPDF debug info alongside QBE IR in debug builds
 * PasBuild `debug` target automatically enables OPDF via `--debug` flag
@@ -547,32 +582,26 @@ and pass the FPTest suite. Binary size measured and within acceptable bounds.
 *Milestone:* Step through a compiled program in the reference OPDF debugger,
 inspect variables, and see correct source lines.
 
-=== Phase 5 — Self-Hosting + LLVM + Windows (Months 12–18)
+=== Phase 6 — LLVM Backend + Windows (previously Phase 5)
 
-*Goal:* Compiler credibility milestone and full platform support.
+*Goal:* Full platform support via a second backend.
 
-*Pre-work (end of Phase 4):* Identify all FPC-specific constructs used in the
-compiler's own source that the new language does not support. Remove or replace them
-before attempting self-hosting. This sprint prevents self-hosting from revealing
-fundamental design incompatibilities too late.
-
-* Compile the compiler's own source with itself (self-hosting)
 * Add LLVM as a second backend (`TCodeGenLLVM implements ICodeGen` — adapter swap)
 * macOS ARM64 support via QBE (Darwin link flags, `libSystem`); fat-binary RTL for
   `blaise_rtl.a` (x86_64 + ARM64 slices)
 * Windows x86_64 support via LLVM (LLVM handles the Microsoft x64 ABI automatically)
 * CI/CD pipeline: GitHub Actions building for Linux x86_64, macOS ARM64, Windows x86_64
 
-*Milestone:* Compiler binary produced by itself. QBE backend producing correct
-binaries on Linux x86_64 and macOS ARM64; LLVM backend on Windows x86_64.
+*Milestone:* QBE backend producing correct binaries on Linux x86_64 and macOS ARM64;
+LLVM backend on Windows x86_64.
 
-=== Phase 6 — LSP + VS Code Extension (Months 15–20)
+=== Phase 7 — LSP + VS Code Extension (previously Phase 6)
 
 *Goal:* Developer experience that attracts contributors.
 
 LSP development may begin on the FPC-bootstrapped compiler once Phase 3 is complete.
-It does not need to wait for Phase 5 self-hosting. Porting the LSP to the self-hosted
-compiler is a Phase 5 secondary milestone, not a Phase 6 blocker.
+It does not need to wait for Phase 4 multi-file compilation. Porting the LSP to the
+self-hosted compiler is a Phase 8 secondary milestone, not a blocker.
 
 * Language server built on the compiler's symbol table and type checker
 * Hover type info, go-to-definition, error squiggles
@@ -581,7 +610,7 @@ compiler is a Phase 5 secondary milestone, not a Phase 6 blocker.
 
 *Milestone:* Write Pascal in VS Code with full IDE support.
 
-=== Phase 7 — Migration Analyser (Months 20+)
+=== Phase 8 — Migration Analyser (previously Phase 7)
 
 *Goal:* Unlock adoption from existing FPC/Delphi codebases.
 
@@ -603,8 +632,8 @@ all incompatibilities. Human reviewer confirms no false negatives.
 
 . *Project name* — "CleanPascal", "ModPas", "Pasca", "Helix", "OP2" — needs a name
   that signals a clean break without alienating the Pascal community.
-. *Package registry* — Deferred until Phase 6. Minimum viable is local file-based
-  dependencies via PasBuild `project.xml`. No registry server in scope until Phase 6+.
+. *Package registry* — Deferred until Phase 8. Minimum viable is local file-based
+  dependencies via PasBuild `project.xml`. No registry server in scope until Phase 8+.
 
 == Committed Decisions
 
@@ -616,7 +645,7 @@ These are not open for reconsideration:
 
 | Calling convention
 | System V AMD64 ABI (cdecl) on Linux/macOS. `var` params = pointer passing.
-  Windows Microsoft x64 ABI via LLVM in Phase 5.
+  Windows Microsoft x64 ABI via LLVM in Phase 6.
 
 | String layout
 | refcount (4B) + length (4B) + capacity (4B) + UTF-8 data (N bytes) + NUL (1B).
@@ -626,7 +655,7 @@ These are not open for reconsideration:
   Phase 3 adds `Generics.Collections`. Everything else deferred or community-contributed.
 
 | Windows support
-| Phase 5 via LLVM backend. Not in Phases 1–4.
+| Phase 6 via LLVM backend. Not in Phases 1–5.
 
 | QBE
 | Vendored in the compiler repository, built from source. Version pinned.
@@ -650,11 +679,14 @@ These are not open for reconsideration:
 | A real library (generic list, hash map) compiles and passes tests
 | Phase 3
 
-| Compiler compiles itself (self-hosting)
-| Phase 5
+| Compiler compiles itself (single-file bootstrap, self-hosting fixpoint) ✓
+| Phase 1 (achieved v0.1.0)
+
+| Compiler compiles its own multi-unit source via `uses` resolution
+| Phase 4
 
 | A non-trivial FPC program analysed and migration report generated
-| Phase 7
+| Phase 8
 |===
 
 == Distribution Plan
@@ -764,7 +796,7 @@ Phase 1 (bootstrap pipeline) is complete. Phase 2 type-system work is in progres
 
 Phase 2 is complete. The linked-list milestone (TObject subclass, separate method
 implementations, `Free`, zero valgrind leaks) has been verified on Linux x86_64.
-macOS ARM64 is deferred to Phase 5 alongside self-hosting.
+macOS ARM64 is deferred to Phase 6.
 
 == Phase 3 — Implementation Status
 
@@ -974,7 +1006,7 @@ Cons:
 
 * Severe porting friction for Delphi/FPC codebases that rely on explicit
   `try..finally Obj.Free`. Mitigated by retaining `Free` as release and
-  by migration-analyser support (Phase 7).
+  by migration-analyser support (Phase 8).
 * Small per-allocation cost (refcount header) and per-assignment cost
   (addref/release pair) on every class, not only interfaced ones.
 * Cycles become a pervasive concern across any non-trivial object graph,
@@ -1066,7 +1098,7 @@ Resolving it is precisely the kind of cleanup this project exists to do.
 Porting cost is mostly deletion, not translation::
 The dominant Delphi pattern is
 `try Obj := TFoo.Create; ... finally Obj.Free; end`. Under option A the
-`finally` arm simply disappears, and the migration analyser (Phase 7)
+`finally` arm simply disappears, and the migration analyser (Phase 8)
 flags the sites. That is the cheapest class of migration available.
 The genuinely difficult work — lifetime auditing, cycle identification —
 has to be done under option B as well, the moment a codebase touches

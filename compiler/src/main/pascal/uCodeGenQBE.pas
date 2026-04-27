@@ -24,10 +24,11 @@ type
 
   TCodeGenQBE = class
   private
-    FOutput:       TStringList;
-    FStrLits:      TStringList;  { index → raw value; label = $__s<index> }
-    FTempCount:    Integer;
-    FLabelCount:   Integer;
+    FOutput:          TStringList;
+    FStrLits:         TStringList;  { index → raw value; label = $__s<index> }
+    FStrLitsEmitted:  Integer;      { count of $__s<N> already written to output }
+    FTempCount:       Integer;
+    FLabelCount:      Integer;
     FCurrentBlock: TBlock;       { block currently being emitted; set by EmitBlock }
     FBreakLabels:    TStringList;  { stack of active loop-end labels; top = innermost }
     FContinueLabels: TStringList;  { stack of active loop-continue labels; top = innermost }
@@ -37,6 +38,7 @@ type
     function  AllocLabel(const APrefix: string): string;
     function  EmitStrLit(const AValue: string): string;
     procedure EmitLine(const ALine: string);
+    procedure EmitPendingStrLits;
     procedure EmitDataSection;
     procedure EmitMainHeader;
     procedure EmitMainFooter;
@@ -114,6 +116,14 @@ type
     destructor Destroy; override;
     procedure Generate(AProg: TProgram);
     procedure GenerateUnit(AUnit: TUnit);
+    { Multi-unit compilation: append unit IR to existing output.
+      Does not reset the output buffer or string-literal table so that
+      all units and the final program can share a single QBE IR file
+      with globally-unique string-literal labels. }
+    procedure AppendUnit(AUnit: TUnit);
+    { Append program IR to existing output (companion to AppendUnit).
+      Emits any remaining string literals and the $main function. }
+    procedure AppendProgram(AProg: TProgram);
     function  GetOutput: string;
   end;
 
@@ -122,12 +132,13 @@ implementation
 constructor TCodeGenQBE.Create;
 begin
   inherited Create;
-  FOutput       := TStringList.Create;
-  FStrLits      := TStringList.Create;
+  FOutput          := TStringList.Create;
+  FStrLits         := TStringList.Create;
   FStrLits.CaseSensitive := True;
-  FBreakLabels    := TStringList.Create;
-  FContinueLabels := TStringList.Create;
-  FTempCount      := 0;
+  FBreakLabels     := TStringList.Create;
+  FContinueLabels  := TStringList.Create;
+  FTempCount       := 0;
+  FStrLitsEmitted  := 0;
 end;
 
 destructor TCodeGenQBE.Destroy;
@@ -166,23 +177,31 @@ begin
   FOutput.Add(ALine);
 end;
 
-procedure TCodeGenQBE.EmitDataSection;
+procedure TCodeGenQBE.EmitPendingStrLits;
 var
-  I:       Integer;
-  StrLen:  Integer;
+  I:      Integer;
+  StrLen: Integer;
 begin
-  { Each literal has a 12-byte ARC header: refcnt=-1 (immortal), length, capacity.
-    The string pointer IS the header pointer; char data begins at ptr+12. }
-  if FStrLits.Count > 0 then
+  { Emit only the string literals not yet written.  Each literal carries a
+    12-byte ARC header: refcnt=-1 (immortal), length, capacity.
+    The string pointer is the header pointer; char data begins at ptr+12. }
+  if FStrLits.Count > FStrLitsEmitted then
   begin
-    EmitLine('# String literals');
-    for I := 0 to FStrLits.Count - 1 do
+    if FStrLitsEmitted = 0 then
+      EmitLine('# String literals');
+    for I := FStrLitsEmitted to FStrLits.Count - 1 do
     begin
       StrLen := Length(FStrLits[I]);
       EmitLine(Format('data $__s%d = { w -1, w %d, w %d, b "%s", b 0 }',
         [I, StrLen, StrLen, QbeEscapeString(FStrLits[I])]));
     end;
+    FStrLitsEmitted := FStrLits.Count;
   end;
+end;
+
+procedure TCodeGenQBE.EmitDataSection;
+begin
+  EmitPendingStrLits;
   { printf format strings. Always emitted: a program with no string literals
     can still call WriteLn(Integer) or a bare WriteLn, and those reference
     $__fmt_d_nl / $__fmt_nl unconditionally. Omitting these definitions
@@ -3768,6 +3787,7 @@ var
 begin
   FOutput.Clear;
   FStrLits.Clear;
+  FStrLitsEmitted := 0;
   FTempCount  := 0;
   FLabelCount := 0;
 
@@ -3812,6 +3832,7 @@ var
 begin
   FOutput.Clear;
   FStrLits.Clear;
+  FStrLitsEmitted := 0;
   FTempCount  := 0;
   FLabelCount := 0;
 
@@ -3845,6 +3866,91 @@ begin
     end;
   finally
     IntfNames.Free;
+  end;
+end;
+
+procedure TCodeGenQBE.AppendUnit(AUnit: TUnit);
+var
+  I:         Integer;
+  ImplDecl:  TMethodDecl;
+  IntfNames: TStringList;
+  Body:      TStringList;
+  SavedOut:  TStringList;
+begin
+  { No clears — output and string literal table accumulate across calls.
+    Counter resets are safe: QBE temps and block labels are function-scoped. }
+  FTempCount  := 0;
+  FLabelCount := 0;
+
+  IntfNames := TStringList.Create;
+  try
+    IntfNames.CaseSensitive := False;
+    for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
+      IntfNames.Add(TMethodDecl(AUnit.IntfBlock.ProcDecls[I]).Name);
+
+    Body := TStringList.Create;
+    try
+      SavedOut := FOutput;
+      FOutput  := Body;
+      try
+        for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
+        begin
+          ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls[I]);
+          EmitFuncDef(ImplDecl, IntfNames.IndexOf(ImplDecl.Name) >= 0);
+        end;
+      finally
+        FOutput := SavedOut;
+      end;
+
+      EmitLine('# Unit: ' + AUnit.Name);
+      EmitLine('');
+      EmitPendingStrLits;  { emit only new string literals — no fmt strings yet }
+      FOutput.AddStrings(Body);
+    finally
+      Body.Free;
+    end;
+  finally
+    IntfNames.Free;
+  end;
+end;
+
+procedure TCodeGenQBE.AppendProgram(AProg: TProgram);
+var
+  Body:        TStringList;
+  SavedOutput: TStringList;
+begin
+  { No clears — accumulates after AppendUnit calls. }
+  FTempCount  := 0;
+  FLabelCount := 0;
+
+  Body := TStringList.Create;
+  try
+    SavedOutput := FOutput;
+    FOutput := Body;
+    try
+      EmitFieldCleanupDefs(AProg);
+      EmitMethodDefs(AProg);
+      EmitStandaloneDefs(AProg);
+      FExitLabel := 'main_exit';
+      EmitMainHeader;
+      EmitBlock(AProg.Block);
+      EmitMainFooter;
+      FExitLabel := '';
+    finally
+      FOutput := SavedOutput;
+    end;
+
+    EmitLine('# Generated by Blaise Compiler');
+    EmitLine('# Source: ' + AProg.Name);
+    EmitLine('');
+    EmitDataSection;  { emits remaining string literals + $__fmt_* (once) }
+    EmitGlobalVarData(AProg.Block);
+    EmitInterfaceDefs(AProg);
+    EmitTypeInfoDefs(AProg);
+    EmitVTableDefs(AProg);
+    FOutput.AddStrings(Body);
+  finally
+    Body.Free;
   end;
 end;
 

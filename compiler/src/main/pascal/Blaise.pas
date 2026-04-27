@@ -22,8 +22,8 @@ program Blaise;
 }
 
 uses
-  SysUtils, Classes, Process,
-  uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
+  SysUtils, Classes, Process, contnrs,
+  uLexer, uParser, uAST, uSemantic, uCodeGenQBE, uUnitLoader;
 
 const
   Version = '0.2.0-dev';
@@ -41,6 +41,7 @@ begin
   WriteLn('Flags:');
   WriteLn('  --source <path>     Pascal source file');
   WriteLn('  --output <path>     Output binary path');
+  WriteLn('  --unit-path <dir>   Add directory to unit search path (repeatable)');
   WriteLn('  --target <id>       linux-x86_64 (default), macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
 end;
@@ -74,19 +75,21 @@ end;
   Handles: -iV/-iTP/-iTO, -FE<dir>, -Fu<path>, -FU<path>, -o<name>,
            -Mobjfpc, -O<n>, -g, -gl, -CX, -d<define>, and the positional source file. }
 function ParseFPCArgs(
-  out SourceFile: string;
-  out OutputFile: string): Boolean;
+  out SourceFile:  string;
+  out OutputFile:  string;
+  out SearchPaths: TStringList): Boolean;
 var
   I:       Integer;
   Arg:     string;
   OutDir:  string;
   OutName: string;
 begin
-  Result     := False;
-  SourceFile := '';
-  OutputFile := '';
-  OutDir     := '';
-  OutName    := '';
+  Result      := False;
+  SourceFile  := '';
+  OutputFile  := '';
+  OutDir      := '';
+  OutName     := '';
+  SearchPaths := TStringList.Create;
 
   I := 1;
   while I <= ParamCount do
@@ -100,7 +103,7 @@ begin
     else if Copy(Arg, 1, 3) = '-FU' then
       { unit cache directory — ignored in Phase 1 }
     else if Copy(Arg, 1, 3) = '-Fu' then
-      { unit search path — ignored in Phase 1 }
+      SearchPaths.Add(Copy(Arg, 4, MaxInt))
     else if Copy(Arg, 1, 2) = '-o' then
       OutName := Copy(Arg, 3, MaxInt)
     else if Copy(Arg, 1, 2) = '-M' then
@@ -131,6 +134,7 @@ begin
   if SourceFile = '' then
   begin
     WriteLn(StdErr, 'Error: no source file specified');
+    SearchPaths.Free;
     Exit;
   end;
 
@@ -165,17 +169,19 @@ begin
 end;
 
 function ParseArgs(
-  out SourceFile: string;
-  out OutputFile: string;
-  out EmitIR:     Boolean): Boolean;
+  out SourceFile:  string;
+  out OutputFile:  string;
+  out EmitIR:      Boolean;
+  out SearchPaths: TStringList): Boolean;
 var
   I: Integer;
   Arg: string;
 begin
-  Result     := False;
-  SourceFile := '';
-  OutputFile := '';
-  EmitIR     := False;
+  Result      := False;
+  SourceFile  := '';
+  OutputFile  := '';
+  EmitIR      := False;
+  SearchPaths := TStringList.Create;
 
   I := 1;
   while I <= ParamCount do
@@ -191,6 +197,11 @@ begin
       Inc(I);
       OutputFile := ParamStr(I);
     end
+    else if (Arg = '--unit-path') and (I < ParamCount) then
+    begin
+      Inc(I);
+      SearchPaths.Add(ParamStr(I));
+    end
     else if Arg = '--emit-ir' then
       EmitIR := True
     else if Arg = '--target' then
@@ -203,6 +214,7 @@ begin
     else
     begin
       WriteLn(StdErr, 'Unknown flag: ', Arg);
+      SearchPaths.Free;
       Exit;
     end;
     Inc(I);
@@ -211,11 +223,13 @@ begin
   if SourceFile = '' then
   begin
     WriteLn(StdErr, 'Error: --source is required');
+    SearchPaths.Free;
     Exit;
   end;
   if (not EmitIR) and (OutputFile = '') then
   begin
     WriteLn(StdErr, 'Error: --output is required (or use --emit-ir)');
+    SearchPaths.Free;
     Exit;
   end;
 
@@ -306,20 +320,25 @@ end;
 
 var
   SourceFile, OutputFile: string;
-  EmitIR: Boolean;
-  Source: TStringList;
+  SearchPaths: TStringList;
+  EmitIR:   Boolean;
+  Source:   TStringList;
   Lexer:    TLexer;
   Parser:   TParser;
   Prog:     TProgram;
   Semantic: TSemanticAnalyser;
   CG:       TCodeGenQBE;
-  IR:     string;
-  IRFile: string;
+  Loader:   TUnitLoader;
+  Units:    TObjectList;
+  I:        Integer;
+  IR:       string;
+  IRFile:   string;
 
 begin
+  SearchPaths := nil;
   if IsFPCStyleInvocation then
   begin
-    if not ParseFPCArgs(SourceFile, OutputFile) then
+    if not ParseFPCArgs(SourceFile, OutputFile, SearchPaths) then
     begin
       PrintUsage;
       Halt(1);
@@ -328,7 +347,7 @@ begin
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR) then
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, SearchPaths) then
     begin
       PrintUsage;
       Halt(1);
@@ -357,6 +376,8 @@ begin
   Prog     := nil;
   Semantic := nil;
   CG       := nil;
+  Loader   := nil;
+  Units    := nil;
   try
     try
       Lexer  := TLexer.Create(Source.Text);
@@ -372,6 +393,14 @@ begin
 
     try
       Semantic := TSemanticAnalyser.Create;
+      if (SearchPaths <> nil) and (SearchPaths.Count > 0) and
+         (Prog.UsedUnits.Count > 0) then
+      begin
+        Loader := TUnitLoader.Create(SearchPaths);
+        Units  := Loader.LoadAll(Prog.UsedUnits);
+        for I := 0 to Units.Count - 1 do
+          Semantic.AnalyseUnitForExport(TUnit(Units[I]));
+      end;
       Semantic.Analyse(Prog);
     except
       on E: ESemanticError do
@@ -379,11 +408,28 @@ begin
         WriteLn(StdErr, 'Semantic error: ', E.Message);
         Halt(1);
       end;
+      on E: EUnitNotFound do
+      begin
+        WriteLn(StdErr, 'Unit not found: ', E.Message);
+        Halt(1);
+      end;
+      on E: ECircularDependency do
+      begin
+        WriteLn(StdErr, 'Circular dependency: ', E.Message);
+        Halt(1);
+      end;
     end;
 
     try
       CG := TCodeGenQBE.Create;
-      CG.Generate(Prog);
+      if (Units <> nil) and (Units.Count > 0) then
+      begin
+        for I := 0 to Units.Count - 1 do
+          CG.AppendUnit(TUnit(Units[I]));
+        CG.AppendProgram(Prog);
+      end
+      else
+        CG.Generate(Prog);
       IR := CG.GetOutput;
     except
       on E: Exception do
@@ -393,6 +439,9 @@ begin
       end;
     end;
   finally
+    Units.Free;
+    Loader.Free;
+    SearchPaths.Free;
     CG.Free;
     Semantic.Free;
     Prog.Free;

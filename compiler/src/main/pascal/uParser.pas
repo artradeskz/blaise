@@ -60,6 +60,7 @@ type
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
 
     function  ParseProgram: TProgram;
+    procedure ParseUsesList(AList: TStringList);
     procedure ParseUses(AProg: TProgram);
     function  ParseBlock: TBlock;
     procedure ParseTypeSection(ABlock: TBlock);
@@ -227,7 +228,7 @@ begin
   end;
 end;
 
-procedure TParser.ParseUses(AProg: TProgram);
+procedure TParser.ParseUsesList(AList: TStringList);
 var
   UName: string;
 begin
@@ -246,7 +247,7 @@ begin
     UName := UName + '.' + FCurrent.Value;
     Advance;
   end;
-  AProg.UsedUnits.Add(UName);
+  AList.Add(UName);
   while Check(tkComma) do
   begin
     Advance;
@@ -264,9 +265,14 @@ begin
       UName := UName + '.' + FCurrent.Value;
       Advance;
     end;
-    AProg.UsedUnits.Add(UName);
+    AList.Add(UName);
   end;
   Expect(tkSemicolon);
+end;
+
+procedure TParser.ParseUses(AProg: TProgram);
+begin
+  ParseUsesList(AProg.UsedUnits);
 end;
 
 function TParser.ParseBlock: TBlock;
@@ -782,7 +788,7 @@ var
   IsVarGrp: Boolean;
 begin
   repeat
-    IsVarGrp := Check(tkVar);
+    IsVarGrp := Check(tkVar) or Check(tkOut);
     if IsVarGrp then Advance
     else if Check(tkConst) then Advance;  { const params treated as value params }
     Names := TStringList.Create;
@@ -1776,6 +1782,8 @@ begin
 
     { Interface section }
     Expect(tkIntf);
+    if Check(tkUses) then
+      ParseUsesList(Result.UsedUnits);
     if Check(tkType) then
       ParseTypeSection(Result.IntfBlock);
     while Check(tkProcedure) or Check(tkFunction) do
@@ -1788,6 +1796,8 @@ begin
 
     { Implementation section }
     Expect(tkImplementation);
+    if Check(tkUses) then
+      ParseUsesList(Result.UsedUnits);  { implementation-only deps — loaded but not re-exported }
     while Check(tkProcedure) or Check(tkFunction) do
     begin
       if Check(tkFunction) then

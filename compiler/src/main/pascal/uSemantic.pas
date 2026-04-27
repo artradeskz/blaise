@@ -101,6 +101,10 @@ type
     destructor Destroy; override;
     procedure Analyse(AProg: TProgram);
     procedure AnalyseUnit(AUnit: TUnit);
+    { Like AnalyseUnit but promotes interface-section symbols to the global
+      scope so that subsequent Analyse(Prog) or AnalyseUnitForExport calls
+      can resolve them.  Use this when compiling a unit as a dependency. }
+    procedure AnalyseUnitForExport(AUnit: TUnit);
   end;
 
 implementation
@@ -460,6 +464,157 @@ begin
       ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls[I]);
       if (ImplDecl.OwnerTypeName <> '') and (ImplDecl.OwnerTypeParams <> nil) then
         Continue;
+      AnalyseStandaloneDecl(ImplDecl);
+    end;
+  finally
+    FTable.PopScope;
+  end;
+end;
+
+procedure TSemanticAnalyser.AnalyseUnitForExport(AUnit: TUnit);
+var
+  I, J:     Integer;
+  MDecl:    TMethodDecl;
+  ImplDecl: TMethodDecl;
+  ImplIdx:  Integer;
+  Par:      TMethodParam;
+  ParType:  TTypeDesc;
+  Sym:      TSymbol;
+begin
+  { --- Interface section ------------------------------------------------
+    No scope is pushed here: all FTable.Define calls go to the global scope,
+    making these symbols visible to callers of this unit. }
+
+  AnalyseConstDecls(AUnit.IntfBlock);
+  AnalyseTypeDecls(AUnit.IntfBlock);
+
+  { Link class method bodies from ImplBlock to the class type method decls
+    registered by AnalyseTypeDecls, then analyse those bodies. }
+  LinkClassMethodImpls(AUnit.ImplBlock);
+  LinkGenericClassMethodImpls(AUnit.ImplBlock);
+  AnalyseMethodBodies(AUnit.IntfBlock);
+
+  { Register interface forward declarations for standalone procs/funcs }
+  for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
+  begin
+    MDecl := TMethodDecl(AUnit.IntfBlock.ProcDecls[I]);
+
+    for J := 0 to MDecl.Params.Count - 1 do
+    begin
+      Par     := TMethodParam(MDecl.Params[J]);
+      ParType := FTable.FindType(Par.TypeName);
+      if ParType = nil then
+        SemanticError(
+          Format('Unknown type ''%s'' for parameter ''%s''',
+            [Par.TypeName, Par.ParamName]),
+          MDecl.Line, MDecl.Col);
+      Par.ResolvedType := ParType;
+    end;
+
+    if MDecl.ReturnTypeName <> '' then
+    begin
+      ParType := FTable.FindType(MDecl.ReturnTypeName);
+      if ParType = nil then
+        SemanticError(
+          Format('Unknown return type ''%s'' for ''%s''',
+            [MDecl.ReturnTypeName, MDecl.Name]),
+          MDecl.Line, MDecl.Col);
+      MDecl.ResolvedReturnType := ParType;
+    end;
+
+    FProcIndex.AddObject(MDecl.Name, MDecl);
+
+    if MDecl.ReturnTypeName <> '' then
+      Sym := TSymbol.Create(MDecl.Name, skFunction, MDecl.ResolvedReturnType)
+    else
+      Sym := TSymbol.Create(MDecl.Name, skProcedure, nil);
+    if not FTable.Define(Sym) then
+    begin
+      Sym.Free;
+      SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
+        MDecl.Line, MDecl.Col);
+    end;
+  end;
+
+  { --- Implementation section -------------------------------------------
+    Push a scope so impl-only standalone symbols don't leak globally. }
+  FTable.PushScope;
+  try
+    { Register impl decls, skipping class method impls (already linked above) }
+    for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
+    begin
+      ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls[I]);
+      if ImplDecl.OwnerTypeName <> '' then Continue;  { class method — already handled }
+
+      for J := 0 to ImplDecl.Params.Count - 1 do
+      begin
+        Par     := TMethodParam(ImplDecl.Params[J]);
+        ParType := FTable.FindType(Par.TypeName);
+        if ParType = nil then
+          SemanticError(
+            Format('Unknown type ''%s'' for parameter ''%s''',
+              [Par.TypeName, Par.ParamName]),
+            ImplDecl.Line, ImplDecl.Col);
+        Par.ResolvedType := ParType;
+      end;
+
+      if ImplDecl.ReturnTypeName <> '' then
+      begin
+        ParType := FTable.FindType(ImplDecl.ReturnTypeName);
+        if ParType = nil then
+          SemanticError(
+            Format('Unknown return type ''%s'' for ''%s''',
+              [ImplDecl.ReturnTypeName, ImplDecl.Name]),
+            ImplDecl.Line, ImplDecl.Col);
+        ImplDecl.ResolvedReturnType := ParType;
+      end;
+
+      ImplIdx := FProcIndex.IndexOf(ImplDecl.Name);
+      if ImplIdx >= 0 then
+      begin
+        { Matches an interface forward decl — verify param count and update index }
+        MDecl := TMethodDecl(FProcIndex.Objects[ImplIdx]);
+        if MDecl.Params.Count <> ImplDecl.Params.Count then
+          SemanticError(
+            Format('Signature mismatch for ''%s'': interface has %d params, implementation has %d',
+              [ImplDecl.Name, MDecl.Params.Count, ImplDecl.Params.Count]),
+            ImplDecl.Line, ImplDecl.Col);
+        FProcIndex.Objects[ImplIdx] := ImplDecl;
+      end
+      else
+      begin
+        { Impl-only declaration — register in impl scope (does not persist) }
+        FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
+        if ImplDecl.ReturnTypeName <> '' then
+          Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
+        else
+          Sym := TSymbol.Create(ImplDecl.Name, skProcedure, nil);
+        if not FTable.Define(Sym) then
+        begin
+          Sym.Free;
+          SemanticError(Format('Duplicate identifier ''%s''', [ImplDecl.Name]),
+            ImplDecl.Line, ImplDecl.Col);
+        end;
+      end;
+    end;
+
+    { Verify every interface declaration has a matching implementation }
+    for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
+    begin
+      MDecl   := TMethodDecl(AUnit.IntfBlock.ProcDecls[I]);
+      ImplIdx := FProcIndex.IndexOf(MDecl.Name);
+      if (ImplIdx < 0) or
+         (TMethodDecl(FProcIndex.Objects[ImplIdx]).Body = nil) then
+        SemanticError(
+          Format('Interface function ''%s'' has no implementation', [MDecl.Name]),
+          MDecl.Line, MDecl.Col);
+    end;
+
+    { Analyse standalone implementation bodies (skip class method impls) }
+    for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
+    begin
+      ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls[I]);
+      if ImplDecl.OwnerTypeName <> '' then Continue;
       AnalyseStandaloneDecl(ImplDecl);
     end;
   finally

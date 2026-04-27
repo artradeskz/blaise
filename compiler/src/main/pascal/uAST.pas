@@ -516,9 +516,10 @@ type
 
   TUnit = class(TASTNode)
   public
-    Name:      string;
-    IntfBlock: TBlock;  { owned — forward decls + type decls }
-    ImplBlock: TBlock;  { owned — full implementations }
+    Name:       string;
+    UsedUnits:  TStringList; { owned — unit names from the interface uses clause }
+    IntfBlock:  TBlock;      { owned — forward decls + type decls }
+    ImplBlock:  TBlock;      { owned — full implementations }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1052,6 +1053,7 @@ end;
 constructor TUnit.Create;
 begin
   inherited Create;
+  UsedUnits := TStringList.Create;
   IntfBlock := TBlock.Create;
   ImplBlock := TBlock.Create;
 end;
@@ -1060,6 +1062,7 @@ destructor TUnit.Destroy;
 begin
   IntfBlock.Free;
   ImplBlock.Free;
+  UsedUnits.Free;
   inherited Destroy;
 end;
 
