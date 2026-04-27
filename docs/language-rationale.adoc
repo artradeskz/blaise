@@ -1,0 +1,341 @@
+= Blaise Language Design Rationale
+:toc: left
+:toclevels: 3
+:sectnums:
+
+This document records design decisions made for the Blaise Pascal dialect,
+together with the alternatives considered and the reasons each choice was
+made. It is not a language reference or user guide. Its purpose is to
+preserve the reasoning behind decisions so that:
+
+* future contributors can understand constraints without reconstructing them
+  from git history;
+* the eventual full language guide can be written from a solid foundation
+  rather than from code archaeology.
+
+Entries are added as decisions are made. Each entry records the decision,
+the alternatives that were rejected, and the rationale.
+
+---
+
+== Type System
+
+=== String
+
+==== Decision
+
+Blaise has exactly one string type: a reference-counted, UTF-8 encoded
+byte sequence, compatible with FPC's `AnsiString` memory layout
+(12-byte header: refcount / length / capacity, followed by character
+data and a null terminator).
+
+==== Alternatives rejected
+
+* *Multiple string types* (ShortString, AnsiString, WideString,
+  UnicodeString as in FPC/Delphi) — rejected. The primary source of
+  confusion in FPC codebases is implicit conversion between string kinds
+  and the mismatch between storage width and semantic meaning. A single
+  type eliminates the entire class of bugs and portability issues that
+  arise from that multiplicity.
+
+* *UTF-16 internal encoding* (as used by Java, C#, Delphi's
+  UnicodeString, Swift prior to 5) — rejected. UTF-8 is the dominant
+  encoding for files, network protocols, and operating system interfaces
+  on all target platforms. Storing UTF-16 internally would require
+  conversion at every system boundary. UTF-8 also preserves ASCII
+  compatibility, which matters for the common case of identifier-like
+  strings in compiler and tool code.
+
+* *Immutable value-type strings* (as in Go, Rust `str`) — deferred.
+  ARC reference counting gives near-value semantics for most practical
+  purposes without the allocation cost of copy-on-write. Revisit if
+  concurrency becomes a first-class concern.
+
+==== Open questions
+
+* Code page annotation on the string header exists in the current layout
+  (inherited from FPC) but is not yet used. Blaise strings are always
+  UTF-8; whether the code page field should be removed or remain as a
+  compatibility shim is undecided.
+
+---
+
+=== No Char Type
+
+==== Decision
+
+Blaise does not have a `Char` type. String subscript (`S[N]`) returns
+`Byte`. Single-quoted ASCII literals coerce to their `Ord` value (a
+`Byte`) when used in a context that expects a numeric type.
+
+==== Alternatives rejected
+
+* *`Char` as a one-byte alias for `Byte`* — rejected. The name `Char`
+  implies a Unicode character (a codepoint), but a one-byte value can
+  only represent code points U+0000..U+00FF. Naming it `Char` reproduces
+  the original sin of FPC's `AnsiChar`: code that operates on `Char`
+  values silently breaks on any input outside the ASCII range. `Byte` is
+  honest about what is actually being held.
+
+* *`Char` as a 16-bit UTF-16 code unit* (as in Java, C#, Delphi
+  `WideChar`) — rejected for the same reason, one level higher. Java's
+  experience demonstrates that a 16-bit `char` that cannot represent
+  supplementary characters (U+10000 and above) creates persistent
+  confusion: `String.charAt(n)` returns a UTF-16 code unit, not a
+  codepoint, and most Java code silently ignores the distinction.
+
+* *`Char` as a full Unicode codepoint (21-bit, stored as 32-bit
+  integer)* — rejected for now. A codepoint subscript on a UTF-8 string
+  requires an O(N) walk to find the Nth codepoint, which is incompatible
+  with the mental model that subscript is O(1). If codepoint-level access
+  is needed, an explicit `CodePointAt(S, N): Integer` function or a
+  `Runes(S)` iterator is the appropriate API. Neither is implemented yet.
+
+==== Consequences for porting
+
+Code ported from FPC that declares `var C: Char` and assigns `C := S[1]`
+will require mechanical substitution of `Char` with `Byte`. This is
+intentional friction: it forces the porting author to reason about whether
+byte access is actually what is intended.
+
+==== Related
+
+See <<_string_subscript_s_n>> and <<_char_literal_coercion>>.
+
+---
+
+=== String Subscript S[N]
+
+==== Decision
+
+`S[N]` returns the Nth byte of the string (1-based), as `Byte` (stored
+as `Integer` in the current implementation). Indexing is into raw UTF-8
+bytes, not into Unicode codepoints.
+
+==== Rationale
+
+UTF-8 encodes ASCII characters (U+0000..U+007F) as single bytes that never
+appear as part of a multi-byte sequence. The overwhelming majority of
+string subscript operations in systems and compiler code check for or
+compare against ASCII characters (delimiters, flags, punctuation). Byte
+indexing is correct for all such uses.
+
+Byte indexing also matches Go's `string[N]` semantics, which has proven
+workable in practice.
+
+==== What is not supported
+
+Codepoint-level indexing is not supported via subscript syntax. It is
+deferred to a future `CodePointAt(S, N)` function or `Runes(S)` iterator.
+These will be O(N) in the codepoint index because UTF-8 is variable-width.
+
+==== Implementation note
+
+The string header occupies 12 bytes (refcount 4 + length 4 + capacity 4)
+before the character data. `S[N]` therefore emits:
+`byte_ptr = S_ptr + 12 + (N - 1)`, followed by a `loadub` instruction.
+
+---
+
+=== Char Literal Coercion
+
+==== Decision
+
+A single-quoted string literal that contains exactly one byte (i.e. a
+single ASCII character, U+0000..U+007F) is implicitly coerced to its
+`Ord` value when used in a comparison with a `Byte` (or `Integer`) value.
+
+A single-quoted literal that encodes to more than one byte (e.g. an emoji
+or any non-ASCII codepoint) in that context is a compile-time error.
+
+==== Rationale
+
+This allows ported FPC code of the form `if S[1] = '-' then` to compile
+unchanged, without introducing a `Char` type. The coercion is always
+safe because:
+
+. The literal value is known at compile time.
+. Whether the literal fits in one byte is checkable at compile time.
+. An emoji or non-ASCII character in this position is almost certainly a
+  mistake; making it an error is the safest default.
+
+==== Example error
+
+[source,pascal]
+----
+if S[1] = '😀' then  { Error: literal '😀' is 4 bytes; cannot coerce to Byte }
+----
+
+---
+
+=== Numeric Char Literals (#N)
+
+==== Decision
+
+`#N` (where N is a decimal integer in 0..255) produces a `Byte` value
+equal to N. There is no separate `Char` type for these literals.
+
+==== Implementation note
+
+Standalone `#N` literals work without any additional machinery. The lexer's
+`UnescapeString` already converts `#N` to the actual byte value (as it does
+for `#N` embedded inside string literals). When a `#N` literal appears in a
+comparison with a string subscript result, the existing `CoerceToCharOrd`
+path validates the byte length and emits `copy N` in the QBE IR.
+
+---
+
+=== PChar
+
+==== Decision
+
+`PChar` is a built-in opaque pointer type that maps to a 64-bit pointer
+(`l` in QBE IR). It is not a string type. It exists solely for C
+interoperability.
+
+* `PChar(str)` — built-in cast; returns the pointer to the string's
+  character data (the data pointer, not the header pointer). Because the
+  Blaise RTL guarantees null termination, the result is a valid C string.
+* `string(pchar)` — built-in conversion; constructs an ARC string from a
+  null-terminated byte sequence by measuring `strlen` and copying.
+
+==== Alternatives rejected
+
+* *No `PChar` at all* — rejected. The compiler itself calls external
+  processes (QBE, cc) and reads/writes files, all of which ultimately
+  require null-terminated byte pointers at the C boundary. Eliminating
+  `PChar` would require an alternative C-interop mechanism.
+
+* *`PChar` as an alias for `^Byte`* — under consideration. Functionally
+  equivalent but would require the pointer type machinery to be in place.
+  Deferred until typed pointer support is complete.
+
+==== Status
+
+_Planned. Not yet implemented._
+
+---
+
+== Memory Management
+
+=== Automatic Reference Counting (ARC)
+
+==== Decision
+
+Blaise uses Automatic Reference Counting (ARC) for all class instances
+and strings. There is no garbage collector. `Free` is retained as a
+manual release operation (it calls `_StringRelease` / decrements the
+refcount) to ease porting, but under ARC it is optional for correctly
+written code.
+
+==== Alternatives rejected
+
+* *Manual memory management* (as in C, original FPC default) — rejected.
+  The primary motivation for Blaise is a safer, more maintainable Pascal
+  dialect. Requiring explicit `Free` everywhere is the dominant source of
+  bugs and leaks in FPC codebases.
+
+* *Tracing garbage collection* — rejected. GC introduces unpredictable
+  pause times and makes the runtime significantly more complex. ARC gives
+  deterministic destruction timing, which matters for resource management
+  (file handles, network connections) and is more predictable in
+  latency-sensitive or systems contexts.
+
+==== Known limitation: reference cycles
+
+ARC cannot automatically collect reference cycles. Blaise provides a
+`weak` reference mechanism (analogous to `weak` in Swift) to break cycles.
+Identifying cycles in a codebase is the principal migration cost when
+porting from manual-free FPC code.
+
+==== Porting note
+
+The migration analyser (Phase 8) is intended to identify `try..finally
+Obj.Free` patterns and flag them for removal. The `Free` call itself
+is harmless under ARC (it simply triggers an early release) but is
+unnecessary and misleading in new code.
+
+---
+
+== Parameters
+
+=== `out` Parameters
+
+==== Decision
+
+`out` parameters are parsed and treated identically to `var` parameters
+at the code-generation level: both are passed by pointer (the caller
+passes the address of the variable; the callee writes through it).
+
+==== Rationale
+
+In FPC/Delphi, the semantic distinction between `var` and `out` is:
+
+* `var` — the callee may read the initial value before writing.
+* `out` — the initial value is undefined; the callee must write before
+  reading. Some compilers zero-initialise `out` parameters on entry.
+
+At the machine level both are pointer parameters. The distinction is
+purely a static-analysis / documentation concern. For the current
+implementation phase the distinction is not enforced; both produce
+identical QBE IR.
+
+==== Future work
+
+A future lint pass could warn when an `out` parameter is read before it
+has been assigned within the callee.
+
+---
+
+== Compiler / Build System Integration
+
+=== Build-Tool-Drives-Compiler
+
+==== Decision
+
+The Blaise compiler accepts `--unit-path <dir>` (repeatable) to specify
+unit search directories, and resolves `uses` clauses by searching those
+directories for matching `.pas` files. No project file format is baked
+into the compiler.
+
+The build tool (PasBuild, or any Makefile / shell script) is responsible
+for passing the correct `--unit-path` flags. This mirrors the approach
+taken by Go (`go build` passes `--importcfg`), Rust (`cargo` passes
+`--extern`), and Swift (`swiftc` takes `-I` paths).
+
+==== Alternatives rejected
+
+* *`--project project.xml`* — rejected. A compiler that requires a
+  project manifest couples the compiler to a specific build tool and file
+  format. Changes to the manifest format require compiler changes. All
+  modern compiled-language toolchains avoid this coupling.
+
+==== FPC-style invocation
+
+When invoked with FPC-style single-dash flags (as PasBuild does when
+`--fpc /path/to/blaise` is configured), the compiler translates `-Fu<path>`
+to `--unit-path` entries internally. This allows PasBuild to drive the
+Blaise compiler without modification.
+
+---
+
+== Open Language Questions
+
+These items are under active consideration but not yet decided.
+
+=== Integer Width
+
+FPC's `Integer` is 32-bit on all platforms (even 64-bit). Should Blaise's
+`Integer` follow suit for portability, or match the native word width?
+Affects ABI, codegen, and porting assumptions.
+
+=== Enumeration Underlying Type
+
+What is the underlying storage type for enumeration values? FPC uses the
+smallest type that fits. QBE IR uses `w` (32-bit) for all ordinals
+currently. A formal decision is needed before enumerations are documented.
+
+=== `Result` vs Return Variable
+
+Blaise currently follows FPC's `Result` convention inside functions.
+No change is planned, but this should be formally documented.

@@ -91,6 +91,7 @@ type
     procedure TestCodegen_StringSubscript_CharLiteralCoerce;
     procedure TestSemantic_StringSubscript_NonStringError;
     procedure TestSemantic_StringSubscript_MultiByteCharError;
+    procedure TestCodegen_StringSubscript_HashLiteralCoerce;
   end;
 
 implementation
@@ -712,6 +713,22 @@ const
     'end.';
 begin
   SemanticError(Src);
+end;
+
+procedure TStringOpsTests.TestCodegen_StringSubscript_HashLiteralCoerce;
+const
+  Src =
+    'program T;'                   + LineEnding +
+    'var S: string;'               + LineEnding +
+    'begin'                        + LineEnding +
+    '  if S[1] = #45 then WriteLn(''yes'')' + LineEnding +  { #45 = Ord('-') }
+    'end.';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('loadub for subscript', IRContains(IR, 'loadub'));
+  AssertTrue('copy 45 for #45',      IRContains(IR, 'copy 45'));
 end;
 
 initialization
