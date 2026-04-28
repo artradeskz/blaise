@@ -992,6 +992,11 @@ begin
   Sym := TSymbol.Create('GetEnvironmentVariable', skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('Exec',       skFunction,  FTypeInteger); Define(Sym);
   Sym := TSymbol.Create('Halt',       skProcedure, nil);          Define(Sym);
+  { File path manipulation }
+  Sym := TSymbol.Create('ChangeFileExt',                skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('ExtractFileName',              skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('ExtractFilePath',              skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('IncludeTrailingPathDelimiter', skFunction, FTypeString); Define(Sym);
 end;
 
 function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;

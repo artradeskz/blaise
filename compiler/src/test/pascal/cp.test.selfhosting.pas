@@ -67,6 +67,18 @@ type
     procedure TestCodegen_Halt_CallsRTL;
 
     { ------------------------------------------------------------------ }
+    { File path manipulation (step 11)                                    }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_ChangeFileExt_ReturnsString;
+    procedure TestSemantic_ExtractFileName_ReturnsString;
+    procedure TestSemantic_ExtractFilePath_ReturnsString;
+    procedure TestSemantic_IncludeTrailingPathDelimiter_ReturnsString;
+    procedure TestCodegen_ChangeFileExt_CallsRTL;
+    procedure TestCodegen_ExtractFileName_CallsRTL;
+    procedure TestCodegen_ExtractFilePath_CallsRTL;
+    procedure TestCodegen_IncludeTrailingPathDelimiter_CallsRTL;
+
+    { ------------------------------------------------------------------ }
     { Main emits argc/argv (required for ParamStr to work at runtime)    }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Main_HasArgcArgv;
@@ -202,6 +214,35 @@ const
     'program P;'                          + LineEnding +
     'begin'                               + LineEnding +
     '  Halt(0)'                           + LineEnding +
+    'end.';
+
+  { Step 11: file path manipulation }
+  SrcChangeFileExt =
+    'program P;'                                   + LineEnding +
+    'var S: string;'                               + LineEnding +
+    'begin'                                        + LineEnding +
+    '  S := ChangeFileExt(''test.pas'', ''.bak'')' + LineEnding +
+    'end.';
+
+  SrcExtractFileName =
+    'program P;'                                   + LineEnding +
+    'var S: string;'                               + LineEnding +
+    'begin'                                        + LineEnding +
+    '  S := ExtractFileName(''/usr/bin/ls'')'      + LineEnding +
+    'end.';
+
+  SrcExtractFilePath =
+    'program P;'                                   + LineEnding +
+    'var S: string;'                               + LineEnding +
+    'begin'                                        + LineEnding +
+    '  S := ExtractFilePath(''/usr/bin/ls'')'      + LineEnding +
+    'end.';
+
+  SrcIncludeTrailingPathDelimiter =
+    'program P;'                                              + LineEnding +
+    'var S: string;'                                          + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  S := IncludeTrailingPathDelimiter(''/usr/bin'')'       + LineEnding +
     'end.';
 
 { ------------------------------------------------------------------ }
@@ -466,6 +507,63 @@ var
 begin
   IR := GenIR(SrcHalt);
   AssertTrue('Halt calls $exit or _Halt', Pos('exit', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Step 11: file path manipulation                                     }
+{ ------------------------------------------------------------------ }
+
+procedure TSelfHostingTests.TestSemantic_ChangeFileExt_ReturnsString;
+begin
+  SemanticOK(SrcChangeFileExt);
+end;
+
+procedure TSelfHostingTests.TestSemantic_ExtractFileName_ReturnsString;
+begin
+  SemanticOK(SrcExtractFileName);
+end;
+
+procedure TSelfHostingTests.TestSemantic_ExtractFilePath_ReturnsString;
+begin
+  SemanticOK(SrcExtractFilePath);
+end;
+
+procedure TSelfHostingTests.TestSemantic_IncludeTrailingPathDelimiter_ReturnsString;
+begin
+  SemanticOK(SrcIncludeTrailingPathDelimiter);
+end;
+
+procedure TSelfHostingTests.TestCodegen_ChangeFileExt_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcChangeFileExt);
+  AssertTrue('ChangeFileExt calls _ChangeFileExt', Pos('_ChangeFileExt', IR) > 0);
+end;
+
+procedure TSelfHostingTests.TestCodegen_ExtractFileName_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcExtractFileName);
+  AssertTrue('ExtractFileName calls _ExtractFileName', Pos('_ExtractFileName', IR) > 0);
+end;
+
+procedure TSelfHostingTests.TestCodegen_ExtractFilePath_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcExtractFilePath);
+  AssertTrue('ExtractFilePath calls _ExtractFilePath', Pos('_ExtractFilePath', IR) > 0);
+end;
+
+procedure TSelfHostingTests.TestCodegen_IncludeTrailingPathDelimiter_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcIncludeTrailingPathDelimiter);
+  AssertTrue('IncludeTrailingPathDelimiter calls _IncludeTrailingPathDelimiter',
+    Pos('_IncludeTrailingPathDelimiter', IR) > 0);
 end;
 
 procedure TSelfHostingTests.TestCodegen_Main_HasArgcArgv;

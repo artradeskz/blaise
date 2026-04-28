@@ -3155,6 +3155,44 @@ begin
         Exit;
       end;
 
+      { File path manipulation }
+      if SameText(Name, 'ChangeFileExt') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ChangeFileExt(l %s, l %s)',
+          [T, L, EmitExpr(TASTExpr(Args[1]))]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'ExtractFileName') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ExtractFileName(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'ExtractFilePath') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ExtractFilePath(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'IncludeTrailingPathDelimiter') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_IncludeTrailingPathDelimiter(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
       { Type cast TypeName(Expr) — ResolvedDecl is nil; just copy with target QBE type }
       if ResolvedDecl = nil then
       begin

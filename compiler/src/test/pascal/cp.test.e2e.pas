@@ -146,6 +146,13 @@ type
     procedure TestRun_Case_ElseBranch;
     procedure TestRun_Enum_OrdinalValues;
     procedure TestRun_Enum_InCase;
+    { ------------------------------------------------------------------ }
+    { File path manipulation (step 11)                                    }
+    { ------------------------------------------------------------------ }
+    procedure TestRun_ChangeFileExt_ChangesExtension;
+    procedure TestRun_ExtractFileName_ReturnsName;
+    procedure TestRun_ExtractFilePath_ReturnsDir;
+    procedure TestRun_IncludeTrailingPathDelimiter_AppendsSlash;
   end;
 
 implementation
@@ -1982,6 +1989,113 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcEnumCase, Output, RCode, []));
   AssertEquals('dEast=2', '2', Trim(Output));
+end;
+
+{ ------------------------------------------------------------------ }
+{ File path manipulation (step 11)                                    }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcChangeFileExtTest =
+    'program P;'                                           + LineEnding +
+    'begin'                                                + LineEnding +
+    '  WriteLn(ChangeFileExt(''test.pas'', ''.bak''));'   + LineEnding +
+    '  WriteLn(ChangeFileExt(''noext'', ''.o''));'        + LineEnding +
+    '  WriteLn(ChangeFileExt(''a.b.c'', ''''))'           + LineEnding +
+    'end.';
+
+  SrcExtractFileNameTest =
+    'program P;'                                           + LineEnding +
+    'begin'                                                + LineEnding +
+    '  WriteLn(ExtractFileName(''/usr/bin/ls''));'         + LineEnding +
+    '  WriteLn(ExtractFileName(''ls''))'                   + LineEnding +
+    'end.';
+
+  SrcExtractFilePathTest =
+    'program P;'                                                      + LineEnding +
+    'begin'                                                           + LineEnding +
+    '  WriteLn(ExtractFilePath(''/usr/bin/ls''));'                    + LineEnding +
+    '  WriteLn(''['' + ExtractFilePath(''ls'') + '']'')'             + LineEnding +
+    'end.';
+
+  SrcIncludeTrailingPathDelimiterTest =
+    'program P;'                                                    + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  WriteLn(IncludeTrailingPathDelimiter(''/usr/bin''));'        + LineEnding +
+    '  WriteLn(IncludeTrailingPathDelimiter(''/usr/bin/''))'        + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_ChangeFileExt_ChangesExtension;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcChangeFileExtTest, Output, RCode, []));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('test.pas→.bak', 'test.bak', Lines[0]);
+    AssertEquals('noext→.o',      'noext.o',  Lines[1]);
+    AssertEquals('a.b.c→empty',   'a.b',      Lines[2]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TE2ETests.TestRun_ExtractFileName_ReturnsName;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcExtractFileNameTest, Output, RCode, []));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('/usr/bin/ls → ls', 'ls', Lines[0]);
+    AssertEquals('ls → ls',          'ls', Lines[1]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TE2ETests.TestRun_ExtractFilePath_ReturnsDir;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcExtractFilePathTest, Output, RCode, []));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('/usr/bin/ls → /usr/bin/', '/usr/bin/', Lines[0]);
+    AssertEquals('ls → empty',              '[]',        Lines[1]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TE2ETests.TestRun_IncludeTrailingPathDelimiter_AppendsSlash;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIncludeTrailingPathDelimiterTest, Output, RCode, []));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('/usr/bin → /usr/bin/',   '/usr/bin/', Lines[0]);
+    AssertEquals('/usr/bin/ unchanged',    '/usr/bin/', Lines[1]);
+  finally
+    Lines.Free;
+  end;
 end;
 
 initialization

@@ -197,3 +197,60 @@ int32_t _Exec(void* cmd) {
 void _Halt(int32_t code) {
     exit((int)code);
 }
+
+/* ------------------------------------------------------------------ */
+/* File-path manipulation (SysUtils equivalents)                       */
+/* ------------------------------------------------------------------ */
+
+/* _ChangeFileExt(path, ext) : string
+   Replaces the extension of path with ext.  ext should include the
+   leading dot (e.g. ".bak"), or be empty to strip the extension.
+   Only the last dot in the base-name (after the last '/') is replaced. */
+void* _ChangeFileExt(void* path, void* ext) {
+    const char* p    = io_str_data(path);
+    const char* e    = io_str_data(ext);
+    const char* slash = strrchr(p, '/');
+    const char* base  = slash ? slash + 1 : p;
+    const char* dot   = strrchr(base, '.');
+    int32_t stem_len  = dot ? (int32_t)(dot - p) : (int32_t)strlen(p);
+    int32_t ext_len   = (int32_t)strlen(e);
+    void*   r         = io_str_alloc(stem_len + ext_len);
+    char*   dst       = (char*)r + sizeof(BlaiseStrHdr);
+    memcpy(dst,            p, (size_t)stem_len);
+    memcpy(dst + stem_len, e, (size_t)ext_len);
+    return r;
+}
+
+/* _ExtractFileName(path) : string
+   Returns the filename portion of path (everything after the last '/'). */
+void* _ExtractFileName(void* path) {
+    const char* p     = io_str_data(path);
+    const char* slash = strrchr(p, '/');
+    return io_str_from_cstr(slash ? slash + 1 : p);
+}
+
+/* _ExtractFilePath(path) : string
+   Returns the directory portion of path including the trailing '/'.
+   Returns an empty string when path contains no directory separator. */
+void* _ExtractFilePath(void* path) {
+    const char* p     = io_str_data(path);
+    const char* slash = strrchr(p, '/');
+    if (!slash) return io_str_from_cstr("");
+    int32_t len = (int32_t)(slash - p + 1);
+    void*   r   = io_str_alloc(len);
+    memcpy((char*)r + sizeof(BlaiseStrHdr), p, (size_t)len);
+    return r;
+}
+
+/* _IncludeTrailingPathDelimiter(path) : string
+   Ensures path ends with '/'.  Returns path unchanged if it already does. */
+void* _IncludeTrailingPathDelimiter(void* path) {
+    const char* p   = io_str_data(path);
+    int32_t     len = (int32_t)strlen(p);
+    if (len > 0 && p[len - 1] == '/') return io_str_from_cstr(p);
+    void* r   = io_str_alloc(len + 1);
+    char* dst = (char*)r + sizeof(BlaiseStrHdr);
+    memcpy(dst, p, (size_t)len);
+    dst[len] = '/';
+    return r;
+}

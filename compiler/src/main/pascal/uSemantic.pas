@@ -2918,6 +2918,31 @@ begin
     Exit;
   end;
 
+  { File path manipulation }
+  if SameText(AExpr.Name, 'ChangeFileExt') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('ChangeFileExt requires exactly 2 arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args[1]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'ExtractFileName') or
+     SameText(AExpr.Name, 'ExtractFilePath') or
+     SameText(AExpr.Name, 'IncludeTrailingPathDelimiter') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError(Format('''%s'' requires exactly 1 argument', [AExpr.Name]),
+                    AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
     SemanticError(

@@ -588,6 +588,55 @@ AND-NOT respectively.  This matches FPC's implementation model.
 
 ---
 
+== File Path Manipulation Built-ins
+
+=== Decision
+
+`ChangeFileExt`, `ExtractFileName`, `ExtractFilePath`, and
+`IncludeTrailingPathDelimiter` are implemented as compiler built-in functions
+backed by C RTL helpers (`_ChangeFileExt`, `_ExtractFileName`,
+`_ExtractFilePath`, `_IncludeTrailingPathDelimiter` in `blaise_io.c`).
+
+=== Rationale
+
+These are the four `SysUtils` path functions required by the self-hosting
+compiler source (`Blaise.pas` and related units).  The todo notes acknowledged
+that a Blaise-native `SysUtils` shim unit would be a cleaner long-term design,
+but that approach requires multi-unit compilation support, which is not yet
+available.  Implementing them as compiler built-ins matches the precedent set
+by `GetEnvVar`/`GetEnvironmentVariable` (step 10) and unblocks the multi-source
+rebuild immediately.
+
+Once the compiler can compile multiple units, these built-ins can be
+migrated to a Blaise-native `SysUtils.pas` shim; at that point the compiler
+knowledge of these names should be removed.
+
+=== Semantics
+
+All four functions take `string` arguments and return `string`:
+
+[cols="2,1,3"]
+|===
+| Function | Args | Behaviour
+
+| `ChangeFileExt(Path, Ext)` | 2 | Replaces extension in `Path` with `Ext`
+  (which should include the leading dot, or be empty to strip the extension).
+  Only the last dot in the base-name portion (after the final `/`) is replaced.
+| `ExtractFileName(Path)` | 1 | Returns everything after the last `/`, or
+  `Path` unchanged when no `/` is present.
+| `ExtractFilePath(Path)` | 1 | Returns everything up to and including the last
+  `/`, or an empty string when `Path` contains no directory separator.
+| `IncludeTrailingPathDelimiter(Path)` | 1 | Returns `Path` with a trailing
+  `/` appended; returns `Path` unchanged when it already ends with `/`.
+|===
+
+=== Grammar
+
+These built-ins are resolved as regular function calls; no grammar change is
+required.
+
+---
+
 == Open Language Questions
 
 These items are under active consideration but not yet decided.
