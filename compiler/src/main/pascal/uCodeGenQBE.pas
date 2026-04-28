@@ -3129,7 +3129,7 @@ begin
       end;
 
       { Environment and process }
-      if SameText(Name, 'GetEnvVar') then
+      if SameText(Name, 'GetEnvVar') or SameText(Name, 'GetEnvironmentVariable') then
       begin
         L := EmitExpr(TASTExpr(Args[0]));
         T := AllocTemp;

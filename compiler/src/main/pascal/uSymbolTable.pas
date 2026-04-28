@@ -989,6 +989,7 @@ begin
   Sym := TSymbol.Create('CurrentExceptionMessage', skFunction,  FTypeString);  Define(Sym);
   { Environment and process }
   Sym := TSymbol.Create('GetEnvVar',  skFunction,  FTypeString);  Define(Sym);
+  Sym := TSymbol.Create('GetEnvironmentVariable', skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('Exec',       skFunction,  FTypeInteger); Define(Sym);
   Sym := TSymbol.Create('Halt',       skProcedure, nil);          Define(Sym);
 end;

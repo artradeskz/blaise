@@ -61,6 +61,8 @@ type
     procedure TestSemantic_Exec_ReturnsInteger;
     procedure TestSemantic_Halt_OK;
     procedure TestCodegen_GetEnvVar_CallsRTL;
+    procedure TestSemantic_GetEnvironmentVariable_ReturnsString;
+    procedure TestCodegen_GetEnvironmentVariable_CallsRTL;
     procedure TestCodegen_Exec_CallsRTL;
     procedure TestCodegen_Halt_CallsRTL;
 
@@ -180,6 +182,13 @@ const
     'var S: string;'                      + LineEnding +
     'begin'                               + LineEnding +
     '  S := GetEnvVar(''PATH'')'          + LineEnding +
+    'end.';
+
+  SrcGetEnvironmentVariable =
+    'program P;'                          + LineEnding +
+    'var S: string;'                      + LineEnding +
+    'begin'                               + LineEnding +
+    '  S := GetEnvironmentVariable(''PATH'')' + LineEnding +
     'end.';
 
   SrcExec =
@@ -428,6 +437,19 @@ var
 begin
   IR := GenIR(SrcGetEnvVar);
   AssertTrue('GetEnvVar calls _GetEnvVar', Pos('_GetEnvVar', IR) > 0);
+end;
+
+procedure TSelfHostingTests.TestSemantic_GetEnvironmentVariable_ReturnsString;
+begin
+  SemanticOK(SrcGetEnvironmentVariable);
+end;
+
+procedure TSelfHostingTests.TestCodegen_GetEnvironmentVariable_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcGetEnvironmentVariable);
+  AssertTrue('GetEnvironmentVariable calls _GetEnvVar', Pos('_GetEnvVar', IR) > 0);
 end;
 
 procedure TSelfHostingTests.TestCodegen_Exec_CallsRTL;

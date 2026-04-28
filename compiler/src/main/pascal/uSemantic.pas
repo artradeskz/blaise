@@ -2896,10 +2896,12 @@ begin
   end;
 
   { Environment and process functions }
-  if SameText(AExpr.Name, 'GetEnvVar') then
+  if SameText(AExpr.Name, 'GetEnvVar') or
+     SameText(AExpr.Name, 'GetEnvironmentVariable') then
   begin
     if AExpr.Args.Count <> 1 then
-      SemanticError('GetEnvVar requires exactly 1 argument', AExpr.Line, AExpr.Col);
+      SemanticError(Format('''%s'' requires exactly 1 argument', [AExpr.Name]),
+                    AExpr.Line, AExpr.Col);
     AnalyseExpr(TASTExpr(AExpr.Args[0]));
     Result := FTable.TypeString;
     AExpr.ResolvedType := Result;
