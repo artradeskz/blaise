@@ -71,11 +71,21 @@ end;
 function TUnitLoader.Locate(const AName: string): string;
 var
   I:    Integer;
+  Base: string;
   Path: string;
 begin
   for I := 0 to FSearchPaths.Count - 1 do
   begin
-    Path := IncludeTrailingPathDelimiter(FSearchPaths[I]) + AName + '.pas';
+    Base := IncludeTrailingPathDelimiter(FSearchPaths[I]);
+    { Try lowercase first — Blaise convention for unit file names }
+    Path := Base + LowerCase(AName) + '.pas';
+    if FileExists(Path) then
+    begin
+      Result := Path;
+      Exit;
+    end;
+    { Fallback: exact case as written in the uses clause }
+    Path := Base + AName + '.pas';
     if FileExists(Path) then
     begin
       Result := Path;
