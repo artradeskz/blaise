@@ -568,6 +568,42 @@ Blaise compiler without modification.
 
 ---
 
+=== Unit File Name Casing
+
+==== Decision
+
+Unit file names are stored in lowercase on disk.  The unit loader
+(`TUnitLoader.Locate`) normalises the name from the `uses` clause to
+lowercase before appending `.pas`, with a fallback to the exact case as
+written.  This means `uses Classes`, `uses classes`, and `uses CLASSES`
+all resolve to `classes.pas` on a case-sensitive filesystem.
+
+==== Rationale
+
+Pascal is a case-insensitive language.  Delphi runs on Windows (case-insensitive
+filesystem) so `uses Classes` finds `Classes.pas` or `classes.pas` equally.
+Linux and FreeBSD filesystems are case-sensitive: without normalisation,
+`uses Classes` would fail to find `classes.pas`.
+
+FPC on Linux searches in this order: exact case, then lowercase, then
+all-uppercase.  Blaise simplifies this to: lowercase first, exact case
+as fallback.  Because the convention is that all Blaise-native unit files
+use lowercase names, the lowercase probe succeeds for every well-formed
+unit and the fallback is only needed for files authored outside the
+convention (e.g. a user's legacy `MyUnit.pas`).
+
+==== Alternatives rejected
+
+* *Case-sensitive lookup only* — rejected.  Would break valid Pascal code
+  the moment a developer writes `uses Classes` and the file is `classes.pas`.
+  Pascal programmers should not have to think about disk capitalisation.
+
+* *Full directory scan for case-insensitive match* — rejected.  Scanning
+  each directory on every lookup is O(n) in directory size.  Lowercase
+  normalisation is O(1) and sufficient given the lowercase convention.
+
+---
+
 == Platform Interoperability
 
 === POSIX and Xlib (Linux, macOS BSD layer)
