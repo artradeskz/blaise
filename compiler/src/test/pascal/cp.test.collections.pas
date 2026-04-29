@@ -66,6 +66,30 @@ type
     procedure TestCodegen_TStringList_AddEmitsStringStore;
     procedure TestCodegen_TStringList_FindEmitsCompare;
     procedure TestCodegen_TStringList_ZeroMemInGrow;
+
+    { ------------------------------------------------------------------ }
+    { TStringList — Text property / LoadFromFile / SaveToFile              }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_TStringList_TextPropertyGet;
+    procedure TestSemantic_TStringList_TextPropertySet;
+    procedure TestSemantic_TStringList_LoadFromFile;
+    procedure TestSemantic_TStringList_SaveToFile;
+    procedure TestCodegen_TStringList_TextGetCallsGetText;
+    procedure TestCodegen_TStringList_TextSetCallsSetText;
+    procedure TestCodegen_TStringList_LoadFromFileCallsReadFile;
+    procedure TestCodegen_TStringList_SaveToFileCallsWriteFile;
+
+    { ------------------------------------------------------------------ }
+    { TStringList — Strings[i] / Objects[i] indexed properties             }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_TStringList_StringsIndexedRead;
+    procedure TestSemantic_TStringList_StringsIndexedWrite;
+    procedure TestSemantic_TStringList_ObjectsIndexedRead;
+    procedure TestSemantic_TStringList_ObjectsIndexedWrite;
+    procedure TestCodegen_TStringList_StringsReadCallsGet;
+    procedure TestCodegen_TStringList_StringsWriteCallsPut;
+    procedure TestCodegen_TStringList_ObjectsReadCallsGetObject;
+    procedure TestCodegen_TStringList_ObjectsWriteCallsSetObject;
   end;
 
 implementation
@@ -436,6 +460,261 @@ begin
   IR := GenIR(SrcTStringListUse);
   AssertTrue('TStringList.Grow emits memset for zero-init of new string slots',
     Pos('call $memset', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ TStringList — Text / LoadFromFile / SaveToFile source constants        }
+{ ------------------------------------------------------------------ }
+
+const
+  { Minimal TStringList with Text property and file methods }
+  SrcTStringListTextBase =
+    'program P;'                                                    + LineEnding +
+    'type'                                                          + LineEnding +
+    '  TStringList = class'                                         + LineEnding +
+    '    FStrings:  ^string;'                                       + LineEnding +
+    '    FObjects:  ^Pointer;'                                      + LineEnding +
+    '    FCount:    Integer;'                                       + LineEnding +
+    '    FCapacity: Integer;'                                       + LineEnding +
+    '    procedure Grow;'                                           + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    function Add(S: string): Integer;'                         + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Result := 0'                                             + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    procedure Clear;'                                          + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Self.FCount := 0'                                        + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    function Get(AIndex: Integer): string;'                    + LineEnding +
+    '    var Ptr: ^string;'                                         + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Ptr := Self.FStrings + AIndex * SizeOf(string);'         + LineEnding +
+    '      Result := Ptr^'                                          + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    procedure Put(AIndex: Integer; S: string);'                + LineEnding +
+    '    var Ptr: ^string;'                                         + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Ptr := Self.FStrings + AIndex * SizeOf(string);'         + LineEnding +
+    '      Ptr^ := S'                                               + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    function GetObject(AIndex: Integer): Pointer;'             + LineEnding +
+    '    var Ptr: ^Pointer;'                                        + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Ptr := Self.FObjects + AIndex * SizeOf(Pointer);'        + LineEnding +
+    '      Result := Ptr^'                                          + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    procedure SetObject(AIndex: Integer; AObject: Pointer);'   + LineEnding +
+    '    var Ptr: ^Pointer;'                                        + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Ptr := Self.FObjects + AIndex * SizeOf(Pointer);'        + LineEnding +
+    '      Ptr^ := AObject'                                         + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    function GetText: string;'                                 + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    procedure SetText(AText: string);'                         + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Self.Clear'                                              + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    procedure LoadFromFile(APath: string);'                    + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      Self.SetText(ReadFile(APath))'                           + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    procedure SaveToFile(APath: string);'                      + LineEnding +
+    '    begin'                                                     + LineEnding +
+    '      WriteFile(APath, Self.GetText + #10)'                    + LineEnding +
+    '    end;'                                                      + LineEnding +
+    '    property Count: Integer read FCount;'                      + LineEnding +
+    '    property Text: string read GetText write SetText;'         + LineEnding +
+    '    property Strings[Index: Integer]: string read Get write Put;' + LineEnding +
+    '    property Objects[Index: Integer]: Pointer read GetObject write SetObject;' + LineEnding +
+    '  end;'                                                        + LineEnding;
+
+  SrcTextGet =
+    SrcTStringListTextBase +
+    'var L: TStringList; S: string;'                                + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  S := L.Text'                                                 + LineEnding +
+    'end.';
+
+  SrcTextSet =
+    SrcTStringListTextBase +
+    'var L: TStringList;'                                           + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  L.Text := ''hello'''                                         + LineEnding +
+    'end.';
+
+  SrcLoadFromFile =
+    SrcTStringListTextBase +
+    'var L: TStringList;'                                           + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  L.LoadFromFile(''/tmp/test.pas'')'                           + LineEnding +
+    'end.';
+
+  SrcSaveToFile =
+    SrcTStringListTextBase +
+    'var L: TStringList;'                                           + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  L.SaveToFile(''/tmp/out.txt'')'                              + LineEnding +
+    'end.';
+
+  SrcStringsRead =
+    SrcTStringListTextBase +
+    'var L: TStringList; S: string;'                                + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  S := L.Strings[0]'                                           + LineEnding +
+    'end.';
+
+  SrcStringsWrite =
+    SrcTStringListTextBase +
+    'var L: TStringList;'                                           + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  L.Strings[0] := ''hello'''                                   + LineEnding +
+    'end.';
+
+  SrcObjectsRead =
+    SrcTStringListTextBase +
+    'var L: TStringList; P: Pointer;'                               + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  P := L.Objects[0]'                                           + LineEnding +
+    'end.';
+
+  SrcObjectsWrite =
+    SrcTStringListTextBase +
+    'var L: TStringList; P: Pointer;'                               + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  L := TStringList.Create;'                                    + LineEnding +
+    '  P := nil;'                                                   + LineEnding +
+    '  L.Objects[0] := P'                                           + LineEnding +
+    'end.';
+
+{ ------------------------------------------------------------------ }
+{ Text property                                                        }
+{ ------------------------------------------------------------------ }
+
+procedure TCollectionTests.TestSemantic_TStringList_TextPropertyGet;
+begin
+  SemanticOK(SrcTextGet);
+end;
+
+procedure TCollectionTests.TestSemantic_TStringList_TextPropertySet;
+begin
+  SemanticOK(SrcTextSet);
+end;
+
+procedure TCollectionTests.TestSemantic_TStringList_LoadFromFile;
+begin
+  SemanticOK(SrcLoadFromFile);
+end;
+
+procedure TCollectionTests.TestSemantic_TStringList_SaveToFile;
+begin
+  SemanticOK(SrcSaveToFile);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_TextGetCallsGetText;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcTextGet);
+  AssertTrue('Text read emits GetText getter call',
+    Pos('TStringList_GetText', IR) > 0);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_TextSetCallsSetText;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcTextSet);
+  AssertTrue('Text write emits SetText setter call',
+    Pos('TStringList_SetText', IR) > 0);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_LoadFromFileCallsReadFile;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcLoadFromFile);
+  AssertTrue('LoadFromFile body calls _ReadFile',
+    Pos('_ReadFile', IR) > 0);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_SaveToFileCallsWriteFile;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSaveToFile);
+  AssertTrue('SaveToFile body calls _WriteFile',
+    Pos('_WriteFile', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Strings[i] / Objects[i] indexed properties                           }
+{ ------------------------------------------------------------------ }
+
+procedure TCollectionTests.TestSemantic_TStringList_StringsIndexedRead;
+begin
+  SemanticOK(SrcStringsRead);
+end;
+
+procedure TCollectionTests.TestSemantic_TStringList_StringsIndexedWrite;
+begin
+  SemanticOK(SrcStringsWrite);
+end;
+
+procedure TCollectionTests.TestSemantic_TStringList_ObjectsIndexedRead;
+begin
+  SemanticOK(SrcObjectsRead);
+end;
+
+procedure TCollectionTests.TestSemantic_TStringList_ObjectsIndexedWrite;
+begin
+  SemanticOK(SrcObjectsWrite);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_StringsReadCallsGet;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcStringsRead);
+  AssertTrue('Strings[i] read emits Get getter call',
+    Pos('TStringList_Get', IR) > 0);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_StringsWriteCallsPut;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcStringsWrite);
+  AssertTrue('Strings[i] write emits Put setter call',
+    Pos('TStringList_Put', IR) > 0);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_ObjectsReadCallsGetObject;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcObjectsRead);
+  AssertTrue('Objects[i] read emits GetObject getter call',
+    Pos('TStringList_GetObject', IR) > 0);
+end;
+
+procedure TCollectionTests.TestCodegen_TStringList_ObjectsWriteCallsSetObject;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcObjectsWrite);
+  AssertTrue('Objects[i] write emits SetObject setter call',
+    Pos('TStringList_SetObject', IR) > 0);
 end;
 
 initialization

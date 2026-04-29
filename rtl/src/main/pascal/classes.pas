@@ -14,11 +14,15 @@ unit Classes;
 // Contnrs unit to match FPC's layout.
 //
 // Design notes:
+//   - TObjectList has been moved to the Contnrs unit (uses Contnrs).
 //   - TDuplicates is replaced by Integer constants: dupAccept=0, dupIgnore=1,
 //     dupError=2 (enums are not yet supported in Blaise).
 //   - TStringList stores strings as ^string; ARC is emitted by the compiler
 //     for pointer-dereference writes (EmitPointerWrite). ZeroMem is used to
 //     zero-initialise newly grown string slots so no garbage is ever released.
+//   - Text property: getter = GetText (lines joined by #10, no trailing newline);
+//     setter = Clear + SplitIntoList(AText, Ord(#10), Self).
+//   - LoadFromFile/SaveToFile use the ReadFile/WriteFile built-ins.
 
 interface
 
@@ -58,10 +62,16 @@ type
     procedure   Insert(AIndex: Integer; S: string);
     procedure   AddStrings(ASource: TStringList);
     function    GetText: string;
+    procedure   SetText(AText: string);
+    procedure   LoadFromFile(APath: string);
+    procedure   SaveToFile(APath: string);
     property Count:         Integer read FCount;
     property CaseSensitive: Boolean read FCaseSensitive write FCaseSensitive;
     property Sorted:        Boolean read FSorted        write FSorted;
     property Duplicates:    Integer read FDuplicates    write FDuplicates;
+    property Text:          string  read GetText        write SetText;
+    property Strings[Index: Integer]: string  read Get  write Put;
+    property Objects[Index: Integer]: Pointer read GetObject write SetObject;
   end;
 
 procedure SplitIntoList(const S: string; ASep: Integer; AList: TStringList);
@@ -413,6 +423,25 @@ begin
     Sep    := #10;
     I      := I + 1
   end
+end;
+
+procedure TStringList.SetText(AText: string);
+begin
+  Self.Clear;
+  SplitIntoList(AText, Ord(#10), Self)
+end;
+
+procedure TStringList.LoadFromFile(APath: string);
+begin
+  Self.SetText(ReadFile(APath))
+end;
+
+procedure TStringList.SaveToFile(APath: string);
+begin
+  if Self.FCount > 0 then
+    WriteFile(APath, Self.GetText + #10)
+  else
+    WriteFile(APath, '')
 end;
 
 end.
