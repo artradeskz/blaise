@@ -179,106 +179,94 @@ Visually heavier than the backtick form; the extra braces make the start
 and end of the literal unambiguous in a multi-column diff.
 
 
-==== Option D:  The Triple Single-Quote (`'''`)
-While Java uses triple double-quotes, Pascal is traditionally a single-quote language. Using triple single-quotes is the most natural evolution.
+==== Option D: Triple single-quote (`'''...''' `)
 
-The Proposed Structure:
+Pascal is a single-quote language; triple single-quotes follow naturally
+from the existing `''` escape convention and mirror Java's triple-quote
+string blocks (Java 13+).  A single quote inside the block does not need
+to be escaped.  The compiler strips the common leading whitespace margin
+using the column position of the closing `'''`.
 
 [source,pascal]
 ----
-var
-  MyQuery: string;
+{ Before }
+SrcFoo =
+  'program P;'       + LineEnding +
+  'var X: Integer;'  + LineEnding +
+  'begin'            + LineEnding +
+  '  X := 1'        + LineEnding +
+  'end.';
+
+{ After — triple single-quote }
+SrcFoo = '''
+  program P;
+  var X: Integer;
+  begin
+    X := 1
+  end.
+  ''';
+----
+
+The closing `'''` determines the indentation baseline; all lines are
+de-dented by that many columns.  Embedded single quotes (e.g. `'John'`)
+require no escaping within the block.
+
+*Disambiguation note.* The sequence `''''` (four single quotes) is valid
+Pascal today and means two empty strings concatenated.  With triple-quote
+support, the tokeniser must choose between reading `'''` as the opening of
+a triple-quote block or reading the first `''` as an empty string followed by
+`'` starting a new literal.  A two-token lookahead resolves the ambiguity:
+if `'''` is followed by a newline or a printable character rather than a
+closing `'''`, it opens a block.
+
+==== Option E: Keyword heredoc (`beginstring SENTINEL ... SENTINEL`)
+
+A keyword-based approach using `beginstring` with a user-supplied sentinel:
+
+[source,pascal]
+----
+{ Before }
+SrcFoo =
+  'program P;'       + LineEnding +
+  'var X: Integer;'  + LineEnding +
+  'begin'            + LineEnding +
+  '  X := 1'        + LineEnding +
+  'end.';
+
+{ After — keyword heredoc }
+SrcFoo = beginstring ENDSRC
+program P;
+var X: Integer;
 begin
-  MyQuery := '''
-             SELECT * FROM Users
-             WHERE Name = 'John'
-             AND Status = 100%;
-             ''';
-end;
+  X := 1
+end.
+ENDSRC;
 ----
 
-Why this works for Pascal:
-
-* **Minimal Escaping:** Since the delimiter is `'''`, a single quote inside the block (like `'John'`) does not need to be escaped. This solves your primary pain point.
-* **The Percent Sign:** Unlike languages that use `%` for string formatting (like C or Python), Pascal generally treats `%` as a standard character unless you are inside a `Format()` call. In a raw block, it remains literal.
-* **Indentation Stripping:** Like modern Java/C#, the compiler should look at the indentation of the closing `'''`. Everything to the left of that column in the preceding lines is stripped. This keeps the code readable without including the "source code margin" in the actual string.
-
-But could it get be ambiguous when you write s := '''' + myName + '''';
-
-==== Option E:  The "Alternative Heredoc" Approach (`String < Symbol`)
-If you want to avoid the "sea of quotes" entirely, a more "Pascal-ish"
-keyword approach using a directive could work. Keyboard could be
-something like `beginstring` or `textblock` etc.
-
-[source,pascal]
-----
-const
-  MyHtml = beginstring END_HTML
-    <html>
-      <body>
-        <p>No quotes to escape here!</p>
-      </body>
-    </html>
-    END_HTML;
-----
-
-* **Pros:** Absolutely zero collisions. You define your own end-marker.
-* **Cons:** Slightly more verbose and breaks the flow of a traditional expression.
-
-
-=== Technical Implementation Tips
-
-To ensure it remains **fast to parse** and easy to maintain:
-
-.  **Scanner State:** When your lexer encounters `'''`, it should toggle into a "Raw String Mode." In this mode, the lexer simply hunts for the next `'''` sequence, ignoring everything else. This is $O(n)$ and extremely efficient.
-.  **Line Endings:** Decide early if your compiler will normalize line endings. A common pitfall is a developer on Windows (`CRLF`) sharing code with someone on Linux (`LF`). I recommend internalizing all multi-line blocks as `LF` ($#10$) and letting the user use `AdjustLineBreaks` if they need platform-specific behavior.
-.  **The "First Line" Rule:** To keep it clean, the opening `'''` should ideally be followed by a newline. The compiler should ignore the immediate newline following the opening delimiter so that the string content actually starts on the next line.
-
-## Summary Table
-
-|===
-| Feature | Proposal | Benefit
-
-| **Delimiter**
-| `'''`
-| Consistent with Pascal's `'string'` syntax.
-
-| **Escaping**
-| Literal
-| No need to escape `'` or `%`.
-
-| **Whitespace**
-| Significant
-| Use the closing tag to determine "Left Margin."
-
-| **Parsing**
-| Greedy Lexer
-| Constant time lookahead for the triple-sequence.
-|===
-
-
+Zero delimiter collision: since `ENDSRC` is chosen by the programmer, it
+can never appear accidentally inside the string content.  Slightly more
+verbose than the heredoc or backtick forms, but eliminates all ambiguity
+for large embedded source blocks.
 
 ==== Recommendation
 
-The heredoc form (Option A) is preferred.  It:
+The heredoc form (Option A) is preferred.
 
-* works with the existing single-pass lexer (scan until the closing
-  sentinel on its own line) with minimal lookahead;
-* supports embedded single quotes without escaping — critical for Pascal
-  string literals within test source;
-* is familiar to shell and Ruby developers, which is the majority of the
-  target contributor base.
+* Compatible with the existing single-pass lexer — scan until the closing
+  sentinel appears alone on a line; no multi-character lookahead needed.
+* Embedded single quotes require no escaping — essential for Pascal source
+  literals in the test suite.
+* Widely familiar from shell, Ruby, and SQL.
 
-*Effort.* Moderate.  Lexer changes to detect `<<'IDENT'` and collect lines;
-parser treatment as a `TStringLit` node; no semantic or codegen changes
-beyond what a regular string literal requires.
+Option D (triple single-quote) is the strongest alternative: it is the
+most visually natural choice for a Pascal programmer and directly analogous
+to Java text blocks.  Its main complexity is the disambiguation rule for
+`''''` sequences, which requires documented precedence.
 
-Though options D & E or also very good.
+*Effort.* Moderate.  Lexer state machine to collect heredoc/raw-string
+content; parser treats the result as a `TStringLit` node; no semantic or
+codegen changes beyond what regular string literals already require.
 
-Follow-up questions:
-
-. What's your plan for handling string interpolation (like `{$Value}`)
-  within these blocks, or are you aiming for purely static raw text?
 
 
 == Stream I/O
