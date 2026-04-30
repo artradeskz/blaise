@@ -48,9 +48,8 @@ type
 implementation
 
 const
-  FpcRtlUnits: array[0..13] of string = (
-    'System', 'SysUtils', 'Classes', 'Contnrs', 'Math',
-    'Process', 'StrUtils', 'DateUtils',
+  FpcRtlUnits: array[0..8] of string = (
+    'System', 'Math', 'DateUtils',
     'Windows', 'Unix', 'BaseUnix', 'CThreads',
     'FGL', 'Types'
   );
