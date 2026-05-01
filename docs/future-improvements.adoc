@@ -335,6 +335,87 @@ codegen changes beyond what regular string literals already require.
 
 
 
+== Tooling
+
+=== Native Blaise test framework (fptest port)
+
+*What.* Port the fptest framework to pure Blaise so that the compiler's own
+test suite can be compiled and executed by the Blaise compiler, with no FPC
+dependency in the test cycle.
+
+*Why it matters.* The only remaining hard FPC dependency in the development
+cycle is the test runner: `compiler/src/test/pascal/TestRunner.pas` and every
+`cp.test.*.pas` unit import `fptest` units (`TestFramework`, `TextTestRunner`)
+that are compiled by FPC.  `pasbuild test` therefore always requires FPC even
+after the production compiler and RTL are fully self-hosting.  A native Blaise
+port eliminates that dependency and closes the loop on a fully FPC-free
+development cycle.
+
+*Why fptest specifically.* fptest is an existing framework authored by the
+same team, based on the original DUnit2 design.  It is faster than FPCUnit,
+supports parameterised tests, and has a clean API.  Its source lives at
+`/data/devel/fptest/`.  Porting it to Blaise rather than designing a new
+framework preserves the existing test API (`TTestCase`, `CheckEquals`,
+`CheckTrue`, `RegisterTest`, etc.) so that the existing `cp.test.*.pas`
+units require only minor adaptation.
+
+*Scope of the Blaise port.*
+
+* Core classes: `TTestCase`, `TTestSuite`, `TTestResult`.
+* Assert helpers: `CheckTrue`, `CheckFalse`, `CheckEquals`, `CheckNotEquals`,
+  `AssertTrue`, `AssertFalse`, `Fail`.
+* A plain text runner that prints `OK (N tests)` or a failure list to
+  stdout and exits with a non-zero code on failure (pasbuild `test` command
+  reads the exit code).
+* No GUI runner, no XML output — keep the port minimal for now.
+
+*Migration path.*
+
+. Write the Blaise port of fptest as a new RTL unit (e.g. `TestFramework.pas`
+  in `rtl/src/main/pascal/`).
+. Adapt `TestRunner.pas` to import the Blaise version instead of the FPC one.
+. Verify all existing `cp.test.*.pas` units compile and pass under Blaise.
+. Update pasbuild's `test` command to invoke the Blaise binary directly instead
+  of an FPC-compiled test runner.
+
+*Effort.* Moderate.  fptest's core is small; the main effort is ensuring the
+Blaise class system supports the TTestCase inheritance hierarchy and the
+virtual dispatch pattern fptest relies on.
+
+=== PasBuild: Blaise compiler backend
+
+*What.* Extend PasBuild to support the Blaise compiler as a first-class build
+backend alongside FPC.  This includes:
+
+* Renaming `--fpc <path>` to `--compiler <path>` (with `--fpc` kept as a
+  deprecated alias for backwards compatibility).
+* Detecting whether the specified binary is FPC or Blaise (e.g. by invoking
+  it with `--version` and inspecting the output).
+* Constructing Blaise-style command lines (`--source`, `--unit-path`,
+  `--output-dir`) instead of FPC-style ones (`-Mobjfpc`, `-Fu`, `-FE`) when
+  the Blaise backend is active.
+* Skipping FPC-specific introspection queries (`-iV`, `-iTP`, `-iTO`) for the
+  Blaise backend; using Blaise's own `--version` / `--target` output instead.
+
+*Why it matters.* Currently `pasbuild compile --fpc releases/v0.3.0/blaise`
+fails immediately because PasBuild appends `-Mobjfpc -O1` and similar FPC
+flags to the command line.  Once the Blaise backend is in place, the full
+development cycle — compile, test, fixpoint — runs with no FPC installation
+required.
+
+*Implementation notes.*
+
+* The change is confined to `PasBuild.Utils.pas` (compiler detection,
+  command-line construction) and `PasBuild.Command.Compile.pas`
+  (backend dispatch).
+* Module descriptor files (`pasbuild.json`) may optionally declare a
+  preferred backend (`"compiler": "blaise"`) so that CI and the release
+  pipeline do not require the `--compiler` flag on every invocation.
+
+*Effort.* Small to moderate.  The flag rename and detection logic are
+straightforward; the main effort is mapping PasBuild's internal compile
+options to Blaise's CLI vocabulary.
+
 == Stream I/O
 
 === Formal TStream decorator hierarchy
