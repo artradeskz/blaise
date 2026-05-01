@@ -57,10 +57,12 @@ type
                                 ADeclIdx: Integer; const ANextLabel: string);
     procedure EmitParameters(AMethod: TMethodDecl);
     procedure EmitLocalVars(ABlock: TBlock; AScopeID: Integer);
+    procedure EmitFunctionScope_Main(AScopeID, ADeclIdx: Integer);
     procedure EmitAllTypes;
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
     procedure CollectStmtLines(AStmt: TASTStmt; ALines: TStringList);
+    procedure EmitLineInfoForBlock(ABlock: TBlock; const AFuncLabel, AFuncName: string);
     procedure EmitLineInfoForScope(AMethod: TMethodDecl);
     procedure PatchTotalRecords;
     procedure DoEmit;
@@ -575,6 +577,24 @@ begin
   L('    .int  0                        # Flags');
 end;
 
+procedure TOPDFEmitter.EmitFunctionScope_Main(AScopeID, ADeclIdx: Integer);
+var
+  ProgName: string;
+  RecSize: Integer;
+begin
+  ProgName := FProgram.Name;
+  RecSize  := 24 + Length(ProgName);
+  L('');
+  L('    # recFunctionScope: ' + ProgName);
+  EmitRecHdr(REC_FUNCSCOPE, RecSize);
+  L('    .int  ' + IntToStr(AScopeID) + '  # ScopeID');
+  L('    .quad main  # LowPC (program entry point)');
+  L('    .quad 0  # HighPC (last scope)');
+  L('    .word ' + IntToStr(ADeclIdx) + '  # DeclIndex');
+  EmitStrField(ProgName);
+  EmitLineInfoForBlock(FProgram.Block, 'main', ProgName);
+end;
+
 procedure TOPDFEmitter.EmitAllTypes;
 var
   I: Integer;
@@ -669,6 +689,13 @@ begin
 
       DeclIdx := DeclIdx + 1;
     end;
+
+    { Main program body — emit as a function scope keyed on 'main' }
+    if FProgram.Block.Stmts.Count > 0 then
+    begin
+      ScopeID := ScopeID + 1;
+      EmitFunctionScope_Main(ScopeID, DeclIdx);
+    end;
   finally
     Labels.Free;
   end;
@@ -720,28 +747,26 @@ begin
   end;
 end;
 
-procedure TOPDFEmitter.EmitLineInfoForScope(AMethod: TMethodDecl);
+procedure TOPDFEmitter.EmitLineInfoForBlock(ABlock: TBlock;
+  const AFuncLabel, AFuncName: string);
 var
   Lines: TStringList;
-  FLabel: string;
   I, LineNum, ColNum, RecSize: Integer;
 begin
-  if AMethod.Body = nil then Exit;
   Lines := TStringList.Create;
   try
-    for I := 0 to AMethod.Body.Stmts.Count - 1 do
-      CollectStmtLines(TASTStmt(AMethod.Body.Stmts.Items[I]), Lines);
+    for I := 0 to ABlock.Stmts.Count - 1 do
+      CollectStmtLines(TASTStmt(ABlock.Stmts.Items[I]), Lines);
     if Lines.Count = 0 then Exit;
-    FLabel := FuncLabel(AMethod);
     RecSize := 16 + Length(FSourceFile);
     for I := 0 to Lines.Count - 1 do
     begin
       LineNum := StrToInt(Lines.Strings[I]);
       ColNum := Integer(PtrUInt(Lines.Objects[I]));
       L('');
-      L('    # recLineInfo: line ' + Lines.Strings[I] + ' in ' + AMethod.Name);
+      L('    # recLineInfo: line ' + Lines.Strings[I] + ' in ' + AFuncName);
       EmitRecHdr(REC_LINEINFO, RecSize);
-      L('    .quad ' + FLabel + '  # Address (function start; per-stmt addr needs QBE label support)');
+      L('    .quad ' + AFuncLabel + '  # Address (function start; per-stmt addr needs QBE label support)');
       L('    .int  ' + IntToStr(LineNum) + '  # LineNumber');
       L('    .word ' + IntToStr(ColNum) + '  # ColumnNumber');
       EmitStrField(FSourceFile);
@@ -749,6 +774,12 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+procedure TOPDFEmitter.EmitLineInfoForScope(AMethod: TMethodDecl);
+begin
+  if AMethod.Body = nil then Exit;
+  EmitLineInfoForBlock(AMethod.Body, FuncLabel(AMethod), AMethod.Name);
 end;
 
 procedure TOPDFEmitter.PatchTotalRecords;

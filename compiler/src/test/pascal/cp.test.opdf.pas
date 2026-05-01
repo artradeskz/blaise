@@ -43,6 +43,9 @@ type
     procedure TestOPDF_LineInfo_RecType;
     procedure TestOPDF_LineInfo_FileName;
     procedure TestOPDF_LineInfo_LineNumber;
+    procedure TestOPDF_MainScope_RecType;
+    procedure TestOPDF_MainScope_LowPC;
+    procedure TestOPDF_MainScope_LineInfo;
   end;
 
 implementation
@@ -327,6 +330,45 @@ begin
     'end;'                    + LineEnding +
     'begin end.');
   AssertTrue('line 5 recorded', Contains(Out, '.int  5  # LineNumber'));
+end;
+
+procedure TOPDFTests.TestOPDF_MainScope_RecType;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'      + LineEnding +
+    'var X: Integer;' + LineEnding +
+    'begin'           + LineEnding +
+    '  X := 1;'       + LineEnding +
+    'end.');
+  AssertTrue('recFunctionScope for main', Contains(Out, '# recFunctionScope: P'));
+end;
+
+procedure TOPDFTests.TestOPDF_MainScope_LowPC;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'      + LineEnding +
+    'var X: Integer;' + LineEnding +
+    'begin'           + LineEnding +
+    '  X := 1;'       + LineEnding +
+    'end.');
+  AssertTrue('main LowPC label', Contains(Out, '.quad main'));
+end;
+
+procedure TOPDFTests.TestOPDF_MainScope_LineInfo;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'      + LineEnding +
+    'var X: Integer;' + LineEnding +
+    'begin'           + LineEnding +
+    '  X := 1;'       + LineEnding +
+    'end.');
+  AssertTrue('line 4 in main body recorded', Contains(Out, '.int  4  # LineNumber'));
 end;
 
 initialization
