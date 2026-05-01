@@ -592,11 +592,13 @@ procedure TSelfHostingTests.TestCodegen_MaxInt_EmitsLongLiteral;
 var
   IR: string;
 begin
+  { MaxInt is a 32-bit Integer constant (2147483647) in Blaise; Copy(S,N,MaxInt)
+    passes it as w to _StringCopy, which treats any value >= slen as "rest of string". }
   IR := GenIR(SrcMaxInt);
-  AssertTrue('MaxInt emits 64-bit literal',
-    Pos('9223372036854775807', IR) > 0);
-  AssertTrue('MaxInt emits l-typed copy',
-    Pos('=l copy 9223372036854775807', IR) > 0);
+  AssertTrue('MaxInt emits 32-bit literal',
+    Pos('2147483647', IR) > 0);
+  AssertTrue('MaxInt emits w-typed copy',
+    Pos('=w copy 2147483647', IR) > 0);
 end;
 
 procedure TSelfHostingTests.TestCodegen_Main_HasArgcArgv;

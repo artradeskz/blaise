@@ -926,9 +926,10 @@ begin
   Sym.ConstValue := 0;
   Define(Sym);
 
-  { Integer range constants }
-  Sym := TSymbol.Create('MaxInt', skConstant, FTypeInt64);
-  Sym.ConstValue := 9223372036854775807;
+  { Integer range constants — MaxInt is the 32-bit maximum; all Copy(S,N,MaxInt)
+    uses mean "rest of string" which works for strings shorter than 2 GB. }
+  Sym := TSymbol.Create('MaxInt', skConstant, FTypeInteger);
+  Sym.ConstValue := 2147483647;
   Define(Sym);
 
   { Built-in I/O procedures }

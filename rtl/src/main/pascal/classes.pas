@@ -411,16 +411,13 @@ function TStringList.GetText: string;
 var
   I:   Integer;
   Ptr: ^string;
-  Sep: string;
 begin
   Result := '';
-  Sep    := '';
   I := 0;
   while I < Self.FCount do
   begin
     Ptr    := Self.FStrings + I * SizeOf(string);
-    Result := Result + Sep + Ptr^;
-    Sep    := #10;
+    Result := Result + Ptr^ + #10;
     I      := I + 1
   end
 end;
@@ -438,10 +435,7 @@ end;
 
 procedure TStringList.SaveToFile(APath: string);
 begin
-  if Self.FCount > 0 then
-    WriteFile(APath, Self.GetText + #10)
-  else
-    WriteFile(APath, '')
+  WriteFile(APath, Self.GetText)
 end;
 
 end.

@@ -3239,9 +3239,21 @@ begin
 
       if SameText(FC.Name,'IntToStr') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
-        T := AllocTemp;
-        EmitLine(Format('  %s =l call $_IntToStr(w %s)', [T, L]));
+        { Route to _Int64ToStr when the argument is Int64-typed, matching FPC's
+          overloaded IntToStr resolution for Int64 values. }
+        if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+           (QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType) = 'l') then
+        begin
+          L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+          T := AllocTemp;
+          EmitLine(Format('  %s =l call $_Int64ToStr(l %s)', [T, L]));
+        end
+        else
+        begin
+          L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+          T := AllocTemp;
+          EmitLine(Format('  %s =l call $_IntToStr(w %s)', [T, L]));
+        end;
         Result := T;
         Exit;
       end;
@@ -4494,8 +4506,10 @@ end;
 
 function TCodeGenQBE.QbeEscapeString(const AStr: string): string;
 var
-  I: Integer;
-  C: Integer;
+  I:    Integer;
+  C:    Integer;
+  Hi:   Integer;
+  Lo:   Integer;
 begin
   Result := '';
   for I := 1 to Length(AStr) do
@@ -4508,7 +4522,13 @@ begin
       13:  Result := Result + '\r';
       9:   Result := Result + '\t';
       else if (C < 32) or (C > 126) then
-        Result := Result + Format('\%02x', [C])
+      begin
+        Hi := C shr 4;
+        Lo := C and 15;
+        if Hi < 10 then Hi := 48 + Hi else Hi := 55 + Hi;
+        if Lo < 10 then Lo := 48 + Lo else Lo := 55 + Lo;
+        Result := Result + '\' + Chr(Hi) + Chr(Lo)
+      end
       else
         Result := Result + Chr(C);
     end;
