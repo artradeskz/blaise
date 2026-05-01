@@ -31,8 +31,9 @@ type
     FOutput:     TStringList;
     FTypeNames:  TStringList;   { sorted; Objects[i] = Pointer(PtrUInt(TypeID)) }
     FEmitted:    TStringList;   { sorted canonical names already written }
-    FRecordCount: Integer;
-    FTotRecIdx:   Integer;      { FOutput line index of the TotalRecords placeholder }
+    FRecordCount:       Integer;
+    FTotRecIdx:         Integer;  { FOutput line index of the TotalRecords placeholder }
+    FUnitDirRecCountIdx: Integer;  { FOutput line index of the UnitDirectory RecordCount placeholder }
     FDone:        Boolean;
 
     function  FNV1a32(const S: string): Cardinal;
@@ -58,6 +59,13 @@ type
     procedure EmitParameters(AMethod: TMethodDecl);
     procedure EmitLocalVars(ABlock: TBlock; AScopeID: Integer);
     procedure EmitFunctionScope_Main(AScopeID, ADeclIdx: Integer);
+    procedure EmitUnitDirectory;
+    procedure EmitPointer(AType: TPointerTypeDesc);
+    procedure EmitArray(AType: TTypeDesc);
+    procedure EmitSet(AType: TSetTypeDesc);
+    procedure EmitInterface(AType: TInterfaceTypeDesc);
+    procedure EmitProperties(AClass: TRecordTypeDesc);
+    procedure EmitConstants;
     procedure EmitAllTypes;
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
@@ -65,6 +73,7 @@ type
     procedure EmitLineInfoForBlock(ABlock: TBlock; const AFuncLabel, AFuncName: string);
     procedure EmitLineInfoForScope(AMethod: TMethodDecl);
     procedure PatchTotalRecords;
+    procedure PatchUnitDirRecordCount;
     procedure DoEmit;
     function  FuncLabel(AMethod: TMethodDecl): string;
     function  CanonicalName(AType: TTypeDesc): string;
@@ -80,21 +89,35 @@ type
 implementation
 
 const
-  REC_LINEINFO  = 14;
   REC_PRIMITIVE = 1;
   REC_GLOBALVAR = 2;
   REC_ANSISTR   = 4;
+  REC_POINTER   = 6;
+  REC_ARRAY     = 7;
   REC_RECORD    = 8;
   REC_CLASS     = 9;
+  REC_PROPERTY  = 10;
   REC_LOCALVAR  = 12;
   REC_PARAMETER = 13;
+  REC_LINEINFO  = 14;
   REC_FUNCSCOPE = 15;
+  REC_INTERFACE = 16;
   REC_ENUM      = 17;
+  REC_SET       = 18;
+  REC_UNITDIR   = 19;
+  REC_CONSTANT  = 20;
 
   SK_INTEGER = 0;
   SK_BOOLEAN = 1;
 
   LOC_RBP = 1;
+
+  PAT_FIELD  = 0;  { property accessor: direct field offset }
+  PAT_METHOD = 1;  { property accessor: method call }
+  PAT_NONE   = 2;  { property accessor: no accessor }
+
+  CK_ORD    = 0;  { constant kind: ordinal (Int64) }
+  CK_STRING = 1;  { constant kind: string bytes }
 
 constructor TOPDFEmitter.Create(AProgram: TProgram; const ASourceFile: string);
 begin
@@ -108,9 +131,10 @@ begin
   FEmitted    := TStringList.Create;
   FEmitted.Sorted        := True;
   FEmitted.CaseSensitive := True;
-  FRecordCount := 0;
-  FTotRecIdx   := -1;
-  FDone        := False;
+  FRecordCount        := 0;
+  FTotRecIdx          := -1;
+  FUnitDirRecCountIdx := -1;
+  FDone               := False;
 end;
 
 destructor TOPDFEmitter.Destroy;
@@ -194,6 +218,8 @@ begin
 end;
 
 function TOPDFEmitter.CanonicalName(AType: TTypeDesc): string;
+var
+  SA: TStaticArrayTypeDesc;
 begin
   if AType = nil then
   begin
@@ -201,12 +227,28 @@ begin
     Exit;
   end;
   case AType.Kind of
-    tyString:  Result := 'AnsiString';
+    tyString:
+      Result := 'AnsiString';
     tyPointer:
       if TPointerTypeDesc(AType).BaseType = nil then
         Result := 'Pointer'
       else
         Result := '^' + CanonicalName(TPointerTypeDesc(AType).BaseType);
+    tyStaticArray:
+    begin
+      SA := TStaticArrayTypeDesc(AType);
+      if SA.Name <> '' then
+        Result := SA.Name
+      else
+        Result := 'array[' + IntToStr(SA.LowBound) + '..' +
+                  IntToStr(SA.HighBound) + '] of ' +
+                  CanonicalName(SA.ElementType);
+    end;
+    tyOpenArray:
+      if AType.Name <> '' then
+        Result := AType.Name
+      else
+        Result := 'array of ' + CanonicalName(TOpenArrayTypeDesc(AType).ElementType);
   else
     if AType.Name = '' then
       Result := 'Pointer'
@@ -266,9 +308,16 @@ begin
       EmitRecord(TRecordTypeDesc(AType));
     tyClass:
       EmitClass(TRecordTypeDesc(AType));
+    tyPointer:
+      EmitPointer(TPointerTypeDesc(AType));
+    tyStaticArray, tyOpenArray:
+      EmitArray(AType);
+    tySet:
+      EmitSet(TSetTypeDesc(AType));
+    tyInterface:
+      EmitInterface(TInterfaceTypeDesc(AType));
   else
-    { tyVoid, tyNil, tyPointer, tyOpenArray, tyStaticArray, tyPChar, tySet,
-      tyInterface: no OPDF record for Priority 1-2 }
+    { tyVoid, tyNil, tyPChar: no OPDF record }
   end;
 end;
 
@@ -429,6 +478,7 @@ begin
   L('    .int  ' + IntToStr(AType.Fields.Count) + '  # FieldCount');
   EmitStrField(CName);
   EmitFields(AType);
+  EmitProperties(AType);
 end;
 
 procedure TOPDFEmitter.EmitGlobalVar(const AVarName: string; AType: TTypeDesc);
@@ -562,6 +612,7 @@ begin
   L('    # macOS arm64 adaptation: change .section to .section __DATA,__opdf');
   L('    .section .opdf, "aw", @progbits');
   L('');
+  L('.Lopdf_start:');
 end;
 
 procedure TOPDFEmitter.EmitHeader;
@@ -574,7 +625,7 @@ begin
   L('    .byte 8                        # PointerSize: 8');
   FTotRecIdx := FOutput.Count;
   L('    .int  0                        # TotalRecords (patched at end)');
-  L('    .int  0                        # Flags');
+  L('    .int  1                        # Flags: OPDF_FLAG_HAS_DIRECTORY');
 end;
 
 procedure TOPDFEmitter.EmitFunctionScope_Main(AScopeID, ADeclIdx: Integer);
@@ -593,6 +644,292 @@ begin
   L('    .word ' + IntToStr(ADeclIdx) + '  # DeclIndex');
   EmitStrField(ProgName);
   EmitLineInfoForBlock(FProgram.Block, 'main', ProgName);
+end;
+
+procedure TOPDFEmitter.EmitUnitDirectory;
+var
+  DirName: string;
+  RecSize: Integer;
+begin
+  DirName := FProgram.Name;
+  RecSize := 14 + Length(DirName);  { 4(UnitCount)+4(Offset)+4(Count)+2(NameLen) }
+  L('');
+  L('    # recUnitDirectory');
+  EmitRecHdr(REC_UNITDIR, RecSize);
+  L('    .int  1  # UnitCount');
+  L('    .int  .Lopdf_unit0_start - .Lopdf_start  # RecordOffset');
+  FUnitDirRecCountIdx := FOutput.Count;
+  L('    .int  0  # RecordCount (patched)');
+  EmitStrField(DirName);
+  L('');
+  L('.Lopdf_unit0_start:');
+end;
+
+procedure TOPDFEmitter.EmitPointer(AType: TPointerTypeDesc);
+var
+  CName: string;
+  TargetID: Cardinal;
+  RecSize: Integer;
+begin
+  CName := CanonicalName(AType);
+  if HasBeenEmitted(CName) then Exit;
+  MarkEmitted(CName);
+
+  if AType.BaseType <> nil then
+  begin
+    EmitTypeDesc(AType.BaseType);
+    TargetID := GetOrAllocTypeID(CanonicalName(AType.BaseType));
+  end
+  else
+    TargetID := 0;
+
+  RecSize := 10 + Length(CName);
+  L('');
+  L('    # recPointer: ' + CName);
+  EmitRecHdr(REC_POINTER, RecSize);
+  L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+  L('    .int  ' + IntToStr(TargetID) + '  # TargetTypeID (0 = untyped)');
+  EmitStrField(CName);
+end;
+
+procedure TOPDFEmitter.EmitArray(AType: TTypeDesc);
+var
+  CName, ElemName: string;
+  ElemID: Cardinal;
+  SA: TStaticArrayTypeDesc;
+  IsDyn, RecSize: Integer;
+begin
+  CName := CanonicalName(AType);
+  if HasBeenEmitted(CName) then Exit;
+  MarkEmitted(CName);
+
+  if AType.Kind = tyStaticArray then
+  begin
+    SA := TStaticArrayTypeDesc(AType);
+    EmitTypeDesc(SA.ElementType);
+    ElemName := CanonicalName(SA.ElementType);
+    ElemID   := GetOrAllocTypeID(ElemName);
+    IsDyn    := 0;
+    RecSize  := 12 + Length(CName) + 16;  { 12 fixed + name + 1×TArrayBound (16 bytes) }
+    L('');
+    L('    # recArray (static): ' + CName);
+    EmitRecHdr(REC_ARRAY, RecSize);
+    L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+    L('    .int  ' + IntToStr(ElemID) + '  # ElementTypeID');
+    L('    .byte 1  # Dimensions');
+    L('    .byte ' + IntToStr(IsDyn) + '  # IsDynamic');
+    EmitStrField(CName);
+    L('    .quad ' + IntToStr(SA.LowBound) + '  # LowerBound');
+    L('    .quad ' + IntToStr(SA.HighBound) + '  # UpperBound');
+  end
+  else
+  begin
+    EmitTypeDesc(TOpenArrayTypeDesc(AType).ElementType);
+    ElemName := CanonicalName(TOpenArrayTypeDesc(AType).ElementType);
+    ElemID   := GetOrAllocTypeID(ElemName);
+    IsDyn    := 1;
+    RecSize  := 12 + Length(CName);
+    L('');
+    L('    # recArray (dynamic): ' + CName);
+    EmitRecHdr(REC_ARRAY, RecSize);
+    L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+    L('    .int  ' + IntToStr(ElemID) + '  # ElementTypeID');
+    L('    .byte 1  # Dimensions');
+    L('    .byte ' + IntToStr(IsDyn) + '  # IsDynamic');
+    EmitStrField(CName);
+  end;
+end;
+
+procedure TOPDFEmitter.EmitSet(AType: TSetTypeDesc);
+var
+  CName: string;
+  BaseID: Cardinal;
+  SzB, RecSize: Integer;
+begin
+  CName := AType.Name;
+  if CName = '' then CName := 'set of ' + AType.BaseType.Name;
+  if HasBeenEmitted(CName) then Exit;
+  MarkEmitted(CName);
+
+  EmitTypeDesc(AType.BaseType);
+  BaseID := GetOrAllocTypeID(AType.BaseType.Name);
+
+  SzB := AType.RawSize;
+  RecSize := 15 + Length(CName);  { 4(TypeID)+4(BaseTypeID)+1(SzB)+4(LBound)+2(NameLen) }
+
+  L('');
+  L('    # recSet: ' + CName);
+  EmitRecHdr(REC_SET, RecSize);
+  L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+  L('    .int  ' + IntToStr(BaseID) + '  # BaseTypeID');
+  L('    .byte ' + IntToStr(SzB) + '  # SizeInBytes');
+  L('    .int  0  # LowerBound');
+  EmitStrField(CName);
+end;
+
+procedure TOPDFEmitter.EmitInterface(AType: TInterfaceTypeDesc);
+var
+  CName: string;
+  ParentID: Cardinal;
+  I, MethodRecSize, RecSize: Integer;
+  MName: string;
+begin
+  CName := AType.Name;
+  if HasBeenEmitted(CName) then Exit;
+  MarkEmitted(CName);
+
+  if AType.Parent <> nil then
+  begin
+    EmitInterface(AType.Parent);
+    ParentID := GetOrAllocTypeID(AType.Parent.Name);
+  end
+  else
+    ParentID := 0;
+
+  MethodRecSize := 0;
+  for I := 0 to AType.MethodCount - 1 do
+    MethodRecSize := MethodRecSize + 7 + Length(AType.MethodName(I));
+
+  RecSize := 31 + Length(CName) + MethodRecSize;
+  { 4(TypeID)+4(ParentID)+1(IntfType)+16(GUID)+4(MethodCount)+2(NameLen) = 31 }
+
+  L('');
+  L('    # recInterface: ' + CName);
+  EmitRecHdr(REC_INTERFACE, RecSize);
+  L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+  L('    .int  ' + IntToStr(ParentID) + '  # ParentTypeID');
+  L('    .byte 0  # IntfType: itfCOM');
+  L('    .byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  # GUID (zeroed)');
+  L('    .int  ' + IntToStr(AType.MethodCount) + '  # MethodCount');
+  EmitStrField(CName);
+  for I := 0 to AType.MethodCount - 1 do
+  begin
+    MName := AType.MethodName(I);
+    L('    # method: ' + MName);
+    L('    .int  0  # ReturnTypeID (0 = procedure)');
+    L('    .byte 0  # ParamCount');
+    EmitStrField(MName);
+  end;
+end;
+
+procedure TOPDFEmitter.EmitProperties(AClass: TRecordTypeDesc);
+var
+  I: Integer;
+  PI: TPropertyInfo;
+  PropTypeID, ClassTypeID: Cardinal;
+  ReadType, WriteType: Integer;
+  RecSize: Integer;
+  RF: TFieldInfo;
+begin
+  if AClass.Properties.Count = 0 then Exit;
+  ClassTypeID := GetOrAllocTypeID(AClass.Name);
+  for I := 0 to AClass.Properties.Count - 1 do
+  begin
+    PI := TPropertyInfo(AClass.Properties.Items[I]);
+    if PI.TypeDesc <> nil then
+      PropTypeID := GetOrAllocTypeID(CanonicalName(PI.TypeDesc))
+    else
+      PropTypeID := 0;
+
+    { Determine read accessor type }
+    if PI.ReadField <> '' then
+      ReadType := PAT_FIELD
+    else if PI.ReadMethod <> '' then
+      ReadType := PAT_METHOD
+    else
+      ReadType := PAT_NONE;
+
+    { Determine write accessor type }
+    if PI.WriteField <> '' then
+      WriteType := PAT_FIELD
+    else if PI.WriteMethod <> '' then
+      WriteType := PAT_METHOD
+    else
+      WriteType := PAT_NONE;
+
+    RecSize := 28 + Length(PI.Name);
+    { 4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+8(WriteAddr)+2(NameLen) }
+
+    L('');
+    L('    # recProperty: ' + PI.Name);
+    EmitRecHdr(REC_PROPERTY, RecSize);
+    L('    .int  ' + IntToStr(ClassTypeID) + '  # ClassTypeID');
+    L('    .int  ' + IntToStr(PropTypeID) + '  # PropertyTypeID');
+    L('    .byte ' + IntToStr(ReadType) + '  # ReadType');
+    L('    .byte ' + IntToStr(WriteType) + '  # WriteType');
+
+    { ReadAddr }
+    if ReadType = PAT_FIELD then
+    begin
+      RF := AClass.FindField(PI.ReadField);
+      if RF <> nil then
+        L('    .quad ' + IntToStr(RF.Offset) + '  # ReadAddr (field offset)')
+      else
+        L('    .quad 0  # ReadAddr (field not found)');
+    end
+    else if ReadType = PAT_METHOD then
+      L('    .quad ' + AClass.Name + '_' + PI.ReadMethod + '  # ReadAddr (getter)')
+    else
+      L('    .quad 0  # ReadAddr (none)');
+
+    { WriteAddr }
+    if WriteType = PAT_FIELD then
+    begin
+      RF := AClass.FindField(PI.WriteField);
+      if RF <> nil then
+        L('    .quad ' + IntToStr(RF.Offset) + '  # WriteAddr (field offset)')
+      else
+        L('    .quad 0  # WriteAddr (field not found)');
+    end
+    else if WriteType = PAT_METHOD then
+      L('    .quad ' + AClass.Name + '_' + PI.WriteMethod + '  # WriteAddr (setter)')
+    else
+      L('    .quad 0  # WriteAddr (none)');
+
+    EmitStrField(PI.Name);
+  end;
+end;
+
+procedure TOPDFEmitter.EmitConstants;
+var
+  I: Integer;
+  C: TConstDecl;
+  TypeID: Cardinal;
+  RecSize: Integer;
+begin
+  for I := 0 to FProgram.Block.ConstDecls.Count - 1 do
+  begin
+    C := TConstDecl(FProgram.Block.ConstDecls.Items[I]);
+    if C.IsString then
+    begin
+      TypeID  := GetOrAllocTypeID('AnsiString');
+      RecSize := 9 + Length(C.StrVal) + Length(C.Name);
+      L('');
+      L('    # recConstant: ' + C.Name);
+      EmitRecHdr(REC_CONSTANT, RecSize);
+      L('    .int  ' + IntToStr(TypeID) + '  # TypeID');
+      L('    .byte ' + IntToStr(CK_STRING) + '  # ConstKind: ckString');
+      L('    .word ' + IntToStr(Length(C.StrVal)) + '  # ValueLen');
+      EmitNameLen(C.Name);
+      if Length(C.StrVal) > 0 then
+        L('    .ascii "' + C.StrVal + '"  # Value');
+      EmitNameData(C.Name);
+    end
+    else
+    begin
+      TypeID  := 0;  { untyped integer constant }
+      RecSize := 17 + Length(C.Name);  { 9 fixed + 8 (Int64 value) + name }
+      L('');
+      L('    # recConstant: ' + C.Name);
+      EmitRecHdr(REC_CONSTANT, RecSize);
+      L('    .int  ' + IntToStr(TypeID) + '  # TypeID');
+      L('    .byte ' + IntToStr(CK_ORD) + '  # ConstKind: ckOrd');
+      L('    .word 8  # ValueLen');
+      EmitNameLen(C.Name);
+      L('    .quad ' + IntToStr(C.IntVal) + '  # Value');
+      EmitNameData(C.Name);
+    end;
+  end;
 end;
 
 procedure TOPDFEmitter.EmitAllTypes;
@@ -789,16 +1126,27 @@ begin
                            '                        # TotalRecords';
 end;
 
+procedure TOPDFEmitter.PatchUnitDirRecordCount;
+begin
+  { RecordCount for the unit = all records except the directory record itself }
+  if FUnitDirRecCountIdx >= 0 then
+    FOutput[FUnitDirRecCountIdx] := '    .int  ' + IntToStr(FRecordCount - 1) +
+                                    '  # RecordCount';
+end;
+
 procedure TOPDFEmitter.DoEmit;
 begin
   if FDone then Exit;
   FDone := True;
   EmitSection;
   EmitHeader;
+  EmitUnitDirectory;
   EmitAllTypes;
   EmitGlobalVars;
+  EmitConstants;
   EmitFunctionScopes;
   PatchTotalRecords;
+  PatchUnitDirRecordCount;
 end;
 
 procedure TOPDFEmitter.EmitToFile(const AFileName: string);

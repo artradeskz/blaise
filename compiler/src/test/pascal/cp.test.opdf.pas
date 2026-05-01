@@ -46,6 +46,19 @@ type
     procedure TestOPDF_MainScope_RecType;
     procedure TestOPDF_MainScope_LowPC;
     procedure TestOPDF_MainScope_LineInfo;
+    { Step 6c }
+    procedure TestOPDF_Pointer_RecType;
+    procedure TestOPDF_Array_Static_RecType;
+    procedure TestOPDF_Array_Static_IsDynamic;
+    procedure TestOPDF_Set_RecType;
+    procedure TestOPDF_Set_SizeInBytes;
+    procedure TestOPDF_Property_RecType;
+    procedure TestOPDF_Interface_RecType;
+    procedure TestOPDF_Constant_OrdRecord;
+    procedure TestOPDF_Constant_OrdValue;
+    procedure TestOPDF_Constant_StrRecord;
+    procedure TestOPDF_UnitDir_Present;
+    procedure TestOPDF_UnitDir_UnitCount;
   end;
 
 implementation
@@ -369,6 +382,150 @@ begin
     '  X := 1;'       + LineEnding +
     'end.');
   AssertTrue('line 4 in main body recorded', Contains(Out, '.int  4  # LineNumber'));
+end;
+
+procedure TOPDFTests.TestOPDF_Pointer_RecType;
+var
+  Out: string;
+begin
+  { Use ^Integer as a class field type — inline pointer types work
+    in field/var positions even though 'type T = ^Foo' in the type
+    section is not yet parsed }
+  Out := GenOPDF(
+    'program P;'              + LineEnding +
+    'type TFoo = class'       + LineEnding +
+    '  FNext: ^Integer;'      + LineEnding +
+    'end;'                    + LineEnding +
+    'begin end.');
+  AssertTrue('recPointer comment', Contains(Out, '# recPointer: ^Integer'));
+end;
+
+procedure TOPDFTests.TestOPDF_Array_Static_RecType;
+var
+  Out: string;
+begin
+  { Inline array type in global var — type section array decls not yet parsed }
+  Out := GenOPDF(
+    'program P;'                           + LineEnding +
+    'var A: array[1..5] of Integer;'       + LineEnding +
+    'begin end.');
+  AssertTrue('recArray comment',
+    Contains(Out, '# recArray (static): array[1..5] of Integer'));
+end;
+
+procedure TOPDFTests.TestOPDF_Array_Static_IsDynamic;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'                           + LineEnding +
+    'var A: array[1..5] of Integer;'       + LineEnding +
+    'begin end.');
+  AssertTrue('IsDynamic=0 for static array', Contains(Out, '.byte 0  # IsDynamic'));
+end;
+
+procedure TOPDFTests.TestOPDF_Set_RecType;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'                                   + LineEnding +
+    'type'                                         + LineEnding +
+    '  TDays = (Mon, Tue, Wed);'                   + LineEnding +
+    '  TDaySet = set of TDays;'                    + LineEnding +
+    'var S: TDaySet;'                              + LineEnding +
+    'begin end.');
+  AssertTrue('recSet comment', Contains(Out, '# recSet: TDaySet'));
+end;
+
+procedure TOPDFTests.TestOPDF_Set_SizeInBytes;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'                                   + LineEnding +
+    'type'                                         + LineEnding +
+    '  TDays = (Mon, Tue, Wed);'                   + LineEnding +
+    '  TDaySet = set of TDays;'                    + LineEnding +
+    'var S: TDaySet;'                              + LineEnding +
+    'begin end.');
+  AssertTrue('SizeInBytes=4 for small set', Contains(Out, '.byte 4  # SizeInBytes'));
+end;
+
+procedure TOPDFTests.TestOPDF_Property_RecType;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'                                      + LineEnding +
+    'type TFoo = class'                               + LineEnding +
+    '  FVal: Integer;'                                + LineEnding +
+    '  property Val: Integer read FVal write FVal;'  + LineEnding +
+    'end;'                                            + LineEnding +
+    'begin end.');
+  AssertTrue('recProperty comment', Contains(Out, '# recProperty: Val'));
+end;
+
+procedure TOPDFTests.TestOPDF_Interface_RecType;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'                    + LineEnding +
+    'type IGreeter = interface'     + LineEnding +
+    '  procedure Greet;'            + LineEnding +
+    'end;'                          + LineEnding +
+    'begin end.');
+  AssertTrue('recInterface comment', Contains(Out, '# recInterface: IGreeter'));
+end;
+
+procedure TOPDFTests.TestOPDF_Constant_OrdRecord;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'       + LineEnding +
+    'const MaxVal = 100;' + LineEnding +
+    'begin end.');
+  AssertTrue('recConstant for integer', Contains(Out, '# recConstant: MaxVal'));
+end;
+
+procedure TOPDFTests.TestOPDF_Constant_OrdValue;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'          + LineEnding +
+    'const MaxVal = 100;' + LineEnding +
+    'begin end.');
+  AssertTrue('constant value embedded', Contains(Out, '.quad 100  # Value'));
+end;
+
+procedure TOPDFTests.TestOPDF_Constant_StrRecord;
+var
+  Out: string;
+begin
+  Out := GenOPDF(
+    'program P;'                  + LineEnding +
+    'const Greeting = ''Hello'';' + LineEnding +
+    'begin end.');
+  AssertTrue('recConstant for string', Contains(Out, '# recConstant: Greeting'));
+end;
+
+procedure TOPDFTests.TestOPDF_UnitDir_Present;
+var
+  Out: string;
+begin
+  Out := GenOPDF('program P; begin end.');
+  AssertTrue('recUnitDirectory present', Contains(Out, '# recUnitDirectory'));
+end;
+
+procedure TOPDFTests.TestOPDF_UnitDir_UnitCount;
+var
+  Out: string;
+begin
+  Out := GenOPDF('program P; begin end.');
+  AssertTrue('unit count is 1', Contains(Out, '.int  1  # UnitCount'));
 end;
 
 initialization

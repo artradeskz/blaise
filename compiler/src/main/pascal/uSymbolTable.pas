@@ -187,7 +187,8 @@ type
     procedure AddProperty(AProp: TPropertyInfo);
     function  FindProperty(const AName: string): TPropertyInfo;
 
-    property  Fields: TObjectList read FFields;
+    property  Fields:      TObjectList read FFields;
+    property  Properties: TObjectList read FProperties;
     property  Parent: TRecordTypeDesc read FParent write FParent;
     property  HasDestroyMethod: Boolean
               read FHasDestroyMethod write FHasDestroyMethod;
