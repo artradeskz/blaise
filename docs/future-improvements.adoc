@@ -102,33 +102,13 @@ single precision is sufficient and throughput matters.
 
 === `const` sections in unit interface and implementation blocks
 
-*What.* Allow `const` declaration sections to appear inside both the
-`interface` and `implementation` blocks of a unit, not only at program
-scope.  A unit's interface `const` section exports named constants to all
-importing units.
-
-*Why it matters.* Without this, RTL units that want to publish symbolic
-constants must either (a) declare them at implementation scope (invisible to
-callers) or (b) inline integer literals at every call site.  The current
-workaround in `classes.pas` is to keep `dupAccept = 0`, `dupIgnore = 1`, and
-`dupError = 2` in the interface section's `const` block — but the unit
-parser does not yet parse that block, so the constants are absent from the
-RTL public API and importing units must repeat the literals.
-
-*Implementation notes.*
-
-* `uParser.pas`: `ParseUnit` already dispatches on `tkConst` in the
-  interface section to skip to the next keyword.  Change that to call
-  `ParseConstSection` and attach the resulting constants to the unit scope.
-* `uSemantic.pas` / `uSymbolTable.pas`: when a unit's interface section is
-  imported, its constants must be registered in the importing scope under
-  the unit namespace, consistent with how exported types and procedures are
-  handled.
-* No codegen change is required: constants are resolved at semantic time and
-  folded to literals before IR emission.
-
-*Effort.* Small.  Parser change is the critical path; symbol-table import
-propagation follows the existing unit-import pattern.
+*Status: implemented.*  `const` blocks are fully supported in program scope,
+unit `interface`, and unit `implementation` sections.  Interface-section
+constants are exported to the global scope via `AnalyseUnitForExport` and
+are visible to all importing units without qualification.  The `classes.pas`
+RTL already uses `dupAccept = 0`, `dupIgnore = 1`, `dupError = 2` in its
+interface `const` block.  10 regression tests in `cp.test.constants` cover
+all cases including cross-unit export visibility.
 
 === Multi-line string literals
 

@@ -63,7 +63,8 @@ uses
   cp.test.openarray,
   cp.test.staticarray,
   cp.test.e2e,
-  cp.test.multifile;
+  cp.test.multifile,
+  cp.test.constants;
 
 var
   Application: TTestRunner;
