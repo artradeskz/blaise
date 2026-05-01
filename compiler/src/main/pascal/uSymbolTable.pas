@@ -996,9 +996,7 @@ begin
   Sym := TSymbol.Create('Inc', skProcedure, nil); Define(Sym);
   Sym := TSymbol.Create('Dec', skProcedure, nil); Define(Sym);
   { Memory utilities }
-  Sym := TSymbol.Create('ZeroMem',      skProcedure, nil); Define(Sym);
-  Sym := TSymbol.Create('_ClassAddRef', skProcedure, nil); Define(Sym);
-  Sym := TSymbol.Create('_ClassRelease',skProcedure, nil); Define(Sym);
+  Sym := TSymbol.Create('ZeroMem', skProcedure, nil); Define(Sym);
   { CLI arguments }
   Sym := TSymbol.Create('ParamCount', skFunction,  FTypeInteger); Define(Sym);
   Sym := TSymbol.Create('ParamStr',   skFunction,  FTypeString);  Define(Sym);

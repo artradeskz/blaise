@@ -2548,6 +2548,7 @@ var
   Prefix:       string;
   SavedExitLbl: string;
 begin
+  if ADecl.IsExternal then Exit;  { no body to emit for external declarations }
   FuncName := '$' + QBEMangle(ADecl.Name);
   IsFunc   := ADecl.ResolvedReturnType <> nil;
   if AExported then Prefix := 'export ' else Prefix := '';
