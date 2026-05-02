@@ -129,11 +129,72 @@ Codepoint-level indexing is not supported via subscript syntax. It is
 deferred to a future `CodePointAt(S, N)` function or `Runes(S)` iterator.
 These will be O(N) in the codepoint index because UTF-8 is variable-width.
 
-==== Implementation note
+==== Implementation note — string memory layout and pointer convention
 
-The string header occupies 12 bytes (refcount 4 + length 4 + capacity 4)
-before the character data. `S[N]` therefore emits:
-`byte_ptr = S_ptr + 12 + (N - 1)`, followed by a `loadub` instruction.
+Blaise uses the *data-pointer convention*: the 8-byte slot in a variable or
+field holds a pointer directly to the first character byte.  The 12-byte ARC
+header (refcount, length, capacity) lives immediately before that pointer at
+negative offsets:
+
+----
+data_ptr − 12  RefCount  (Integer, 4 bytes; −1 = immortal literal)
+data_ptr −  8  Length    (Integer, 4 bytes; byte count)
+data_ptr −  4  Capacity  (Integer, 4 bytes)
+data_ptr +  0  char data (Length UTF-8 bytes, null-terminated)
+----
+
+`S[N]` therefore emits: `byte_ptr = data_ptr + (N − 1)`, followed by a
+`loadub` instruction.  This is simpler than the header-pointer form because
+there is no 12-byte skip — the pointer already is the character data.
+
+`PChar(s)` is an identity operation: the data pointer is already a valid C
+`char*` with no arithmetic needed.
+
+This layout matches how class instance pointers work (the user pointer points
+to the first user field; the ARC header is at negative offsets before it),
+making the two reference-counted types fully consistent.
+
+==== Why data-pointer rather than header-pointer
+
+The original implementation used a *header-pointer* convention (the variable
+slot held a pointer to the start of the ARC header block, with character data
+12 bytes later).  That was changed for several reasons:
+
+* *Consistency with class objects* — class instances already use the
+  data/user-pointer convention (`user_ptr` points to the vtable; the ARC
+  header lives at `user_ptr − 16`).  Strings following the same idiom means
+  there is one rule for all reference-counted types, not two.
+
+* *Simpler subscript arithmetic* — `S[N]` with header-pointer required
+  `ptr + 12 + (N − 1)`.  With data-pointer it is `ptr + (N − 1)`, matching
+  C array indexing.
+
+* *Zero-cost `PChar` cast* — the `PChar(str)` cast is an identity operation;
+  no `+ 12` is needed.  This matters for cross-platform C interop even on
+  non-Win32 targets: POSIX `write(2)`, `fopen`, and similar system calls all
+  take `char*`.
+
+==== Why not the FPC convention
+
+FPC also uses a data-pointer convention, but the signed offsets differ: FPC's
+header on x86-64 places length at `data_ptr − 8` (SizeInt, 8 bytes), refcount
+at `data_ptr − 12`, codepage at `data_ptr − 16`, and element-size at
+`data_ptr − 14`.  Blaise's header is smaller (12 bytes, no codepage/elemsize)
+and length is always a 32-bit `Integer` because Blaise has a single string
+type with no codepage.
+
+FPC's choice of data-pointer was driven by Delphi compatibility and Win32 API
+usage where `PChar(s)` had to be a zero-cost cast — exactly the same
+motivation applies to Blaise's cross-platform C interop requirement.  The
+header layout differs, but the pointer-to-content invariant is shared.
+
+==== Implication for the Migration Analyser (Phase 8)
+
+FPC code that manually accesses the `AnsiString` header via pointer arithmetic
+(e.g. `PInteger(PChar(s) - 12)^` to read the refcount) uses negative offsets
+which are correct in Blaise too.  Code that used the old Blaise header-pointer
+form (positive offsets from a header pointer) is a porting error that the
+Migration Analyser should flag.
 
 ---
 
