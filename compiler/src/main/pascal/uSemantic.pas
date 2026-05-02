@@ -2131,108 +2131,140 @@ begin
 
     { 1. Analyse the collection expression }
     CollType := AnalyseExpr(ForInS.CollExpr);
-    if (CollType = nil) or (CollType.Kind <> tyClass) then
-      SemanticError(
-        'for-in collection must be a class instance',
-        ForInS.Line, ForInS.Col);
-    CollRT := TRecordTypeDesc(CollType);
-
-    { 2. Find GetEnumerator on the collection type (walk parent chain) }
-    GetEnumDecl := FindMethodDecl(CollRT.Name, 'GetEnumerator');
-    if GetEnumDecl = nil then
-      SemanticError(
-        Format('class ''%s'' does not have a GetEnumerator method',
-          [CollRT.Name]),
+    if CollType = nil then
+      SemanticError('for-in collection has unknown type',
         ForInS.Line, ForInS.Col);
 
-    { 3. Verify GetEnumerator returns a class type }
-    EnumType := GetEnumDecl.ResolvedReturnType;
-    if (EnumType = nil) or (EnumType.Kind <> tyClass) then
-      SemanticError(
-        Format('GetEnumerator on ''%s'' must return a class type',
-          [CollRT.Name]),
-        ForInS.Line, ForInS.Col);
-    EnumRT := TRecordTypeDesc(EnumType);
-
-    { 4. Find MoveNext on the enumerator type (walk parent chain) }
-    MNDecl := FindMethodDecl(EnumRT.Name, 'MoveNext');
-    if MNDecl = nil then
-      SemanticError(
-        Format('enumerator class ''%s'' does not have a MoveNext method',
-          [EnumRT.Name]),
-        ForInS.Line, ForInS.Col);
-    if (MNDecl.ResolvedReturnType = nil) or
-       (MNDecl.ResolvedReturnType.Kind <> tyBoolean) then
-      SemanticError(
-        Format('MoveNext on enumerator ''%s'' must return Boolean',
-          [EnumRT.Name]),
-        ForInS.Line, ForInS.Col);
-
-    { 5. Find Current property on the enumerator (walk parent chain) }
-    CurProp := nil;
-    WalkRT  := EnumRT;
-    while (WalkRT <> nil) and (CurProp = nil) do
+    if CollType.Kind = tyStaticArray then
     begin
-      CurProp := WalkRT.FindProperty('Current');
-      WalkRT  := WalkRT.Parent;
-    end;
-    if CurProp = nil then
-      SemanticError(
-        Format('enumerator class ''%s'' does not have a Current property',
-          [EnumRT.Name]),
-        ForInS.Line, ForInS.Col);
-    if CurProp.ReadMethod = '' then
-      SemanticError(
-        Format('Current property on ''%s'' must have a method-backed getter',
-          [EnumRT.Name]),
-        ForInS.Line, ForInS.Col);
+      { ---- Static array iteration path ---- }
+      ElemType := TStaticArrayTypeDesc(CollType).ElementType;
 
-    { 6. Resolve the getter method }
-    CurDecl := FindMethodDecl(EnumRT.Name, CurProp.ReadMethod);
-    if CurDecl = nil then
-      SemanticError(
-        Format('getter ''%s'' for Current on ''%s'' not found',
-          [CurProp.ReadMethod, EnumRT.Name]),
-        ForInS.Line, ForInS.Col);
-    ElemType := CurDecl.ResolvedReturnType;
+      VarSym := FTable.Lookup(ForInS.VarName);
+      if VarSym = nil then
+        SemanticError(
+          Format('Undeclared loop variable ''%s''', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      if VarSym.Kind <> skVariable then
+        SemanticError(
+          Format('''%s'' is not a variable', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      CheckTypesMatch(VarSym.TypeDesc, ElemType,
+        'for-in loop variable', ForInS.Line, ForInS.Col);
+      ForInS.VarIsGlobal    := VarSym.IsGlobal;
+      ForInS.IsArrayIter    := True;
+      ForInS.ResolvedVarType := ElemType;
+      ForInS.ArrayLow  := TStaticArrayTypeDesc(CollType).LowBound;
+      ForInS.ArrayHigh := TStaticArrayTypeDesc(CollType).HighBound;
 
-    { 7. Resolve the loop variable and check type compatibility }
-    VarSym := FTable.Lookup(ForInS.VarName);
-    if VarSym = nil then
-      SemanticError(
-        Format('Undeclared loop variable ''%s''', [ForInS.VarName]),
-        ForInS.Line, ForInS.Col);
-    if VarSym.Kind <> skVariable then
-      SemanticError(
-        Format('''%s'' is not a variable', [ForInS.VarName]),
-        ForInS.Line, ForInS.Col);
-    CheckTypesMatch(VarSym.TypeDesc, ElemType,
-      'for-in loop variable', ForInS.Line, ForInS.Col);
-    ForInS.VarIsGlobal := VarSym.IsGlobal;
-
-    { 8. Set resolved annotations }
-    ForInS.ResolvedVarType      := ElemType;
-    ForInS.ResolvedEnumTypeName := EnumRT.Name;
-    ForInS.GetEnumDecl          := GetEnumDecl;
-    ForInS.MoveNextDecl         := MNDecl;
-    ForInS.CurrentDecl          := CurDecl;
-
-    { 9. Inject a synthetic TVarDecl for the enumerator slot into the
-         current local block so EmitVarAllocs allocates the slot and
-         EmitArcCleanup releases it at block exit. }
-    ForInS.EnumVarName := '__forin_' + IntToStr(FForInCounter);
-    Inc(FForInCounter);
-    if FCurrentLocalBlock <> nil then
+      { Inject synthetic index slot __idx_N (Integer) }
+      ForInS.IdxVarName := '__idx_' + IntToStr(FForInCounter);
+      Inc(FForInCounter);
+      if FCurrentLocalBlock <> nil then
+      begin
+        SynthDecl := TVarDecl.Create;
+        SynthDecl.Names.Add(ForInS.IdxVarName);
+        SynthDecl.TypeName    := 'Integer';
+        SynthDecl.ResolvedType := FTable.TypeInteger;
+        SynthDecl.IsGlobal    := False;
+        FCurrentLocalBlock.Decls.Add(SynthDecl);
+      end;
+    end
+    else if CollType.Kind = tyClass then
     begin
-      SynthDecl := TVarDecl.Create;
-      SynthDecl.Names.Add(ForInS.EnumVarName);
-      SynthDecl.TypeName    := EnumRT.Name;
-      SynthDecl.ResolvedType := EnumType;
-      SynthDecl.IsGlobal    := False;
-      FCurrentLocalBlock.Decls.Add(SynthDecl);
-    end;
+      { ---- Class enumerator protocol path ---- }
+      CollRT := TRecordTypeDesc(CollType);
 
-    { 10. Analyse the body }
+      GetEnumDecl := FindMethodDecl(CollRT.Name, 'GetEnumerator');
+      if GetEnumDecl = nil then
+        SemanticError(
+          Format('class ''%s'' does not have a GetEnumerator method',
+            [CollRT.Name]),
+          ForInS.Line, ForInS.Col);
+
+      EnumType := GetEnumDecl.ResolvedReturnType;
+      if (EnumType = nil) or (EnumType.Kind <> tyClass) then
+        SemanticError(
+          Format('GetEnumerator on ''%s'' must return a class type',
+            [CollRT.Name]),
+          ForInS.Line, ForInS.Col);
+      EnumRT := TRecordTypeDesc(EnumType);
+
+      MNDecl := FindMethodDecl(EnumRT.Name, 'MoveNext');
+      if MNDecl = nil then
+        SemanticError(
+          Format('enumerator class ''%s'' does not have a MoveNext method',
+            [EnumRT.Name]),
+          ForInS.Line, ForInS.Col);
+      if (MNDecl.ResolvedReturnType = nil) or
+         (MNDecl.ResolvedReturnType.Kind <> tyBoolean) then
+        SemanticError(
+          Format('MoveNext on enumerator ''%s'' must return Boolean',
+            [EnumRT.Name]),
+          ForInS.Line, ForInS.Col);
+
+      CurProp := nil;
+      WalkRT  := EnumRT;
+      while (WalkRT <> nil) and (CurProp = nil) do
+      begin
+        CurProp := WalkRT.FindProperty('Current');
+        WalkRT  := WalkRT.Parent;
+      end;
+      if CurProp = nil then
+        SemanticError(
+          Format('enumerator class ''%s'' does not have a Current property',
+            [EnumRT.Name]),
+          ForInS.Line, ForInS.Col);
+      if CurProp.ReadMethod = '' then
+        SemanticError(
+          Format('Current property on ''%s'' must have a method-backed getter',
+            [EnumRT.Name]),
+          ForInS.Line, ForInS.Col);
+
+      CurDecl := FindMethodDecl(EnumRT.Name, CurProp.ReadMethod);
+      if CurDecl = nil then
+        SemanticError(
+          Format('getter ''%s'' for Current on ''%s'' not found',
+            [CurProp.ReadMethod, EnumRT.Name]),
+          ForInS.Line, ForInS.Col);
+      ElemType := CurDecl.ResolvedReturnType;
+
+      VarSym := FTable.Lookup(ForInS.VarName);
+      if VarSym = nil then
+        SemanticError(
+          Format('Undeclared loop variable ''%s''', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      if VarSym.Kind <> skVariable then
+        SemanticError(
+          Format('''%s'' is not a variable', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      CheckTypesMatch(VarSym.TypeDesc, ElemType,
+        'for-in loop variable', ForInS.Line, ForInS.Col);
+      ForInS.VarIsGlobal := VarSym.IsGlobal;
+
+      ForInS.ResolvedVarType      := ElemType;
+      ForInS.ResolvedEnumTypeName := EnumRT.Name;
+      ForInS.GetEnumDecl          := GetEnumDecl;
+      ForInS.MoveNextDecl         := MNDecl;
+      ForInS.CurrentDecl          := CurDecl;
+
+      ForInS.EnumVarName := '__forin_' + IntToStr(FForInCounter);
+      Inc(FForInCounter);
+      if FCurrentLocalBlock <> nil then
+      begin
+        SynthDecl := TVarDecl.Create;
+        SynthDecl.Names.Add(ForInS.EnumVarName);
+        SynthDecl.TypeName    := EnumRT.Name;
+        SynthDecl.ResolvedType := EnumType;
+        SynthDecl.IsGlobal    := False;
+        FCurrentLocalBlock.Decls.Add(SynthDecl);
+      end;
+    end
+    else
+      SemanticError(
+        'for-in collection must be a class instance or static array',
+        ForInS.Line, ForInS.Col);
+
     Inc(FLoopDepth);
     try
       AnalyseStmt(ForInS.Body);

@@ -198,12 +198,18 @@ type
     CollExpr:             TASTExpr;   { owned — collection expression }
     Body:                 TASTStmt;   { owned }
     { Annotations set by the semantic pass }
-    EnumVarName:          string;     { synthetic slot name, e.g. __forin_0 }
-    ResolvedVarType:      TTypeDesc;  { element type (type of Current) }
+    ResolvedVarType:      TTypeDesc;  { element type }
+    { Class-enumerator path (IsArrayIter = False) }
+    IsArrayIter:          Boolean;    { True when collection is a static array }
+    EnumVarName:          string;     { synthetic enumerator slot, e.g. __forin_0 }
     ResolvedEnumTypeName: string;     { enumerator class type name }
     GetEnumDecl:          TObject;    { TMethodDecl — not owned }
     MoveNextDecl:         TObject;    { TMethodDecl — not owned }
     CurrentDecl:          TObject;    { TMethodDecl getter — not owned }
+    { Static-array iteration path (IsArrayIter = True) }
+    IdxVarName:           string;     { synthetic index slot, e.g. __idx_0 }
+    ArrayLow:             Integer;    { compile-time lower bound }
+    ArrayHigh:            Integer;    { compile-time upper bound }
     destructor Destroy; override;
   end;
 

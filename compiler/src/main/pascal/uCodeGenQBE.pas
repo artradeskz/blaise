@@ -878,17 +878,14 @@ begin
 end;
 
 procedure TCodeGenQBE.EmitForInStmt(AStmt: TForInStmt);
-{ Implements for X in Collection do Body via the GetEnumerator protocol.
-  Desugars to:
-    __forin_N := Collection.GetEnumerator;
-    while __forin_N.MoveNext do begin X := __forin_N.Current; Body end;
-  The synthetic __forin_N slot is pre-allocated by EmitVarAllocs (injected
-  into Block.Decls by the semantic pass) and released by EmitArcCleanup. }
+{ Implements for..in for two collection kinds:
+    - IsArrayIter=True:  static array, index-based iteration
+    - IsArrayIter=False: class enumerator (GetEnumerator / MoveNext / Current) }
 var
   LblCond:    string;
   LblBody:    string;
   LblEnd:     string;
-  EnumSlot:   string;  { %_var___forin_N address }
+  EnumSlot:   string;
   SelfT:      string;
   EnumT:      string;
   OldT:       string;
@@ -904,7 +901,123 @@ var
   FPtrT:      string;
   SlotOff:    Integer;
   StoreInstr: string;
+  { Array iteration locals }
+  IdxSlot:    string;
+  IdxW:       string;
+  IdxL:       string;
+  CmpT:       string;
+  BasePtr:    string;
+  SAT:        TStaticArrayTypeDesc;
+  ElemSize:   Integer;
+  AdjL:       string;
+  OffL:       string;
+  ElemPtr:    string;
+  QLoad:      string;
+  NxtW:       string;
 begin
+  if AStmt.IsArrayIter then
+  begin
+    { ---- Static array iteration ---- }
+    SAT      := TStaticArrayTypeDesc(AStmt.CollExpr.ResolvedType);
+    ElemSize := SAT.ElementType.RawSize;
+    case SAT.ElementType.Kind of
+      tyByte, tyBoolean:            QLoad := 'loadub';
+      tyInteger, tyUInt32, tyEnum:  QLoad := 'loadw';
+    else
+      QLoad := 'loadl';
+    end;
+    QType   := QbeTypeOf(SAT.ElementType);
+    IdxSlot := '%_var_' + AStmt.IdxVarName;
+    LblCond := AllocLabel('forin_cond');
+    LblBody := AllocLabel('forin_body');
+    LblEnd  := AllocLabel('forin_end');
+
+    { Initialise index to ArrayLow }
+    EmitLine(Format('  storew %d, %s', [AStmt.ArrayLow, IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    { Condition: idx <= ArrayHigh }
+    EmitLine('@' + LblCond);
+    IdxW := AllocTemp;
+    CmpT := AllocTemp;
+    EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w cslew %s, %d', [CmpT, IdxW, AStmt.ArrayHigh]));
+    EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
+
+    { Body: load element, assign to loop var, then user body }
+    EmitLine('@' + LblBody);
+    FBreakLabels.Add(LblEnd);
+    FContinueLabels.Add(LblCond);
+    try
+      BasePtr := EmitExpr(AStmt.CollExpr);
+      IdxW    := AllocTemp;
+      IdxL    := AllocTemp;
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+      EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+      if AStmt.ArrayLow <> 0 then
+      begin
+        AdjL := AllocTemp;
+        EmitLine(Format('  %s =l sub %s, %d', [AdjL, IdxL, AStmt.ArrayLow]));
+        OffL := AllocTemp;
+        EmitLine(Format('  %s =l mul %s, %d', [OffL, AdjL, ElemSize]));
+      end
+      else
+      begin
+        OffL := AllocTemp;
+        EmitLine(Format('  %s =l mul %s, %d', [OffL, IdxL, ElemSize]));
+      end;
+      ElemPtr := AllocTemp;
+      CurT    := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, BasePtr, OffL]));
+      EmitLine(Format('  %s =%s %s %s', [CurT, QType, QLoad, ElemPtr]));
+
+      { Assign element to loop variable }
+      if AStmt.ResolvedVarType.IsString then
+      begin
+        OldVarT := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [OldVarT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+        EmitLine(Format('  call $_StringAddRef(l %s)', [CurT]));
+        EmitLine(Format('  call $_StringRelease(l %s)', [OldVarT]));
+        EmitLine(Format('  storel %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      end
+      else if AStmt.ResolvedVarType.Kind = tyClass then
+      begin
+        OldVarT := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [OldVarT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+        EmitLine(Format('  call $_ClassAddRef(l %s)', [CurT]));
+        EmitLine(Format('  call $_ClassRelease(l %s)', [OldVarT]));
+        EmitLine(Format('  storel %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      end
+      else if QType = 'w' then
+        EmitLine(Format('  storew %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]))
+      else
+        EmitLine(Format('  storel %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+
+      EmitStmt(AStmt.Body);
+    finally
+      FBreakLabels.Delete(FBreakLabels.Count - 1);
+      FContinueLabels.Delete(FContinueLabels.Count - 1);
+    end;
+
+    { Increment index }
+    IdxW := AllocTemp;
+    NxtW := AllocTemp;
+    EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
+    EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    EmitLine('@' + LblEnd);
+    Exit;
+  end;
+
+  { ---- Class enumerator protocol ---- }
   LblCond := AllocLabel('forin_cond');
   LblBody := AllocLabel('forin_body');
   LblEnd  := AllocLabel('forin_end');

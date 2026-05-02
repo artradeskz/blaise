@@ -9,7 +9,7 @@ unit cp.test.forin;
 
 {$mode objfpc}{$H+}
 
-{ Tests for for..in loop with class-based enumerators (GetEnumerator protocol). }
+{ Tests for for..in loop: class-based enumerators and static array iteration. }
 
 interface
 
@@ -43,7 +43,7 @@ type
     procedure TestSemantic_ForIn_CollNotClass_RaisesError;
 
     { ------------------------------------------------------------------ }
-    { Codegen                                                              }
+    { Codegen — class enumerator                                           }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_ForIn_HasForInCondLabel;
     procedure TestCodegen_ForIn_HasForInBodyLabel;
@@ -53,6 +53,22 @@ type
     procedure TestCodegen_ForIn_CallsGetCurrent;
     procedure TestCodegen_ForIn_JnzOnMoveNextResult;
     procedure TestCodegen_ForIn_JumpsBackToCond;
+
+    { ------------------------------------------------------------------ }
+    { Semantic — static array                                              }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_ArrayForIn_Valid_OK;
+    procedure TestSemantic_ArrayForIn_VarTypeMismatch_RaisesError;
+    procedure TestSemantic_ArrayForIn_NonZeroBased_OK;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — static array                                               }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_ArrayForIn_HasForInCondLabel;
+    procedure TestCodegen_ArrayForIn_HasForInEndLabel;
+    procedure TestCodegen_ArrayForIn_LoadsElement;
+    procedure TestCodegen_ArrayForIn_JumpsBackToCond;
+    procedure TestCodegen_ArrayForIn_NonZeroBased_AdjustsIndex;
   end;
 
 implementation
@@ -337,6 +353,99 @@ var IR: string;
 begin
   IR := GenIR(SrcForIn);
   AssertTrue('jmp back to forin_cond', Pos('jmp @forin_cond', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Shared sources — static array                                        }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcArrayForIn =
+    'program P;'                                              + LineEnding +
+    'var'                                                     + LineEnding +
+    '  Arr: array[0..4] of Integer;'                          + LineEnding +
+    '  X:   Integer;'                                         + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  for X in Arr do'                                       + LineEnding +
+    '    X := X + 1'                                          + LineEnding +
+    'end.';
+
+  SrcArrayForInNonZero =
+    'program P;'                                              + LineEnding +
+    'var'                                                     + LineEnding +
+    '  Arr: array[3..7] of Integer;'                          + LineEnding +
+    '  X:   Integer;'                                         + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  for X in Arr do'                                       + LineEnding +
+    '    X := X + 1'                                          + LineEnding +
+    'end.';
+
+{ ------------------------------------------------------------------ }
+{ Semantic tests — static array                                        }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestSemantic_ArrayForIn_Valid_OK;
+begin
+  AnalyseSrc(SrcArrayForIn).Free;
+end;
+
+procedure TForInTests.TestSemantic_ArrayForIn_VarTypeMismatch_RaisesError;
+begin
+  AnalyseExpectError(
+    'program P;'                                              + LineEnding +
+    'var'                                                     + LineEnding +
+    '  Arr: array[0..4] of Integer;'                          + LineEnding +
+    '  X:   string;'                                          + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  for X in Arr do'                                       + LineEnding +
+    '    X := X'                                              + LineEnding +
+    'end.');
+end;
+
+procedure TForInTests.TestSemantic_ArrayForIn_NonZeroBased_OK;
+begin
+  AnalyseSrc(SrcArrayForInNonZero).Free;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen tests — static array                                         }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestCodegen_ArrayForIn_HasForInCondLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayForIn);
+  AssertTrue('forin_cond label present', Pos('forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_ArrayForIn_HasForInEndLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayForIn);
+  AssertTrue('forin_end label present', Pos('forin_end', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_ArrayForIn_LoadsElement;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayForIn);
+  { Element load for Integer array: loadw from computed address }
+  AssertTrue('loadw emitted for array element', Pos('loadw', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_ArrayForIn_JumpsBackToCond;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayForIn);
+  AssertTrue('jmp back to forin_cond', Pos('jmp @forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_ArrayForIn_NonZeroBased_AdjustsIndex;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayForInNonZero);
+  { Non-zero-based array needs a subtraction to compute element offset }
+  AssertTrue('sub instruction for offset adjustment', Pos('sub', IR) > 0);
 end;
 
 initialization
