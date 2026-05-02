@@ -8,20 +8,24 @@
 {
   Blaise RTL — string operation functions (Pascal port of blaise_str.c)
 
-  String memory layout (shared with blaise_arc.pas):
-    +--[4 bytes]--+--[4 bytes]--+--[4 bytes]--+--[N bytes]--+--[1 byte]--+
-    | RefCount    | Length      | Capacity    | UTF-8 data  | NUL        |
-    +-------------+-------------+-------------+-------------+------------+
-    ^--- string pointer (header ptr)
+  String memory layout — data-pointer convention:
+
+    Allocation:
+      +--[4 bytes]--+--[4 bytes]--+--[4 bytes]--+--[N bytes]--+--[1 byte]--+
+      | RefCount    | Length      | Capacity    | UTF-8 data  | NUL        |
+      +-------------+-------------+-------------+-------------+------------+
+      ^--- base (raw malloc result)             ^--- DATA POINTER (stored in var)
+
+  The variable slot holds the DATA POINTER (pointing at the first character
+  byte).  The 12-byte header lives immediately before it at negative offsets:
+
+      data_ptr − 12  RefCount  (Integer, 4 bytes)
+      data_ptr −  8  Length    (Integer, 4 bytes)
+      data_ptr −  4  Capacity  (Integer, 4 bytes)
+      data_ptr +  0  char data (Length bytes + NUL terminator)
 
   nil represents an empty / unassigned string.
-  RefCount = -1 marks immortal (statically-allocated) strings.
-
-  Header field byte offsets:
-    0  RefCount  (Integer, 4 bytes)
-    4  Length    (Integer, 4 bytes)
-    8  Capacity  (Integer, 4 bytes)
-   12  char data begins (HDR_SIZE)
+  RefCount = -1 marks immortal (statically-allocated string literals).
 }
 
 unit blaise_str;
@@ -83,6 +87,7 @@ end;
 { Internal helpers                                                     }
 { ------------------------------------------------------------------ }
 
+{ StrLen: Ptr is the DATA pointer; length lives at Ptr-8 }
 function StrLen(Ptr: Pointer): Integer;
 var
   P: ^Integer;
@@ -91,35 +96,43 @@ begin
     Result := 0
   else
   begin
-    P := Ptr + 4;  { Length field at offset 4 }
+    P := Ptr - 8;   { Length field at data_ptr − 8 }
     Result := P^;
   end;
 end;
 
+{ StrData: data IS the pointer — identity for data-pointer convention }
 function StrData(Ptr: Pointer): PChar;
 begin
-  Result := PChar(Ptr + HDR_SIZE);
+  Result := PChar(Ptr);
 end;
 
 { Allocate a new Blaise string of exactly Len bytes plus NUL.
-  RefCount = 0 (unowned); caller must call _StringAddRef. }
+  RefCount = 0 (unowned); caller must call _StringAddRef.
+  Returns DATA POINTER (= base + HDR_SIZE). }
 function StrAlloc(Len: Integer): Pointer;
 var
   TotalL: Int64;
+  Base:   Pointer;
   RC, LN, CP: ^Integer;
   NulPtr: PChar;
 begin
   TotalL := Int64(HDR_SIZE) + Int64(Len) + 1;
-  Result := _libc_malloc(TotalL);
-  if Result = nil then Exit;
-  RC  := Result;
+  Base   := _libc_malloc(TotalL);
+  if Base = nil then
+  begin
+    Result := nil;
+    Exit;
+  end;
+  RC  := Base;        { RefCount at base+0 }
   RC^ := 0;
-  LN  := Result + 4;
+  LN  := Base + 4;    { Length at base+4 }
   LN^ := Len;
-  CP  := Result + 8;
+  CP  := Base + 8;    { Capacity at base+8 }
   CP^ := Len;
-  NulPtr      := PChar(Result + HDR_SIZE);
-  NulPtr[Len] := 0;
+  Result := Base + HDR_SIZE;   { DATA POINTER }
+  NulPtr        := PChar(Result);
+  NulPtr[Len]   := 0;          { NUL terminator at data+Len }
 end;
 
 { ------------------------------------------------------------------ }
@@ -204,7 +217,7 @@ begin
   if (Result <> nil) and (Count > 0) then
   begin
     Data := StrData(S);
-    MemCopy(Result + HDR_SIZE, Data + Start, Count);
+    MemCopy(StrData(Result), Data + Start, Count);
   end;
 end;
 
@@ -223,7 +236,7 @@ begin
   Result := StrAlloc(Len);
   if Result = nil then Exit;
   SrcData := StrData(S);
-  DstData := PChar(Result + HDR_SIZE);
+  DstData := StrData(Result);
   for I := 0 to Len - 1 do
   begin
     C := SrcData[I];
@@ -249,7 +262,7 @@ begin
   Result := StrAlloc(Len);
   if Result = nil then Exit;
   SrcData := StrData(S);
-  DstData := PChar(Result + HDR_SIZE);
+  DstData := StrData(Result);
   for I := 0 to Len - 1 do
   begin
     C := SrcData[I];
@@ -291,7 +304,7 @@ begin
     NewLen := 0;
   Result := StrAlloc(NewLen);
   if (Result = nil) or (NewLen = 0) then Exit;
-  MemCopy(Result + HDR_SIZE, Data + Lo, NewLen);
+  MemCopy(StrData(Result), Data + Lo, NewLen);
 end;
 
 { ------------------------------------------------------------------ }
@@ -398,7 +411,7 @@ begin
   Written := WriteDecimal(Int64(N), BP);
   Result  := StrAlloc(Written);
   if (Result <> nil) and (Written > 0) then
-    MemCopy(Result + HDR_SIZE, Buf, Written);
+    MemCopy(StrData(Result), Buf, Written);
   _libc_free(Buf);
 end;
 
@@ -417,7 +430,7 @@ begin
   Written := WriteDecimal(N, BP);
   Result  := StrAlloc(Written);
   if (Result <> nil) and (Written > 0) then
-    MemCopy(Result + HDR_SIZE, Buf, Written);
+    MemCopy(StrData(Result), Buf, Written);
   _libc_free(Buf);
 end;
 
@@ -513,7 +526,7 @@ var
 begin
   Result := StrAlloc(1);
   if Result = nil then Exit;
-  DP    := PChar(Result + HDR_SIZE);
+  DP    := StrData(Result);
   DP[0] := N;
 end;
 
@@ -607,7 +620,7 @@ begin
     Inc(Len);
   Result := StrAlloc(Len);
   if (Result <> nil) and (Len > 0) then
-    MemCopy(Result + HDR_SIZE, P, Len);
+    MemCopy(StrData(Result), P, Len);
 end;
 
 end.

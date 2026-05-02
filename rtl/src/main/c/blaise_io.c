@@ -17,32 +17,30 @@
 #include <stdio.h>
 
 /* ------------------------------------------------------------------ */
-/* String header (mirrors blaise_str.c)                                */
+/* String helpers — data-pointer convention.
+   Variable slots hold a pointer to the char data; the 12-byte header
+   (refcount, length, capacity) lives immediately before it at offsets
+   data_ptr-12, data_ptr-8, data_ptr-4 respectively.              */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    int32_t refcnt;
-    int32_t length;
-    int32_t capacity;
-    /* char data[]; follows immediately */
-} BlaiseStrHdr;
+#define BLAISE_STR_HDR 12   /* sizeof(refcount + length + capacity) */
 
-static inline const char* io_str_data(void* ptr) {
-    return ptr ? (const char*)ptr + sizeof(BlaiseStrHdr) : "";
+static inline const char* io_str_data(void* data_ptr) {
+    return data_ptr ? (const char*)data_ptr : "";
 }
 
-static inline int32_t io_str_len(void* ptr) {
-    return ptr ? ((BlaiseStrHdr*)ptr)->length : 0;
+static inline int32_t io_str_len(void* data_ptr) {
+    return data_ptr ? ((int32_t*)data_ptr)[-2] : 0;  /* length at -8 */
 }
 
 static void* io_str_alloc(int32_t len) {
-    BlaiseStrHdr* h = (BlaiseStrHdr*)malloc(sizeof(BlaiseStrHdr) + len + 1);
-    if (!h) return NULL;
-    h->refcnt   = 0;
-    h->length   = len;
-    h->capacity = len;
-    ((char*)(h + 1))[len] = '\0';
-    return (void*)h;
+    char* base = (char*)malloc((size_t)(BLAISE_STR_HDR + len + 1));
+    if (!base) return NULL;
+    ((int32_t*)base)[0] = 0;    /* refcount  */
+    ((int32_t*)base)[1] = len;  /* length    */
+    ((int32_t*)base)[2] = len;  /* capacity  */
+    base[BLAISE_STR_HDR + len]  = '\0';
+    return base + BLAISE_STR_HDR;  /* DATA POINTER */
 }
 
 /* Build a Blaise string from a C string (may be NULL → empty). */
@@ -50,7 +48,7 @@ static void* io_str_from_cstr(const char* s) {
     int32_t len = s ? (int32_t)strlen(s) : 0;
     void*   r   = io_str_alloc(len);
     if (r && len > 0)
-        memcpy((char*)r + sizeof(BlaiseStrHdr), s, (size_t)len);
+        memcpy((char*)r, s, (size_t)len);   /* data IS r */
     return r;
 }
 
@@ -105,11 +103,11 @@ void* _ReadFile(void* filename) {
     void* r = io_str_alloc((int32_t)sz);
     if (!r) { fclose(f); return NULL; }
 
-    size_t n = fread((char*)r + sizeof(BlaiseStrHdr), 1, (size_t)sz, f);
+    size_t n = fread((char*)r, 1, (size_t)sz, f);  /* r IS the data pointer */
     fclose(f);
-    ((BlaiseStrHdr*)r)->length   = (int32_t)n;
-    ((BlaiseStrHdr*)r)->capacity = (int32_t)n;
-    ((char*)r + sizeof(BlaiseStrHdr))[n] = '\0';
+    ((int32_t*)r)[-2] = (int32_t)n;  /* patch length  at data_ptr-8 */
+    ((int32_t*)r)[-1] = (int32_t)n;  /* patch capacity at data_ptr-4 */
+    ((char*)r)[n]     = '\0';
     return r;
 }
 
@@ -215,9 +213,8 @@ void* _ChangeFileExt(void* path, void* ext) {
     int32_t stem_len  = dot ? (int32_t)(dot - p) : (int32_t)strlen(p);
     int32_t ext_len   = (int32_t)strlen(e);
     void*   r         = io_str_alloc(stem_len + ext_len);
-    char*   dst       = (char*)r + sizeof(BlaiseStrHdr);
-    memcpy(dst,            p, (size_t)stem_len);
-    memcpy(dst + stem_len, e, (size_t)ext_len);
+    memcpy((char*)r,            p, (size_t)stem_len);
+    memcpy((char*)r + stem_len, e, (size_t)ext_len);
     return r;
 }
 
@@ -238,7 +235,7 @@ void* _ExtractFilePath(void* path) {
     if (!slash) return io_str_from_cstr("");
     int32_t len = (int32_t)(slash - p + 1);
     void*   r   = io_str_alloc(len);
-    memcpy((char*)r + sizeof(BlaiseStrHdr), p, (size_t)len);
+    memcpy((char*)r, p, (size_t)len);
     return r;
 }
 
@@ -249,8 +246,7 @@ void* _IncludeTrailingPathDelimiter(void* path) {
     int32_t     len = (int32_t)strlen(p);
     if (len > 0 && p[len - 1] == '/') return io_str_from_cstr(p);
     void* r   = io_str_alloc(len + 1);
-    char* dst = (char*)r + sizeof(BlaiseStrHdr);
-    memcpy(dst, p, (size_t)len);
-    dst[len] = '/';
+    memcpy((char*)r, p, (size_t)len);
+    ((char*)r)[len] = '/';
     return r;
 }

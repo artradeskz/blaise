@@ -8,13 +8,14 @@
 {
   Blaise RTL — ARC management (Pascal port of blaise_arc.c)
 
-  String layout (shared with blaise_str.pas):
-    +--[4 bytes]--+--[4 bytes]--+--[4 bytes]--+--[N bytes]--+--[1 byte]--+
-    | RefCount    | Length      | Capacity    | UTF-8 data  | NUL        |
-    +-------------+-------------+-------------+-------------+------------+
-    ^--- string pointer
+  String layout — data-pointer convention (shared with blaise_str.pas):
+    data_ptr − 12  RefCount  (Integer, 4 bytes)
+    data_ptr −  8  Length    (Integer, 4 bytes)
+    data_ptr −  4  Capacity  (Integer, 4 bytes)
+    data_ptr +  0  UTF-8 char data + NUL terminator
+    ↑ the DATA POINTER is what the variable slot holds
 
-  Class instance layout:
+  Class instance layout — same offset convention for ARC header:
     +--[4 bytes]--+--[4 bytes]--+--[8 bytes]--+--[user fields...]--+
     | RefCount    | (padding)   | cleanup ptr | ...                |
     +-------------+-------------+-------------+--------------------+
@@ -86,20 +87,22 @@ var
   RC: ^Integer;
 begin
   if Ptr = nil then Exit;
-  RC := Ptr;
+  RC := Ptr - HDR_SIZE;   { RefCount at data_ptr − 12 }
   if RC^ = IMMORTAL then Exit;
   RC^ := RC^ + 1;
 end;
 
 procedure _StringRelease(Ptr: Pointer);
 var
-  RC: ^Integer;
+  Base: Pointer;
+  RC:   ^Integer;
 begin
   if Ptr = nil then Exit;
-  RC := Ptr;
+  Base := Ptr - HDR_SIZE;  { header base = data_ptr − 12 }
+  RC   := Base;
   if RC^ = IMMORTAL then Exit;
   RC^ := RC^ - 1;
-  if RC^ = 0 then _libc_free(Ptr);
+  if RC^ = 0 then _libc_free(Base);
 end;
 
 function _StringEquals(S1, S2: Pointer): Integer;
@@ -117,14 +120,14 @@ begin
     Len1 := 0
   else
   begin
-    LN   := S1 + 4;
+    LN   := S1 - 8;   { Length at data_ptr − 8 }
     Len1 := LN^;
   end;
   if S2 = nil then
     Len2 := 0
   else
   begin
-    LN   := S2 + 4;
+    LN   := S2 - 8;
     Len2 := LN^;
   end;
   if Len1 <> Len2 then
@@ -137,8 +140,8 @@ begin
     Result := 1;
     Exit;
   end;
-  C1 := PChar(S1 + HDR_SIZE);
-  C2 := PChar(S2 + HDR_SIZE);
+  C1 := PChar(S1);    { data IS the pointer }
+  C2 := PChar(S2);
   if MemCompare(C1, C2, Len1) = 0 then
     Result := 1
   else
@@ -149,6 +152,7 @@ function _StringConcat(S1, S2: Pointer): Pointer;
 var
   Len1, Len2, Total: Integer;
   LN:                ^Integer;
+  Base:              Pointer;
   RC, LenF, CapF:    ^Integer;
   Dst:               PChar;
 begin
@@ -156,30 +160,31 @@ begin
     Len1 := 0
   else
   begin
-    LN   := S1 + 4;
+    LN   := S1 - 8;   { Length at data_ptr − 8 }
     Len1 := LN^;
   end;
   if S2 = nil then
     Len2 := 0
   else
   begin
-    LN   := S2 + 4;
+    LN   := S2 - 8;
     Len2 := LN^;
   end;
   Total  := Len1 + Len2;
-  Result := _libc_malloc(Int64(HDR_SIZE + Total + 1));
-  if Result = nil then Exit;
-  RC    := Result;
+  Base   := _libc_malloc(Int64(HDR_SIZE + Total + 1));
+  if Base = nil then Exit;
+  RC    := Base;             { RefCount at base+0 }
   RC^   := 0;
-  LenF  := Result + 4;
+  LenF  := Base + 4;
   LenF^ := Total;
-  CapF  := Result + 8;
+  CapF  := Base + 8;
   CapF^ := Total;
-  Dst   := PChar(Result + HDR_SIZE);
+  Result := Base + HDR_SIZE; { DATA POINTER }
+  Dst    := PChar(Result);
   if Len1 > 0 then
-    MemCopy(Dst, S1 + HDR_SIZE, Len1);
+    MemCopy(Dst, PChar(S1), Len1);
   if Len2 > 0 then
-    MemCopy(Dst + Len1, S2 + HDR_SIZE, Len2);
+    MemCopy(Dst + Len1, PChar(S2), Len2);
   Dst[Total] := 0;
 end;
 

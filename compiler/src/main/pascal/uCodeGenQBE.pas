@@ -195,11 +195,16 @@ end;
 function TCodeGenQBE.EmitStrLit(const AValue: string): string;
 var
   Idx: Integer;
+  T:   string;
 begin
   Idx := FStrLits.IndexOf(AValue);
   if Idx < 0 then
     Idx := FStrLits.Add(AValue);
-  Result := Format('$__s%d', [Idx]);
+  { Data-pointer convention: $__s<N> labels the 12-byte header.
+    Add 12 to get the data pointer that string variable slots hold. }
+  T := AllocTemp;
+  EmitLine(Format('  %s =l add $__s%d, 12', [T, Idx]));
+  Result := T;
 end;
 
 procedure TCodeGenQBE.EmitLine(const ALine: string);
@@ -214,7 +219,8 @@ var
 begin
   { Emit only the string literals not yet written.  Each literal carries a
     12-byte ARC header: refcnt=-1 (immortal), length, capacity.
-    The string pointer is the header pointer; char data begins at ptr+12. }
+    $__s<N> labels the header; EmitStrLit emits 'add $__s<N>, 12' to produce
+    the data pointer stored in string variable slots. }
   if FStrLits.Count > FStrLitsEmitted then
   begin
     if FStrLitsEmitted = 0 then
@@ -1032,20 +1038,21 @@ begin
     EmitLine(Format('  storew 0, %s', [IdxSlot]));
     EmitLine(Format('  jmp @%s', [LblCond]));
 
-    { Condition: idx < string length }
+    { Condition: idx < string length
+      Data-pointer convention: length at data_ptr − 8 }
     EmitLine('@' + LblCond);
-    SelfT := EmitExpr(AStmt.CollExpr);  { string header pointer }
+    SelfT := EmitExpr(AStmt.CollExpr);  { string data pointer }
     OldT  := AllocTemp;
     OkT   := AllocTemp;
     IdxW  := AllocTemp;
     CmpT  := AllocTemp;
-    EmitLine(Format('  %s =l add %s, 4', [OldT, SelfT]));
-    EmitLine(Format('  %s =w loadw %s',  [OkT, OldT]));   { string length }
-    EmitLine(Format('  %s =w loadw %s',  [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =l add %s, -8', [OldT, SelfT]));  { data_ptr − 8 = length }
+    EmitLine(Format('  %s =w loadw %s',   [OkT, OldT]));
+    EmitLine(Format('  %s =w loadw %s',   [IdxW, IdxSlot]));
     EmitLine(Format('  %s =w csltw %s, %s', [CmpT, IdxW, OkT]));
     EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
 
-    { Body: load byte at index, assign to loop var, then user body }
+    { Body: load byte at index — data IS the pointer, no skip needed }
     EmitLine('@' + LblBody);
     FBreakLabels.Add(LblEnd);
     FContinueLabels.Add(LblCond);
@@ -1053,13 +1060,11 @@ begin
       SelfT   := EmitExpr(AStmt.CollExpr);
       IdxW    := AllocTemp;
       IdxL    := AllocTemp;
-      OffL    := AllocTemp;
       ElemPtr := AllocTemp;
       CurT    := AllocTemp;
       EmitLine(Format('  %s =w loadw %s',   [IdxW, IdxSlot]));
       EmitLine(Format('  %s =l extuw %s',   [IdxL, IdxW]));
-      EmitLine(Format('  %s =l add %s, 12', [OffL, SelfT]));    { skip header }
-      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, OffL, IdxL]));
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, SelfT, IdxL]));  { data_ptr + idx }
       EmitLine(Format('  %s =w loadub %s',  [CurT, ElemPtr]));
       EmitLine(Format('  storew %s, %s',
         [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
@@ -3485,10 +3490,8 @@ begin
           tyPChar, tyPointer:
             Result := L;  { identity — raw pointer, no offset }
         else
-          { PChar(str) — pointer to char data: str_ptr + 12 (past ARC header) }
-          T := AllocTemp;
-          EmitLine(Format('  %s =l add %s, 12', [T, L]));
-          Result := T;
+          { PChar(str) — data-pointer convention: str_ptr IS the char data }
+          Result := L;
         end;
         Exit;
       end;
@@ -5325,16 +5328,16 @@ begin
   end;
 
   { String byte access: S[N] (1-based).
-    String layout: [refcount(4)][length(4)][capacity(4)][chars...][0]
-    S[N] = byte at ptr + 12 + (N - 1) = ptr + N + 11 }
-  StrPtr  := EmitExpr(AExpr.StrExpr);    { pointer to string header (l) }
+    Data-pointer convention: str_ptr IS the char data.
+    S[N] = byte at str_ptr + (N - 1) }
+  StrPtr  := EmitExpr(AExpr.StrExpr);    { data pointer (l) }
   IdxW    := EmitExpr(AExpr.IndexExpr);  { 1-based index (w) }
   IdxL    := AllocTemp;
   Offset  := AllocTemp;
   BytePtr := AllocTemp;
   ByteVal := AllocTemp;
   EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
-  EmitLine(Format('  %s =l add %s, 11', [Offset, IdxL]));  { 12 + (N-1) = N+11 }
+  EmitLine(Format('  %s =l sub %s, 1', [Offset, IdxL]));   { N-1 (0-based offset) }
   EmitLine(Format('  %s =l add %s, %s', [BytePtr, StrPtr, Offset]));
   EmitLine(Format('  %s =w loadub %s', [ByteVal, BytePtr]));
   Result := ByteVal;

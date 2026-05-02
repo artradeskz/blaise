@@ -353,10 +353,16 @@ end;
 procedure TOPDFEmitter.EmitAnsiStr;
 const
   CNAME           = 'AnsiString';
-  LEN_OFFSET      = 4;   { Blaise: Length at header+4 }
-  RC_OFFSET       = 0;   { Blaise: RefCount at header+0 }
-  CODEPAGE_OFFSET = 0;
-  ELEMSIZE_OFFSET = 0;
+  { Data-pointer convention: variable holds pointer to char data.
+    Header fields are at negative offsets from the data pointer:
+      data_ptr − 12 = RefCount
+      data_ptr −  8 = Length
+      data_ptr −  4 = Capacity
+    CodePage and ElementSize are not used by Blaise (UTF-8 only, 1-byte elements). }
+  LEN_OFFSET      = -8;
+  RC_OFFSET       = -12;
+  CODEPAGE_OFFSET = 0;    { not applicable — always UTF-8 }
+  ELEMSIZE_OFFSET = 0;    { not applicable — always 1 byte }
 var
   RecSize: Integer;
 begin
@@ -364,13 +370,13 @@ begin
   MarkEmitted(CNAME);
   RecSize := 14 + Length(CNAME);
   L('');
-  L('    # recAnsiStr: AnsiString (Blaise layout: ptr→[RC][Len][Cap][data])');
+  L('    # recAnsiStr: AnsiString (Blaise data-pointer layout: data_ptr-12=RC, data_ptr-8=Len, data_ptr+0=chars)');
   EmitRecHdr(REC_ANSISTR, RecSize);
   L('    .int  ' + IntToStr(GetOrAllocTypeID(CNAME)) + '  # TypeID');
   L('    .word ' + IntToStr(LEN_OFFSET)      + '  # LengthOffset');
   L('    .word ' + IntToStr(RC_OFFSET)       + '  # RefCountOffset');
-  L('    .word ' + IntToStr(CODEPAGE_OFFSET) + '  # CodePageOffset');
-  L('    .word ' + IntToStr(ELEMSIZE_OFFSET) + '  # ElementSizeOffset');
+  L('    .word ' + IntToStr(CODEPAGE_OFFSET) + '  # CodePageOffset (unused)');
+  L('    .word ' + IntToStr(ELEMSIZE_OFFSET) + '  # ElementSizeOffset (unused)');
   EmitStrField(CNAME);
 end;
 

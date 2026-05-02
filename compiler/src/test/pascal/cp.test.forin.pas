@@ -553,8 +553,9 @@ procedure TForInTests.TestCodegen_StringForIn_UsesLengthFromHeader;
 var IR: string;
 begin
   IR := GenIR(SrcStringForIn);
-  { Length read from header at ptr+4: 'add ... 4' }
-  AssertTrue('reads length at ptr+4 from header', Pos(', 4', IR) > 0);
+  { Data-pointer convention: length is at data_ptr-8.
+    Codegen emits 'add <ptr>, -8' to reach the length field. }
+  AssertTrue('reads length at data_ptr-8', Pos(', -8', IR) > 0);
 end;
 
 initialization

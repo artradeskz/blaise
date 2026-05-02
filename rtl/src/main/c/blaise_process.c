@@ -28,35 +28,31 @@
 #endif
 
 /* ------------------------------------------------------------------ */
-/* String header (mirrors blaise_str.c / blaise_io.c)                  */
+/* String helpers — data-pointer convention (mirrors blaise_str.pas)   */
+/* Variable slots hold pointer to char data; header lives before it.   */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    int32_t refcnt;
-    int32_t length;
-    int32_t capacity;
-    /* char data[]; follows immediately */
-} BlaiseStrHdr;
+#define BLAISE_STR_HDR 12   /* refcount + length + capacity */
 
-static inline const char* proc_str_data(void* ptr) {
-    return ptr ? (const char*)ptr + sizeof(BlaiseStrHdr) : "";
+static inline const char* proc_str_data(void* data_ptr) {
+    return data_ptr ? (const char*)data_ptr : "";
 }
 
 static void* proc_str_alloc(int32_t len) {
-    BlaiseStrHdr* h = (BlaiseStrHdr*)malloc(sizeof(BlaiseStrHdr) + len + 1);
-    if (!h) return NULL;
-    h->refcnt   = 0;
-    h->length   = len;
-    h->capacity = len;
-    ((char*)(h + 1))[len] = '\0';
-    return (void*)h;
+    char* base = (char*)malloc((size_t)(BLAISE_STR_HDR + len + 1));
+    if (!base) return NULL;
+    ((int32_t*)base)[0] = 0;    /* refcount  */
+    ((int32_t*)base)[1] = len;  /* length    */
+    ((int32_t*)base)[2] = len;  /* capacity  */
+    base[BLAISE_STR_HDR + len]  = '\0';
+    return base + BLAISE_STR_HDR;  /* DATA POINTER */
 }
 
 static void* proc_str_from_cstr(const char* s) {
     int32_t len = s ? (int32_t)strlen(s) : 0;
     void*   r   = proc_str_alloc(len);
     if (r && len > 0)
-        memcpy((char*)r + sizeof(BlaiseStrHdr), s, (size_t)len);
+        memcpy((char*)r, s, (size_t)len);   /* data IS r */
     return r;
 }
 
@@ -218,7 +214,7 @@ void* _ProcessReadOutput(void* proc) {
         return proc_str_from_cstr("");
     }
     void* r = proc_str_alloc((int32_t)n);
-    if (r) memcpy((char*)r + sizeof(BlaiseStrHdr), buf, (size_t)n);
+    if (r) memcpy((char*)r, buf, (size_t)n);   /* data IS r */
     return r;
 #endif
 }

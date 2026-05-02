@@ -1,8 +1,12 @@
 /*
  * Blaise RTL — _StringFormat (variadic; cannot be ported to Pascal)
  *
- * String layout mirrors blaise_str.pas:
- *   [RefCount:4][Length:4][Capacity:4][data...][NUL]
+ * Data-pointer convention: the Pointer stored in a Blaise string variable
+ * IS the character data pointer.  The 12-byte header lives before it:
+ *   data_ptr - 12 = refcount
+ *   data_ptr -  8 = length
+ *   data_ptr -  4 = capacity
+ *   data_ptr +  0 = char data
  *
  * All other string functions live in blaise_str.pas.
  */
@@ -16,29 +20,26 @@
 
 #define HDR_SIZE 12
 
-typedef struct {
-    int32_t refcnt;
-    int32_t length;
-    int32_t capacity;
-} BlaiseStrHdr;
-
-static inline const char* str_data(void* ptr) {
-    return (const char*)ptr + HDR_SIZE;
+/* data_ptr IS the char data — identity helper */
+static inline const char* str_data(void* data_ptr) {
+    return (const char*)data_ptr;
 }
 
-static inline int32_t str_len(void* ptr) {
-    if (!ptr) return 0;
-    return ((BlaiseStrHdr*)ptr)->length;
+/* length lives at data_ptr - 8 */
+static inline int32_t str_len(void* data_ptr) {
+    if (!data_ptr) return 0;
+    return *((int32_t*)((char*)data_ptr - 8));
 }
 
+/* Allocate: header first, then data.  Return DATA POINTER. */
 static void* str_alloc(int32_t len) {
-    BlaiseStrHdr* h = malloc(sizeof(BlaiseStrHdr) + (size_t)len + 1);
-    if (!h) return NULL;
-    h->refcnt   = 0;
-    h->length   = len;
-    h->capacity = len;
-    ((char*)(h + 1))[len] = '\0';
-    return h;
+    char* base = malloc((size_t)(HDR_SIZE + len + 1));
+    if (!base) return NULL;
+    ((int32_t*)base)[0] = 0;    /* refcount  */
+    ((int32_t*)base)[1] = len;  /* length    */
+    ((int32_t*)base)[2] = len;  /* capacity  */
+    base[HDR_SIZE + len] = '\0';
+    return base + HDR_SIZE;     /* DATA POINTER */
 }
 
 /* ------------------------------------------------------------------ */
@@ -102,7 +103,7 @@ void* _StringFormat(void* fmt, ...) {
 
     void* result = str_alloc((int32_t)out_len);
     if (!result) { va_end(ap2); return NULL; }
-    char* dst = (char*)result + HDR_SIZE;
+    char* dst = (char*)str_data(result);  /* = result (identity) */
 
     /* Pass 2: fill buffer */
     p = f;

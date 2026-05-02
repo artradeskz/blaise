@@ -38,21 +38,19 @@ function  _Int64ToStr(N: Int64): Pointer;   external name '_Int64ToStr';
 procedure _StringAddRef(Ptr: Pointer);      external name '_StringAddRef';
 procedure _StringRelease(Ptr: Pointer);     external name '_StringRelease';
 
-const
-  HDR_SIZE = 12;  { Blaise string header: RefCount + Length + Capacity }
+{ Data-pointer convention: variable holds pointer to char data;
+  length lives at data_ptr − 8; no HDR_SIZE offset needed for data access. }
 
 procedure _SysWriteStr(Fd: Integer; S: Pointer);
 var
   LPtr: ^Integer;
   Len:  Integer;
-  Data: PChar;
 begin
   if S = nil then Exit;
-  LPtr := S + 4;  { Length field }
+  LPtr := S - 8;   { Length at data_ptr − 8 }
   Len  := LPtr^;
   if Len = 0 then Exit;
-  Data := PChar(S + HDR_SIZE);
-  _SysWrite(Fd, Data, Int64(Len));
+  _SysWrite(Fd, PChar(S), Int64(Len));  { data IS S }
 end;
 
 procedure _SysWriteInt(Fd: Integer; N: Integer);
@@ -60,15 +58,13 @@ var
   S:    Pointer;
   LPtr: ^Integer;
   Len:  Integer;
-  Data: PChar;
 begin
   S := _IntToStr(N);
-  _StringAddRef(S);   { RC: 0 → 1 }
-  LPtr := S + 4;
+  _StringAddRef(S);
+  LPtr := S - 8;
   Len  := LPtr^;
-  Data := PChar(S + HDR_SIZE);
-  _SysWrite(Fd, Data, Int64(Len));
-  _StringRelease(S);  { RC: 1 → 0 → freed }
+  _SysWrite(Fd, PChar(S), Int64(Len));
+  _StringRelease(S);
 end;
 
 procedure _SysWriteInt64(Fd: Integer; N: Int64);
@@ -76,15 +72,13 @@ var
   S:    Pointer;
   LPtr: ^Integer;
   Len:  Integer;
-  Data: PChar;
 begin
   S := _Int64ToStr(N);
-  _StringAddRef(S);   { RC: 0 → 1 }
-  LPtr := S + 4;
+  _StringAddRef(S);
+  LPtr := S - 8;
   Len  := LPtr^;
-  Data := PChar(S + HDR_SIZE);
-  _SysWrite(Fd, Data, Int64(Len));
-  _StringRelease(S);  { RC: 1 → 0 → freed }
+  _SysWrite(Fd, PChar(S), Int64(Len));
+  _StringRelease(S);
 end;
 
 end.
