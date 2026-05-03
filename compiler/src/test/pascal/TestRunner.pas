@@ -67,7 +67,8 @@ uses
   cp.test.constants,
   cp.test.external,
   cp.test.opdf,
-  cp.test.forin;
+  cp.test.forin,
+  cp.test.genericforin;
 
 var
   Application: TTestRunner;

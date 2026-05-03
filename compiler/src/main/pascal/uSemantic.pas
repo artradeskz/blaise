@@ -52,6 +52,12 @@ type
     function  SubstTypeParam(const ATypeName: string;
                 AParamNames, AArgs: TStringList): string;
 
+    { Resolves scope-bound type params inside a generic type name such as
+      'TGenEnum<T>' when 'T' is bound in the current scope as a skType symbol.
+      Returns the canonical name (e.g. 'TGenEnum<Integer>') suitable for
+      FindTypeOrInstantiate. Has no effect on names without '<'. }
+    function  ResolveScopeBoundTypeParams(const ATypeName: string): string;
+
     { Generic function instantiation: resolves 'Identity<Integer>' on demand. }
     function  InstantiateGenericFunc(const AInstName: string): TMethodDecl;
 
@@ -736,6 +742,55 @@ begin
   end;
 end;
 
+function TSemanticAnalyser.ResolveScopeBoundTypeParams(const ATypeName: string): string;
+var
+  BrOpen, BrClose, I: Integer;
+  BasePart, ArgsPart, OutArgs, Arg: string;
+  ArgList: TStringList;
+  Sym: TSymbol;
+begin
+  Result  := ATypeName;
+  BrOpen  := Pos('<', ATypeName);
+  if BrOpen = 0 then Exit;
+  BrClose  := Length(ATypeName);
+  BasePart := Copy(ATypeName, 1, BrOpen - 1);
+  ArgsPart := Copy(ATypeName, BrOpen + 1, BrClose - BrOpen - 1);
+  ArgList  := TStringList.Create;
+  try
+    while ArgsPart <> '' do
+    begin
+      I := Pos(',', ArgsPart);
+      if I > 0 then
+      begin
+        ArgList.Add(Trim(Copy(ArgsPart, 1, I - 1)));
+        ArgsPart := Trim(Copy(ArgsPart, I + 1, MaxInt));
+      end
+      else
+      begin
+        ArgList.Add(Trim(ArgsPart));
+        ArgsPart := '';
+      end;
+    end;
+    OutArgs := '';
+    for I := 0 to ArgList.Count - 1 do
+    begin
+      Arg := ArgList.Strings[I];
+      { If this arg is a bare ident bound as skType in the current scope,
+        replace it with the concrete type name. }
+      Sym := FTable.Lookup(Arg);
+      if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc <> nil) then
+        Arg := Sym.TypeDesc.Name;
+      if OutArgs = '' then
+        OutArgs := Arg
+      else
+        OutArgs := OutArgs + ',' + Arg;
+    end;
+  finally
+    ArgList.Free;
+  end;
+  Result := BasePart + '<' + OutArgs + '>';
+end;
+
 function TSemanticAnalyser.FindTypeOrInstantiate(const AName: string): TTypeDesc;
 var
   BaseName: string;
@@ -818,7 +873,9 @@ end;
 function TSemanticAnalyser.SubstTypeParam(const ATypeName: string;
   AParamNames, AArgs: TStringList): string;
 var
-  I: Integer;
+  I, BrOpen, BrClose: Integer;
+  BasePart, ArgsPart, OutArgs, Arg: string;
+  ArgList: TStringList;
 begin
   Result := ATypeName;
   { Direct match: T → Integer }
@@ -830,7 +887,47 @@ begin
     end;
   { Prefix caret: ^T → ^Integer, ^^T → ^^Integer, etc. }
   if (Length(Result) > 0) and (Result[1] = '^') then
+  begin
     Result := '^' + Self.SubstTypeParam(Copy(Result, 2, MaxInt), AParamNames, AArgs);
+    Exit;
+  end;
+  { Generic instantiation: SomeName<T,...> — substitute each type argument }
+  BrOpen := Pos('<', Result);
+  if BrOpen > 0 then
+  begin
+    BrClose  := Length(Result);  { closing '>' is always the last char }
+    BasePart := Copy(Result, 1, BrOpen - 1);
+    ArgsPart := Copy(Result, BrOpen + 1, BrClose - BrOpen - 1);
+    ArgList  := TStringList.Create;
+    try
+      while ArgsPart <> '' do
+      begin
+        I := Pos(',', ArgsPart);
+        if I > 0 then
+        begin
+          ArgList.Add(Trim(Copy(ArgsPart, 1, I - 1)));
+          ArgsPart := Trim(Copy(ArgsPart, I + 1, MaxInt));
+        end
+        else
+        begin
+          ArgList.Add(Trim(ArgsPart));
+          ArgsPart := '';
+        end;
+      end;
+      OutArgs := '';
+      for I := 0 to ArgList.Count - 1 do
+      begin
+        Arg := Self.SubstTypeParam(ArgList.Strings[I], AParamNames, AArgs);
+        if OutArgs = '' then
+          OutArgs := Arg
+        else
+          OutArgs := OutArgs + ',' + Arg;
+      end;
+    finally
+      ArgList.Free;
+    end;
+    Result := BasePart + '<' + OutArgs + '>';
+  end;
 end;
 
 function TSemanticAnalyser.InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
@@ -848,11 +945,15 @@ var
   NewMDecl: TMethodDecl;
   Par:      TMethodParam;
   NewPar:   TMethodParam;
+  PDecl:    TPropertyDecl;
+  NewPDecl: TPropertyDecl;
   Sym:      TSymbol;
   Key:      string;
   FldType:  TTypeDesc;
   FldName:  string;
   ParType:  TTypeDesc;
+  PropType: TTypeDesc;
+  PropInfo: TPropertyInfo;
   RT:       TRecordTypeDesc;
   GI:        TGenericInstance;
   Subst:     string;
@@ -947,6 +1048,20 @@ begin
       ClonedCD.Methods.Add(NewMDecl);
     end;
 
+    { Clone property declarations with type-param substitution }
+    for I := 0 to Templ.ClassDef.Properties.Count - 1 do
+    begin
+      PDecl    := TPropertyDecl(Templ.ClassDef.Properties.Items[I]);
+      NewPDecl := TPropertyDecl.Create;
+      NewPDecl.Name           := PDecl.Name;
+      NewPDecl.TypeName       := SubstTypeParam(PDecl.TypeName, Templ.ParamNames, Args);
+      NewPDecl.ReadName       := PDecl.ReadName;
+      NewPDecl.WriteName      := PDecl.WriteName;
+      NewPDecl.IndexParamName := PDecl.IndexParamName;
+      NewPDecl.IndexTypeName  := SubstTypeParam(PDecl.IndexTypeName, Templ.ParamNames, Args);
+      ClonedCD.Properties.Add(NewPDecl);
+    end;
+
     { Pre-pass: vtable slots (before fields so vptr is counted in offsets) }
     for J := 0 to ClonedCD.Methods.Count - 1 do
     begin
@@ -1010,6 +1125,39 @@ begin
             0, 0);
         NewMDecl.ResolvedReturnType := ParType;
       end;
+    end;
+
+    { Resolve property declarations — type-param already substituted in clone pass }
+    for J := 0 to ClonedCD.Properties.Count - 1 do
+    begin
+      NewPDecl := TPropertyDecl(ClonedCD.Properties.Items[J]);
+      PropType := FindTypeOrInstantiate(NewPDecl.TypeName);
+      if PropType = nil then
+        SemanticError(
+          Format('Unknown type ''%s'' for property ''%s'' in ''%s''',
+            [NewPDecl.TypeName, NewPDecl.Name, ATypeName]),
+          0, 0);
+      PropInfo := TPropertyInfo.Create;
+      PropInfo.Name := NewPDecl.Name;
+      PropInfo.TypeDesc := PropType;
+      if NewPDecl.ReadName <> '' then
+      begin
+        if RT.FindField(NewPDecl.ReadName) <> nil then
+          PropInfo.ReadField := NewPDecl.ReadName
+        else
+          PropInfo.ReadMethod := NewPDecl.ReadName;
+      end;
+      if NewPDecl.WriteName <> '' then
+      begin
+        if RT.FindField(NewPDecl.WriteName) <> nil then
+          PropInfo.WriteField := NewPDecl.WriteName
+        else
+          PropInfo.WriteMethod := NewPDecl.WriteName;
+      end;
+      PropInfo.IndexParamName := NewPDecl.IndexParamName;
+      if NewPDecl.IndexTypeName <> '' then
+        PropInfo.IndexTypeDesc := FindTypeOrInstantiate(NewPDecl.IndexTypeName);
+      RT.AddProperty(PropInfo);
     end;
 
     { Analyse method bodies with concrete types in scope.
@@ -3935,6 +4083,15 @@ begin
   end;
 
   RecSym := FTable.Lookup(AAccess.RecordName);
+  { If the name contains '<' and wasn't found, resolve scope-bound type params
+    (e.g. 'TGenEnum<T>' → 'TGenEnum<Integer>' when T=Integer is in scope)
+    and update AAccess.RecordName so codegen sees the concrete instantiation. }
+  if (RecSym = nil) and (Pos('<', AAccess.RecordName) > 0) then
+  begin
+    AAccess.RecordName := ResolveScopeBoundTypeParams(AAccess.RecordName);
+    FindTypeOrInstantiate(AAccess.RecordName);
+    RecSym := FTable.Lookup(AAccess.RecordName);
+  end;
   if RecSym = nil then
   begin
     { Implicit Self.RecordName.FieldName — RecordName is a field of current class }
