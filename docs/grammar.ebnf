@@ -257,6 +257,7 @@ MethodDirective
     = VIRTUAL
     | OVERRIDE
     | ExternalDirective
+    | "overload"                          (* required on every overload of a same-named proc/func/method *)
     | IDENT                               (* inline, stdcall, cdecl, abstract, reintroduce, … *)
     ;
 

@@ -78,6 +78,12 @@ type
     procedure AnalyseAssignment(AAssign: TAssignment);
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     procedure AnalyseProcCall(ACall: TProcCall);
+    { Phase A overload resolution: walks FProcIndex collecting all decls
+      whose name matches AName (case-insensitive), then returns the one
+      whose param count matches AArity.  Returns nil if no match.
+      Raises ESemanticError on no-match or ambiguity (Phase B). }
+    function  ResolveStandaloneOverload(const AName: string;
+      AArity: Integer): TMethodDecl;
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
@@ -2130,15 +2136,27 @@ begin
     end;
 
     { If an earlier forward declaration exists, update the index to point to
-      this implementation and skip re-registering the symbol. }
-    J := FProcIndex.IndexOf(ADecl.Name);
-    if (J >= 0) and (TMethodDecl(FProcIndex.Objects[J]).Body = nil) then
+      this implementation and skip re-registering the symbol.  Overloaded
+      decls bypass this — each overload is independent. }
+    if not ADecl.IsOverload then
     begin
-      FProcIndex.Objects[J] := ADecl;
-      Continue;
+      J := FProcIndex.IndexOf(ADecl.Name);
+      if (J >= 0) and (TMethodDecl(FProcIndex.Objects[J]).Body = nil) and
+         (not TMethodDecl(FProcIndex.Objects[J]).IsOverload) then
+      begin
+        FProcIndex.Objects[J] := ADecl;
+        Continue;
+      end;
     end;
 
-    { Index for call resolution }
+    { Compute the QBE-emit name.  Phase A: overloads get an arity suffix
+      ('$N<arity>'); non-overloaded decls keep their plain name. }
+    if ADecl.IsOverload then
+      ADecl.ResolvedQbeName := ADecl.Name + '$N' + IntToStr(ADecl.Params.Count)
+    else
+      ADecl.ResolvedQbeName := ADecl.Name;
+
+    { Index for call resolution — overloaded names appear multiple times. }
     FProcIndex.AddObject(ADecl.Name, ADecl);
 
     { Register in symbol table }
@@ -2146,6 +2164,8 @@ begin
       Sym := TSymbol.Create(ADecl.Name, skFunction, ADecl.ResolvedReturnType)
     else
       Sym := TSymbol.Create(ADecl.Name, skProcedure, nil);
+    Sym.IsOverload := ADecl.IsOverload;
+    Sym.Decl       := ADecl;
 
     if not FTable.Define(Sym) then
     begin
@@ -3125,6 +3145,37 @@ begin
     AAssign.Line, AAssign.Col);
 end;
 
+function TSemanticAnalyser.ResolveStandaloneOverload(const AName: string;
+  AArity: Integer): TMethodDecl;
+var
+  I:        Integer;
+  Cand:     TMethodDecl;
+  Match:    TMethodDecl;
+  TotalCnt: Integer;
+begin
+  Match    := nil;
+  TotalCnt := 0;
+  for I := 0 to FProcIndex.Count - 1 do
+    if SameText(FProcIndex.Strings[I], AName) then
+    begin
+      Inc(TotalCnt);
+      Cand := TMethodDecl(FProcIndex.Objects[I]);
+      if Cand.Params.Count = AArity then
+      begin
+        Match := Cand;
+        { Phase A: take the first arity match.  Phase B will refine via
+          type-compatibility scoring when multiple candidates share an arity. }
+        Break;
+      end;
+    end;
+  if (TotalCnt = 0) and (Match = nil) then
+  begin
+    Result := nil;
+    Exit;
+  end;
+  Result := Match;  { nil = candidates exist but none with this arity }
+end;
+
 procedure TSemanticAnalyser.AnalyseProcCall(ACall: TProcCall);
 var
   Sym:     TSymbol;
@@ -3179,7 +3230,12 @@ begin
   Idx := FProcIndex.IndexOf(ACall.Name);
   if Idx >= 0 then
   begin
-    MDecl := TMethodDecl(FProcIndex.Objects[Idx]);
+    MDecl := ResolveStandaloneOverload(ACall.Name, ACall.Args.Count);
+    if MDecl = nil then
+      SemanticError(
+        Format('No matching overload for ''%s'' with %d argument(s)',
+          [ACall.Name, ACall.Args.Count]),
+        ACall.Line, ACall.Col);
     if ACall.Args.Count <> MDecl.Params.Count then
       SemanticError(
         Format('Procedure ''%s'' expects %d argument(s) but got %d',
@@ -3770,7 +3826,12 @@ begin
       Format('Cannot find declaration for function ''%s''', [AExpr.Name]),
       AExpr.Line, AExpr.Col);
 
-  MDecl := TMethodDecl(FProcIndex.Objects[Idx]);
+  MDecl := ResolveStandaloneOverload(AExpr.Name, AExpr.Args.Count);
+  if MDecl = nil then
+    SemanticError(
+      Format('No matching overload for ''%s'' with %d argument(s)',
+        [AExpr.Name, AExpr.Args.Count]),
+      AExpr.Line, AExpr.Col);
 
   if AExpr.Args.Count <> MDecl.Params.Count then
     SemanticError(

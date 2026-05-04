@@ -1181,6 +1181,84 @@ Specific properties that mattered for this decision:
 
 ---
 
+== Function and Method Overloading
+
+=== Decision
+
+Blaise supports overloading of standalone procedures, standalone
+functions, and class methods.  The `overload` directive is *required* on
+every declaration that participates in an overload set: omitting the
+directive on any same-named declaration is a compile-time
+"duplicate identifier" error.  Resolution at the call site follows
+Delphi semantics — exact-type match is preferred over widening match,
+and an unresolvable tie is a compile-time "ambiguous overload" error.
+
+=== Rationale
+
+Requiring the directive on every overload (rather than inferring it
+from duplicate names, as FPC's `{$mode objfpc}` does) keeps overload
+sets explicit at the source level: a reader can see at a glance that a
+declaration is intended to participate in dispatch, and accidental
+shadowing of an unrelated symbol cannot silently introduce an
+overload.  Delphi's preference for exact match avoids the "promotion
+ambiguity" pitfalls that surface when an `Integer` argument matches
+both an `Integer` and a `Double` overload — exact match always wins,
+ambiguity is escalated to the user.
+
+=== Name mangling
+
+Each overload is emitted under a distinct QBE symbol name derived from
+its parameter signature.  The mangling scheme uses short type codes
+appended after `$`:
+
+[cols="1,3"]
+|===
+| Code | Meaning
+
+| `i` | Integer (32-bit signed)
+| `l` | Int64
+| `d` | Double
+| `s` | Single
+| `b` | Boolean
+| `y` | Byte
+| `S` | string
+| `p` | Pointer / PChar
+| `R<Name>` | record or class type
+| `^X` | typed pointer to X
+| `@X` | var/out parameter of X
+|===
+
+Example: `procedure Log(const S: string; N: Integer); overload;` emits
+as `$Log$Si`.  Phase A of the implementation uses an arity-only suffix
+(`$N<arity>`) as a temporary mangling — the type-code scheme above
+becomes the permanent form once Phase B (type-distinct resolution)
+lands.
+
+=== Alternatives rejected
+
+* *Implicit overloading on duplicate names.*  FPC's objfpc mode allows
+  this.  Rejected because it makes accidental shadowing
+  indistinguishable from intentional overloading.
+* *Numeric suffixes (`Greet$1`, `Greet$2`).*  Simpler to implement but
+  obscures the signature in debugger backtraces and IR diffs.  Type
+  codes are deterministic and human-decodable.
+* *FPC-style "first-fit" resolution.*  Picks the first declared
+  overload whose parameters can be coerced.  Rejected in favour of
+  Delphi's exact-match preference, which surfaces ambiguity rather
+  than silently picking an order-dependent answer.
+
+=== Class methods
+
+A virtual method that is overloaded must carry both `virtual` and
+`overload`.  Overrides in descendants must carry both `override` and
+`overload`.  Each `(virtual, overload)` pair is a *distinct* vtable
+slot — the override targets the slot whose mangled signature matches
+its own.  This means you cannot override the wrong overload by
+accident, and the compiler will report a missing override target if
+the descendant's signature matches no base-class slot.
+
+---
+
 == Open Language Questions
 
 These items are under active consideration but not yet decided.

@@ -511,6 +511,9 @@ type
     OwnBody:            Boolean;     { False for cloned generic method stubs that share the body }
     IsVirtual:          Boolean;     { declared with 'virtual' directive }
     IsOverride:         Boolean;     { declared with 'override' directive }
+    IsOverload:         Boolean;     { declared with 'overload' directive }
+    ResolvedQbeName:    string;      { set by uSemantic — mangled QBE symbol name;
+                                       empty string means use Name verbatim }
     IsExternal:         Boolean;     { declared with 'external' directive — no body }
     ExternalName:       string;      { C symbol name from 'external name ''c_foo'''; empty = use Pascal name }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }

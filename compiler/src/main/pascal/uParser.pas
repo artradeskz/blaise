@@ -916,6 +916,12 @@ begin
         end;
         if Check(tkSemicolon) then Advance;
       end
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'overload') then
+      begin
+        Result.IsOverload := True;
+        Advance;
+        if Check(tkSemicolon) then Advance;
+      end
       else if Check(tkIdent) and
               (SameText(FCurrent.Value, 'inline')      or
                SameText(FCurrent.Value, 'stdcall')     or

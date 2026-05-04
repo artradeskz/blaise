@@ -70,7 +70,8 @@ uses
   cp.test.opdf,
   cp.test.forin,
   cp.test.genericforin,
-  cp.test.proctypes;
+  cp.test.proctypes,
+  cp.test.overload;
 
 var
   Application: TTestRunner;

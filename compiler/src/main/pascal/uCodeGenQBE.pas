@@ -1988,7 +1988,10 @@ begin
     end
     else
     begin
-      FuncName := '$' + QBEMangle(FCallExpr.Name);
+      if (MDecl <> nil) and (MDecl.ResolvedQbeName <> '') then
+        FuncName := '$' + QBEMangle(MDecl.ResolvedQbeName)
+      else
+        FuncName := '$' + QBEMangle(FCallExpr.Name);
       ArgLine  := Format('l %s', [ASretAddr]);
     end;
     for I := 0 to FCallExpr.Args.Count - 1 do
@@ -3040,7 +3043,10 @@ var
   SavedExitLbl: string;
 begin
   if ADecl.IsExternal then Exit;  { no body to emit for external declarations }
-  FuncName := '$' + QBEMangle(ADecl.Name);
+  if ADecl.ResolvedQbeName <> '' then
+    FuncName := '$' + QBEMangle(ADecl.ResolvedQbeName)
+  else
+    FuncName := '$' + QBEMangle(ADecl.Name);
   IsFunc   := ADecl.ResolvedReturnType <> nil;
   if AExported then Prefix := 'export ' else Prefix := '';
 
@@ -3295,6 +3301,8 @@ begin
     end;
     if MDecl.IsExternal and (MDecl.ExternalName <> '') then
       EmitLine(Format('  call $%s(%s)', [MDecl.ExternalName, ArgLine]))
+    else if MDecl.ResolvedQbeName <> '' then
+      EmitLine(Format('  call $%s(%s)', [QBEMangle(MDecl.ResolvedQbeName), ArgLine]))
     else
       EmitLine(Format('  call $%s(%s)', [QBEMangle(ACall.Name), ArgLine]));
     Exit;
@@ -4152,6 +4160,8 @@ begin
       end;
       if MDecl.IsExternal and (MDecl.ExternalName <> '') then
         FuncName := '$' + MDecl.ExternalName
+      else if MDecl.ResolvedQbeName <> '' then
+        FuncName := '$' + QBEMangle(MDecl.ResolvedQbeName)
       else
         FuncName := '$' + QBEMangle(FC.Name);
       ArgLine  := '';

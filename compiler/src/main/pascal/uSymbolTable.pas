@@ -261,6 +261,12 @@ type
                                 of the strong addref/release pattern. }
     IsGlobal:   Boolean;      { true for program-level variables; codegen uses
                                 QBE data-section storage instead of stack alloc }
+    IsOverload:   Boolean;    { true when declared with the 'overload' directive;
+                                same-named overload symbols form a NextOverload chain }
+    NextOverload: TSymbol;    { not owned — link to next overload in the chain;
+                                nil = last (or only) overload }
+    Decl:         TObject;    { not owned — TMethodDecl backing this proc/func symbol;
+                                nil for non-callable symbols }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;
@@ -749,9 +755,26 @@ end;
 function TScope.Define(ASymbol: TSymbol): Boolean;
 var
   Idx: Integer;
+  Existing, Tail: TSymbol;
 begin
   if FKeys.Find(ASymbol.Name, Idx) then
   begin
+    Existing := TSymbol(FKeys.Objects[Idx]);
+    { Overload chaining: both old and new must be overload-marked
+      procedures or functions.  Mixing overload + non-overload is a
+      duplicate-identifier error. }
+    if ASymbol.IsOverload and Existing.IsOverload and
+       (ASymbol.Kind in [skProcedure, skFunction]) and
+       (Existing.Kind in [skProcedure, skFunction]) then
+    begin
+      Tail := Existing;
+      while Tail.NextOverload <> nil do
+        Tail := Tail.NextOverload;
+      Tail.NextOverload := ASymbol;
+      FSymbols.Add(ASymbol);  { take ownership; lookup walks the chain via Existing }
+      Result := True;
+      Exit;
+    end;
     Result := False;
     Exit;
   end;
