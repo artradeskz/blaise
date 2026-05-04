@@ -2577,6 +2577,18 @@ begin
           EmitLine(Format('  storel %%_par_%s, %%_var_%s',
             [Par.ParamName, Par.ParamName]));
         end;
+      tyDouble:
+        begin
+          EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+          EmitLine(Format('  stored %%_par_%s, %%_var_%s',
+            [Par.ParamName, Par.ParamName]));
+        end;
+      tySingle:
+        begin
+          EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
+          EmitLine(Format('  stores %%_par_%s, %%_var_%s',
+            [Par.ParamName, Par.ParamName]));
+        end;
     else
       EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
       EmitLine(Format('  storel %%_par_%s, %%_var_%s',
@@ -3110,6 +3122,18 @@ begin
           begin
             EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
             EmitLine(Format('  storew %%_par_%s, %%_var_%s',
+              [Par.ParamName, Par.ParamName]));
+          end;
+        tyDouble:
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+            EmitLine(Format('  stored %%_par_%s, %%_var_%s',
+              [Par.ParamName, Par.ParamName]));
+          end;
+        tySingle:
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
+            EmitLine(Format('  stores %%_par_%s, %%_var_%s',
               [Par.ParamName, Par.ParamName]));
           end;
       else

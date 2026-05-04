@@ -63,6 +63,12 @@ type
     procedure TestCodegen_ProcCall_EmitsCall;
     procedure TestCodegen_FuncCall_EmitsTypedCall;
     procedure TestCodegen_Proc_ParamAccessible;
+
+    { Regression: float-typed parameter spill must use stored/stores
+      (matching the QBE 'd'/'s' parameter type), not storel — QBE
+      rejects 'storel %_par_D' for a 'd %_par_D' parameter. }
+    procedure TestCodegen_DoubleParam_SpillsWithStored;
+    procedure TestCodegen_SingleParam_SpillsWithStores;
   end;
 
 implementation
@@ -515,6 +521,40 @@ begin
   IR := GenIR(SrcWithProc);
   { Param X should have a local alloc slot inside PrintIt }
   AssertTrue('param X has local slot', Pos('%_var_X', IR) > 0);
+end;
+
+procedure TProcFuncTests.TestCodegen_DoubleParam_SpillsWithStored;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    'program P;'                                    + LineEnding +
+    'procedure F(D: Double);'                       + LineEnding +
+    'begin'                                         + LineEnding +
+    '  WriteLn(DoubleToStr(D))'                     + LineEnding +
+    'end;'                                          + LineEnding +
+    'begin F(3.14) end.');
+  AssertTrue('Double param spilt with ''stored''',
+    Pos('stored %_par_D', IR) > 0);
+  AssertFalse('Double param must NOT use ''storel''',
+    Pos('storel %_par_D', IR) > 0);
+end;
+
+procedure TProcFuncTests.TestCodegen_SingleParam_SpillsWithStores;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    'program P;'                                    + LineEnding +
+    'procedure F(S: Single);'                       + LineEnding +
+    'begin'                                         + LineEnding +
+    '  WriteLn(SingleToStr(S))'                     + LineEnding +
+    'end;'                                          + LineEnding +
+    'begin F(1.5) end.');
+  AssertTrue('Single param spilt with ''stores''',
+    Pos('stores %_par_S', IR) > 0);
+  AssertFalse('Single param must NOT use ''storel''',
+    Pos('storel %_par_S', IR) > 0);
 end;
 
 initialization
