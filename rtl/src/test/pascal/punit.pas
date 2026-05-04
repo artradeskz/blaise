@@ -223,40 +223,40 @@ function  TestRegistryOK : Boolean;
 
 function AddSuite(const AName : string; ASetup : TTestSetup;
   ATearDown : TTestTearDown; AParent : ^TSuite;
-  aPerTestSetupTearDown : Boolean) : ^TSuite;
-function AddSuite(const AName : string; AParent : ^TSuite) : ^TSuite;
+  aPerTestSetupTearDown : Boolean) : ^TSuite; overload;
+function AddSuite(const AName : string; AParent : ^TSuite) : ^TSuite; overload;
 
-function GetSuiteCount : Integer;
-function GetSuiteCount(Recurse : Boolean) : Integer;
-function GetSuiteCount(ASuite : ^TSuite) : Integer;
-function GetSuiteCount(ASuite : ^TSuite; Recurse : Boolean) : Integer;
-function GetSuiteIndex(const AName : string) : Integer;
-function GetSuiteIndex(ASuite : ^TSuite; const AName : string) : Integer;
-function GetSuite(const AIndex : Integer) : ^TSuite;
-function GetSuite(const AName : string) : ^TSuite;
-function GetSuite(const AName : string; AParent : ^TSuite) : ^TSuite;
+function GetSuiteCount : Integer; overload;
+function GetSuiteCount(Recurse : Boolean) : Integer; overload;
+function GetSuiteCount(ASuite : ^TSuite) : Integer; overload;
+function GetSuiteCount(ASuite : ^TSuite; Recurse : Boolean) : Integer; overload;
+function GetSuiteIndex(const AName : string) : Integer; overload;
+function GetSuiteIndex(ASuite : ^TSuite; const AName : string) : Integer; overload;
+function GetSuite(const AIndex : Integer) : ^TSuite; overload;
+function GetSuite(const AName : string) : ^TSuite; overload;
+function GetSuite(const AName : string; AParent : ^TSuite) : ^TSuite; overload;
 
 { -----------------------------------------------------------------------
   Test management
   ----------------------------------------------------------------------- }
 
 function AddTest(const ATestName : string; ARun : TTestRun;
-  const ASuiteName : string) : ^TTest;
+  const ASuiteName : string) : ^TTest; overload;
 function AddTest(const ATestName : string; ARun : TTestRunProc;
-  const ASuiteName : string) : ^TTest;
+  const ASuiteName : string) : ^TTest; overload;
 function AddTest(const ATestName : string; ARun : TTestRun;
-  const ASuite : ^TSuite) : ^TTest;
+  const ASuite : ^TSuite) : ^TTest; overload;
 function AddTest(const ATestName : string; ARun : TTestRunProc;
-  const ASuite : ^TSuite) : ^TTest;
+  const ASuite : ^TSuite) : ^TTest; overload;
 
-function GetTestIndex(const ASuiteName : string; const ATestName : string) : Integer;
-function GetTestIndex(const ASuite : ^TSuite; const ATestName : string) : Integer;
-function GetTestIndex(const ASuite : ^TSuite; const ATest : ^TTest) : Integer;
-function GetTestCount(const ASuiteName : string) : Integer;
-function GetTestCount(const ASuite : ^TSuite) : Integer;
-function GetTest(const ASuiteName : string; const ATestName : string) : ^TTest;
-function GetTest(const ASuite : ^TSuite; const ATestName : string) : ^TTest;
-function GetTest(const ASuite : ^TSuite; const ATestIndex : Integer) : ^TTest;
+function GetTestIndex(const ASuiteName : string; const ATestName : string) : Integer; overload;
+function GetTestIndex(const ASuite : ^TSuite; const ATestName : string) : Integer; overload;
+function GetTestIndex(const ASuite : ^TSuite; const ATest : ^TTest) : Integer; overload;
+function GetTestCount(const ASuiteName : string) : Integer; overload;
+function GetTestCount(const ASuite : ^TSuite) : Integer; overload;
+function GetTest(const ASuiteName : string; const ATestName : string) : ^TTest; overload;
+function GetTest(const ASuite : ^TSuite; const ATestName : string) : ^TTest; overload;
+function GetTest(const ASuite : ^TSuite; const ATestIndex : Integer) : ^TTest; overload;
 function TestIsInSuite(const ASuite : ^TSuite; const ATest : ^TTest) : Boolean;
 
 { -----------------------------------------------------------------------
@@ -264,13 +264,13 @@ function TestIsInSuite(const ASuite : ^TSuite; const ATest : ^TTest) : Boolean;
   ----------------------------------------------------------------------- }
 
 function  RunAllTests : TTestError;
-function  RunSuite(const ASuiteName : string) : TTestError;
-function  RunSuite(ASuiteIndex : Integer) : TTestError;
-function  RunSuite(ASuite : ^TSuite) : TTestError;
-function  RunTest(const ASuiteName : string; const ATestName : string) : TTestError;
-function  RunTest(ASuite : ^TSuite; const ATestName : string) : TTestError;
-function  RunTest(ASuite : ^TSuite; ATest : ^TTest) : TTestError;
-procedure RunTest(ARun : TTestRun);
+function  RunSuite(const ASuiteName : string) : TTestError; overload;
+function  RunSuite(ASuiteIndex : Integer) : TTestError; overload;
+function  RunSuite(ASuite : ^TSuite) : TTestError; overload;
+function  RunTest(const ASuiteName : string; const ATestName : string) : TTestError; overload;
+function  RunTest(ASuite : ^TSuite; const ATestName : string) : TTestError; overload;
+function  RunTest(ASuite : ^TSuite; ATest : ^TTest) : TTestError; overload;
+procedure RunTest(ARun : TTestRun); overload;
 
 function  GetCurrentRun : TRunSummary;
 function  GetCurrentSuite : ^TSuite;
@@ -287,22 +287,22 @@ function Ignore(const Msg : string) : Boolean;
 function Fail(const Msg : string) : Boolean;
 function FailExit(const Msg : string) : Boolean;
 function IgnoreExit(const Msg : string) : Boolean;
-function AssertPassed : Boolean;
-function AssertPassed(AMessage : string) : Boolean;
+function AssertPassed : Boolean; overload;
+function AssertPassed(AMessage : string) : Boolean; overload;
 
 function AssertTrue(const AMessage : string; ACondition : Boolean) : Boolean;
 function AssertFalse(const AMessage : string; ACondition : Boolean) : Boolean;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : string) : Boolean;
-function AssertEquals(AMessage : string; const AExpected, AActual : Boolean) : Boolean;
-function AssertEquals(AMessage : string; const AExpected, AActual : Byte) : Boolean;
-function AssertEquals(AMessage : string; const AExpected, AActual : Integer) : Boolean;
-function AssertEquals(AMessage : string; const AExpected, AActual : Cardinal) : Boolean;
-function AssertEquals(AMessage : string; const AExpected, AActual : Int64) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : string) : Boolean; overload;
+function AssertEquals(AMessage : string; const AExpected, AActual : Boolean) : Boolean; overload;
+function AssertEquals(AMessage : string; const AExpected, AActual : Byte) : Boolean; overload;
+function AssertEquals(AMessage : string; const AExpected, AActual : Integer) : Boolean; overload;
+function AssertEquals(AMessage : string; const AExpected, AActual : Cardinal) : Boolean; overload;
+function AssertEquals(AMessage : string; const AExpected, AActual : Int64) : Boolean; overload;
 
 function AssertNull(AMessage : string; const AValue : Pointer) : Boolean;
 function AssertNotNull(AMessage : string; const AValue : Pointer) : Boolean;
-function AssertEquals(AMessage : string; const AExpected, AActual : Pointer) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Pointer) : Boolean; overload;
 function AssertDiffers(AMessage : string; const AExpected, AActual : Pointer) : Boolean;
 function AssertSame(AMessage : string; const AExpected, AActual : TObject) : Boolean;
 function AssertNotSame(AMessage : string; const AExpected, AActual : TObject) : Boolean;
@@ -695,7 +695,7 @@ begin
   InitSuiteList(TestRegistry);
 end;
 
-procedure FreeSuiteList(var Suites : TSuiteList); forward;
+procedure FreeSuiteList(var Suites : TSuiteList); overload; forward;
 
 procedure FreeSuite(ASuite : ^TSuite);
 var
@@ -709,7 +709,7 @@ begin
   FreeMem(ASuite);
 end;
 
-procedure FreeSuiteList(var Suites : TSuiteList);
+procedure FreeSuiteList(var Suites : TSuiteList); overload;
 var
   I : Integer;
 begin
@@ -748,7 +748,7 @@ begin
     SetTestError(teTestsRunning);
 end;
 
-function AddSuite(const AName : string; AParent : ^TSuite) : ^TSuite;
+function AddSuite(const AName : string; AParent : ^TSuite) : ^TSuite; overload;
 begin
   Result := AddSuite(AName, nil, nil, AParent, False);
 end;
@@ -767,22 +767,22 @@ begin
       end;
 end;
 
-function GetSuiteCount : Integer;
+function GetSuiteCount : Integer; overload;
 begin
   Result := GetSuiteCount(True);
 end;
 
-function GetSuiteCount(Recurse : Boolean) : Integer;
+function GetSuiteCount(Recurse : Boolean) : Integer; overload;
 begin
   Result := GetSuiteCountInternal(@TestRegistry, Recurse);
 end;
 
-function GetSuiteCount(ASuite : ^TSuite) : Integer;
+function GetSuiteCount(ASuite : ^TSuite) : Integer; overload;
 begin
   Result := GetSuiteCount(ASuite, True);
 end;
 
-function GetSuiteCount(ASuite : ^TSuite; Recurse : Boolean) : Integer;
+function GetSuiteCount(ASuite : ^TSuite; Recurse : Boolean) : Integer; overload;
 begin
   if ASuite = nil then
     Result := 0
@@ -804,12 +804,12 @@ begin
     Dec(Result);
 end;
 
-function GetSuiteIndex(const AName : string) : Integer;
+function GetSuiteIndex(const AName : string) : Integer; overload;
 begin
   Result := GetSuiteIndexInternal(@TestRegistry, AName);
 end;
 
-function GetSuiteIndex(ASuite : ^TSuite; const AName : string) : Integer;
+function GetSuiteIndex(ASuite : ^TSuite; const AName : string) : Integer; overload;
 begin
   if ASuite = nil then
     Result := 0
@@ -850,7 +850,7 @@ begin
     Result := SuiteListGet(L, I);
 end;
 
-function GetSuite(const AIndex : Integer) : ^TSuite;
+function GetSuite(const AIndex : Integer) : ^TSuite; overload;
 begin
   if (AIndex >= 0) and (AIndex < TestRegistry.Count) then
     Result := SuiteListGet(@TestRegistry, AIndex)
@@ -858,12 +858,12 @@ begin
     Result := nil;
 end;
 
-function GetSuite(const AName : string) : ^TSuite;
+function GetSuite(const AName : string) : ^TSuite; overload;
 begin
   Result := GetSuite(AName, nil);
 end;
 
-function GetSuite(const AName : string; AParent : ^TSuite) : ^TSuite;
+function GetSuite(const AName : string; AParent : ^TSuite) : ^TSuite; overload;
 var
   L : ^TSuiteList;
 begin
@@ -878,7 +878,7 @@ end;
 
 function AddSuite(const AName : string; ASetup : TTestSetup;
   ATearDown : TTestTearDown; AParent : ^TSuite;
-  aPerTestSetupTearDown : Boolean) : ^TSuite;
+  aPerTestSetupTearDown : Boolean) : ^TSuite; overload;
 var
   S : ^TSuite;
   L : ^TSuiteList;
@@ -962,7 +962,7 @@ begin
 end;
 
 function AddTest(const ATestName : string; ARun : TTestRun;
-  const ASuite : ^TSuite) : ^TTest;
+  const ASuite : ^TSuite) : ^TTest; overload;
 begin
   Result := DoAddTest(ATestName, ASuite);
   if Assigned(Result) then
@@ -970,7 +970,7 @@ begin
 end;
 
 function AddTest(const ATestName : string; ARun : TTestRunProc;
-  const ASuite : ^TSuite) : ^TTest;
+  const ASuite : ^TSuite) : ^TTest; overload;
 begin
   Result := DoAddTest(ATestName, ASuite);
   if Assigned(Result) then
@@ -996,7 +996,7 @@ begin
 end;
 
 function AddTest(const ATestName : string; ARun : TTestRun;
-  const ASuiteName : string) : ^TTest;
+  const ASuiteName : string) : ^TTest; overload;
 var
   S : ^TSuite;
 begin
@@ -1007,7 +1007,7 @@ begin
 end;
 
 function AddTest(const ATestName : string; ARun : TTestRunProc;
-  const ASuiteName : string) : ^TTest;
+  const ASuiteName : string) : ^TTest; overload;
 var
   S : ^TSuite;
 begin
@@ -1017,12 +1017,12 @@ begin
     Result := AddTest(ATestName, ARun, S);
 end;
 
-function GetTestIndex(const ASuiteName : string; const ATestName : string) : Integer;
+function GetTestIndex(const ASuiteName : string; const ATestName : string) : Integer; overload;
 begin
   Result := GetTestIndex(GetSuite(ASuiteName), ATestName);
 end;
 
-function GetTestIndex(const ASuite : ^TSuite; const ATestName : string) : Integer;
+function GetTestIndex(const ASuite : ^TSuite; const ATestName : string) : Integer; overload;
 begin
   Result := -1;
   SetTestError(teOK);
@@ -1036,7 +1036,7 @@ begin
     end;
 end;
 
-function GetTestIndex(const ASuite : ^TSuite; const ATest : ^TTest) : Integer;
+function GetTestIndex(const ASuite : ^TSuite; const ATest : ^TTest) : Integer; overload;
 begin
   SetTestError(teOK);
   Result := -1;
@@ -1052,12 +1052,12 @@ begin
     end;
 end;
 
-function GetTestCount(const ASuiteName : string) : Integer;
+function GetTestCount(const ASuiteName : string) : Integer; overload;
 begin
   Result := GetTestCount(GetSuite(ASuiteName));
 end;
 
-function GetTestCount(const ASuite : ^TSuite) : Integer;
+function GetTestCount(const ASuite : ^TSuite) : Integer; overload;
 begin
   SetTestError(teOK);
   Result := -1;
@@ -1067,12 +1067,12 @@ begin
     Result := ASuite^.Tests.Count;
 end;
 
-function GetTest(const ASuiteName : string; const ATestName : string) : PTest;
+function GetTest(const ASuiteName : string; const ATestName : string) : PTest; overload;
 begin
   Result := GetTest(GetSuite(ASuiteName), ATestName);
 end;
 
-function GetTest(const ASuite : ^TSuite; const ATestName : string) : ^TTest;
+function GetTest(const ASuite : ^TSuite; const ATestName : string) : ^TTest; overload;
 var
   I, P : Integer;
   N : string;
@@ -1102,7 +1102,7 @@ begin
     Result := TestListGet(@S^.Tests, I);
 end;
 
-function GetTest(const ASuite : ^TSuite; const ATestIndex : Integer) : ^TTest;
+function GetTest(const ASuite : ^TSuite; const ATestIndex : Integer) : ^TTest; overload;
 begin
   SetTestError(teOK);
   Result := nil;
@@ -1122,7 +1122,7 @@ end;
   ----------------------------------------------------------------------- }
 
 procedure SetTestResultRec(var AResult : TResultRecord; AResultType : TTestResult;
-  AMessage : string; Force : Boolean);
+  AMessage : string; Force : Boolean); overload;
 var
   Prev : TTestResult;
 begin
@@ -1140,19 +1140,19 @@ begin
 end;
 
 procedure SetTestResultRec(var AResult : TResultRecord; AResultType : TTestResult;
-  AMessage : string);
+  AMessage : string); overload;
 begin
   SetTestResultRec(AResult, AResultType, AMessage, False);
 end;
 
 procedure SetTestResult(AResultType : TTestResult; AMessage : string;
-  Force : Boolean);
+  Force : Boolean); overload;
 begin
   if Assigned(CurrentResult) then
     SetTestResultRec(CurrentResult^, AResultType, AMessage, Force);
 end;
 
-procedure SetTestResult(AResultType : TTestResult; AMessage : string);
+procedure SetTestResult(AResultType : TTestResult; AMessage : string); overload;
 begin
   SetTestResult(AResultType, AMessage, False);
 end;
@@ -1202,12 +1202,12 @@ begin
   raise EIgnore.Create(Msg);
 end;
 
-function AssertPassed : Boolean;
+function AssertPassed : Boolean; overload;
 begin
   Result := AssertPassed('');
 end;
 
-function AssertPassed(AMessage : string) : Boolean;
+function AssertPassed(AMessage : string) : Boolean; overload;
 begin
   Result := DoAssert(True, '');
   if Assigned(CurrentResult) then
@@ -1226,7 +1226,7 @@ begin
 end;
 
 function ExpectMessage(const AExpect, AActual : string;
-  Quote : Boolean) : string;
+  Quote : Boolean) : string; overload;
 var
   E, A : string;
 begin
@@ -1240,19 +1240,19 @@ begin
   Result := 'Expected: ' + E + ' Actual: ' + A;
 end;
 
-function ExpectMessage(const AExpect, AActual : string) : string;
+function ExpectMessage(const AExpect, AActual : string) : string; overload;
 begin
   Result := ExpectMessage(AExpect, AActual, False);
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : string) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : string) : Boolean; overload;
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(AExpected, AActual, True),
     AExpected = AActual);
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : Boolean) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Boolean) : Boolean; overload;
 var
   SE, SA : string;
 begin
@@ -1263,28 +1263,28 @@ begin
     AExpected = AActual);
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : Byte) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Byte) : Boolean; overload;
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(IntToStr(AExpected), IntToStr(AActual)),
     AExpected = AActual);
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : Integer) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Integer) : Boolean; overload;
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(IntToStr(AExpected), IntToStr(AActual)),
     AExpected = AActual);
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : Cardinal) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Cardinal) : Boolean; overload;
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(IntToStr(AExpected), IntToStr(AActual)),
     AExpected = AActual);
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : Int64) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Int64) : Boolean; overload;
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(Int64ToStr(AExpected), Int64ToStr(AActual)),
@@ -1324,7 +1324,7 @@ begin
   Result := '0x' + S;
 end;
 
-function AssertEquals(AMessage : string; const AExpected, AActual : Pointer) : Boolean;
+function AssertEquals(AMessage : string; const AExpected, AActual : Pointer) : Boolean; overload;
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(PointerToHex(AExpected), PointerToHex(AActual)),
@@ -1977,7 +1977,7 @@ begin
   Result := CombineError(Result, RunGlobalRunCompleteHandler(CurrentRun));
 end;
 
-function RunSuite(ASuite : ^TSuite) : TTestError;
+function RunSuite(ASuite : ^TSuite) : TTestError; overload;
 begin
   SetTestError(teOK);
   if ASuite = nil then
@@ -1986,22 +1986,22 @@ begin
     Result := DoRunSuite(ASuite);
 end;
 
-function RunSuite(const ASuiteName : string) : TTestError;
+function RunSuite(const ASuiteName : string) : TTestError; overload;
 begin
   Result := RunSuite(GetSuite(ASuiteName));
 end;
 
-function RunSuite(ASuiteIndex : Integer) : TTestError;
+function RunSuite(ASuiteIndex : Integer) : TTestError; overload;
 begin
   Result := RunSuite(GetSuite(ASuiteIndex));
 end;
 
-function RunTest(ASuite : ^TSuite; const ATestName : string) : TTestError;
+function RunTest(ASuite : ^TSuite; const ATestName : string) : TTestError; overload;
 begin
   Result := RunTest(ASuite, GetTest(ASuite, ATestName));
 end;
 
-function RunTest(const ASuiteName : string; const ATestName : string) : TTestError;
+function RunTest(const ASuiteName : string; const ATestName : string) : TTestError; overload;
 var
   S : ^TSuite;
 begin
@@ -2009,7 +2009,7 @@ begin
   Result := RunTest(S, GetTest(S, ATestName));
 end;
 
-function RunTest(ASuite : ^TSuite; ATest : ^TTest) : TTestError;
+function RunTest(ASuite : ^TSuite; ATest : ^TTest) : TTestError; overload;
 begin
   Result := SetTestError(teOK);
   ProcessSysCommandline;
@@ -2083,9 +2083,9 @@ begin
     Halt(0);
 end;
 
-procedure DoRunSysTests(S : PSuite; T : PTest); forward;
+procedure DoRunSysTests(S : PSuite; T : PTest); overload; forward;
 
-procedure RunTest(ARun : TTestRun);
+procedure RunTest(ARun : TTestRun); overload;
 begin
   ProcessSysCommandLine;
   if ARun = nil then
@@ -2462,7 +2462,7 @@ begin
   WriteLn(SHelpExit5);
 end;
 
-procedure DoRunSysTests(S : PSuite; T : PTest);
+procedure DoRunSysTests(S : PSuite; T : PTest); overload;
 var
   R : TTestError;
 begin

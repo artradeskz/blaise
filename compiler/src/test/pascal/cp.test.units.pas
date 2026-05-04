@@ -57,6 +57,16 @@ type
     procedure TestSemantic_Unit_MissingImpl_RaisesError;
     procedure TestSemantic_Unit_ImplOnlyDecl_OK;
 
+    { Interface-section global variable is registered and visible to
+      implementation-section function bodies. }
+    procedure TestSemantic_Unit_IntfVarVisibleInImpl;
+    { Implementation-section type declarations are processed (e.g.
+      enum types declared after the 'implementation' keyword can be
+      used to type subsequent var declarations). }
+    procedure TestSemantic_Unit_ImplTypeDecl;
+    { Forward decl with 'overload' directive parses and analyses. }
+    procedure TestSemantic_Unit_ForwardOverload_OK;
+
     { ------------------------------------------------------------------ }
     { Codegen                                                              }
     { ------------------------------------------------------------------ }
@@ -400,6 +410,58 @@ begin
   IR := GenUnitIR(SrcUnitFuncs);
   AssertTrue('add instruction for Add', Pos('add', IR) > 0);
   AssertTrue('mul instruction for Mul', Pos('mul', IR) > 0);
+end;
+
+procedure TUnitTests.TestSemantic_Unit_IntfVarVisibleInImpl;
+var
+  U: TUnit;
+begin
+  U := AnalyseUnit(
+    'unit U;'                                + LineEnding +
+    'interface'                              + LineEnding +
+    'var Counter: Integer;'                  + LineEnding +
+    'procedure Bump;'                        + LineEnding +
+    'implementation'                         + LineEnding +
+    'procedure Bump;'                        + LineEnding +
+    'begin Counter := Counter + 1 end;'      + LineEnding +
+    'end.');
+  U.Free;
+end;
+
+procedure TUnitTests.TestSemantic_Unit_ImplTypeDecl;
+var
+  U: TUnit;
+begin
+  U := AnalyseUnit(
+    'unit U;'                                + LineEnding +
+    'interface'                              + LineEnding +
+    'procedure Bump;'                        + LineEnding +
+    'implementation'                         + LineEnding +
+    'type'                                   + LineEnding +
+    '  TMode = (mA, mB, mC);'                + LineEnding +
+    'var CurrentMode: TMode;'                + LineEnding +
+    'procedure Bump;'                        + LineEnding +
+    'begin CurrentMode := mA end;'           + LineEnding +
+    'end.');
+  U.Free;
+end;
+
+procedure TUnitTests.TestSemantic_Unit_ForwardOverload_OK;
+var
+  U: TUnit;
+begin
+  U := AnalyseUnit(
+    'unit U;'                                          + LineEnding +
+    'interface'                                        + LineEnding +
+    'function Add(A, B: Integer): Integer; overload;' + LineEnding +
+    'function Add(A, B: Double):  Double;  overload;' + LineEnding +
+    'implementation'                                   + LineEnding +
+    'function Add(A, B: Integer): Integer; overload;' + LineEnding +
+    'begin Result := A + B end;'                       + LineEnding +
+    'function Add(A, B: Double): Double; overload;'    + LineEnding +
+    'begin Result := A + B end;'                       + LineEnding +
+    'end.');
+  U.Free;
 end;
 
 initialization

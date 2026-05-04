@@ -323,7 +323,7 @@ begin
   if AExpected = AActual then
     Exit;
   { nil is compatible with any class, interface, pointer, PChar, or string type }
-  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface, tyPointer, tyPChar, tyString]) then
+  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface, tyPointer, tyPChar, tyString, tyProcedural]) then
     Exit;
   { Two pointer types are compatible when:
       - either is untyped (Pointer), or
@@ -411,8 +411,39 @@ var
 begin
   FTable.PushScope;
   try
-    { Resolve interface type declarations }
+    { Resolve interface type and constant declarations. }
+    AnalyseConstDecls(AUnit.IntfBlock);
     AnalyseTypeDecls(AUnit.IntfBlock);
+
+    { Register interface-section global variables — visible to impl bodies. }
+    for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
+    begin
+      MDecl := nil;  { reuse var below }
+      ParType := FTable.FindType(TVarDecl(AUnit.IntfBlock.Decls.Items[I]).TypeName);
+      if ParType = nil then
+        SemanticError(
+          Format('Unknown type ''%s''',
+            [TVarDecl(AUnit.IntfBlock.Decls.Items[I]).TypeName]),
+          TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Line,
+          TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Col);
+      TVarDecl(AUnit.IntfBlock.Decls.Items[I]).ResolvedType := ParType;
+      TVarDecl(AUnit.IntfBlock.Decls.Items[I]).IsGlobal := True;
+      for J := 0 to TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Names.Count - 1 do
+      begin
+        Sym := TSymbol.Create(
+          TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Names.Strings[J],
+          skVariable, ParType);
+        Sym.IsGlobal := True;
+        if not FTable.Define(Sym) then
+        begin
+          Sym.Free;
+          SemanticError(Format('Duplicate identifier ''%s''',
+            [TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Names.Strings[J]]),
+            TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Line,
+            TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Col);
+        end;
+      end;
+    end;
 
     { Register interface forward declaration signatures }
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
@@ -436,17 +467,60 @@ begin
         MDecl.ResolvedReturnType := ParType;
       end;
 
+      { Compute mangled QBE name for overloaded forward decls. }
+      if MDecl.IsOverload then
+        MDecl.ResolvedQbeName := MDecl.Name + '$' + MangleParamSig(MDecl)
+      else
+        MDecl.ResolvedQbeName := MDecl.Name;
+
       FProcIndex.AddObject(MDecl.Name, MDecl);
 
       if MDecl.ReturnTypeName <> '' then
         Sym := TSymbol.Create(MDecl.Name, skFunction, MDecl.ResolvedReturnType)
       else
         Sym := TSymbol.Create(MDecl.Name, skProcedure, nil);
+      Sym.IsOverload := MDecl.IsOverload;
+      Sym.Decl       := MDecl;
       if not FTable.Define(Sym) then
       begin
         Sym.Free;
         SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
           MDecl.Line, MDecl.Col);
+      end;
+    end;
+
+    { Process implementation-section const + type declarations before
+      walking proc bodies, so that impl-only types and consts are in
+      scope when their referencing routines are analysed. }
+    AnalyseConstDecls(AUnit.ImplBlock);
+    AnalyseTypeDecls(AUnit.ImplBlock);
+
+    { Register impl-section global variables. }
+    for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
+    begin
+      ParType := FTable.FindType(TVarDecl(AUnit.ImplBlock.Decls.Items[I]).TypeName);
+      if ParType = nil then
+        SemanticError(
+          Format('Unknown type ''%s''',
+            [TVarDecl(AUnit.ImplBlock.Decls.Items[I]).TypeName]),
+          TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Line,
+          TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Col);
+      TVarDecl(AUnit.ImplBlock.Decls.Items[I]).ResolvedType := ParType;
+      TVarDecl(AUnit.ImplBlock.Decls.Items[I]).IsGlobal := True;
+      for J := 0 to TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Names.Count - 1 do
+      begin
+        Sym := TSymbol.Create(
+          TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Names.Strings[J],
+          skVariable, ParType);
+        Sym.IsGlobal := True;
+        if not FTable.Define(Sym) then
+        begin
+          Sym.Free;
+          SemanticError(Format('Duplicate identifier ''%s''',
+            [TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Names.Strings[J]]),
+            TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Line,
+            TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Col);
+        end;
       end;
     end;
 
@@ -475,7 +549,25 @@ begin
         ImplDecl.ResolvedReturnType := ParType;
       end;
 
-      ImplIdx := FProcIndex.IndexOf(ImplDecl.Name);
+      { Match impl to forward by signature when overloaded.  Walk all
+        FProcIndex entries with this name; pick the one whose mangled
+        signature equals the impl's. }
+      ImplIdx := -1;
+      if ImplDecl.IsOverload then
+      begin
+        for J := 0 to FProcIndex.Count - 1 do
+          if SameText(FProcIndex.Strings[J], ImplDecl.Name) and
+             (TMethodDecl(FProcIndex.Objects[J]).IsOverload) and
+             (MangleParamSig(TMethodDecl(FProcIndex.Objects[J])) =
+              MangleParamSig(ImplDecl)) then
+          begin
+            ImplIdx := J;
+            Break;
+          end;
+      end
+      else
+        ImplIdx := FProcIndex.IndexOf(ImplDecl.Name);
+
       if ImplIdx >= 0 then
       begin
         { Matched an interface forward decl — verify param count }
@@ -485,17 +577,25 @@ begin
             Format('Signature mismatch for ''%s'': interface has %d params, implementation has %d',
               [ImplDecl.Name, MDecl.Params.Count, ImplDecl.Params.Count]),
             ImplDecl.Line, ImplDecl.Col);
-        { Update index to point to the full implementation }
+        { Carry mangling forward, then update the index entry. }
+        ImplDecl.ResolvedQbeName := MDecl.ResolvedQbeName;
+        ImplDecl.IsOverload      := MDecl.IsOverload;
         FProcIndex.Objects[ImplIdx] := ImplDecl;
       end
       else
       begin
         { Impl-only declaration — register symbol and index it }
+        if ImplDecl.IsOverload then
+          ImplDecl.ResolvedQbeName := ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
+        else
+          ImplDecl.ResolvedQbeName := ImplDecl.Name;
         FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
         else
           Sym := TSymbol.Create(ImplDecl.Name, skProcedure, nil);
+        Sym.IsOverload := ImplDecl.IsOverload;
+        Sym.Decl       := ImplDecl;
         if not FTable.Define(Sym) then
         begin
           Sym.Free;
@@ -557,6 +657,31 @@ begin
   AnalyseConstDecls(AUnit.IntfBlock);
   AnalyseTypeDecls(AUnit.IntfBlock);
 
+  { Register interface-section global variables.  Marked IsGlobal so
+    codegen emits them as data-segment slots rather than stack allocs;
+    visible to callers of this unit. }
+  for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
+  begin
+    VDecl := TVarDecl(AUnit.IntfBlock.Decls.Items[I]);
+    ParType := FTable.FindType(VDecl.TypeName);
+    if ParType = nil then
+      SemanticError(Format('Unknown type ''%s''', [VDecl.TypeName]),
+        VDecl.Line, VDecl.Col);
+    VDecl.ResolvedType := ParType;
+    VDecl.IsGlobal := True;
+    for J := 0 to VDecl.Names.Count - 1 do
+    begin
+      Sym := TSymbol.Create(VDecl.Names.Strings[J], skVariable, ParType);
+      Sym.IsGlobal := True;
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free;
+        SemanticError(Format('Duplicate identifier ''%s''',
+          [VDecl.Names.Strings[J]]), VDecl.Line, VDecl.Col);
+      end;
+    end;
+  end;
+
   { Register interface forward declarations for standalone procs/funcs.
     Must happen before AnalyseMethodBodies so class method bodies can call
     them (e.g. TStringList.SetText calls SplitIntoList). }
@@ -581,12 +706,19 @@ begin
       MDecl.ResolvedReturnType := ParType;
     end;
 
+    if MDecl.IsOverload then
+      MDecl.ResolvedQbeName := MDecl.Name + '$' + MangleParamSig(MDecl)
+    else
+      MDecl.ResolvedQbeName := MDecl.Name;
+
     FProcIndex.AddObject(MDecl.Name, MDecl);
 
     if MDecl.ReturnTypeName <> '' then
       Sym := TSymbol.Create(MDecl.Name, skFunction, MDecl.ResolvedReturnType)
     else
       Sym := TSymbol.Create(MDecl.Name, skProcedure, nil);
+    Sym.IsOverload := MDecl.IsOverload;
+    Sym.Decl       := MDecl;
     if not FTable.Define(Sym) then
     begin
       Sym.Free;
@@ -609,6 +741,7 @@ begin
     { Register impl-section global variables — marked IsGlobal so codegen
       emits them as data-segment slots rather than stack allocations. }
     AnalyseConstDecls(AUnit.ImplBlock);
+    AnalyseTypeDecls(AUnit.ImplBlock);
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
     begin
       VDecl := TVarDecl(AUnit.ImplBlock.Decls.Items[I]);
@@ -652,7 +785,23 @@ begin
         ImplDecl.ResolvedReturnType := ParType;
       end;
 
-      ImplIdx := FProcIndex.IndexOf(ImplDecl.Name);
+      { Match impl to forward by signature when overloaded. }
+      ImplIdx := -1;
+      if ImplDecl.IsOverload then
+      begin
+        for J := 0 to FProcIndex.Count - 1 do
+          if SameText(FProcIndex.Strings[J], ImplDecl.Name) and
+             (TMethodDecl(FProcIndex.Objects[J]).IsOverload) and
+             (MangleParamSig(TMethodDecl(FProcIndex.Objects[J])) =
+              MangleParamSig(ImplDecl)) then
+          begin
+            ImplIdx := J;
+            Break;
+          end;
+      end
+      else
+        ImplIdx := FProcIndex.IndexOf(ImplDecl.Name);
+
       if ImplIdx >= 0 then
       begin
         { Matches an interface forward decl — verify param count and update index }
@@ -662,16 +811,24 @@ begin
             Format('Signature mismatch for ''%s'': interface has %d params, implementation has %d',
               [ImplDecl.Name, MDecl.Params.Count, ImplDecl.Params.Count]),
             ImplDecl.Line, ImplDecl.Col);
+        ImplDecl.ResolvedQbeName := MDecl.ResolvedQbeName;
+        ImplDecl.IsOverload      := MDecl.IsOverload;
         FProcIndex.Objects[ImplIdx] := ImplDecl;
       end
       else
       begin
         { Impl-only declaration — register in impl scope (does not persist) }
+        if ImplDecl.IsOverload then
+          ImplDecl.ResolvedQbeName := ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
+        else
+          ImplDecl.ResolvedQbeName := ImplDecl.Name;
         FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
         else
           Sym := TSymbol.Create(ImplDecl.Name, skProcedure, nil);
+        Sym.IsOverload := ImplDecl.IsOverload;
+        Sym.Decl       := ImplDecl;
         if not FTable.Define(Sym) then
         begin
           Sym.Free;
@@ -2416,7 +2573,7 @@ begin
       end;
     end;
 
-    if not ADecl.IsExternal then
+    if (not ADecl.IsExternal) and (ADecl.Body <> nil) then
       AnalyseBlock(ADecl.Body);
   finally
     Dec(FScopeDepth);
@@ -3258,7 +3415,7 @@ begin
       Format('Undeclared variable ''%s''', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
   end;
-  if not ((RecSym.Kind = skVariable) or (RecSym.Kind = skParameter)) then
+  if not (RecSym.Kind in [skVariable, skParameter, skVarParameter]) then
     SemanticError(
       Format('''%s'' is not a variable', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
@@ -3601,7 +3758,10 @@ begin
       Par := TMethodParam(MDecl.Params.Items[I]);
       if Par.IsVarParam then
       begin
-        if not (TASTExpr(ACall.Args.Items[I]) is TIdentExpr) then
+        { Var argument must be an L-value: simple ident, field access,
+          or pointer-deref-then-field (e.g. P^.Field). }
+        if not ((TASTExpr(ACall.Args.Items[I]) is TIdentExpr) or
+                (TASTExpr(ACall.Args.Items[I]) is TFieldAccessExpr)) then
           SemanticError(
             Format('var argument %d of ''%s'' must be a variable',
               [I + 1, ACall.Name]),

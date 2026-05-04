@@ -53,6 +53,12 @@ type
     { Var-param forwarding: passing a var param directly to another var param }
     procedure TestCodegen_VarParam_ForwardToProc;
     procedure TestCodegen_VarParam_ForwardToMethod;
+
+    { L-value var args beyond simple identifiers: a record-field access
+      (R.F) and a pointer-deref-then-field (P^.F) must both be accepted
+      where the parameter is var-typed. }
+    procedure TestSemantic_VarParam_FieldAccess_OK;
+    procedure TestSemantic_VarParam_DerefField_OK;
   end;
 
 implementation
@@ -337,6 +343,47 @@ begin
     Pos('loadl %_var_N', IR) > 0);
   AssertFalse('must NOT pass slot address directly to SetVal',
     Pos('call $THelper_SetVal(l %_var_N)', IR) > 0);
+end;
+
+procedure TVarParamTests.TestSemantic_VarParam_FieldAccess_OK;
+var
+  Prog: TProgram;
+begin
+  { Pass R.Count (a field access expression) as a var argument.
+    Must analyse without error — field accesses are L-values. }
+  Prog := AnalyseSrc(
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  TRec = record Count: Integer; end;'                  + LineEnding +
+    'procedure Bump(var N: Integer);'                       + LineEnding +
+    'begin Inc(N) end;'                                     + LineEnding +
+    'var R: TRec;'                                          + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  R.Count := 0;'                                       + LineEnding +
+    '  Bump(R.Count)'                                       + LineEnding +
+    'end.');
+  Prog.Free;
+end;
+
+procedure TVarParamTests.TestSemantic_VarParam_DerefField_OK;
+var
+  Prog: TProgram;
+begin
+  { Pass P^.Count (pointer deref + field) as a var argument. }
+  Prog := AnalyseSrc(
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  TRec = record Count: Integer; end;'                  + LineEnding +
+    '  PRec = ^TRec;'                                       + LineEnding +
+    'procedure Bump(var N: Integer);'                       + LineEnding +
+    'begin Inc(N) end;'                                     + LineEnding +
+    'var P: PRec; R: TRec;'                                 + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  P := @R;'                                            + LineEnding +
+    '  P^.Count := 0;'                                      + LineEnding +
+    '  Bump(P^.Count)'                                      + LineEnding +
+    'end.');
+  Prog.Free;
 end;
 
 initialization

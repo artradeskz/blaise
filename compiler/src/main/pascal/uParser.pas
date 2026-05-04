@@ -2231,18 +2231,45 @@ begin
       Result.ReturnTypeName := ParseTypeName;
     end;
     Expect(tkSemicolon);
-    { optional external directive }
-    if Check(tkExternal) then
+    { Directive loop — forward declarations may carry overload, external,
+      and the same identifier-form directives accepted by ParseMethodDecl. }
+    while True do
     begin
-      Result.IsExternal := True;
-      Advance;
-      if Check(tkIdent) and SameText(FCurrent.Value, 'name') then
+      if Check(tkExternal) then
+      begin
+        Result.IsExternal := True;
+        Advance;
+        if Check(tkIdent) and SameText(FCurrent.Value, 'name') then
+        begin
+          Advance;
+          Result.ExternalName := FCurrent.Value;
+          Expect(tkStringLit);
+        end;
+        if Check(tkSemicolon) then Advance;
+      end
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'overload') then
+      begin
+        Result.IsOverload := True;
+        Advance;
+        if Check(tkSemicolon) then Advance;
+      end
+      else if Check(tkIdent) and
+              (SameText(FCurrent.Value, 'inline')      or
+               SameText(FCurrent.Value, 'stdcall')     or
+               SameText(FCurrent.Value, 'cdecl')       or
+               SameText(FCurrent.Value, 'register')    or
+               SameText(FCurrent.Value, 'pascal')      or
+               SameText(FCurrent.Value, 'safecall')    or
+               SameText(FCurrent.Value, 'forward')     or
+               SameText(FCurrent.Value, 'deprecated')  or
+               SameText(FCurrent.Value, 'platform')    or
+               SameText(FCurrent.Value, 'experimental')) then
       begin
         Advance;
-        Result.ExternalName := FCurrent.Value;
-        Expect(tkStringLit);
-      end;
-      if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance;
+      end
+      else
+        Break;
     end;
     { Body remains nil — forward or external declaration }
   except
