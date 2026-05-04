@@ -39,6 +39,12 @@ type
     procedure TestSemantic_AssignWrongReturnType_Fails;
     procedure TestSemantic_AssignWrongParamCount_Fails;
 
+    { Semantic — indirect-call argument type checking.
+      Calls through a procedural-typed variable must validate each
+      argument's type against the signature, not just the arg count. }
+    procedure TestSemantic_IndirectCallStmt_WrongArgType_Fails;
+    procedure TestSemantic_IndirectCallExpr_WrongArgType_Fails;
+
     { Codegen — emission }
     procedure TestCodegen_ProceduralVar_AllocatedAsPointer;
     procedure TestCodegen_AddrOfFunc_EmitsFunctionLabel;
@@ -375,6 +381,65 @@ begin
     Raised := True;
   end;
   AssertTrue('Should raise on incompatible param count', Raised);
+end;
+
+procedure TProcTypesTests.TestSemantic_IndirectCallStmt_WrongArgType_Fails;
+var
+  Raised: Boolean;
+begin
+  { Statement-form indirect call: H('s') where H expects Integer must
+    be rejected at semantic time, not silently miscompiled. }
+  Raised := False;
+  try
+    GenIR(
+      'program Test;'                                 + LineEnding +
+      'type'                                          + LineEnding +
+      '  THandler = procedure(N: Integer);'           + LineEnding +
+      'procedure DoIt(N: Integer);'                   + LineEnding +
+      'begin'                                         + LineEnding +
+      'end;'                                          + LineEnding +
+      'var H: THandler;'                              + LineEnding +
+      'begin'                                         + LineEnding +
+      '  H := @DoIt;'                                 + LineEnding +
+      '  H(''oops'')'                                 + LineEnding +
+      'end.'
+    );
+  except
+    Raised := True;
+  end;
+  AssertTrue(
+    'Indirect call statement should reject string where Integer expected',
+    Raised);
+end;
+
+procedure TProcTypesTests.TestSemantic_IndirectCallExpr_WrongArgType_Fails;
+var
+  Raised: Boolean;
+begin
+  { Expression-form indirect call: R := F('s') where F expects Integer
+    must also be rejected at semantic time. }
+  Raised := False;
+  try
+    GenIR(
+      'program Test;'                                 + LineEnding +
+      'type'                                          + LineEnding +
+      '  TIntFn = function(N: Integer): Integer;'     + LineEnding +
+      'function Square(N: Integer): Integer;'         + LineEnding +
+      'begin'                                         + LineEnding +
+      '  Result := N * N'                             + LineEnding +
+      'end;'                                          + LineEnding +
+      'var F: TIntFn; R: Integer;'                    + LineEnding +
+      'begin'                                         + LineEnding +
+      '  F := @Square;'                               + LineEnding +
+      '  R := F(''oops'')'                            + LineEnding +
+      'end.'
+    );
+  except
+    Raised := True;
+  end;
+  AssertTrue(
+    'Indirect call expression should reject string where Integer expected',
+    Raised);
 end;
 
 { ── Codegen tests ────────────────────────────────────────────────────────── }

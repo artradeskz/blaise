@@ -3749,6 +3749,8 @@ var
   ArgType: TTypeDesc;
   Idx:     Integer;
   I:       Integer;
+  PT:      TProceduralTypeDesc;
+  PPar:    TProcParamInfo;
 begin
   Sym := FTable.Lookup(ACall.Name);
   if Sym = nil then
@@ -3794,13 +3796,30 @@ begin
     ACall.IsIndirectCall       := True;
     ACall.IndirectCallIsGlobal := Sym.IsGlobal;
     ACall.ResolvedProcType     := Sym.TypeDesc;
-    if ACall.Args.Count <> TProceduralTypeDesc(Sym.TypeDesc).Params.Count then
+    PT := TProceduralTypeDesc(Sym.TypeDesc);
+    if ACall.Args.Count <> PT.Params.Count then
       SemanticError(Format(
         'Indirect call ''%s'' expects %d argument(s), got %d',
-        [ACall.Name, TProceduralTypeDesc(Sym.TypeDesc).Params.Count,
-         ACall.Args.Count]), ACall.Line, ACall.Col);
+        [ACall.Name, PT.Params.Count, ACall.Args.Count]),
+        ACall.Line, ACall.Col);
     for I := 0 to ACall.Args.Count - 1 do
-      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+    begin
+      ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+      PPar    := TProcParamInfo(PT.Params.Items[I]);
+      { Var-param actual must be an L-value; check before the type match
+        so the diagnostic matches the regular-call path. }
+      if PPar.IsVarParam and
+         not ((TASTExpr(ACall.Args.Items[I]) is TIdentExpr) or
+              (TASTExpr(ACall.Args.Items[I]) is TFieldAccessExpr) or
+              (TASTExpr(ACall.Args.Items[I]) is TDerefExpr)) then
+        SemanticError(
+          Format('var argument %d of ''%s'' must be a variable',
+            [I + 1, ACall.Name]),
+          ACall.Line, ACall.Col);
+      CheckTypesMatch(PPar.TypeDesc, ArgType,
+        Format('argument %d of ''%s''', [I + 1, ACall.Name]),
+        ACall.Line, ACall.Col);
+    end;
     Exit;
   end;
 
@@ -3945,6 +3964,8 @@ var
   ArgType: TTypeDesc;
   Idx:     Integer;
   I:       Integer;
+  PT:      TProceduralTypeDesc;
+  PPar:    TProcParamInfo;
 begin
   { SizeOf(TypeName) — compile-time type size, returns Integer }
   if SameText(AExpr.Name, 'SizeOf') then
@@ -4077,14 +4098,29 @@ begin
     AExpr.IndirectCallIsGlobal := Sym.IsGlobal;
     AExpr.ResolvedProcType     := Sym.TypeDesc;
     { Validate arg count + types against the signature. }
-    if AExpr.Args.Count <> TProceduralTypeDesc(Sym.TypeDesc).Params.Count then
+    PT := TProceduralTypeDesc(Sym.TypeDesc);
+    if AExpr.Args.Count <> PT.Params.Count then
       SemanticError(Format(
         'Indirect call ''%s'' expects %d argument(s), got %d',
-        [AExpr.Name, TProceduralTypeDesc(Sym.TypeDesc).Params.Count,
-         AExpr.Args.Count]), AExpr.Line, AExpr.Col);
+        [AExpr.Name, PT.Params.Count, AExpr.Args.Count]),
+        AExpr.Line, AExpr.Col);
     for I := 0 to AExpr.Args.Count - 1 do
-      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-    Result := TProceduralTypeDesc(Sym.TypeDesc).ReturnType;
+    begin
+      ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+      PPar    := TProcParamInfo(PT.Params.Items[I]);
+      if PPar.IsVarParam and
+         not ((TASTExpr(AExpr.Args.Items[I]) is TIdentExpr) or
+              (TASTExpr(AExpr.Args.Items[I]) is TFieldAccessExpr) or
+              (TASTExpr(AExpr.Args.Items[I]) is TDerefExpr)) then
+        SemanticError(
+          Format('var argument %d of ''%s'' must be a variable',
+            [I + 1, AExpr.Name]),
+          AExpr.Line, AExpr.Col);
+      CheckTypesMatch(PPar.TypeDesc, ArgType,
+        Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    end;
+    Result := PT.ReturnType;
     if Result = nil then
       Result := FTable.TypeVoid;
     AExpr.ResolvedType := Result;

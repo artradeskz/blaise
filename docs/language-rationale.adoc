@@ -1228,11 +1228,32 @@ appended after `$`:
 | `@X` | var/out parameter of X
 |===
 
-Example: `procedure Log(const S: string; N: Integer); overload;` emits
-as `$Log$Si`.  Phase A of the implementation uses an arity-only suffix
-(`$N<arity>`) as a temporary mangling — the type-code scheme above
-becomes the permanent form once Phase B (type-distinct resolution)
-lands.
+Example: `procedure Log(const S: string; N: Integer); overload;` is
+named `Log$Si` after type-code mangling, then escaped through `QBEMangle`
+to the QBE symbol `$Log_D_Si` (the leading `$` sigil is preserved; any
+embedded sigil characters are escaped as listed below).  Phase A of the
+implementation uses an arity-only suffix (`$N<arity>`) as a temporary
+mangling — the type-code scheme above becomes the permanent form once
+Phase B (type-distinct resolution) lands.
+
+The mangled name still contains the original sigil characters (`$`,
+`@`, `^`) which conflict with the QBE symbol grammar in some downstream
+toolchains.  `QBEMangle` rewrites them as alphabetic escapes before the
+name is emitted to IR:
+
+[cols="1,3"]
+|===
+| Sigil | Escape
+
+| `$` | `_D_` (overload delimiter)
+| `@` | `_V_` (var-param prefix)
+| `^` | `_P_` (pointer prefix)
+|===
+
+Function definitions, call sites, and vtable data entries all route
+through `QBEMangle`, so the same overload always reaches the same QBE
+symbol — a previous mismatch between definition and call site is now
+covered by the regression tests in `cp.test.overload.pas`.
 
 === Alternatives rejected
 

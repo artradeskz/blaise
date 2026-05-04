@@ -728,7 +728,12 @@ Phase 1 (bootstrap pipeline) is complete. Phase 2 type-system work is in progres
 | `var` parameters (pass-by-reference)
 | Done
 | Caller passes stack address; callee spills pointer, double-dereferences on read,
-  stores through pointer on write; `skVarParameter` in symbol table
+  stores through pointer on write; `skVarParameter` in symbol table.
+  Records and static arrays declared as plain value parameters use the same
+  by-pointer ABI (the local slot holds a pointer to the caller's storage,
+  not the aggregate bytes), so semantic marks both `skVarParameter` and
+  `skParameter`-of-aggregate as `IsVarParam` for codegen.  Scalar value
+  parameters are unaffected and continue to be passed by value.
 
 | Unit `interface`/`implementation` compilation
 | Done
