@@ -71,6 +71,12 @@ type
     procedure TestSemantic_IndexedProperty_MissingIndex_RaisesError;
     procedure TestCodegen_IndexedProperty_Read_EmitsGetterWithIndex;
     procedure TestCodegen_IndexedProperty_Write_EmitsSetterWithIndex;
+
+    { Regression: 'Outer.Inner.Indexed[Variable]' — chained base + indexed
+      property read with a variable index.  Previously crashed the codegen
+      because the analyser skipped AnalyseExpr on PropIndexExpr in the
+      Base<>nil branch, leaving its ResolvedType nil. }
+    procedure TestCodegen_IndexedProperty_ChainedBase_VarIndex_Compiles;
   end;
 
 implementation
@@ -553,6 +559,41 @@ var
 begin
   IR := GenIR(SrcIndexedPropWriteUsage);
   AssertTrue('indexed write emits setter call', Pos('call $TList_Put', IR) > 0);
+end;
+
+procedure TPropertyTests.TestCodegen_IndexedProperty_ChainedBase_VarIndex_Compiles;
+const
+  Src =
+    'program P;'                                                    + LineEnding +
+    'type'                                                          + LineEnding +
+    '  TItems = class'                                              + LineEnding +
+    '    function Get(AIndex: Integer): Integer;'                   + LineEnding +
+    '    begin Result := AIndex end;'                               + LineEnding +
+    '    property Strings[Index: Integer]: Integer read Get;'       + LineEnding +
+    '  end;'                                                        + LineEnding +
+    '  TOuter = class'                                              + LineEnding +
+    '    FInner: TItems;'                                           + LineEnding +
+    '    property Inner: TItems read FInner;'                       + LineEnding +
+    '  end;'                                                        + LineEnding +
+    'var'                                                           + LineEnding +
+    '  O: TOuter;'                                                  + LineEnding +
+    '  I, V: Integer;'                                              + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  O := TOuter.Create;'                                         + LineEnding +
+    '  O.FInner := TItems.Create;'                                  + LineEnding +
+    '  I := 7;'                                                     + LineEnding +
+    '  V := O.Inner.Strings[I];'                                    + LineEnding +
+    '  WriteLn(V)'                                                  + LineEnding +
+    'end.';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  { The fix routes both segments through method-backed property reads.
+    Inner is field-backed (read FInner) so the inner step is a load; the
+    outer Strings[Index] is method-backed and must emit a call to Get
+    threaded with the variable I. }
+  AssertTrue('outer indexed getter emitted', Pos('call $TItems_Get', IR) > 0);
 end;
 
 initialization

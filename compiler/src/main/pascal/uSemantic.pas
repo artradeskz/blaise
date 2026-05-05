@@ -5211,12 +5211,23 @@ begin
         Result := PropInfo.TypeDesc;
         Exit;
       end;
-      { Method-backed property (including indexed; index attached later by subscript analyser) }
+      { Method-backed property (including indexed: the parser attaches the
+        '[idx]' to AAccess.PropIndexExpr when it parses 'Base.Prop[idx]'). }
       if (PropInfo <> nil) and (PropInfo.ReadMethod <> '') then
       begin
+        if PropInfo.IndexParamName <> '' then
+        begin
+          if AAccess.PropIndexExpr = nil then
+            SemanticError(
+              Format('Indexed property ''%s'' requires an index expression',
+                [AAccess.FieldName]),
+              AAccess.Line, AAccess.Col);
+          AnalyseExpr(AAccess.PropIndexExpr);
+        end;
         AAccess.PropRead := PropInfo;
         AAccess.PropOwnerType := RT.Name;
         Result := PropInfo.TypeDesc;
+        AAccess.ResolvedType := Result;
         Exit;
       end;
       { Zero-arg method call via field access: Obj.Method (no parens) }

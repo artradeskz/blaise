@@ -111,7 +111,7 @@ Program
     ;
 
 Unit
-    = UNIT IDENT SEMICOLON
+    = UNIT UnitName SEMICOLON
       InterfaceSection
       ImplementationSection
       DOT
@@ -139,7 +139,8 @@ UnitName
 
 (* Dotted unit names map to path-separated files: Generics.Collections →
  * Generics/Collections.pas.  The dot is part of the name, not a field
- * access operator; it is only valid in the UsesClause position. *)
+ * access operator; it is valid in the Unit declaration header and in
+ * any UnitName position inside a UsesClause. *)
 
 
 (* ═══════════════════════════════════════════════════════════════════════════

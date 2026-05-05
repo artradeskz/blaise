@@ -2373,6 +2373,17 @@ begin
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
+    { Dotted unit names: 'unit bcl.testing;' / 'unit Generics.Collections;'.
+      Same shape as ParseUsesList — repeat (tkDot tkIdent). }
+    while Check(tkDot) do
+    begin
+      Advance;
+      if not Check(tkIdent) then
+        raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      Result.Name := Result.Name + '.' + FCurrent.Value;
+      Advance;
+    end;
     Expect(tkSemicolon);
 
     { Interface section }
