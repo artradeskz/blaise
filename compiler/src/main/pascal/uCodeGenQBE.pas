@@ -2900,21 +2900,32 @@ begin
 end;
 
 procedure TCodeGenQBE.EmitTypeInfoDefs(AProg: TProgram);
-{ Emit one $typeinfo_T data item per class type.
-  Layout: { l parent, l impllist, l name, l methods }
+{ Emit one $typeinfo_T data item per class type.  Each typeinfo data
+  block has 7 l-slots, in order:
+
     Slot 0 (offset  0): parent typeinfo pointer (0 = root)
     Slot 1 (offset  8): impllist pointer (0 = no interfaces)
     Slot 2 (offset 16): pointer to class name string literal
     Slot 3 (offset 24): pointer to published-method table (0 = none)
-                        Table layout: { l count, [l name, l addr] x count }.
-                        TObject.MethodAddress walks vtable[0]→typeinfo→
-                        slot 3, then climbs the parent chain.
+                        Table holds count followed by (name, code) pairs.
+                        TObject.MethodAddress walks vtable[0] -> typeinfo
+                        -> slot 3, then climbs the parent chain.
+    Slot 4 (offset 32): total instance size in bytes (vptr + fields)
+    Slot 5 (offset 40): pointer to $_FieldCleanup_<T> for this class
+    Slot 6 (offset 48): pointer to $vtable_<T> for this class
+
+  Slots 4-6 are read by _ClassCreate(TInfo) to allocate, install the
+  vtable, and arrange for ARC field cleanup on release — the runtime
+  equivalent of the inline lowering EmitConstructorCall produces for
+  the static 'TFoo.Create' form.
 
   TObject is the built-in root class; any user class with an explicit
   class(TObject, IFoo) parent list resolves Parent to TObject's
   TRecordTypeDesc, so we emit a typeinfo stub for TObject unconditionally
   to satisfy the linker.  Its parent slot is nil and its impllist slot
-  is nil because TObject implements no interfaces. }
+  is nil because TObject implements no interfaces.  TObject also gets
+  a vtable stub and an empty field-cleanup function so its typeinfo
+  can name them. }
 var
   I, J, PubCount:  Integer;
   TD:              TTypeDecl;
@@ -2930,7 +2941,8 @@ var
   MethLine:        string;
 begin
   EmitLine('data $typeinfo_TObject = { l 0, l 0, l ' +
-           EmitClassNameRef('TObject') + ', l 0 }');
+           EmitClassNameRef('TObject') + ', l 0' +
+           ', l 8, l $_FieldCleanup_TObject, l $vtable_TObject }');
 
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -2977,7 +2989,10 @@ begin
     EmitLine('data $typeinfo_' + TD.Name +
              ' = { l ' + ParentStr + ', l ' + ImplStr +
              ', l ' + EmitClassNameRef(TD.Name) +
-             ', l ' + MethStr + ' }');
+             ', l ' + MethStr +
+             ', l ' + IntToStr(RT.TotalSize) +
+             ', l $_FieldCleanup_' + TD.Name +
+             ', l $vtable_' + TD.Name + ' }');
   end;
 
   { Generic instances — no published-method table emission yet (the
@@ -2994,7 +3009,10 @@ begin
       ParentStr := '0';
     ImplStr := '0';
     EmitLine('data $typeinfo_' + MName + ' = { l ' + ParentStr + ', l ' + ImplStr +
-             ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0 }');
+             ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0' +
+             ', l ' + IntToStr(RT.TotalSize) +
+             ', l $_FieldCleanup_' + MName +
+             ', l $vtable_' + MName + ' }');
   end;
 
   EmitLine('');
@@ -3002,7 +3020,9 @@ end;
 
 procedure TCodeGenQBE.EmitVTableDefs(AProg: TProgram);
 { Vtable layout: slot 0 = $typeinfo_T pointer, slots 1..N = virtual method ptrs.
-  Dispatch uses (VTableSlot + 1) * 8 to skip the typeinfo slot. }
+  Dispatch uses (VTableSlot + 1) * 8 to skip the typeinfo slot.
+  TObject's vtable carries Destroy and ToString — referenced by every
+  user class through inheritance and by the typeinfo's vtable slot. }
 var
   I, S:  Integer;
   TD:    TTypeDecl;
@@ -3013,6 +3033,8 @@ var
   Line:  string;
   MName: string;
 begin
+  EmitLine('data $vtable_TObject = { l $typeinfo_TObject' +
+           ', l $TObject_Destroy, l $TObject_ToString }');
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
@@ -3202,7 +3224,9 @@ end;
 procedure TCodeGenQBE.EmitFieldCleanupDefs(AProg: TProgram);
 { Emit a _FieldCleanup_<T> function for every declared class and every
   generic class instantiation.  The constructor lowering references these
-  functions by name; see the _ClassAlloc call in EmitExpr. }
+  functions by name; see the _ClassAlloc call in EmitExpr.
+  TObject also gets a no-op stub so the typeinfo's fieldcleanup slot
+  can name a real symbol — needed by _ClassCreate's runtime path. }
 var
   I:     Integer;
   TD:    TTypeDecl;
@@ -3210,6 +3234,11 @@ var
   RT:    TRecordTypeDesc;
   GI:    TGenericInstance;
 begin
+  EmitLine('function $_FieldCleanup_TObject(l %self) {');
+  EmitLine('@start');
+  EmitLine('  ret');
+  EmitLine('}');
+  EmitLine('');
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);

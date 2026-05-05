@@ -314,9 +314,13 @@ const
     'begin end.';
 var IR: string;
 begin
+  { Layout: parent, impllist, name, methods, totalsize, fieldcleanup, vtable.
+    The first four slots remain unchanged from Step 11b; the trailing
+    three were added in Step 11e to support runtime ClassCreate. }
   IR := GenIR(Src);
-  AssertTrue('typeinfo emits four l-slots',
-    Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l 0, l $__cn_TFoo + 12, l 0 }', IR) > 0);
+  AssertTrue('typeinfo emits seven l-slots, first four unchanged',
+    Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l 0, l $__cn_TFoo + 12, l 0' +
+        ', l 8, l $_FieldCleanup_TFoo, l $vtable_TFoo }', IR) > 0);
 end;
 
 procedure TPublishedRTTITests.TestCodegen_NoPublishedMethods_MethodsSlotZero;
@@ -334,7 +338,7 @@ var IR: string;
 begin
   IR := GenIR(Src);
   AssertTrue('typeinfo methods slot is 0 when no published methods',
-    Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l 0, l $__cn_TFoo + 12, l 0 }', IR) > 0);
+    Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l 0, l $__cn_TFoo + 12, l 0,', IR) > 0);
   AssertEquals('no methods table emitted', 0, Pos('$methods_TFoo', IR));
 end;
 
@@ -354,7 +358,7 @@ begin
   IR := GenIR(Src);
   AssertTrue('methods table emitted', Pos('$methods_TFoo', IR) > 0);
   AssertTrue('typeinfo points at methods table',
-    Pos(', l $methods_TFoo }', IR) > 0);
+    Pos(', l $methods_TFoo,', IR) > 0);
 end;
 
 procedure TPublishedRTTITests.TestCodegen_PublishedMethods_TableCount;

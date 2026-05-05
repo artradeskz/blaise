@@ -587,9 +587,10 @@ var
   IR: string;
 begin
   IR := GenIR(SrcClassImplements);
-  { Class with implements: parent, impllist, nameptr, methods. }
+  { Class with implements: parent, impllist, nameptr, methods, then
+    totalsize/fieldcleanup/vtable (Step 11e). }
   AssertTrue('TFoo typeinfo has impllist field',
-    Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l $impllist_TFoo, l $__cn_TFoo + 12, l 0 }', IR) > 0);
+    Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l $impllist_TFoo, l $__cn_TFoo + 12, l 0,', IR) > 0);
 end;
 
 procedure TInterfaceTests.TestCodegen_Impllist_Emitted;

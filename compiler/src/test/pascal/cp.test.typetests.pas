@@ -336,20 +336,21 @@ end;
 procedure TTypeTestTests.TestCodegen_TypeInfo_ParentPtr_IsZero_ForRoot;
 var IR: string;
 begin
-  { Root class (no parent): parent=0, impllist=0, nameptr=&ClassName, methods=0. }
+  { Root class (no parent): parent=0, impllist=0, nameptr=&ClassName,
+    methods=0, then totalsize/fieldcleanup/vtable (Step 11e). }
   IR := GenIR(SrcBase);
   AssertTrue('root typeinfo has zero parent ptr',
-    Pos('$typeinfo_TAnimal = { l 0, l 0, l $__cn_TAnimal + 12, l 0 }', IR) > 0);
+    Pos('$typeinfo_TAnimal = { l 0, l 0, l $__cn_TAnimal + 12, l 0,', IR) > 0);
 end;
 
 procedure TTypeTestTests.TestCodegen_TypeInfo_ParentPtr_ForDerived;
 var IR: string;
 begin
   { Derived class typeinfo: parent=$typeinfo_TAnimal, impllist=0,
-    nameptr=&ClassName, methods=0. }
+    nameptr=&ClassName, methods=0, then size/cleanup/vtable. }
   IR := GenIR(SrcInherit);
   AssertTrue('derived typeinfo refs parent',
-    Pos('$typeinfo_TDog = { l $typeinfo_TAnimal, l 0, l $__cn_TDog + 12, l 0 }', IR) > 0);
+    Pos('$typeinfo_TDog = { l $typeinfo_TAnimal, l 0, l $__cn_TDog + 12, l 0,', IR) > 0);
 end;
 
 procedure TTypeTestTests.TestCodegen_Vtable_StartsWithTypeInfo;
