@@ -1,6 +1,4 @@
 = Blaise Pascal Compiler
-:toc: left
-:toclevels: 2
 :icons: font
 :source-highlighter: rouge
 
