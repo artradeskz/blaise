@@ -9,7 +9,7 @@
 Blaise is a next-generation Object Pascal compiler built from the ground up to eliminate decades of legacy baggage. It prioritizes developer productivity, memory safety, and high-performance execution.
 
 
-== Design Philosophy
+== ✨ The Vision
 
 The Object Pascal ecosystem has two options: Embarcadero Delphi (proprietary,
 Windows-first) and Free Pascal (open source but carrying 30 years of accumulated
@@ -35,6 +35,83 @@ The result — A modern, cross-platform Object Pascal compiler targeting native 
 https://c9x.me/compile/[QBE] (and eventually LLVM). Single language mode,
 single string type, zero-GUID interfaces, reified generics, and first-class
 https://github.com/graemeg/opdebugger[OPDF] debug format support.
+
+
+== 🚀 Project Status
+
+* **Self-Hosting:** Yes. Blaise currently bootstraps and recompiles itself with byte-for-byte exact matches.
+* **Testing:** 1200+ tests and growing (Test-Driven Development from day one).
+* **Backends:** Currently utilizing a QBE backend, with an LLVM backend in active development.
+
+
+[cols="1,3,1", options="header"]
+|===
+| Phase | Goal | Status
+
+| 1
+| Bootstrap pipeline — Hello World on Linux x86_64 via PasBuild
+| Complete ✅
+
+| 2
+| Type system — classes, records, ARC, exceptions
+| Complete ✅
+
+| 3
+| Generics + zero-GUID interfaces
+| Complete ✅
+
+| 4
+| OPDF debug info emission
+| Complete ✅
+
+| 5
+| Self-hosting + LLVM + Windows + macOS ARM64
+| In-Progress
+
+| 6
+| LSP + VS Code extension
+| Planned
+
+| 7
+| Migration analyser for FPC/Delphi codebases
+| Planned
+|===
+
+== What Is Dropped From Classic Pascal
+
+[cols="1,3", options="header"]
+|===
+| Feature | Reason for removal
+
+| `ShortString`, `AnsiString`, `WideString`, `UnicodeString`
+| Replaced by a single UTF-8 reference-counted `string` type
+
+| `with` statement
+| Source of hard-to-diagnose symbol resolution bugs; breaks static analysis
+
+| Old-style `object` types
+| Use `record` (stack/value) or `class` (heap/reference) instead
+
+| COM-style interface GUIDs
+| Interface dispatch via compile-time vtable; GUIDs are unnecessary complexity
+
+| Multiple language modes
+| One dialect, maintained well, beats five dialects maintained poorly
+
+| `assign`, `reset`, `rewrite`, `blockread`
+| Replaced by a stream-based I/O RTL
+
+| `TObject` vs `TInterfacedObject` split
+| One unified class model under automatic reference counting; `[Weak]`
+  breaks cycles
+|===
+
+== 📢 Community
+
+The core architecture is still being finalised, so the project is not yet
+accepting code contributions. Feedback on language design, syntax choices, and
+the future direction of Blaise is very welcome — please use the
+https://github.com/graemeg/blaise/discussions[Discussions] tab on GitHub.
 
 
 == Repository Layout
@@ -70,53 +147,6 @@ project.xml                       Root aggregator (packaging=pom)
 
 PasBuild compiles each module to its own `target/` subdirectory. Build output is
 never committed to the repository.
-
-== Status
-
-[cols="1,2", options="none"]
-|===
-| Self-hosting
-| Yes — Blaise compiles itself with byte-for-byte identical output across bootstrap stages.
-
-| Test coverage
-| 1200+ tests and growing; Test-Driven Development from day one.
-
-| Backend
-| QBE (production); LLVM backend in active development.
-|===
-
-[cols="1,3,1", options="header"]
-|===
-| Phase | Goal | Status
-
-| 1
-| Bootstrap pipeline — Hello World on Linux x86_64 via PasBuild
-| Complete
-
-| 2
-| Type system — classes, records, ARC, exceptions
-| Complete
-
-| 3
-| Generics + zero-GUID interfaces
-| Complete
-
-| 4
-| OPDF debug info emission
-| Complete
-
-| 5
-| Self-hosting + LLVM + Windows + macOS ARM64
-| In-Progress
-
-| 6
-| LSP + VS Code extension
-| Planned
-
-| 7
-| Migration analyser for FPC/Delphi codebases
-| Planned
-|===
 
 == Building
 
@@ -174,42 +204,6 @@ compiler/target/blaise --project project.xml --config debug --output myapp
 # Emit QBE IR (useful for debugging the compiler itself)
 compiler/target/blaise --source Hello.pas --emit-ir
 ----
-
-== What Is Dropped From Classic Pascal
-
-[cols="1,3", options="header"]
-|===
-| Feature | Reason for removal
-
-| `ShortString`, `AnsiString`, `WideString`, `UnicodeString`
-| Replaced by a single UTF-8 reference-counted `string` type
-
-| `with` statement
-| Source of hard-to-diagnose symbol resolution bugs; breaks static analysis
-
-| Old-style `object` types
-| Use `record` (stack/value) or `class` (heap/reference) instead
-
-| COM-style interface GUIDs
-| Interface dispatch via compile-time vtable; GUIDs are unnecessary complexity
-
-| Multiple language modes
-| One dialect, maintained well, beats five dialects maintained poorly
-
-| `assign`, `reset`, `rewrite`, `blockread`
-| Replaced by a stream-based I/O RTL
-
-| `TObject` vs `TInterfacedObject` split
-| One unified class model under automatic reference counting; `[Weak]`
-  breaks cycles
-|===
-
-== Community
-
-The core architecture is still being finalised, so the project is not yet
-accepting code contributions. Feedback on language design, syntax choices, and
-the future direction of Blaise is very welcome — please use the
-https://github.com/graemeg/blaise/discussions[Discussions] tab on GitHub.
 
 == Licence
 
