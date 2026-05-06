@@ -4536,6 +4536,33 @@ begin
     Exit;
   end;
 
+  { ClassCreate(Cls, ...args): runtime construction from a metaclass.
+    Resolves the constructor on Cls.BaseClass with the supplied args
+    and stores the TMethodDecl on AExpr.ResolvedDecl.  Codegen lowers
+    this to '%p = call $_ClassCreate(l <classvalue>); call $T_Create(l %p, args...)'.
+    Result type is the BaseClass — assigning to a 'var T: TFoo' is
+    well-typed when Cls: class of TFoo. }
+  if SameText(AExpr.Name, 'ClassCreate') then
+  begin
+    if AExpr.Args.Count < 1 then
+      SemanticError('ClassCreate requires a metaclass as the first argument',
+        AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if (TASTExpr(AExpr.Args.Items[0]).ResolvedType = nil) or
+       (TASTExpr(AExpr.Args.Items[0]).ResolvedType.Kind <> tyMetaClass) then
+      SemanticError('ClassCreate: first argument must be a metaclass (class of T) value',
+        AExpr.Line, AExpr.Col);
+    { Analyse remaining args before resolving the constructor — argument
+      types feed FindMethodDecl when we add overload resolution; for v0
+      we look up 'Create' by name and trust uniqueness. }
+    for I := 1 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+    Result := TMetaClassTypeDesc(TASTExpr(AExpr.Args.Items[0]).ResolvedType).BaseClass;
+    AExpr.ResolvedType := Result;
+    AExpr.ResolvedDecl := FindMethodDecl(Result.Name, 'Create');
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'Format') then
   begin
     if AExpr.Args.Count < 1 then

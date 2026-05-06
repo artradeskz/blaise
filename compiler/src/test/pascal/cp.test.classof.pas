@@ -45,6 +45,13 @@ type
     procedure TestCodegen_ClassIdent_EmitsTypeinfo;
     procedure TestCodegen_MetaClassVar_StorelTypeinfo;
     procedure TestCodegen_MetaClassEquality_UsesCEQL;
+
+    { ClassCreate builtin (Step 11e): runtime construction via a
+      metaclass value.  Lowers to '_ClassCreate(Cls)' followed by a
+      static call to the resolved constructor. }
+    procedure TestSemantic_ClassCreate_RejectsNonMetaclassFirstArg;
+    procedure TestCodegen_ClassCreate_EmitsAllocAndCtorCall;
+    procedure TestCodegen_ClassCreate_NoCtor_OnlyAllocCalled;
   end;
 
 implementation
@@ -379,6 +386,64 @@ begin
   IR := GenIR(Src);
   AssertTrue('metaclass equality uses ceql (pointer compare), not ceqw',
     Pos('ceql', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ ClassCreate builtin                                                  }
+{ ------------------------------------------------------------------ }
+
+procedure TClassOfTests.TestSemantic_ClassCreate_RejectsNonMetaclassFirstArg;
+begin
+  AnalyseExpectError(
+    'program P;'                                       + LineEnding +
+    'type TFoo = class(TObject) end;'                  + LineEnding +
+    'var F: TFoo;'                                     + LineEnding +
+    'begin'                                            + LineEnding +
+    '  F := ClassCreate(F)'                            + LineEnding +
+    'end.'
+  );
+end;
+
+procedure TClassOfTests.TestCodegen_ClassCreate_EmitsAllocAndCtorCall;
+const
+  Src =
+    'program P;'                                       + LineEnding +
+    'type'                                             + LineEnding +
+    '  TFoo = class(TObject)'                          + LineEnding +
+    '    Value: Integer;'                              + LineEnding +
+    '    constructor Create(N: Integer);'              + LineEnding +
+    '  end;'                                           + LineEnding +
+    'constructor TFoo.Create(N: Integer);'             + LineEnding +
+    'begin Self.Value := N end;'                       + LineEnding +
+    'var C: class of TFoo; F: TFoo;'                   + LineEnding +
+    'begin'                                            + LineEnding +
+    '  C := TFoo;'                                     + LineEnding +
+    '  F := ClassCreate(C, 7)'                         + LineEnding +
+    'end.';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('emits call to $_ClassCreate', Pos('call $_ClassCreate(', IR) > 0);
+  AssertTrue('emits static call to TFoo_Create after alloc',
+    Pos('call $TFoo_Create(', IR) > 0);
+end;
+
+procedure TClassOfTests.TestCodegen_ClassCreate_NoCtor_OnlyAllocCalled;
+const
+  Src =
+    'program P;'                                       + LineEnding +
+    'type TFoo = class(TObject) end;'                  + LineEnding +
+    'var C: class of TFoo; F: TFoo;'                   + LineEnding +
+    'begin'                                            + LineEnding +
+    '  C := TFoo;'                                     + LineEnding +
+    '  F := ClassCreate(C)'                            + LineEnding +
+    'end.';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('emits call to $_ClassCreate', Pos('call $_ClassCreate(', IR) > 0);
+  AssertEquals('no constructor call emitted when class declares none',
+    0, Pos('TFoo_Create', IR));
 end;
 
 initialization

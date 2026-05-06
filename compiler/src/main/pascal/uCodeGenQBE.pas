@@ -4200,6 +4200,35 @@ begin
         Exit;
       end;
 
+      { ClassCreate(Cls, ...args): runtime equivalent of TFoo.Create(args).
+        Allocates via _ClassCreate (which reads totalsize/fieldcleanup/vtable
+        from Cls's typeinfo), then calls $<BaseClass>_Create statically with
+        the new pointer and the supplied args.  Returns the new pointer. }
+      if SameText(FC.Name,'ClassCreate') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));   { metaclass = typeinfo ptr }
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ClassCreate(l %s)', [T, L]));
+        if FC.ResolvedDecl <> nil then
+        begin
+          MDecl := TMethodDecl(FC.ResolvedDecl);
+          ArgLine := Format('l %s', [T]);
+          for I := 1 to FC.Args.Count - 1 do
+          begin
+            Par     := TMethodParam(MDecl.Params.Items[I - 1]);
+            ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+            ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]),
+              QbeTypeOf(Par.ResolvedType));
+            ArgLine := ArgLine + Format(', %s %s',
+              [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+          end;
+          EmitLine(Format('  call $%s(%s)',
+            [MethodEmitName(MDecl, MDecl.OwnerTypeName, 'Create'), ArgLine]));
+        end;
+        Result := T;
+        Exit;
+      end;
+
       if SameText(FC.Name,'StrToInt64') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));

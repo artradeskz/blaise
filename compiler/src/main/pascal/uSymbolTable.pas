@@ -1169,6 +1169,11 @@ begin
   Sym := TSymbol.Create('Abs', skFunction, FTypeInteger); Define(Sym);
   { MethodAddress(Obj, Name) — published-method lookup via typeinfo chain }
   Sym := TSymbol.Create('MethodAddress', skFunction, FTypePointer); Define(Sym);
+  { ClassCreate(Cls, ...args) — runtime construction from a metaclass value.
+    Calls _ClassCreate to allocate + install vtable, then invokes the
+    constructor on Cls.BaseClass with the supplied args.  Result type is
+    the BaseClass; resolved by AnalyseFuncCallExpr in uSemantic. }
+  Sym := TSymbol.Create('ClassCreate', skFunction, FTypePointer); Define(Sym);
   { Inc/Dec — in-place increment/decrement (var param, 1 or 2 args) }
   Sym := TSymbol.Create('Inc', skProcedure, nil); Define(Sym);
   Sym := TSymbol.Create('Dec', skProcedure, nil); Define(Sym);
