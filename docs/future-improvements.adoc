@@ -100,16 +100,6 @@ single precision is sufficient and throughput matters.
 
 == Language
 
-=== `const` sections in unit interface and implementation blocks
-
-*Status: implemented.*  `const` blocks are fully supported in program scope,
-unit `interface`, and unit `implementation` sections.  Interface-section
-constants are exported to the global scope via `AnalyseUnitForExport` and
-are visible to all importing units without qualification.  The `classes.pas`
-RTL already uses `dupAccept = 0`, `dupIgnore = 1`, `dupError = 2` in its
-interface `const` block.  10 regression tests in `cp.test.constants` cover
-all cases including cross-unit export visibility.
-
 === Multi-line string literals
 
 *What.* Add a raw-string or heredoc literal syntax to Blaise so that
@@ -330,8 +320,6 @@ The following features were identified as missing from Blaise while porting
 current port, noted below, so none is a blocker; they are collected here so
 they can be prioritised alongside other language work.
 
-Items marked *Status: implemented* have since been added to the compiler.
-
 === Dynamic arrays with `SetLength`
 
 *What.* Support local variables of type `array of T` whose length can be set
@@ -358,41 +346,6 @@ template.
 
 *Effort.* Significant — new type kind, RTL support, codegen changes.
 
-=== `TObject.ClassType` and `TObject.ClassName`
-
-*Status: partially implemented.*  `ClassName` is implemented — the typeinfo
-record now carries a class-name string pointer at slot 2 (offset 16), and
-`.ClassName` on any class instance loads it at runtime.  `ClassType` (returning
-a `TClass` metaclass reference) is still deferred; it requires a metaclass type
-and vtable slot.
-
-*What.* Virtual methods on `TObject` that return the runtime class of an
-object: `ClassType` returns the `TClass` metaclass reference;
-`ClassName` returns the class name as a string.
-
-*Why it matters.* Exception handling idioms rely on `E.ClassType` to
-identify the actual exception class raised.  In punit it is used in
-`RunTestHandler` (comparing the raised exception class against the expected
-one set by `ExpectException`) and in `AssertException`.  More broadly, any
-framework or diagnostic code that needs to print or compare runtime types
-needs these methods.
-
-*Current workaround in punit.* Both methods are absent: `RunTestHandler`
-tracks only `ExcRaised: Boolean` (was an exception raised at all).
-`AssertException` verifies that *an* exception was raised but skips class
-identity.  Exception mismatch messages in `RunTestHandler` show pointer
-hex values rather than class names.  These are functional limitations — a
-test that registers `ExpectException(EFoo)` will pass even if `EBar` is
-raised instead.
-
-*Implementation notes.* Requires vmt slots for the class name string pointer
-and class parent pointer.  `ClassName` can be a class method that reads the
-name from the vmt.  `ClassType` can return `Self` when called on a metaclass
-or the class pointer from the object header.  The codegen already emits
-`$typeinfo_<ClassName>` records; this feature reuses that infrastructure.
-
-*Effort.* Moderate — vmt extension, class method dispatch, RTL additions.
-
 === `TObject.InheritsFrom`
 
 *What.* A class method on `TObject` that walks the parent-class chain and
@@ -413,16 +366,9 @@ walks the chain comparing pointers.  Closely related to implementing the `is`
 operator and typed `on E: TFoo do` exception matching by inheritance rather
 than exact type.
 
-*Effort.* Small once `ClassType` vmt slots are in place.
+*Effort.* Small — walks the parent-class pointer chain already present in the typeinfo struct.
 
 === `Str()` intrinsic — numeric to string conversion
-
-*Status: partially implemented.*  Integer and Int64 conversions are covered by
-the existing `IntToStr` / `Int64ToStr` built-ins.  Float→string is provided by
-the new `DoubleToStr` / `SingleToStr` built-ins.  The FPC-style `Str(X, S)` var-
-parameter form is still absent.
-
-
 
 *What.* The FPC/Pascal `Str(X, S)` intrinsic writes the string representation
 of a numeric value `X` (integer or float) into the `var` string parameter `S`.
@@ -432,41 +378,12 @@ string without pulling in `SysUtils`.  Used throughout punit's `SysTimeString`
 helper and the float assertion overloads.
 
 *Current workaround in punit.* Integer conversions replaced with `IntToStr()`
-and `Int64ToStr()` (already Blaise built-ins).  Float→string is deferred:
-`AssertEquals(Double)` displays `<float>` in failure messages rather than
-the actual values.
+and `Int64ToStr()`.  Float→string conversions use `DoubleToStr()` /
+`SingleToStr()`.  The FPC-style `Str(X, S)` var-parameter form is still absent.
 
-*Implementation notes.* For integers, `Str` is a thin wrapper over `IntToStr`
-/ `Int64ToStr` and can be emitted identically.  For floating-point, full
-`Str(Double, S)` requires either a libc `snprintf` call or a Blaise RTL
-float-formatting function.  The two entry points can be handled separately:
-the integer form is trivial; the float form can wait until the RTL has
-`Double`-to-string support.
-
-*Effort.* Trivial for integers (alias existing built-ins); moderate for floats
-(RTL formatting function).
-
-=== `Abs()` built-in for numeric types
-
-*Status: implemented.*  `Abs()` is now a compiler built-in.  For `Integer` and
-`Int64` it calls `_AbsInt` / `_AbsInt64` in the C RTL; for `Double` / `Single`
-it calls `fabs` / `fabsf` from libc directly.
-
-
-
-*What.* Standard Pascal intrinsic that returns the absolute value of an
-integer or floating-point argument.
-
-*Why it matters.* Used in punit's floating-point `AssertEquals` to compute
-`|expected - actual| < delta`.
-
-*Current workaround in punit.* Replaced with an explicit double-sided
-comparison: `(a - b < delta) and (b - a < delta)`.  This is correct but
-verbose.
-
-*Implementation notes.* A simple codegen branch: if the argument type is
-`tyInteger` emit `abssw`; for `tyInt64` emit `absl`; for `tyDouble` / float
-emit `absd` or `abss`.  QBE has native `abs` instructions for all four.
+*Implementation notes.* `Str` is a thin wrapper: for integers, alias
+`IntToStr` / `Int64ToStr`; for floats, alias `DoubleToStr` / `SingleToStr`.
+The `var`-parameter assignment can be emitted as a string copy into `S`.
 
 *Effort.* Trivial.
 
