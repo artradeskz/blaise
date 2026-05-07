@@ -1586,6 +1586,84 @@ order has no observable side effect.
 
 ---
 
+== Triple Single-Quote Text Blocks
+
+=== Decision
+
+Blaise supports multi-line string literals delimited by triple single
+quotes (`+'''...'''+`).  The opening `'''` must be followed immediately by
+a newline; the closing `'''` must appear on its own line (possibly preceded
+by whitespace).  The column position of the closing `'''` sets the
+indentation baseline: all content lines are de-dented by that many columns.
+Single quotes inside the block require no escaping.
+
+Example:
+
+[source,pascal]
+----
+const
+  Src = '''
+    program Hello;
+    begin
+      WriteLn('world');
+    end.
+    ''';
+----
+
+The value of `Src` is the four-line program with no leading whitespace,
+because the closing `'''` is at column 5 (four spaces of indent), and
+all content lines have at least four leading spaces stripped.
+
+=== Rationale
+
+Pascal is a single-quote language; triple-quoting follows naturally from
+the existing `''` escape convention.  The design mirrors Java 13+ text
+blocks — one of Java's most well-received modern additions.
+
+The primary motivation is the compiler test suite: every `cp.test.*.pas`
+file constructs multi-line source strings with `'line' + LineEnding +
+'line'` concatenation.  Text blocks eliminate this concatenation noise,
+making inline source snippets readable and maintaining them trivial.
+
+Margin stripping based on the closing delimiter position keeps text blocks
+tidy inside indented method bodies without accumulating spurious leading
+whitespace in the string value.
+
+Embedded single quotes (e.g. `'John'`, `#10`) require no escaping, which
+is essential for Pascal source literals in the test suite.
+
+=== Disambiguation
+
+When the lexer encounters three consecutive single-quote characters, it
+peeks at the next character:
+
+* If the next character is a newline (LF, CR, or end-of-file), it opens
+  a text block.
+* If the next character is anything else — including another `'`, a letter,
+  a digit, or any printable character — it falls back to the classic string
+  parse.  This means `'''text'''` (a string containing `'text'` via the
+  standard `''` escape) continues to work unchanged.
+
+This is a one-character lookahead — no backtracking or multi-token
+lookahead is required.
+
+=== Alternatives rejected
+
+* *Heredoc syntax* (`<<'SENTINEL' ... SENTINEL`) — alien to Pascal;
+  requires sentinel matching rather than simple delimiter detection.
+* *Backtick raw strings* (`` `...` ``) — cannot embed backtick characters;
+  backtick has no history in Pascal.
+* *Triple curly braces* (`{{{ ... }}}`) — visually heavy; conflicts with
+  the comment delimiter namespace.
+* *Keyword heredoc* (`beginstring SENTINEL ... SENTINEL`) — verbose; adds
+  a new keyword.
+
+This is a Blaise-only language feature — not FPC/Delphi compatible — and
+that is intentional: it is the kind of feature that makes Blaise worth
+using rather than just being "FPC with a different name".
+
+---
+
 == Open Language Questions
 
 These items are under active consideration but not yet decided.

@@ -23,8 +23,15 @@
  * ═══════════════════════════════════════════════════════════════════════════ *)
 
 (* Literals *)
-INT_LIT    = digit { digit } ;
-STRING_LIT = "'" { char | "''" } "'" ;
+INT_LIT       = digit { digit } ;
+STRING_LIT    = "'" { char | "''" } "'" ;
+TEXT_BLOCK_LIT = "'''" NEWLINE { any_char | NEWLINE } "'''" ;
+(* TEXT_BLOCK_LIT: opening ''' must be followed immediately by a newline
+   (LF, CR, or CRLF); any other character after ''' falls back to the
+   classic string parse.  Closing ''' must not be followed by another '.
+   The column position of the closing ''' sets the indentation baseline —
+   all content lines are de-dented by that many columns.  Single quotes
+   inside the block need no escaping. *)
 
 (* Identifiers (case-insensitive) *)
 IDENT    = letter { letter | digit | "_" } ;
@@ -594,6 +601,7 @@ Term
 Factor
     = INT_LIT
     | STRING_LIT
+    | TEXT_BLOCK_LIT
     | NIL
     | ArrayLiteral
     | AddrOf

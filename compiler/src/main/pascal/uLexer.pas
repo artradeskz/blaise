@@ -125,6 +125,7 @@ type
     FFilename: string;
     function MapKeyword(const AUpper: string): TTokenKind;
     function UnescapeString(const ARaw: string): string;
+    function ProcessTextBlock(const ARaw: string): string;
     function DirectiveName(const AText: string): string;
     procedure SkipToElseOrEndif;
     procedure SkipToEndif;
@@ -275,6 +276,93 @@ begin
     end
     else
       I := I + 1;
+  end;
+end;
+
+function TLexer.ProcessTextBlock(const ARaw: string): string;
+var
+  Len, I, C, Margin, LineStart, LineLen, Skip: Integer;
+  Body: string;
+begin
+  Len := Length(ARaw);
+  I := 4;
+  if (I <= Len) and (OrdAt(ARaw, I) = 13) then
+    I := I + 1;
+  if (I <= Len) and (OrdAt(ARaw, I) = 10) then
+    I := I + 1;
+  Body := Copy(ARaw, I, Len - I - 3 + 1);
+
+  Margin := 0;
+  I := Len - 3;
+  while (I >= 1) and (OrdAt(ARaw, I) = 32) do
+  begin
+    Margin := Margin + 1;
+    I := I - 1;
+  end;
+
+  if Margin = 0 then
+  begin
+    Result := '';
+    Len := Length(Body);
+    I := 1;
+    while I <= Len do
+    begin
+      C := OrdAt(Body, I);
+      if C = 13 then
+      begin
+        Result := Result + #10;
+        I := I + 1;
+        if (I <= Len) and (OrdAt(Body, I) = 10) then
+          I := I + 1;
+      end
+      else if C = 10 then
+      begin
+        Result := Result + #10;
+        I := I + 1;
+      end
+      else
+      begin
+        Result := Result + Chr(C);
+        I := I + 1;
+      end;
+    end;
+    Exit;
+  end;
+
+  Result := '';
+  Len := Length(Body);
+  I := 1;
+  while I <= Len do
+  begin
+    Skip := Margin;
+    while (Skip > 0) and (I <= Len) and (OrdAt(Body, I) = 32) do
+    begin
+      I := I + 1;
+      Skip := Skip - 1;
+    end;
+    while I <= Len do
+    begin
+      C := OrdAt(Body, I);
+      if C = 13 then
+      begin
+        Result := Result + #10;
+        I := I + 1;
+        if (I <= Len) and (OrdAt(Body, I) = 10) then
+          I := I + 1;
+        Break;
+      end
+      else if C = 10 then
+      begin
+        Result := Result + #10;
+        I := I + 1;
+        Break;
+      end
+      else
+      begin
+        Result := Result + Chr(C);
+        I := I + 1;
+      end;
+    end;
   end;
 end;
 
@@ -432,6 +520,12 @@ begin
       begin
         Result.Kind  := tkStringLit;
         Result.Value := UnescapeString(FTok.TokenText);
+      end;
+
+    fptkTextBlock:
+      begin
+        Result.Kind  := tkStringLit;
+        Result.Value := ProcessTextBlock(FTok.TokenText);
       end;
 
     fptkSymbol:

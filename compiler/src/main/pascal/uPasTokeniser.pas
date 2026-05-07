@@ -39,6 +39,7 @@ type
     fptkKeyword,
     fptkNumber,
     fptkString,
+    fptkTextBlock,
     fptkComment,
     fptkDirective,
     fptkSymbol
@@ -67,6 +68,7 @@ type
     procedure ReadIdentifierOrKeyword;
     procedure ReadNumber;
     procedure ReadString;
+    procedure ReadTextBlock;
     procedure ReadBraceCommentOrDirective;
     procedure ReadParenStarCommentOrDirective;
     procedure ReadLineComment;
@@ -369,6 +371,54 @@ begin
   FToken.Len := FPos - FToken.TextStart
 end;
 
+procedure TFpgPascalTokeniser.ReadTextBlock;
+begin
+  FToken.Kind := fptkTextBlock;
+  Advance; { skip first ' }
+  Advance; { skip second ' }
+  Advance; { skip third ' }
+  if (FPos <= Length(FSource)) and (OrdAt(FSource, FPos) = 13) then
+  begin
+    Advance;
+    if (FPos <= Length(FSource)) and (OrdAt(FSource, FPos) = 10) then
+      Advance;
+    AdvanceLine
+  end
+  else if (FPos <= Length(FSource)) and (OrdAt(FSource, FPos) = 10) then
+  begin
+    Advance;
+    AdvanceLine
+  end;
+  while FPos <= Length(FSource) do
+  begin
+    if OrdAt(FSource, FPos) = 39 then
+    begin
+      if (PeekAt(1) = 39) and (PeekAt(2) = 39) and (PeekAt(3) <> 39) then
+      begin
+        Advance;
+        Advance;
+        Advance;
+        Break
+      end
+    end;
+    if OrdAt(FSource, FPos) = 13 then
+    begin
+      Advance;
+      if (FPos <= Length(FSource)) and (OrdAt(FSource, FPos) = 10) then
+        Advance;
+      AdvanceLine
+    end
+    else if OrdAt(FSource, FPos) = 10 then
+    begin
+      Advance;
+      AdvanceLine
+    end
+    else
+      Advance
+  end;
+  FToken.Len := FPos - FToken.TextStart
+end;
+
 procedure TFpgPascalTokeniser.ReadBraceCommentOrDirective;
 begin
   if PeekAt(1) = 36 then
@@ -532,6 +582,14 @@ begin
   if (C = 38) and ((C2 >= 48) and (C2 <= 55)) then
   begin
     ReadNumber;
+    Result := FToken;
+    Exit
+  end;
+
+  if (C = 39) and (C2 = 39) and (PeekAt(2) = 39) and
+     ((PeekAt(3) = 10) or (PeekAt(3) = 13) or (PeekAt(3) = 0)) then
+  begin
+    ReadTextBlock;
     Result := FToken;
     Exit
   end;

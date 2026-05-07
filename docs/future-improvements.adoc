@@ -286,18 +286,33 @@ for large embedded source blocks.
 
 ==== Recommendation
 
-The heredoc form (Option A) is preferred.
+*Decision (2026-05-07):* Option D (triple single-quote) is selected for
+implementation in v0.6.0.
 
-* Compatible with the existing single-pass lexer — scan until the closing
-  sentinel appears alone on a line; no multi-character lookahead needed.
-* Embedded single quotes require no escaping — essential for Pascal source
-  literals in the test suite.
-* Widely familiar from shell, Ruby, and SQL.
+Option D is the most Pascal-native syntax.  Single quotes are _the_ Pascal
+string delimiter; triple-quoting follows naturally from the existing `''`
+escape convention and directly mirrors Java 13+ text blocks — one of Java's
+most well-received modern additions.
 
-Option D (triple single-quote) is the strongest alternative: it is the
-most visually natural choice for a Pascal programmer and directly analogous
-to Java text blocks.  Its main complexity is the disambiguation rule for
-`''''` sequences, which requires documented precedence.
+Reasons for choosing Option D over Option A (heredoc):
+
+* *Visually natural for Pascal programmers* — no alien `<<` syntax borrowed
+  from shell.  A Pascal developer sees `'''` and immediately understands it
+  as an extension of the quote system they already know.
+* *Margin stripping* — the closing `'''` column sets the indentation baseline,
+  so text blocks inside an indented method body do not accumulate spurious
+  leading whitespace.  Heredocs require a separate strip directive or
+  convention to achieve this.
+* *Embedded single quotes require no escaping* — essential for Pascal source
+  literals in the test suite, where `'John'` and `#10` appear inside the
+  block content.
+* *One-character lookahead disambiguation* — when the lexer sees `'''`,
+  peek at the next character: if it is a newline (or any non-`'` character),
+  open a text block; if it is another `'`, fall back to the classic `'' + '...'`
+  parse.  This is simpler than the sentinel-matching required by heredocs.
+
+This is a Blaise-only language feature — not FPC/Delphi compatible — and that
+is intentional.
 
 *Effort.* Moderate.  Lexer state machine to collect heredoc/raw-string
 content; parser treats the result as a `TStringLit` node; no semantic or
@@ -666,4 +681,79 @@ fragile toolchain coupling without benefit for a self-hosted debugger.
 
 *Effort.* Small (documentation + build-system integration for `codesign`);
 moderate for the debug-server architecture.
+
+== Concurrency
+
+=== Threading and modern concurrency models
+
+*What.* Blaise needs a concurrency story.  The plan is a layered approach:
+a compatibility layer for existing Pascal code, and a modern concurrency
+model that makes Blaise worth choosing over FPC/Delphi for concurrent
+workloads.
+
+*Layer 1 — TThread (Delphi/FPC compatibility).*
+
+Thin wrapper around `pthread_create` (POSIX) or `CreateThread` (Win32).
+Required for porting existing Pascal codebases.  Provides the familiar
+`TThread.Create`, `Execute` override, `Synchronize`, `WaitFor`, and
+`Terminate` / `Terminated` pattern.  Not inspiring, but necessary for
+ecosystem compatibility.
+
+*Layer 2 — Modern structured concurrency.*
+
+The industry has converged on a few proven models:
+
+* *Structured concurrency with async/await* (C#, Rust, JavaScript, Swift,
+  Kotlin) — the compiler transforms `async` functions into state machines.
+  Works well with I/O-bound code.  Requires language-level support in the
+  parser and codegen but no complex runtime scheduler.
+
+* *Virtual threads / green threads* (Java 21, Go goroutines, Erlang
+  processes) — the runtime multiplexes many lightweight threads onto a
+  small pool of OS threads.  User code looks synchronous.  Requires a
+  scheduler in the RTL, which is a larger investment.
+
+* *Structured task groups* (Swift `TaskGroup`, Java `StructuredTaskScope`)
+  — tasks have parent-child relationships with automatic cancellation
+  propagation and scope-bound lifetimes.  Prevents leaked tasks by
+  construction.
+
+The recommended path for Blaise:
+
+. Start with `TThread` for compatibility.
+. Add `async`/`await` as the primary modern concurrency primitive.  This
+  is the most compiler-friendly approach — it is a source-to-source
+  transform during semantic analysis, turning async functions into state
+  machine classes.  It does not require a complex runtime scheduler.
+. Layer structured task groups on top of async/await for fork-join
+  parallelism with automatic cancellation.
+. Consider virtual threads as a long-term option if the runtime grows to
+  support a user-mode scheduler (significant investment).
+
+*Why not just TThread.* `TThread` maps 1:1 to OS threads, which are
+expensive to create (~1 MB stack each) and limited in number (~thousands).
+Modern server and UI workloads routinely need tens of thousands of
+concurrent tasks (network connections, background jobs, UI animations).
+Lightweight async tasks are the standard solution across every modern
+language ecosystem.
+
+*Design considerations.*
+
+* ARC interaction — async tasks capture variables by reference; the ARC
+  system must ensure captured objects outlive the task.  Structured
+  concurrency helps here because task lifetimes are lexically scoped.
+* QBE constraints — QBE has no coroutine or `setjmp`-based context
+  switching primitives.  `async`/`await` via state-machine transform
+  does not require these — the compiler generates ordinary function calls
+  between states.  Green threads would require platform-specific context
+  switching (`swapcontext` or hand-rolled assembly), which is harder to
+  express through QBE.
+* Exception propagation — async tasks need a defined exception model.
+  Structured concurrency naturally provides this: exceptions propagate
+  to the parent scope and cancel sibling tasks.
+
+*Effort.* Large.  TThread is small (1–2 weeks); async/await is a
+significant compiler feature (parser, semantic, codegen transforms) that
+warrants its own design document and phased implementation.  This is
+post-v0.6.0 work.
 

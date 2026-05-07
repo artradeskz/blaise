@@ -74,7 +74,8 @@ uses
   cp.test.overload,
   cp.test.classof,
   cp.test.publishedrtti,
-  cp.test.proctypes_ofobject;
+  cp.test.proctypes_ofobject,
+  cp.test.textblock;
 
 var
   Application: TTestRunner;
