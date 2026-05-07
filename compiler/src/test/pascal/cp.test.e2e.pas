@@ -305,21 +305,20 @@ begin
   end;
 end;
 
-{ Runs a process, captures stdout into AStdout, returns exit code.
+{ Runs a process, captures stdout+stderr into AStdout, returns exit code.
   Returns -1 if the process could not be started. }
 function RunProc(const AExe:      string;
                  const AArgs:     array of string;
                  out   AStdout:   string;
                  AInheritStdErr:  Boolean): Integer;
 var
-  Proc:    TProcess;
-  Ss:      TStringStream;
-  Buf:     array[0..4095] of Byte;
-  N:       LongInt;
-  I:       Integer;
+  Proc: TProcess;
+  Buf:  array[0..4095] of Byte;
+  N:    LongInt;
+  S:    string;
+  I:    Integer;
 begin
   Proc := TProcess.Create(nil);
-  Ss   := TStringStream.Create('');
   try
     Proc.Executable := AExe;
     for I := Low(AArgs) to High(AArgs) do
@@ -333,20 +332,23 @@ begin
       Result := -1;
       Exit;
     end;
+    AStdout := '';
     while Proc.Running or (Proc.Output.NumBytesAvailable > 0) do
     begin
       if Proc.Output.NumBytesAvailable > 0 then
       begin
         N := Proc.Output.Read(Buf, SizeOf(Buf));
-        if N > 0 then Ss.Write(Buf, N);
+        if N > 0 then
+        begin
+          SetString(S, PChar(@Buf[0]), N);
+          AStdout := AStdout + S;
+        end;
       end
       else
-        Sleep(2);
+        Sleep(1);
     end;
-    Result  := Proc.ExitCode;
-    AStdout := Ss.DataString;
+    Result := Proc.ExitCode;
   finally
-    Ss.Free;
     Proc.Free;
   end;
 end;
@@ -389,7 +391,7 @@ begin
   Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut, True);
   if Rc <> 0 then
   begin
-    Fail('qbe failed (exit ' + IntToStr(Rc) + '): ' + ToolOut + sLineBreak +
+    Fail('qbe failed (exit ' + IntToStr(Rc) + '): ' + ToolOut + #10 +
          'IR file preserved at: ' + IRFile);
     Exit;
   end;
@@ -397,8 +399,8 @@ begin
   Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL], ToolOut, True);
   if Rc <> 0 then
   begin
-    Fail('cc failed (exit ' + IntToStr(Rc) + '): ' + ToolOut + sLineBreak +
-         'IR: ' + IRFile + sLineBreak + 'asm: ' + AsmFile);
+    Fail('cc failed (exit ' + IntToStr(Rc) + '): ' + ToolOut + #10 +
+         'IR: ' + IRFile + #10 + 'asm: ' + AsmFile);
     Exit;
   end;
 
