@@ -369,24 +369,6 @@ units require only minor adaptation.
 Blaise class system supports the TTestCase inheritance hierarchy and the
 virtual dispatch pattern fptest relies on.
 
-=== PasBuild: rename `--fpc` to `--compiler`
-
-*What.* Rename PasBuild's `--fpc <path>` flag to `--compiler <path>`, keeping
-`--fpc` as a deprecated alias.  Update help text and documentation accordingly.
-
-*Why it matters.* The Blaise compiler already accepts FPC-style invocations:
-it responds to `-iV`/`-iTP`/`-iTO` probes, maps `-Fu`/`-FE` to its internal
-unit-path and output-dir, and silently ignores `-Mobjfpc`, `-O<n>`, and other
-FPC flags.  So `pasbuild compile --fpc releases/v0.3.0/blaise` already works
-today — the only friction is the misleading flag name.  Renaming it to
-`--compiler` makes the intent clear and removes the implication that only FPC
-binaries are accepted.
-
-*Implementation notes.* Change is confined to `PasBuild.CLI.pas`
-(flag parsing, help text) and `PasBuild.Utils.pas` (stored field name).
-One-line alias: if `--fpc` is seen, treat it identically to `--compiler`.
-
-*Effort.* Trivial.
 
 == Stream I/O
 
