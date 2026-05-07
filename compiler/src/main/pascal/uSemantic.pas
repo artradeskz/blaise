@@ -4170,6 +4170,13 @@ begin
       AnalyseExpr(TASTExpr(ACall.Args.Items[1]));
     end
     else
+    if SameText(ACall.Name, 'Sleep') then
+    begin
+      if ACall.Args.Count <> 1 then
+        SemanticError('Sleep requires exactly 1 argument', ACall.Line, ACall.Col);
+      AnalyseExpr(TASTExpr(ACall.Args.Items[0]));
+    end
+    else
     begin
       { Other built-ins (WriteLn/Write/etc.) — just analyse arg expressions }
       for I := 0 to ACall.Args.Count - 1 do
@@ -4637,11 +4644,22 @@ begin
   end;
 
   { CLI arguments }
-  if SameText(AExpr.Name, 'ParamCount') then
+  if SameText(AExpr.Name, 'ParamCount') or
+     SameText(AExpr.Name, 'GetProcessID') then
   begin
     if AExpr.Args.Count <> 0 then
-      SemanticError('ParamCount takes no arguments', AExpr.Line, AExpr.Col);
+      SemanticError(Format('''%s'' takes no arguments', [AExpr.Name]),
+                    AExpr.Line, AExpr.Col);
     Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'GetTempDir') then
+  begin
+    if AExpr.Args.Count <> 0 then
+      SemanticError('GetTempDir takes no arguments', AExpr.Line, AExpr.Col);
+    Result := FTable.TypeString;
     AExpr.ResolvedType := Result;
     Exit;
   end;
@@ -4667,10 +4685,22 @@ begin
     Exit;
   end;
 
-  if SameText(AExpr.Name, 'FileExists') then
+  if SameText(AExpr.Name, 'FileExists') or
+     SameText(AExpr.Name, 'DirectoryExists') then
   begin
     if AExpr.Args.Count <> 1 then
-      SemanticError('FileExists requires exactly 1 argument', AExpr.Line, AExpr.Col);
+      SemanticError(Format('''%s'' requires exactly 1 argument', [AExpr.Name]),
+                    AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    Result := FTable.TypeBoolean;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'ForceDirectories') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('ForceDirectories requires exactly 1 argument', AExpr.Line, AExpr.Col);
     AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     Result := FTable.TypeBoolean;
     AExpr.ResolvedType := Result;

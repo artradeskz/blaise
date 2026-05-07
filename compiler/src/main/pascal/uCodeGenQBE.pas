@@ -3889,6 +3889,11 @@ begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
     EmitLine(Format('  call $_DeleteFile(l %s)', [ArgTemp]));
   end
+  else if UCaseName = 'SLEEP' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
+    EmitLine(Format('  call $_Sleep(w %s)', [ArgTemp]));
+  end
   else if UCaseName = 'PROCESSSETEXE' then
   begin
     ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[0]));
@@ -4498,6 +4503,22 @@ begin
         Exit;
       end;
 
+      if SameText(FC.Name,'GetProcessID') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_GetProcessID()', [T]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'GetTempDir') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_GetTempDir()', [T]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(FC.Name,'ParamStr') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
@@ -4522,6 +4543,24 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_FileExists(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'DirectoryExists') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_DirectoryExists(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'ForceDirectories') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_ForceDirectories(l %s)', [T, L]));
         Result := T;
         Exit;
       end;

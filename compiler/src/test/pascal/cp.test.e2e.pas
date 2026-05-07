@@ -186,6 +186,15 @@ type
       the inherited slot must still resolve to the override at runtime. }
     procedure TestRun_ToString_InheritedOverrideStillReached;
 
+    { ------------------------------------------------------------------ }
+    { OS utility builtins (step 2a)                                      }
+    { ------------------------------------------------------------------ }
+    procedure TestRun_GetProcessID_ReturnsNonZero;
+    procedure TestRun_DirectoryExists_TrueAndFalse;
+    procedure TestRun_GetTempDir_ReturnsPath;
+    procedure TestRun_ForceDirectories_CreatesTree;
+    procedure TestRun_Sleep_DoesNotCrash;
+
     { TObject.InheritsFrom: class ancestry walk }
     procedure TestRun_InheritsFrom_SameClass_ReturnsTrue;
     procedure TestRun_InheritsFrom_Parent_ReturnsTrue;
@@ -2639,6 +2648,141 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromClassType, Output, RCode, []));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ClassType.InheritsFrom works', 'yes' + LE, Output);
+end;
+
+{ ================================================================== }
+{ OS utility builtins (step 2a)                                      }
+{ ================================================================== }
+
+const
+  SrcGetProcessID =
+    'program P;'                                      + LineEnding +
+    'begin'                                           + LineEnding +
+    '  WriteLn(GetProcessID)'                         + LineEnding +
+    'end.';
+
+  SrcDirectoryExists =
+    'program P;'                                      + LineEnding +
+    'begin'                                           + LineEnding +
+    '  WriteLn(DirectoryExists(''/tmp''));'            + LineEnding +
+    '  WriteLn(DirectoryExists(''/__no_such_dir__''))' + LineEnding +
+    'end.';
+
+  SrcGetTempDir =
+    'program P;'                                      + LineEnding +
+    'begin'                                           + LineEnding +
+    '  WriteLn(GetTempDir)'                           + LineEnding +
+    'end.';
+
+  SrcForceDirectories =
+    'program P;'                                      + LineEnding +
+    'var Dir: string;'                                + LineEnding +
+    'begin'                                           + LineEnding +
+    '  Dir := ParamStr(1);'                           + LineEnding +
+    '  WriteLn(ForceDirectories(Dir));'               + LineEnding +
+    '  WriteLn(DirectoryExists(Dir))'                 + LineEnding +
+    'end.';
+
+  SrcSleepTest =
+    'program P;'                                      + LineEnding +
+    'begin'                                           + LineEnding +
+    '  Sleep(1);'                                     + LineEnding +
+    '  WriteLn(''ok'')'                               + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_GetProcessID_ReturnsNonZero;
+var
+  Output: string;
+  RCode:  Integer;
+  PID:    Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcGetProcessID, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  PID := StrToIntDef(Trim(Output), 0);
+  AssertTrue('PID > 0', PID > 0);
+end;
+
+procedure TE2ETests.TestRun_DirectoryExists_TrueAndFalse;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcDirectoryExists, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('/tmp exists = 1',           '1', Lines[0]);
+    AssertEquals('missing dir = 0',           '0', Lines[1]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TE2ETests.TestRun_GetTempDir_ReturnsPath;
+var
+  Output: string;
+  RCode:  Integer;
+  Dir:    string;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcGetTempDir, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  Dir := Trim(Output);
+  AssertTrue('dir is non-empty', Length(Dir) > 0);
+  AssertTrue('dir ends with /', Dir[Length(Dir)] = '/');
+end;
+
+procedure TE2ETests.TestRun_ForceDirectories_CreatesTree;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+  Dir:    string;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) +
+         'blaise_test_' + IntToStr(GetProcessID) + '/a/b/c';
+  try
+    AssertTrue('compile+run',
+      CompileAndRun(SrcForceDirectories, Output, RCode, [Dir]));
+    AssertEquals('exit code 0', 0, RCode);
+    Lines := TStringList.Create;
+    try
+      Lines.Text := Trim(Output);
+      AssertEquals('ForceDirectories returned 1', '1', Lines[0]);
+      AssertEquals('DirectoryExists returned 1',  '1', Lines[1]);
+    finally
+      Lines.Free;
+    end;
+  finally
+    { Clean up the test directory tree }
+    RemoveDir(Dir);
+    RemoveDir(ExtractFilePath(ExcludeTrailingPathDelimiter(Dir)));
+    RemoveDir(ExtractFilePath(ExcludeTrailingPathDelimiter(
+      ExtractFilePath(ExcludeTrailingPathDelimiter(Dir)))));
+    RemoveDir(ExtractFilePath(ExcludeTrailingPathDelimiter(
+      ExtractFilePath(ExcludeTrailingPathDelimiter(
+        ExtractFilePath(ExcludeTrailingPathDelimiter(Dir)))))));
+  end;
+end;
+
+procedure TE2ETests.TestRun_Sleep_DoesNotCrash;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcSleepTest, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output is ok', 'ok', Trim(Output));
 end;
 
 initialization

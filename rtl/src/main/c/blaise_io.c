@@ -17,10 +17,17 @@
  *   +-------------+-------------+-------------+-------------+------------+
  */
 
+#define _POSIX_C_SOURCE 199309L
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <errno.h>
+#include <time.h>
 
 /* ------------------------------------------------------------------ */
 /* String helpers — data-pointer convention.
@@ -200,6 +207,86 @@ int32_t _Exec(void* cmd) {
 
 void _Halt(int32_t code) {
     exit((int)code);
+}
+
+/* ------------------------------------------------------------------ */
+/* _GetProcessID() : Integer                                           */
+/* Returns the current process ID.                                     */
+/* ------------------------------------------------------------------ */
+
+int32_t _GetProcessID(void) {
+    return (int32_t)getpid();
+}
+
+/* ------------------------------------------------------------------ */
+/* _DirectoryExists(Path) : Boolean (0 or 1)                           */
+/* Returns 1 if Path exists and is a directory, 0 otherwise.           */
+/* ------------------------------------------------------------------ */
+
+int32_t _DirectoryExists(void* path) {
+    const char* p = io_str_data(path);
+    struct stat st;
+    if (stat(p, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* _GetTempDir() : string                                              */
+/* Returns the temp directory (TMPDIR env or /tmp), with trailing '/'. */
+/* ------------------------------------------------------------------ */
+
+void* _GetTempDir(void) {
+    const char* tmp = getenv("TMPDIR");
+    if (!tmp || tmp[0] == '\0') tmp = "/tmp";
+    int32_t len = (int32_t)strlen(tmp);
+    int need_slash = (len > 0 && tmp[len - 1] != '/') ? 1 : 0;
+    void* r = io_str_alloc(len + need_slash);
+    memcpy((char*)r, tmp, (size_t)len);
+    if (need_slash) ((char*)r)[len] = '/';
+    return r;
+}
+
+/* ------------------------------------------------------------------ */
+/* _ForceDirectories(Path) : Boolean (0 or 1)                          */
+/* Creates the directory Path and all parent directories. Returns 1    */
+/* on success, 0 on failure. Like mkdir -p.                            */
+/* ------------------------------------------------------------------ */
+
+int32_t _ForceDirectories(void* path) {
+    const char* p = io_str_data(path);
+    if (!p || p[0] == '\0') return 0;
+
+    char buf[4096];
+    int32_t len = (int32_t)strlen(p);
+    if (len >= (int32_t)sizeof(buf)) return 0;
+    memcpy(buf, p, (size_t)len + 1);
+
+    for (int32_t i = 1; i <= len; i++) {
+        if (buf[i] == '/' || buf[i] == '\0') {
+            char saved = buf[i];
+            buf[i] = '\0';
+            struct stat st;
+            if (stat(buf, &st) != 0) {
+                if (mkdir(buf, 0755) != 0 && errno != EEXIST) return 0;
+            } else if (!S_ISDIR(st.st_mode)) {
+                return 0;
+            }
+            buf[i] = saved;
+        }
+    }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* _Sleep(Milliseconds)                                                */
+/* Suspends execution for the given number of milliseconds.            */
+/* ------------------------------------------------------------------ */
+
+void _Sleep(int32_t ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
 }
 
 /* ------------------------------------------------------------------ */

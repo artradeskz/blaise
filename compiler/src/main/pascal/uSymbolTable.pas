@@ -1218,6 +1218,12 @@ begin
   Sym := TSymbol.Create('GetEnvironmentVariable', skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('Exec',       skFunction,  FTypeInteger); Define(Sym);
   Sym := TSymbol.Create('Halt',       skProcedure, nil);          Define(Sym);
+  { OS utility functions }
+  Sym := TSymbol.Create('GetProcessID',      skFunction,  FTypeInteger); Define(Sym);
+  Sym := TSymbol.Create('GetTempDir',        skFunction,  FTypeString);  Define(Sym);
+  Sym := TSymbol.Create('DirectoryExists',   skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('ForceDirectories',  skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('Sleep',             skProcedure, nil);          Define(Sym);
   { File path manipulation }
   Sym := TSymbol.Create('ChangeFileExt',                skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('ExtractFileName',              skFunction, FTypeString); Define(Sym);
