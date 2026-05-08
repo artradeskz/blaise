@@ -2979,23 +2979,81 @@ begin
       'Expected expression at line %d col %d in %s',
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   end;
-  { Postfix subscript: Expr[N] — string byte access }
-  if Check(tkLBracket) then
+  { Postfix chaining loop: Expr.Field, Expr.Method(...), Expr[i], Expr^ }
+  while Check(tkDot) or Check(tkLBracket) or Check(tkCaret) do
   begin
-    SubNode := TStringSubscriptExpr.Create;
-    SubNode.Line := FCurrent.Line;
-    SubNode.Col  := FCurrent.Col;
-    SubNode.StrExpr := Result;
-    Result := nil;
-    try
-      Advance;  { consume '[' }
-      SubNode.IndexExpr := ParseExpr;
-      Expect(tkRBracket);
-    except
-      SubNode.Free;
-      raise;
+    if Check(tkDot) then
+    begin
+      Advance;  { consume '.' }
+      if not Check(tkIdent) then
+        raise EParseError.Create(Format(
+          'Expected field or method name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      SecondName := FCurrent.Value;
+      Advance;  { consume ident }
+      if Check(tkLParen) then
+      begin
+        MCallNode            := TMethodCallExpr.Create;
+        MCallNode.Line       := FCurrent.Line;
+        MCallNode.Col        := FCurrent.Col;
+        MCallNode.ObjectName := '';
+        MCallNode.Name       := SecondName;
+        MCallNode.ObjExpr    := Result;
+        Advance;  { consume '(' }
+        if not Check(tkRParen) then
+        begin
+          MCallNode.Args.Add(ParseExpr);
+          while Check(tkComma) do
+          begin
+            Advance;
+            MCallNode.Args.Add(ParseExpr);
+          end;
+        end;
+        Expect(tkRParen);
+        Result := MCallNode;
+      end
+      else
+      begin
+        FldNode           := TFieldAccessExpr.Create;
+        FldNode.Line      := FCurrent.Line;
+        FldNode.Col       := FCurrent.Col;
+        FldNode.Base      := Result;
+        FldNode.FieldName := SecondName;
+        Result := FldNode;
+        if Check(tkLBracket) then
+        begin
+          Advance;
+          FldNode.PropIndexExpr := ParseExpr;
+          Expect(tkRBracket);
+        end;
+      end;
+    end
+    else if Check(tkLBracket) then
+    begin
+      SubNode := TStringSubscriptExpr.Create;
+      SubNode.Line := FCurrent.Line;
+      SubNode.Col  := FCurrent.Col;
+      SubNode.StrExpr := Result;
+      Result := nil;
+      try
+        Advance;  { consume '[' }
+        SubNode.IndexExpr := ParseExpr;
+        Expect(tkRBracket);
+      except
+        SubNode.Free;
+        raise;
+      end;
+      Result := SubNode;
+    end
+    else
+    begin
+      Advance;  { consume '^' }
+      DerefNode      := TDerefExpr.Create;
+      DerefNode.Line := FCurrent.Line;
+      DerefNode.Col  := FCurrent.Col;
+      DerefNode.Expr := Result;
+      Result         := DerefNode;
     end;
-    Result := SubNode;
   end;
 end;
 
