@@ -40,6 +40,11 @@ type
     FExitLabel:    string;       { label to jmp to for 'exit'; '' = main program }
     FSymTable:         TSymbolTable; { set via SetSymbolTable; used by AppendUnit for class data }
     FUnitInitNames:    TStringList;  { unit names that have initialization sections }
+    { mem2reg: parallel lists tracking which locals are promoted SSA temps.
+      FPromotedLocals[i] = var name; FPromotedTypes[i] = QBE type ('w','l','d','s').
+      Cleared at the start of each function by EmitVarAllocs. }
+    FPromotedLocals: TStringList;
+    FPromotedTypes:  TStringList;
 
     function  AllocTemp: string;
     function  AllocLabel(const APrefix: string): string;
@@ -66,6 +71,26 @@ type
     procedure EmitFuncDef(ADecl: TMethodDecl; AExported: Boolean);
     procedure EmitBlock(ABlock: TBlock);
     procedure EmitVarAllocs(ABlock: TBlock);
+    { mem2reg helpers }
+    { Returns True if AKind is a scalar type promotable to a QBE SSA temp. }
+    function  IsPromotableKind(AKind: TTypeKind): Boolean;
+    { Returns the QBE value type ('w','l','d','s') for a promotable kind. }
+    function  PromotedQType(AKind: TTypeKind; AType: TTypeDesc): string;
+    { Collect names of locals in ABlock whose address is taken (var-arg
+      sites or @X expressions).  Result is caller-owned TStringList. }
+    function  CollectAddressTaken(ABlock: TBlock): TStringList;
+    { Returns True if ABlock contains any try/finally or try/except statement
+      (recursively).  Promoted locals are unsafe across setjmp/longjmp. }
+    function  BlockHasTry(ABlock: TBlock): Boolean;
+    function  StmtHasTry(AStmt: TASTStmt): Boolean;
+    { Walk a statement tree adding any address-taken local names to ASet. }
+    procedure CollectAddressTakenStmt(AStmt: TASTStmt; ASet: TStringList);
+    { Walk an expression adding any address-taken local names to ASet. }
+    procedure CollectAddressTakenExpr(AExpr: TASTExpr; ASet: TStringList);
+    { Returns True if AName is currently a promoted SSA temp. }
+    function  IsPromoted(const AName: string): Boolean;
+    { Returns the QBE type of a promoted local ('' if not promoted). }
+    function  PromotedType(const AName: string): string;
     function  CountTryStmts(AStmt: TASTStmt): Integer;
     procedure EmitExcFrameAllocs(ABlock: TBlock);
     procedure EmitGlobalVarData(ABlock: TBlock);
@@ -181,6 +206,9 @@ begin
   FBreakLabels     := TStringList.Create;
   FContinueLabels  := TStringList.Create;
   FUnitInitNames   := TStringList.Create;
+  FPromotedLocals  := TStringList.Create;
+  FPromotedLocals.CaseSensitive := True;
+  FPromotedTypes   := TStringList.Create;
   FTempCount       := 0;
   FStrLitsEmitted  := 0;
 end;
@@ -190,6 +218,8 @@ begin
   FBreakLabels.Free;
   FContinueLabels.Free;
   FUnitInitNames.Free;
+  FPromotedLocals.Free;
+  FPromotedTypes.Free;
   FOutput.Free;
   FStrLits.Free;
   inherited Destroy;
@@ -476,18 +506,427 @@ begin
     EmitLine(Format('  %%_exc_frame_%d =l alloc16 512', [I]));
 end;
 
+{ -----------------------------------------------------------------------
+  mem2reg helpers
+  ----------------------------------------------------------------------- }
+
+function TCodeGenQBE.IsPromotableKind(AKind: TTypeKind): Boolean;
+begin
+  { Only promote pure scalar types that are never used as receivers for
+    method calls or ARC operations that load the slot address.
+    tyClass, tyString, tyPointer, tyPChar, tyMetaClass are excluded because
+    many codegen paths emit 'loadl %_var_X' to get the heap pointer from the
+    local slot — those paths are not all promotion-aware yet. }
+  Result := AKind in [
+    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
+    tyInt64,
+    tyDouble, tySingle,
+    tySet
+  ];
+end;
+
+function TCodeGenQBE.PromotedQType(AKind: TTypeKind; AType: TTypeDesc): string;
+begin
+  case AKind of
+    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum: Result := 'w';
+    tyInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: Result := 'l';
+    tyDouble: Result := 'd';
+    tySingle: Result := 's';
+    tySet:
+      if TSetTypeDesc(AType).BitCount <= 32 then Result := 'w'
+      else Result := 'l';
+  else
+    Result := 'l';
+  end;
+end;
+
+function TCodeGenQBE.IsPromoted(const AName: string): Boolean;
+begin
+  Result := FPromotedLocals.IndexOf(AName) >= 0;
+end;
+
+function TCodeGenQBE.PromotedType(const AName: string): string;
+var
+  Idx: Integer;
+begin
+  Idx := FPromotedLocals.IndexOf(AName);
+  if Idx >= 0 then
+    Result := FPromotedTypes.Strings[Idx]
+  else
+    Result := '';
+end;
+
+procedure TCodeGenQBE.CollectAddressTakenExpr(AExpr: TASTExpr; ASet: TStringList);
+var
+  I: Integer;
+  FC: TFuncCallExpr;
+  MC: TMethodCallExpr;
+  FA: TFieldAccessExpr;
+  Param: TMethodParam;
+  Arg: TASTExpr;
+begin
+  if AExpr = nil then Exit;
+
+  { @X — explicit address-of }
+  if AExpr is TAddrOfExpr then
+  begin
+    if TAddrOfExpr(AExpr).Expr is TIdentExpr then
+      ASet.Add(TIdentExpr(TAddrOfExpr(AExpr).Expr).Name);
+    CollectAddressTakenExpr(TAddrOfExpr(AExpr).Expr, ASet);
+    Exit;
+  end;
+
+  { Function call: var params take the address of their actual argument }
+  if AExpr is TFuncCallExpr then
+  begin
+    FC := TFuncCallExpr(AExpr);
+    if FC.ResolvedDecl <> nil then
+    begin
+      for I := 0 to FC.Args.Count - 1 do
+      begin
+        Arg := TASTExpr(FC.Args.Items[I]);
+        if I < TMethodDecl(FC.ResolvedDecl).Params.Count then
+        begin
+          Param := TMethodParam(TMethodDecl(FC.ResolvedDecl).Params.Items[I]);
+          if Param.IsVarParam and (Arg is TIdentExpr) and not TIdentExpr(Arg).IsGlobal then
+            ASet.Add(TIdentExpr(Arg).Name);
+        end;
+        CollectAddressTakenExpr(Arg, ASet);
+      end;
+    end
+    else
+      for I := 0 to FC.Args.Count - 1 do
+        CollectAddressTakenExpr(TASTExpr(FC.Args.Items[I]), ASet);
+    Exit;
+  end;
+
+  { Method call: same var-param check }
+  if AExpr is TMethodCallExpr then
+  begin
+    MC := TMethodCallExpr(AExpr);
+    CollectAddressTakenExpr(MC.ObjExpr, ASet);
+    if MC.ResolvedMethod <> nil then
+    begin
+      for I := 0 to MC.Args.Count - 1 do
+      begin
+        Arg := TASTExpr(MC.Args.Items[I]);
+        if I < TMethodDecl(MC.ResolvedMethod).Params.Count then
+        begin
+          Param := TMethodParam(TMethodDecl(MC.ResolvedMethod).Params.Items[I]);
+          if Param.IsVarParam and (Arg is TIdentExpr) and not TIdentExpr(Arg).IsGlobal then
+            ASet.Add(TIdentExpr(Arg).Name);
+        end;
+        CollectAddressTakenExpr(Arg, ASet);
+      end;
+    end
+    else
+      for I := 0 to MC.Args.Count - 1 do
+        CollectAddressTakenExpr(TASTExpr(MC.Args.Items[I]), ASet);
+    Exit;
+  end;
+
+  { Recurse into common composite expressions }
+  if AExpr is TBinaryExpr then
+  begin
+    CollectAddressTakenExpr(TBinaryExpr(AExpr).Left, ASet);
+    CollectAddressTakenExpr(TBinaryExpr(AExpr).Right, ASet);
+  end
+  else if AExpr is TNotExpr then
+    CollectAddressTakenExpr(TNotExpr(AExpr).Expr, ASet)
+  else if AExpr is TFieldAccessExpr then
+  begin
+    FA := TFieldAccessExpr(AExpr);
+    CollectAddressTakenExpr(FA.Base, ASet);
+    if FA.PropIndexExpr <> nil then
+      CollectAddressTakenExpr(FA.PropIndexExpr, ASet);
+  end
+  else if AExpr is TDerefExpr then
+    CollectAddressTakenExpr(TDerefExpr(AExpr).Expr, ASet)
+  else if AExpr is TStringSubscriptExpr then
+  begin
+    CollectAddressTakenExpr(TStringSubscriptExpr(AExpr).StrExpr, ASet);
+    CollectAddressTakenExpr(TStringSubscriptExpr(AExpr).IndexExpr, ASet);
+  end
+  else if AExpr is TIsExpr then
+    CollectAddressTakenExpr(TIsExpr(AExpr).Obj, ASet)
+  else if AExpr is TAsExpr then
+    CollectAddressTakenExpr(TAsExpr(AExpr).Obj, ASet)
+  else if AExpr is TArrayLiteralExpr then
+    for I := 0 to TArrayLiteralExpr(AExpr).Elements.Count - 1 do
+      CollectAddressTakenExpr(TASTExpr(TArrayLiteralExpr(AExpr).Elements.Items[I]), ASet);
+end;
+
+procedure TCodeGenQBE.CollectAddressTakenStmt(AStmt: TASTStmt; ASet: TStringList);
+var
+  I:      Integer;
+  TryE:   TTryExceptStmt;
+  TryF:   TTryFinallyStmt;
+  RaiseS: TRaiseStmt;
+  CaseS:  TCaseStmt;
+  PWrite: TPointerWriteStmt;
+  SSubA:  TStaticSubscriptAssign;
+  PCall:  TProcCall;
+  MCall:  TMethodCallStmt;
+  ICall:  TInheritedCallStmt;
+  ForS:   TForStmt;
+begin
+  if AStmt = nil then Exit;
+
+  if AStmt is TCompoundStmt then
+  begin
+    for I := 0 to TCompoundStmt(AStmt).Stmts.Count - 1 do
+      CollectAddressTakenStmt(TASTStmt(TCompoundStmt(AStmt).Stmts.Items[I]), ASet);
+  end
+  else if AStmt is TIfStmt then
+  begin
+    CollectAddressTakenExpr(TIfStmt(AStmt).Condition, ASet);
+    CollectAddressTakenStmt(TIfStmt(AStmt).ThenStmt, ASet);
+    CollectAddressTakenStmt(TIfStmt(AStmt).ElseStmt, ASet);
+  end
+  else if AStmt is TWhileStmt then
+  begin
+    CollectAddressTakenExpr(TWhileStmt(AStmt).Condition, ASet);
+    CollectAddressTakenStmt(TWhileStmt(AStmt).Body, ASet);
+  end
+  else if AStmt is TRepeatStmt then
+  begin
+    CollectAddressTakenExpr(TRepeatStmt(AStmt).Condition, ASet);
+    CollectAddressTakenStmt(TRepeatStmt(AStmt).Body, ASet);
+  end
+  else if AStmt is TForStmt then
+  begin
+    ForS := TForStmt(AStmt);
+    CollectAddressTakenExpr(ForS.StartExpr, ASet);
+    CollectAddressTakenExpr(ForS.EndExpr, ASet);
+    CollectAddressTakenStmt(ForS.Body, ASet);
+  end
+  else if AStmt is TForInStmt then
+  begin
+    CollectAddressTakenExpr(TForInStmt(AStmt).CollExpr, ASet);
+    CollectAddressTakenStmt(TForInStmt(AStmt).Body, ASet);
+  end
+  else if AStmt is TAssignment then
+    CollectAddressTakenExpr(TAssignment(AStmt).Expr, ASet)
+  else if AStmt is TFieldAssignment then
+    CollectAddressTakenExpr(TFieldAssignment(AStmt).Expr, ASet)
+  else if AStmt is TMethodCallStmt then
+  begin
+    MCall := TMethodCallStmt(AStmt);
+    CollectAddressTakenExpr(MCall.ObjExpr, ASet);
+    if MCall.ResolvedMethod <> nil then
+      for I := 0 to MCall.Args.Count - 1 do
+      begin
+        if I < TMethodDecl(MCall.ResolvedMethod).Params.Count then
+          if TMethodParam(TMethodDecl(MCall.ResolvedMethod).Params.Items[I]).IsVarParam and
+             (TASTExpr(MCall.Args.Items[I]) is TIdentExpr) and
+             not TIdentExpr(TASTExpr(MCall.Args.Items[I])).IsGlobal then
+            ASet.Add(TIdentExpr(TASTExpr(MCall.Args.Items[I])).Name);
+        CollectAddressTakenExpr(TASTExpr(MCall.Args.Items[I]), ASet);
+      end
+    else
+      for I := 0 to MCall.Args.Count - 1 do
+        CollectAddressTakenExpr(TASTExpr(MCall.Args.Items[I]), ASet);
+  end
+  else if AStmt is TProcCall then
+  begin
+    PCall := TProcCall(AStmt);
+    if PCall.ResolvedDecl <> nil then
+      for I := 0 to PCall.Args.Count - 1 do
+      begin
+        if I < TMethodDecl(PCall.ResolvedDecl).Params.Count then
+          if TMethodParam(TMethodDecl(PCall.ResolvedDecl).Params.Items[I]).IsVarParam and
+             (TASTExpr(PCall.Args.Items[I]) is TIdentExpr) and
+             not TIdentExpr(TASTExpr(PCall.Args.Items[I])).IsGlobal then
+            ASet.Add(TIdentExpr(TASTExpr(PCall.Args.Items[I])).Name);
+        CollectAddressTakenExpr(TASTExpr(PCall.Args.Items[I]), ASet);
+      end
+    else
+      for I := 0 to PCall.Args.Count - 1 do
+        CollectAddressTakenExpr(TASTExpr(PCall.Args.Items[I]), ASet);
+  end
+  else if AStmt is TInheritedCallStmt then
+  begin
+    ICall := TInheritedCallStmt(AStmt);
+    if ICall.ResolvedMethod <> nil then
+      for I := 0 to ICall.Args.Count - 1 do
+      begin
+        if I < TMethodDecl(ICall.ResolvedMethod).Params.Count then
+          if TMethodParam(TMethodDecl(ICall.ResolvedMethod).Params.Items[I]).IsVarParam and
+             (TASTExpr(ICall.Args.Items[I]) is TIdentExpr) and
+             not TIdentExpr(TASTExpr(ICall.Args.Items[I])).IsGlobal then
+            ASet.Add(TIdentExpr(TASTExpr(ICall.Args.Items[I])).Name);
+        CollectAddressTakenExpr(TASTExpr(ICall.Args.Items[I]), ASet);
+      end
+    else
+      for I := 0 to ICall.Args.Count - 1 do
+        CollectAddressTakenExpr(TASTExpr(ICall.Args.Items[I]), ASet);
+  end
+  else if AStmt is TTryFinallyStmt then
+  begin
+    TryF := TTryFinallyStmt(AStmt);
+    CollectAddressTakenStmt(TryF.TryBody, ASet);
+    CollectAddressTakenStmt(TryF.FinallyBody, ASet);
+  end
+  else if AStmt is TTryExceptStmt then
+  begin
+    TryE := TTryExceptStmt(AStmt);
+    CollectAddressTakenStmt(TryE.TryBody, ASet);
+    for I := 0 to TryE.Handlers.Count - 1 do
+      CollectAddressTakenStmt(TExceptHandlerClause(TryE.Handlers.Items[I]).Body, ASet);
+    CollectAddressTakenStmt(TryE.ElseBody, ASet);
+    CollectAddressTakenStmt(TryE.ExceptBody, ASet);
+  end
+  else if AStmt is TRaiseStmt then
+  begin
+    RaiseS := TRaiseStmt(AStmt);
+    CollectAddressTakenExpr(RaiseS.Expr, ASet);
+  end
+  else if AStmt is TCaseStmt then
+  begin
+    CaseS := TCaseStmt(AStmt);
+    CollectAddressTakenExpr(CaseS.Selector, ASet);
+    for I := 0 to CaseS.Branches.Count - 1 do
+      CollectAddressTakenStmt(TCaseBranch(CaseS.Branches.Items[I]).Stmt, ASet);
+    CollectAddressTakenStmt(CaseS.ElseStmt, ASet);
+  end
+  else if AStmt is TPointerWriteStmt then
+  begin
+    PWrite := TPointerWriteStmt(AStmt);
+    CollectAddressTakenExpr(PWrite.PtrExpr, ASet);
+    CollectAddressTakenExpr(PWrite.ValExpr, ASet);
+  end
+  else if AStmt is TStaticSubscriptAssign then
+  begin
+    SSubA := TStaticSubscriptAssign(AStmt);
+    CollectAddressTakenExpr(SSubA.IndexExpr, ASet);
+    CollectAddressTakenExpr(SSubA.ValueExpr, ASet);
+  end;
+  { TExitStmt, TBreakStmt, TContinueStmt — no expressions to walk }
+end;
+
+function TCodeGenQBE.StmtHasTry(AStmt: TASTStmt): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if AStmt = nil then Exit;
+  if (AStmt is TTryFinallyStmt) or (AStmt is TTryExceptStmt) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if AStmt is TCompoundStmt then
+    for I := 0 to TCompoundStmt(AStmt).Stmts.Count - 1 do
+      if StmtHasTry(TASTStmt(TCompoundStmt(AStmt).Stmts.Items[I])) then
+      begin
+        Result := True;
+        Exit;
+      end;
+  if AStmt is TIfStmt then
+  begin
+    if StmtHasTry(TIfStmt(AStmt).ThenStmt) or StmtHasTry(TIfStmt(AStmt).ElseStmt) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  if AStmt is TWhileStmt then
+    Result := StmtHasTry(TWhileStmt(AStmt).Body)
+  else if AStmt is TRepeatStmt then
+    Result := StmtHasTry(TRepeatStmt(AStmt).Body)
+  else if AStmt is TForStmt then
+    Result := StmtHasTry(TForStmt(AStmt).Body)
+  else if AStmt is TForInStmt then
+    Result := StmtHasTry(TForInStmt(AStmt).Body)
+  else if AStmt is TCaseStmt then
+    for I := 0 to TCaseStmt(AStmt).Branches.Count - 1 do
+      if StmtHasTry(TCaseBranch(TCaseStmt(AStmt).Branches.Items[I]).Stmt) then
+      begin
+        Result := True;
+        Exit;
+      end;
+end;
+
+function TCodeGenQBE.BlockHasTry(ABlock: TBlock): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.Stmts.Count - 1 do
+    if StmtHasTry(TASTStmt(ABlock.Stmts.Items[I])) then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+function TCodeGenQBE.CollectAddressTaken(ABlock: TBlock): TStringList;
+var
+  I: Integer;
+begin
+  Result := TStringList.Create;
+  Result.CaseSensitive := True;
+  Result.Duplicates    := dupIgnore;
+  Result.Sorted        := True;
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.Stmts.Count - 1 do
+    CollectAddressTakenStmt(TASTStmt(ABlock.Stmts.Items[I]), Result);
+end;
+
 procedure TCodeGenQBE.EmitVarAllocs(ABlock: TBlock);
 var
-  I, J:     Integer;
-  Decl:     TVarDecl;
-  VarName:  string;
-  RT:       TRecordTypeDesc;
-  RecSize:  Integer;
-  RecAlign: Integer;
-  SAT:      TStaticArrayTypeDesc;
-  ArrSize:  Integer;
-  ArrAlign: Integer;
+  I, J:        Integer;
+  Decl:        TVarDecl;
+  VarName:     string;
+  RT:          TRecordTypeDesc;
+  RecSize:     Integer;
+  RecAlign:    Integer;
+  SAT:         TStaticArrayTypeDesc;
+  ArrSize:     Integer;
+  ArrAlign:    Integer;
+  AddrTaken:   TStringList;
+  QT:          string;
+  IsMethodPtr: Boolean;
 begin
+  { mem2reg pre-pass: find which locals have their address taken so we
+    know which ones must remain as stack slots.
+    Also skip promotion entirely when the block contains try/except or
+    try/finally — promoted SSA temps live in registers and don't survive
+    the setjmp/longjmp used by the exception frame. }
+  FPromotedLocals.Clear;
+  FPromotedTypes.Clear;
+  if not BlockHasTry(ABlock) then
+  begin
+    AddrTaken := CollectAddressTaken(ABlock);
+    try
+      for I := 0 to ABlock.Decls.Count - 1 do
+      begin
+        Decl := TVarDecl(ABlock.Decls.Items[I]);
+        if Decl.ResolvedType = nil then Continue;
+        if Decl.IsGlobal then Continue;
+        for J := 0 to Decl.Names.Count - 1 do
+        begin
+          VarName := Decl.Names.Strings[J];
+          if IsPromotableKind(Decl.ResolvedType.Kind) and
+             (AddrTaken.IndexOf(VarName) < 0) then
+          begin
+            { tyProcedural method-pointers are two-slot aggregates — not promotable }
+            IsMethodPtr := (Decl.ResolvedType.Kind = tyProcedural) and
+                           TProceduralTypeDesc(Decl.ResolvedType).IsMethodPtr;
+            if not IsMethodPtr then
+            begin
+              FPromotedLocals.Add(VarName);
+              FPromotedTypes.Add(PromotedQType(Decl.ResolvedType.Kind, Decl.ResolvedType));
+            end;
+          end;
+        end;
+      end;
+    finally
+      AddrTaken.Free;
+    end;
+  end;
+
   for I := 0 to ABlock.Decls.Count - 1 do
   begin
     Decl := TVarDecl(ABlock.Decls.Items[I]);
@@ -501,6 +940,22 @@ begin
     for J := 0 to Decl.Names.Count - 1 do
     begin
       VarName := Decl.Names.Strings[J];
+
+      { Promoted locals: emit a zero initialisation as a direct copy into
+        the temp.  QBE re-uses the same name across assignments (non-SSA
+        mode — QBE inserts phi nodes itself). }
+      if IsPromoted(VarName) then
+      begin
+        QT := PromotedType(VarName);
+        case QT of
+          'w': EmitLine(Format('  %%_var_%s =w copy 0', [VarName]));
+          'l': EmitLine(Format('  %%_var_%s =l copy 0', [VarName]));
+          'd': EmitLine(Format('  %%_var_%s =d copy d_0', [VarName]));
+          's': EmitLine(Format('  %%_var_%s =s copy s_0', [VarName]));
+        end;
+        Continue;
+      end;
+
       case Decl.ResolvedType.Kind of
         tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
           begin
@@ -529,9 +984,6 @@ begin
               EmitLine(Format('  %%_var_%s =l alloc8 %d', [VarName, RecSize]))
             else
               EmitLine(Format('  %%_var_%s =l alloc4 %d', [VarName, RecSize]));
-            { Zero-initialise record storage: Pascal records default to 0 and
-              QBE's SSA checker requires every loaded slot to have at least
-              one prior store. }
             if RecSize > 0 then
               EmitLine(Format('  call $memset(l %%_var_%s, w 0, l %d)',
                 [VarName, RecSize]));
@@ -539,7 +991,6 @@ begin
 
         tyClass:
           begin
-            { Class var holds a heap pointer — allocate one pointer slot, nil-init }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
@@ -549,18 +1000,11 @@ begin
             if (Decl.ResolvedType.Kind = tyProcedural) and
                TProceduralTypeDesc(Decl.ResolvedType).IsMethodPtr then
             begin
-              { Method-pointer var: 16-byte (Code, Data) block, allocated
-                inline like a record.  The var name is the address of
-                that block; loads/stores read both halves explicitly. }
               EmitLine(Format('  %%_var_%s =l alloc8 16', [VarName]));
               EmitLine(Format('  call $memset(l %%_var_%s, w 0, l 16)', [VarName]));
             end
             else
             begin
-              { Pointer var (typed/untyped), bare procedural var, or
-                metaclass var — one pointer slot, nil-init.  Procedural
-                variables hold a function code pointer; metaclass
-                variables hold a typeinfo pointer. }
               EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
               EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
             end;
@@ -568,7 +1012,6 @@ begin
 
         tyPChar:
           begin
-            { PChar var — opaque C pointer slot, nil-init }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
@@ -587,7 +1030,6 @@ begin
 
         tySet:
           begin
-            { Set var: 32-bit bitmask for ≤32 members, 64-bit for 33–64 }
             if TSetTypeDesc(Decl.ResolvedType).BitCount <= 32 then
             begin
               EmitLine(Format('  %%_var_%s =l alloc4 1', [VarName]));
@@ -753,6 +1195,8 @@ begin
       ValTemp := AllocTemp;
       if IsIntf then
         EmitLine(Format('  %s =l loadl %s_obj', [ValTemp, VarRef(VarName, Decl.IsGlobal)]))
+      else if not Decl.IsGlobal and IsPromoted(VarName) then
+        EmitLine(Format('  %s =l copy %%_var_%s', [ValTemp, VarName]))
       else
         EmitLine(Format('  %s =l loadl %s', [ValTemp, VarRef(VarName, Decl.IsGlobal)]));
       EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
@@ -1155,7 +1599,10 @@ begin
 
   { Evaluate start and store into loop variable }
   StartT := EmitExpr(AStmt.StartExpr);
-  EmitLine(Format('  storew %s, %s', [StartT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
+  if not AStmt.IsGlobal and IsPromoted(AStmt.VarName) then
+    EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.VarName, StartT]))
+  else
+    EmitLine(Format('  storew %s, %s', [StartT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
 
   { Evaluate end value once into a temp }
   EndT := EmitExpr(AStmt.EndExpr);
@@ -1166,7 +1613,10 @@ begin
   { Condition block: test loop variable against end value }
   EmitLine('@' + LblCond);
   CurT := AllocTemp;
-  EmitLine(Format('  %s =w loadw %s', [CurT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
+  if not AStmt.IsGlobal and IsPromoted(AStmt.VarName) then
+    EmitLine(Format('  %s =w copy %%_var_%s', [CurT, AStmt.VarName]))
+  else
+    EmitLine(Format('  %s =w loadw %s', [CurT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
   CmpT := AllocTemp;
   if AStmt.IsDownTo then
     CmpOp := 'csgew'   { I >= End }
@@ -1191,13 +1641,19 @@ begin
   EmitLine('@' + LblNext);
   CurT  := AllocTemp;
   StepT := AllocTemp;
-  EmitLine(Format('  %s =w loadw %s', [CurT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
+  if not AStmt.IsGlobal and IsPromoted(AStmt.VarName) then
+    EmitLine(Format('  %s =w copy %%_var_%s', [CurT, AStmt.VarName]))
+  else
+    EmitLine(Format('  %s =w loadw %s', [CurT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
   if AStmt.IsDownTo then
     StepOp := 'sub'
   else
     StepOp := 'add';
   EmitLine(Format('  %s =w %s %s, 1', [StepT, StepOp, CurT]));
-  EmitLine(Format('  storew %s, %s', [StepT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
+  if not AStmt.IsGlobal and IsPromoted(AStmt.VarName) then
+    EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.VarName, StepT]))
+  else
+    EmitLine(Format('  storew %s, %s', [StepT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
   EmitLine(Format('  jmp @%s', [LblCond]));
 
   { Continuation block }
@@ -1851,11 +2307,17 @@ begin
   begin
     { ARC: load old, compute new, retain new, release old, store new }
     OldTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      EmitLine(Format('  %s =l copy %%_var_%s', [OldTemp, AAssign.Name]))
+    else
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     ValTemp := EmitExpr(AAssign.Expr);
     EmitLine(Format('  call $_StringAddRef(l %s)', [ValTemp]));
     EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      EmitLine(Format('  %%_var_%s =l copy %s', [AAssign.Name, ValTemp]))
+    else
+      EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
   end
   else if AAssign.IsWeakLhs and (AAssign.Expr.ResolvedType.Kind = tyClass) then
   begin
@@ -1872,11 +2334,17 @@ begin
     { ARC: load old class reference, evaluate new, retain new, release old,
       store new.  Matches the string ARC idiom one-for-one. }
     OldTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      EmitLine(Format('  %s =l copy %%_var_%s', [OldTemp, AAssign.Name]))
+    else
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     ValTemp := EmitExpr(AAssign.Expr);
     EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      EmitLine(Format('  %%_var_%s =l copy %s', [AAssign.Name, ValTemp]))
+    else
+      EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
   end
   else
   begin
@@ -1901,7 +2369,10 @@ begin
         EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
         ValTemp := ExtTemp;
       end;
-      EmitLine(Format('  stored %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+      if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+        EmitLine(Format('  %%_var_%s =d copy %s', [AAssign.Name, ValTemp]))
+      else
+        EmitLine(Format('  stored %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end
     else if (AAssign.ResolvedLhsType <> nil) and
             (QbeTypeOf(AAssign.ResolvedLhsType) = 'l') then
@@ -1913,19 +2384,29 @@ begin
         EmitLine(Format('  %s =l extsw %s', [ExtTemp, ValTemp]));
         ValTemp := ExtTemp;
       end;
-      EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+      if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+        EmitLine(Format('  %%_var_%s =l copy %s', [AAssign.Name, ValTemp]))
+      else
+        EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end
     else
     begin
       QType   := QbeTypeOf(AAssign.Expr.ResolvedType);
       ValTemp := EmitExpr(AAssign.Expr);
-      case QType of
-        'w': StoreInstr := 'storew';
-        'd': StoreInstr := 'stored';
-        's': StoreInstr := 'stores';
-      else   StoreInstr := 'storel';
+      if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      begin
+        EmitLine(Format('  %%_var_%s =%s copy %s', [AAssign.Name, QType, ValTemp]));
+      end
+      else
+      begin
+        case QType of
+          'w': StoreInstr := 'storew';
+          'd': StoreInstr := 'stored';
+          's': StoreInstr := 'stores';
+        else   StoreInstr := 'storel';
+        end;
+        EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
       end;
-      EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end;
   end;
 end;
@@ -3036,7 +3517,9 @@ begin
     else
     begin
       RetTemp := AllocTemp;
-      if RetQType = 'w' then
+      if IsPromoted('Result') then
+        EmitLine(Format('  %s =%s copy %%_var_Result', [RetTemp, RetQType]))
+      else if RetQType = 'w' then
         EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
       else
         EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
@@ -3615,7 +4098,9 @@ begin
     else
     begin
       RetTemp := AllocTemp;
-      if RetQType = 'w' then
+      if IsPromoted('Result') then
+        EmitLine(Format('  %s =%s copy %%_var_Result', [RetTemp, RetQType]))
+      else if RetQType = 'w' then
         EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
       else
         EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
@@ -3823,37 +4308,80 @@ begin
   end
   else if (UCaseName = 'INC') or (UCaseName = 'DEC') then
   begin
-    { Inc(x) / Inc(x, n) / Dec(x) / Dec(x, n) — in-place add/sub }
-    ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
-    ArgTemp2 := AllocTemp;
-    if (TASTExpr(ACall.Args.Items[0]).ResolvedType <> nil) and
-       (TASTExpr(ACall.Args.Items[0]).ResolvedType.Kind in [tyInt64, tyClass, tyPointer]) then
+    { Inc(x) / Inc(x, n) / Dec(x) / Dec(x, n) — in-place add/sub.
+      For promoted locals the variable is an SSA temp (no memory address);
+      use copy/add/sub instead of load/store. }
+    if (TASTExpr(ACall.Args.Items[0]) is TIdentExpr) and
+       not TIdentExpr(TASTExpr(ACall.Args.Items[0])).IsGlobal and
+       IsPromoted(TIdentExpr(TASTExpr(ACall.Args.Items[0])).Name) then
     begin
-      EmitLine(Format('  %s =l loadl %s', [ArgTemp2, ArgTemp]));
-      if ACall.Args.Count >= 2 then
-        SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]))
+      { Promoted scalar local: read directly, compute, write directly }
+      ArgTemp  := TIdentExpr(TASTExpr(ACall.Args.Items[0])).Name;
+      ArgTemp2 := AllocTemp;
+      if (TASTExpr(ACall.Args.Items[0]).ResolvedType <> nil) and
+         (TASTExpr(ACall.Args.Items[0]).ResolvedType.Kind in [tyInt64, tyClass, tyPointer]) then
+      begin
+        EmitLine(Format('  %s =l copy %%_var_%s', [ArgTemp2, ArgTemp]));
+        if ACall.Args.Count >= 2 then
+          SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]))
+        else
+          SizeTemp := '1';
+        ArgLine := AllocTemp;
+        if UCaseName = 'INC' then
+          EmitLine(Format('  %s =l add %s, %s', [ArgLine, ArgTemp2, SizeTemp]))
+        else
+          EmitLine(Format('  %s =l sub %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
+        EmitLine(Format('  %%_var_%s =l copy %s', [ArgTemp, ArgLine]));
+      end
       else
-        SizeTemp := '1';
-      ArgLine := AllocTemp;
-      if UCaseName = 'INC' then
-        EmitLine(Format('  %s =l add %s, %s', [ArgLine, ArgTemp2, SizeTemp]))
-      else
-        EmitLine(Format('  %s =l sub %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
-      EmitLine(Format('  storel %s, %s', [ArgLine, ArgTemp]));
+      begin
+        EmitLine(Format('  %s =w copy %%_var_%s', [ArgTemp2, ArgTemp]));
+        if ACall.Args.Count >= 2 then
+          SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]))
+        else
+          SizeTemp := '1';
+        ArgLine := AllocTemp;
+        if UCaseName = 'INC' then
+          EmitLine(Format('  %s =w add %s, %s', [ArgLine, ArgTemp2, SizeTemp]))
+        else
+          EmitLine(Format('  %s =w sub %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
+        EmitLine(Format('  %%_var_%s =w copy %s', [ArgTemp, ArgLine]));
+      end;
     end
     else
     begin
-      EmitLine(Format('  %s =w loadw %s', [ArgTemp2, ArgTemp]));
-      if ACall.Args.Count >= 2 then
-        SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]))
+      { Stack-slot local or global: use address-based load/store }
+      ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
+      ArgTemp2 := AllocTemp;
+      if (TASTExpr(ACall.Args.Items[0]).ResolvedType <> nil) and
+         (TASTExpr(ACall.Args.Items[0]).ResolvedType.Kind in [tyInt64, tyClass, tyPointer]) then
+      begin
+        EmitLine(Format('  %s =l loadl %s', [ArgTemp2, ArgTemp]));
+        if ACall.Args.Count >= 2 then
+          SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]))
+        else
+          SizeTemp := '1';
+        ArgLine := AllocTemp;
+        if UCaseName = 'INC' then
+          EmitLine(Format('  %s =l add %s, %s', [ArgLine, ArgTemp2, SizeTemp]))
+        else
+          EmitLine(Format('  %s =l sub %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
+        EmitLine(Format('  storel %s, %s', [ArgLine, ArgTemp]));
+      end
       else
-        SizeTemp := '1';
-      ArgLine := AllocTemp;
-      if UCaseName = 'INC' then
-        EmitLine(Format('  %s =w add %s, %s', [ArgLine, ArgTemp2, SizeTemp]))
-      else
-        EmitLine(Format('  %s =w sub %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
-      EmitLine(Format('  storew %s, %s', [ArgLine, ArgTemp]));
+      begin
+        EmitLine(Format('  %s =w loadw %s', [ArgTemp2, ArgTemp]));
+        if ACall.Args.Count >= 2 then
+          SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]))
+        else
+          SizeTemp := '1';
+        ArgLine := AllocTemp;
+        if UCaseName = 'INC' then
+          EmitLine(Format('  %s =w add %s, %s', [ArgLine, ArgTemp2, SizeTemp]))
+        else
+          EmitLine(Format('  %s =w sub %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
+        EmitLine(Format('  storew %s, %s', [ArgLine, ArgTemp]));
+      end;
     end;
   end
   else if UCaseName = 'INCLUDE' then
@@ -5716,6 +6244,13 @@ begin
       { Aggregate variable — return its storage address directly (no load). }
       Result := VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal);
       Exit;
+    end
+    else if not TIdentExpr(AExpr).IsGlobal and
+            IsPromoted(TIdentExpr(AExpr).Name) then
+    begin
+      { mem2reg: promoted local — the temp already holds the value; just copy. }
+      QType := PromotedType(TIdentExpr(AExpr).Name);
+      EmitLine(Format('  %s =%s copy %%_var_%s', [T, QType, TIdentExpr(AExpr).Name]));
     end
     else
     begin
