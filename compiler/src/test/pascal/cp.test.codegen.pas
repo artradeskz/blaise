@@ -59,6 +59,10 @@ type
     procedure TestFalse_AssignToBoolVar;
     procedure TestTrue_InIfCondition;
     procedure TestBoolFunc_ReturnTrue;
+
+    { Case-insensitive identifier normalisation }
+    procedure TestResult_LowercaseAssign_CompilesOK;
+    procedure TestIdent_WrongCase_NormalisedInIR;
   end;
 
 implementation
@@ -346,6 +350,44 @@ begin
     'end.');
   AssertTrue('IsOK function emitted', IRContains(IR, '$IsOK'));
   AssertTrue('True emits copy 1', IRContains(IR, 'copy 1'));
+end;
+
+procedure TCodeGenTests.TestResult_LowercaseAssign_CompilesOK;
+var
+  IR: string;
+begin
+  { 'result' (lowercase) must resolve to the same slot as 'Result' and
+    produce valid QBE — regression test for the case-normalisation bug
+    reported in https://github.com/graemeg/blaise/discussions/15 }
+  IR := GenerateIR(
+    'program P;'                                   + LineEnding +
+    'function MyAdd(X, Y: Integer): Integer;'      + LineEnding +
+    'begin'                                        + LineEnding +
+    '  result := X + Y'                            + LineEnding +
+    'end;'                                         + LineEnding +
+    'var Z: Integer;'                              + LineEnding +
+    'begin'                                        + LineEnding +
+    '  Z := MyAdd(2, 3)'                           + LineEnding +
+    'end.');
+  AssertTrue('storew to Result slot (canonical casing)',
+    IRContains(IR, 'storew %_t'));
+  AssertFalse('no mis-cased %_var_result slot',
+    IRContains(IR, '%_var_result ='));
+end;
+
+procedure TCodeGenTests.TestIdent_WrongCase_NormalisedInIR;
+var
+  IR: string;
+begin
+  { Reading a variable with wrong casing must use the declared slot name }
+  IR := GenerateIR(
+    'program P;'                                   + LineEnding +
+    'var N: Integer;'                              + LineEnding +
+    'begin'                                        + LineEnding +
+    '  n := 42'                                    + LineEnding +
+    'end.');
+  AssertTrue('canonical $N global used', IRContains(IR, '$N'));
+  AssertFalse('no mis-cased $n global', IRContains(IR, '$n ='));
 end;
 
 initialization

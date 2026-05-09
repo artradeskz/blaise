@@ -3384,6 +3384,7 @@ begin
       Format('''%s'' is not a variable', [AAssign.Name]),
       AAssign.Line, AAssign.Col);
 
+  AAssign.Name            := VarSym.Name;  { normalise to declared casing }
   AAssign.IsVarParam      := (VarSym.Kind = skVarParameter);
   AAssign.ResolvedLhsType := VarSym.TypeDesc;
   AAssign.IsWeakLhs       := VarSym.IsWeak;
@@ -5332,6 +5333,7 @@ begin
     { Var-params and value-record/array params are both passed by reference at
       the QBE ABI level: the local slot holds a pointer, not the aggregate
       bytes.  Codegen must dereference the slot before reading fields. }
+    TIdentExpr(AExpr).Name      := Sym.Name;  { normalise to declared casing }
     TIdentExpr(AExpr).IsVarParam :=
       (Sym.Kind = skVarParameter) or
       ((Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
