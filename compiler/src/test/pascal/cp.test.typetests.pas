@@ -58,7 +58,7 @@ type
     { Codegen — typeinfo data sections                                     }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_TypeInfo_Emitted;
-    procedure TestCodegen_TypeInfo_ParentPtr_IsZero_ForRoot;
+    procedure TestCodegen_TypeInfo_ParentPtr_IsTObject_ForImplicitRoot;
     procedure TestCodegen_TypeInfo_ParentPtr_ForDerived;
     procedure TestCodegen_Vtable_StartsWithTypeInfo;
 
@@ -333,14 +333,14 @@ begin
     Pos('data $typeinfo_TAnimal', IR) > 0);
 end;
 
-procedure TTypeTestTests.TestCodegen_TypeInfo_ParentPtr_IsZero_ForRoot;
+procedure TTypeTestTests.TestCodegen_TypeInfo_ParentPtr_IsTObject_ForImplicitRoot;
 var IR: string;
 begin
-  { Root class (no parent): parent=0, impllist=0, nameptr=&ClassName,
-    methods=0, then totalsize/fieldcleanup/vtable (Step 11e). }
+  { A class with no explicit parent implicitly inherits from TObject, so its
+    typeinfo parent pointer must reference $typeinfo_TObject, not zero. }
   IR := GenIR(SrcBase);
-  AssertTrue('root typeinfo has zero parent ptr',
-    Pos('$typeinfo_TAnimal = { l 0, l 0, l $__cn_TAnimal + 12, l 0,', IR) > 0);
+  AssertTrue('implicit-TObject typeinfo has TObject parent ptr',
+    Pos('$typeinfo_TAnimal = { l $typeinfo_TObject, l 0, l $__cn_TAnimal + 12, l 0,', IR) > 0);
 end;
 
 procedure TTypeTestTests.TestCodegen_TypeInfo_ParentPtr_ForDerived;

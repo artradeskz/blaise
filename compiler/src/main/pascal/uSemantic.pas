@@ -2089,9 +2089,10 @@ begin
       end;
 
       { If no explicit parent was specified (and this class is not TObject itself),
-        implicitly inherit TObject's vtable so that all class types carry a vptr.
-        This ensures field offsets start after the 8-byte vtable pointer.
-        We do NOT set RT.Parent here — root classes have null parent in typeinfo. }
+        implicitly inherit from TObject: copy its vtable so the vptr slot is
+        present and field offsets start after the 8-byte pointer, and set
+        RT.Parent so that typeinfo carries the correct parent chain for
+        is/as/InheritsFrom checks. }
       if (TClassTypeDef(TD.Def).ParentName = '') and (TD.Name <> 'TObject') then
       begin
         ParentSym := FTable.Lookup('TObject');
@@ -2099,6 +2100,7 @@ begin
         begin
           ParentRT := TRecordTypeDesc(ParentSym.TypeDesc);
           RT.CopyVTableFrom(ParentRT);
+          RT.Parent := ParentRT;
         end;
       end;
 
