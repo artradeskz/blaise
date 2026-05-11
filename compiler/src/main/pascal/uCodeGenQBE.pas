@@ -6021,9 +6021,21 @@ begin
         Exit;
       end;
       L := EmitInstancePtr(FldAccess.Base);
-      { Method-backed property read (indexed or non-indexed) }
+      { Method-backed property read (indexed or non-indexed).
+        When FieldInfo is also non-nil, load the field value first — the getter
+        runs on the field's object, not the chained base. }
       if FldAccess.PropRead <> nil then
       begin
+        if FldAccess.FieldInfo <> nil then
+        begin
+          Ptr := AllocTemp;
+          if FldAccess.FieldInfo.Offset > 0 then
+            EmitLine(Format('  %s =l add %s, %d', [Ptr, L, FldAccess.FieldInfo.Offset]))
+          else
+            Ptr := L;
+          L := AllocTemp;
+          EmitLine(Format('  %s =l loadl %s', [L, Ptr]));
+        end;
         QType := QbeTypeOf(FldAccess.PropRead.TypeDesc);
         T := AllocTemp;
         if FldAccess.PropIndexExpr <> nil then
