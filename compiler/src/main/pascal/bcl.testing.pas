@@ -39,6 +39,11 @@ interface
 uses
   Classes;
 
+{$IFNDEF FPC}
+const
+  LineEnding = #10;
+{$ENDIF}
+
 type
   { TRunMethod — type of a parameter-less method on any TObject descendant.
     Used as the cast target for the published-method dispatch trampoline:

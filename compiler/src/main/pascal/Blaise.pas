@@ -254,6 +254,7 @@ begin
   Result := True;
 end;
 
+{$IFDEF FPC}
 { Returns a cache key string for the given source file: "<mtime>:<size>".
   Returns '' if the file cannot be stat'd. }
 function CacheKeyForFile(const APath: string): string;
@@ -327,6 +328,7 @@ begin
     SL.Free;
   end;
 end;
+{$ENDIF}
 
 function ReadProcessChunk(AProc: TProcess): string;
 {$IFDEF FPC}
@@ -573,10 +575,8 @@ begin
     end;
 
     try
-      IR := '';
-
-      { Build a composite cache key: "<prog-key>|<unitA>:<key>|<unitB>:<key>..."
-        The load order is deterministic (dependency-sorted), so the key is stable. }
+      {$IFDEF FPC}
+      { IR caching — FPC-only; uses TSearchRec etc. not available under Blaise }
       if CacheDir <> '' then
       begin
         UnitIR := CacheKeyForFile(SourceFile);
@@ -588,7 +588,6 @@ begin
             UnitIR := UnitIR + '|' + UnitName + ':' + CacheKeyForFile(UnitPath);
           end;
 
-        { Try cache hit }
         IRFile := IncludeTrailingPathDelimiter(CacheDir) + '__full__.ssa';
         Source := TStringList.Create;
         try
@@ -606,10 +605,11 @@ begin
           Source := nil;
         end;
       end;
+      {$ENDIF}
 
+      { Full codegen (or fallback if caching was skipped/missed) }
       if IR = '' then
       begin
-        { Full codegen }
         CG := TCodeGenQBE.Create;
         try
           if (Units <> nil) and (Units.Count > 0) then
@@ -627,7 +627,7 @@ begin
           CG := nil;
         end;
 
-        { Store result in cache }
+        {$IFDEF FPC}
         if CacheDir <> '' then
         begin
           if ForceDirectories(CacheDir) then
@@ -651,6 +651,7 @@ begin
             end;
           end;
         end;
+        {$ENDIF}
       end;
 
       if OPDFEnabled then

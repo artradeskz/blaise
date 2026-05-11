@@ -1466,7 +1466,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringPos, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringPos, Output, RCode));
   AssertEquals('Pos(''world'', ''hello world'') = 6', '6', Trim(Output));
 end;
 
@@ -1476,7 +1476,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringCopy, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringCopy, Output, RCode));
   AssertEquals('Copy(''hello'', 1, 3) = ''ell''', 'ell', Trim(Output));
 end;
 
@@ -1557,7 +1557,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringCopyMaxIntCount, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringCopyMaxIntCount, Output, RCode));
   AssertEquals('Copy(''^Integer'', 1, MaxInt) = ''Integer''', 'Integer', Trim(Output));
 end;
 

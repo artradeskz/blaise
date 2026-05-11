@@ -13,7 +13,7 @@ unit cp.test.tokenkindname;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer;
 
 type
@@ -133,10 +133,10 @@ var
   k: TTokenKind;
   name: string;
 begin
-  for k := Low(TTokenKind) to High(TTokenKind) do
+  for k := TTokenKind(0) to TTokenKind(ExpectedMaxTokenKindOrd) do
   begin
     name := TokenKindName(k);
-    AssertTrue(Format('TokenKindName returned empty string for ordinal %d', [Ord(k)]),
+    AssertTrue('TokenKindName returned empty string for ordinal ' + IntToStr(Ord(k)),
       name <> '');
   end;
 end;
@@ -146,11 +146,11 @@ var
   k: TTokenKind;
   name: string;
 begin
-  for k := Low(TTokenKind) to High(TTokenKind) do
+  for k := TTokenKind(0) to TTokenKind(ExpectedMaxTokenKindOrd) do
   begin
     name := TokenKindName(k);
-    AssertFalse(Format('TokenKindName returned <unknown(...)> for ordinal %d', [Ord(k)]),
-      Pos('<unknown(', name) > 0);
+    AssertTrue('TokenKindName returned <unknown(...)> for ordinal ' + IntToStr(Ord(k)),
+      Pos('<unknown(', name) = 0);
   end;
 end;
 

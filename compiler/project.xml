@@ -6,14 +6,13 @@
     <packaging>application</packaging>
     <mainSource>Blaise.pas</mainSource>
     <executableName>blaise</executableName>
-    <!-- RTL sources consumed directly by Blaise; no pre-built PPU artifacts needed. -->
-    <unitPaths>
-      <path>../rtl/src/main/pascal</path>
-    </unitPaths>
   </build>
 
   <test>
     <testSource>TestRunner.pas</testSource>
+    <unitPaths>
+      <path>../rtl/src/main/pascal</path>
+    </unitPaths>
   </test>
 
 </project>
