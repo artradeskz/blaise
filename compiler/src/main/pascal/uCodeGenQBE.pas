@@ -1823,14 +1823,20 @@ begin
     LblEnd  := AllocLabel('forin_end');
 
     { Initialise index to ArrayLow }
-    EmitLine(Format('  storew %d, %s', [AStmt.ArrayLow, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %d', [IdxSlot, AStmt.ArrayLow]))
+    else
+      EmitLine(Format('  storew %d, %s', [AStmt.ArrayLow, IdxSlot]));
     EmitLine(Format('  jmp @%s', [LblCond]));
 
     { Condition: idx <= ArrayHigh }
     EmitLine('@' + LblCond);
     IdxW := AllocTemp;
     CmpT := AllocTemp;
-    EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
     EmitLine(Format('  %s =w cslew %s, %d', [CmpT, IdxW, AStmt.ArrayHigh]));
     EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
 
@@ -1842,7 +1848,10 @@ begin
       BasePtr := EmitExpr(AStmt.CollExpr);
       IdxW    := AllocTemp;
       IdxL    := AllocTemp;
-      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+      if IsPromoted(AStmt.IdxVarName) then
+        EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+      else
+        EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
       EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
       if AStmt.ArrayLow <> 0 then
       begin
@@ -1883,8 +1892,13 @@ begin
           [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
       end
       else if QType = 'w' then
-        EmitLine(Format('  storew %s, %s',
-          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]))
+      begin
+        if not AStmt.VarIsGlobal and IsPromoted(AStmt.VarName) then
+          EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.VarName, CurT]))
+        else
+          EmitLine(Format('  storew %s, %s',
+            [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      end
       else
         EmitLine(Format('  storel %s, %s',
           [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
@@ -1898,9 +1912,15 @@ begin
     { Increment index }
     IdxW := AllocTemp;
     NxtW := AllocTemp;
-    EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
     EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
-    EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxSlot, NxtW]))
+    else
+      EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
     EmitLine(Format('  jmp @%s', [LblCond]));
 
     EmitLine('@' + LblEnd);
@@ -1919,7 +1939,10 @@ begin
     LblBody := AllocLabel('forin_body');
     LblEnd  := AllocLabel('forin_end');
 
-    EmitLine(Format('  storew 0, %s', [IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy 0', [IdxSlot]))
+    else
+      EmitLine(Format('  storew 0, %s', [IdxSlot]));
     EmitLine(Format('  jmp @%s', [LblCond]));
 
     { Condition: idx < string length
@@ -1932,7 +1955,10 @@ begin
     CmpT  := AllocTemp;
     EmitLine(Format('  %s =l add %s, -8', [OldT, SelfT]));  { data_ptr − 8 = length }
     EmitLine(Format('  %s =w loadw %s',   [OkT, OldT]));
-    EmitLine(Format('  %s =w loadw %s',   [IdxW, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s',  [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
     EmitLine(Format('  %s =w csltw %s, %s', [CmpT, IdxW, OkT]));
     EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
 
@@ -1946,12 +1972,18 @@ begin
       IdxL    := AllocTemp;
       ElemPtr := AllocTemp;
       CurT    := AllocTemp;
-      EmitLine(Format('  %s =w loadw %s',   [IdxW, IdxSlot]));
+      if IsPromoted(AStmt.IdxVarName) then
+        EmitLine(Format('  %s =w copy %s',  [IdxW, IdxSlot]))
+      else
+        EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
       EmitLine(Format('  %s =l extuw %s',   [IdxL, IdxW]));
       EmitLine(Format('  %s =l add %s, %s', [ElemPtr, SelfT, IdxL]));  { data_ptr + idx }
       EmitLine(Format('  %s =w loadub %s',  [CurT, ElemPtr]));
-      EmitLine(Format('  storew %s, %s',
-        [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      if not AStmt.VarIsGlobal and IsPromoted(AStmt.VarName) then
+        EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.VarName, CurT]))
+      else
+        EmitLine(Format('  storew %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
 
       EmitStmt(AStmt.Body);
     finally
@@ -1962,9 +1994,15 @@ begin
     { Increment index }
     IdxW := AllocTemp;
     NxtW := AllocTemp;
-    EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
     EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
-    EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxSlot, NxtW]))
+    else
+      EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
     EmitLine(Format('  jmp @%s', [LblCond]));
 
     EmitLine('@' + LblEnd);
