@@ -511,9 +511,10 @@ begin
         TD.Def := ParseSetDef
       else if Check(tkFunction) or Check(tkProcedure) then
         TD.Def := ParseProceduralTypeDef
-      else if Check(tkCaret) or Check(tkIdent) then
+      else if Check(tkArray) or Check(tkCaret) or Check(tkIdent) then
       begin
-        { Pointer alias: type PFoo = ^TFoo;
+        { Array alias:   type TArr = array[L..H] of T;
+          Pointer alias: type PFoo = ^TFoo;
           Simple alias:  type TMyInt = Integer;  (ident rhs) }
         AD := TTypeAliasDef.Create;
         AD.TypeName := Self.ParseTypeName;

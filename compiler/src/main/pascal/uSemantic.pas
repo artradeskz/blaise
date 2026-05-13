@@ -1992,15 +1992,23 @@ begin
       end
       else
       begin
-        { Simple alias: resolve to the existing type descriptor. }
+        { Simple alias or constructed alias (array[L..H] of T, etc.).
+          Try direct lookup first; fall through to FindTypeOrInstantiate
+          for names the symbol table doesn't hold yet (e.g. array types
+          that are created on demand). }
         BaseSym := FTable.Lookup(AliasName);
-        if (BaseSym = nil) or (BaseSym.Kind <> skType) then
+        if (BaseSym <> nil) and (BaseSym.Kind = skType) then
+          AliasDesc := BaseSym.TypeDesc
+        else
         begin
-          SemanticError(Format('Unknown type ''%s'' in type alias', [AliasName]),
-            TD.Line, TD.Col);
-          Continue;
+          AliasDesc := FindTypeOrInstantiate(AliasName);
+          if AliasDesc = nil then
+          begin
+            SemanticError(Format('Unknown type ''%s'' in type alias', [AliasName]),
+              TD.Line, TD.Col);
+            Continue;
+          end;
         end;
-        AliasDesc := BaseSym.TypeDesc;
       end;
       Sym := TSymbol.Create(TD.Name, skType, AliasDesc);
       if not FTable.Define(Sym) then

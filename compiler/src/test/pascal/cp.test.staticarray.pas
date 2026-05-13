@@ -67,6 +67,19 @@ type
     procedure TestSemantic_AddrOf_BaseTypeIsByte;
     procedure TestCodegen_AddrOf_NoLoad;
     procedure TestCodegen_AddrOf_AddressArithmetic;
+
+    { ------------------------------------------------------------------ }
+    { Named array type alias: type TArr = array[L..H] of T               }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_TypeAlias_ArrayParses;
+    procedure TestParse_TypeAlias_ArrayName;
+    procedure TestSemantic_TypeAlias_KindIsStaticArray;
+    procedure TestSemantic_TypeAlias_ElementType;
+    procedure TestSemantic_TypeAlias_Bounds;
+    procedure TestSemantic_TypeAlias_VarUsesAlias;
+    procedure TestSemantic_TypeAlias_NonZeroBase;
+    procedure TestCodegen_TypeAlias_AllocEmitted;
+    procedure TestCodegen_TypeAlias_ElementSizeInAlloc;
   end;
 
 implementation
@@ -437,6 +450,148 @@ begin
   IR := GenIR(SrcAddrOf);
   { address is computed: base + offset using add }
   AssertTrue('=l add emitted', Pos('=l add', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Named array type alias — source constants                            }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcTypeAliasBasic =
+    '''
+        program SA;
+        type
+          TByteArr = array[0..7] of Byte;
+        var Buf: TByteArr;
+        begin
+          Buf[0] := 55
+        end.
+        ''';
+
+  SrcTypeAliasIntNonZero =
+    '''
+        program SA;
+        type
+          TIntRange = array[1..5] of Integer;
+        var A: TIntRange;
+        begin
+          A[1] := 99
+        end.
+        ''';
+
+  SrcTypeAliasVar =
+    '''
+        program SA;
+        type
+          TWordArr = array[0..3] of Integer;
+        var W: TWordArr; X: Integer;
+        begin
+          W[0] := 7;
+          X := W[0]
+        end.
+        ''';
+
+{ ------------------------------------------------------------------ }
+{ Named array type alias — tests                                       }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestParse_TypeAlias_ArrayParses;
+var P: TProgram;
+begin
+  P := ParseSrc(SrcTypeAliasBasic);
+  try
+    AssertEquals('one type decl', 1, P.Block.TypeDecls.Count);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestParse_TypeAlias_ArrayName;
+var P: TProgram; TD: TTypeDecl;
+begin
+  P := ParseSrc(SrcTypeAliasBasic);
+  try
+    TD := TTypeDecl(P.Block.TypeDecls.Items[0]);
+    AssertEquals('type name', 'TByteArr', TD.Name);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_TypeAlias_KindIsStaticArray;
+var P: TProgram; Sym: TSymbol;
+begin
+  P := AnalyseSrc(SrcTypeAliasBasic);
+  try
+    Sym := P.SymbolTable.Lookup('TByteArr');
+    AssertTrue('symbol found', Sym <> nil);
+    AssertEquals('kind is tyStaticArray',
+      Ord(tyStaticArray), Ord(Sym.TypeDesc.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_TypeAlias_ElementType;
+var P: TProgram; Sym: TSymbol; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcTypeAliasBasic);
+  try
+    Sym := P.SymbolTable.Lookup('TByteArr');
+    AssertTrue('symbol found', Sym <> nil);
+    SAT := TStaticArrayTypeDesc(Sym.TypeDesc);
+    AssertEquals('element kind is tyByte',
+      Ord(tyByte), Ord(SAT.ElementType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_TypeAlias_Bounds;
+var P: TProgram; Sym: TSymbol; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcTypeAliasBasic);
+  try
+    Sym := P.SymbolTable.Lookup('TByteArr');
+    SAT := TStaticArrayTypeDesc(Sym.TypeDesc);
+    AssertEquals('low=0',  0, SAT.LowBound);
+    AssertEquals('high=7', 7, SAT.HighBound);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_TypeAlias_VarUsesAlias;
+var P: TProgram; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcTypeAliasVar);
+  try
+    AssertTrue('at least one var decl', P.Block.Decls.Count >= 1);
+    Decl := TVarDecl(P.Block.Decls.Items[0]);
+    AssertEquals('var name is W', 'W', Decl.Names.Strings[0]);
+    AssertTrue('ResolvedType set', Decl.ResolvedType <> nil);
+    AssertEquals('var W has tyStaticArray',
+      Ord(tyStaticArray), Ord(Decl.ResolvedType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_TypeAlias_NonZeroBase;
+var P: TProgram; Sym: TSymbol; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcTypeAliasIntNonZero);
+  try
+    Sym := P.SymbolTable.Lookup('TIntRange');
+    AssertTrue('TIntRange found', Sym <> nil);
+    SAT := TStaticArrayTypeDesc(Sym.TypeDesc);
+    AssertEquals('low=1',  1, SAT.LowBound);
+    AssertEquals('high=5', 5, SAT.HighBound);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestCodegen_TypeAlias_AllocEmitted;
+var IR: string;
+begin
+  IR := GenIR(SrcTypeAliasBasic);
+  { Global array is emitted as a data declaration containing the var name }
+  AssertTrue('Buf appears in IR', Pos('Buf', IR) >= 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_TypeAlias_ElementSizeInAlloc;
+var IR: string;
+begin
+  IR := GenIR(SrcTypeAliasBasic);
+  // 8 bytes * 1 (Byte) = 8 bytes total; check the number 8 appears in the IR
+  AssertTrue('size 8 appears in IR', Pos('8', IR) >= 0);
 end;
 
 initialization

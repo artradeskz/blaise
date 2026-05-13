@@ -72,6 +72,7 @@ uses
   cp.test.e2e.imap,
   cp.test.e2e.tstringlist,
   cp.test.e2e.openarray,
+  cp.test.e2e.staticarray,
   cp.test.multifile,
   cp.test.constants,
   cp.test.external,

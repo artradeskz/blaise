@@ -815,7 +815,47 @@ Blaise supports fixed-size, stack-allocated arrays declared as
 
 | `array of array of T` — multi-dim open array
 | Separate feature
+
+| `type TArr = array[L..H] of T` — named array type alias in type section
+| Supported
 |===
+
+==== Named array type aliases
+
+A named type alias for a static array may be declared in a `type` section:
+
+[source,pascal]
+----
+type
+  TByteBuffer = array[0..63] of Byte;
+  TIntRange   = array[1..10] of Integer;
+var
+  Buf: TByteBuffer;
+  R:   TIntRange;
+----
+
+The alias name is registered as a `tyStaticArray` symbol in the symbol table,
+identical to an inline anonymous declaration.  Any context that accepts an
+inline `array[L..H] of T` declaration also accepts a named alias.
+
+*Decision rationale:* The parser already handled `array[L..H] of T` as part of
+`ParseTypeName` (used in variable declarations, parameter types, and record
+fields), but the `ParseTypeDecl` path did not include `tkArray` as a valid
+token on the right-hand side of a `type` section alias.  The fix adds `tkArray`
+to the existing `tkCaret | tkIdent` branch (which handles pointer aliases and
+simple name aliases) so all three use the same `TTypeAliasDef` → `ParseTypeName`
+path.  The semantic pass already resolved `'array[L..H] of T'` style names via
+`FindTypeOrInstantiate`; the only change needed there was to try that function
+when `FTable.Lookup` returns nil for a type-alias name, rather than immediately
+raising an error.
+
+*Alternatives rejected:*
+
+* Storing the array alias as a `TStaticArrayTypeDef` node: would require a new
+  AST node type and a new semantic pass.  The alias-via-string-name approach
+  reuses the existing on-demand instantiation machinery at zero code cost.
+* Requiring the alias to use a distinct keyword or syntax: rejected because FPC
+  and Delphi both use the plain `type TArr = array[...] of T` form.
 
 ==== Deferred items
 
