@@ -19,10 +19,9 @@
   Departures from fpcunit:
 
     * No GUID on ITestListener — Blaise interfaces are GUID-free.
-    * EAssertionFailed descends from TObject (not Exception) so the unit
-      stays self-contained and avoids dragging SysUtils transitively.
-      The unit follows the convention established by punit.pas in the
-      RTL test tree.
+    * EAssertionFailed descends from TObject (not Exception) so that
+      assertion failures are never accidentally caught by a user-level
+      'on E: Exception do' handler inside a test method.
     * AssertException / ExpectException are intentionally absent — no
       cp.test.*.pas unit currently relies on them.  Re-add when needed.
     * Test enumeration of a registered class via 'class of TTestCase' is
