@@ -37,7 +37,7 @@ unit bcl.testing;
 interface
 
 uses
-  Classes;
+  Classes, SysUtils;
 
 {$IFNDEF FPC}
 const
@@ -61,12 +61,15 @@ type
     FNumberOfIgnored:  Integer;
     FFailureList:      TStringList;
     FErrorList:        TStringList;
+    FVerbose:          Boolean;
+    FCurrentClassName: string;
+    FCurrentTestName:  string;
   public
     constructor Create;
     destructor  Destroy; override;
 
-    procedure StartTest (ATest: TObject);
-    procedure EndTest   (ATest: TObject);
+    procedure StartTest (AClassName, ATestName: string);
+    procedure EndTest   (AOutcome: string);
     procedure AddFailure(AName, AMessage: string);
     procedure AddError  (AName, AMessage: string);
     procedure AddIgnored(AName, AMessage: string);
@@ -79,6 +82,7 @@ type
     property  NumberOfIgnored:  Integer read FNumberOfIgnored;
     property  Failures:         TStringList read FFailureList;
     property  Errors:           TStringList read FErrorList;
+    property  Verbose:          Boolean read FVerbose write FVerbose;
   end;
 
   { TTest — abstract root of the test hierarchy.  Concrete subclasses
@@ -112,12 +116,29 @@ type
     procedure AssertEquals(AMsg: string; AExpected, AActual: Boolean); overload;
     procedure AssertEquals(AExpected, AActual: Boolean); overload;
 
+    procedure AssertNotEquals(AMsg: string; AExpected, AActual: Integer); overload;
+    procedure AssertNotEquals(AExpected, AActual: Integer); overload;
+    procedure AssertNotEquals(AMsg: string; AExpected, AActual: Int64); overload;
+    procedure AssertNotEquals(AExpected, AActual: Int64); overload;
+    procedure AssertNotEquals(AMsg: string; AExpected, AActual: string); overload;
+    procedure AssertNotEquals(AExpected, AActual: string); overload;
+    procedure AssertNotEquals(AMsg: string; AExpected, AActual: Boolean); overload;
+    procedure AssertNotEquals(AExpected, AActual: Boolean); overload;
+    procedure AssertNotEquals(AMsg: string; AExpected, AActual: Pointer); overload;
+    procedure AssertNotEquals(AExpected, AActual: Pointer); overload;
+
     procedure AssertNotNull(AMsg: string; AObject: TObject); overload;
     procedure AssertNotNull(AObject: TObject); overload;
     procedure AssertNull   (AMsg: string; AObject: TObject); overload;
     procedure AssertNull   (AObject: TObject); overload;
     procedure AssertSame   (AMsg: string; AExpected, AActual: TObject); overload;
     procedure AssertSame   (AExpected, AActual: TObject); overload;
+
+    { AssertContains — verifies that AHaystack contains ASubstring.
+      Failure message quotes both the needle and haystack, which is far
+      more useful than 'AssertTrue failed' when a Pos() check fails. }
+    procedure AssertContains(AMsg: string; const ASubstring, AHaystack: string); overload;
+    procedure AssertContains(const ASubstring, AHaystack: string); overload;
 
     procedure Fail(AMsg: string);
     procedure Ignore(AMsg: string);
@@ -129,16 +150,19 @@ type
     procedure-of-object cast. }
   TTestCase = class(TAssert)
   private
-    FName: string;
+    FName:      string;
+    FClassName: string;
   protected
     procedure SetUp;    virtual;
     procedure TearDown; virtual;
   public
     constructor Create(AName: string);
+    procedure   SetClassName(AClassName: string);
     procedure   RunTest;            virtual;
     procedure   Run(AResult: TTestResult); override;
     function    CountTestCases: Integer; override;
-    property    TestName: string read FName;
+    property    TestName:  string read FName;
+    property    ClassName: string read FClassName;
   end;
 
   { TTestCaseClass — class-of reference used by RegisterTest. }
@@ -299,6 +323,86 @@ begin
   end;
 end;
 
+procedure TAssert.AssertNotEquals(AMsg: string; AExpected, AActual: Integer);
+begin
+  if AExpected = AActual then
+    Self.Fail(AMsg + ' Expected values to differ, both are: ' + IntToStr(AActual));
+end;
+
+procedure TAssert.AssertNotEquals(AExpected, AActual: Integer);
+begin
+  if AExpected = AActual then
+    Self.Fail('Expected values to differ, both are: ' + IntToStr(AActual));
+end;
+
+procedure TAssert.AssertNotEquals(AMsg: string; AExpected, AActual: Int64);
+begin
+  if AExpected = AActual then
+    Self.Fail(AMsg + ' Expected values to differ, both are: ' + Int64ToStr(AActual));
+end;
+
+procedure TAssert.AssertNotEquals(AExpected, AActual: Int64);
+begin
+  if AExpected = AActual then
+    Self.Fail('Expected values to differ, both are: ' + Int64ToStr(AActual));
+end;
+
+procedure TAssert.AssertNotEquals(AMsg: string; AExpected, AActual: string);
+begin
+  if AExpected = AActual then
+    Self.Fail(AMsg + ' Expected values to differ, both are: "' + AActual + '"');
+end;
+
+procedure TAssert.AssertNotEquals(AExpected, AActual: string);
+begin
+  if AExpected = AActual then
+    Self.Fail('Expected values to differ, both are: "' + AActual + '"');
+end;
+
+procedure TAssert.AssertNotEquals(AMsg: string; AExpected, AActual: Boolean);
+var S: string;
+begin
+  if AExpected = AActual then
+  begin
+    if AActual then S := 'True' else S := 'False';
+    Self.Fail(AMsg + ' Expected values to differ, both are: ' + S);
+  end;
+end;
+
+procedure TAssert.AssertNotEquals(AExpected, AActual: Boolean);
+var S: string;
+begin
+  if AExpected = AActual then
+  begin
+    if AActual then S := 'True' else S := 'False';
+    Self.Fail('Expected values to differ, both are: ' + S);
+  end;
+end;
+
+procedure TAssert.AssertNotEquals(AMsg: string; AExpected, AActual: Pointer);
+begin
+  if AExpected = AActual then
+    Self.Fail(AMsg + ' Expected pointers to differ');
+end;
+
+procedure TAssert.AssertNotEquals(AExpected, AActual: Pointer);
+begin
+  if AExpected = AActual then
+    Self.Fail('Expected pointers to differ');
+end;
+
+procedure TAssert.AssertContains(AMsg: string; const ASubstring, AHaystack: string);
+begin
+  if Pos(ASubstring, AHaystack) = 0 then
+    Self.Fail(AMsg + ' Expected "' + ASubstring + '" to appear in: "' + AHaystack + '"');
+end;
+
+procedure TAssert.AssertContains(const ASubstring, AHaystack: string);
+begin
+  if Pos(ASubstring, AHaystack) = 0 then
+    Self.Fail('Expected "' + ASubstring + '" to appear in: "' + AHaystack + '"');
+end;
+
 procedure TAssert.AssertNotNull(AMsg: string; AObject: TObject);
 begin
   if AObject = nil then
@@ -352,7 +456,13 @@ end;
 constructor TTestCase.Create(AName: string);
 begin
   inherited Create;
-  Self.FName := AName;
+  Self.FName      := AName;
+  Self.FClassName := '';
+end;
+
+procedure TTestCase.SetClassName(AClassName: string);
+begin
+  Self.FClassName := AClassName;
 end;
 
 procedure TTestCase.SetUp;
@@ -386,8 +496,11 @@ begin
 end;
 
 procedure TTestCase.Run(AResult: TTestResult);
+var
+  Outcome: string;
 begin
-  AResult.StartTest(Self);
+  AResult.StartTest(Self.FClassName, Self.FName);
+  Outcome := 'OK';
   try
     Self.SetUp;
     try
@@ -395,17 +508,31 @@ begin
         Self.RunTest;
       except
         on EAF: EAssertionFailed do
+        begin
+          Outcome := 'FAIL';
           AResult.AddFailure(Self.FName, EAF.ToString);
+        end;
         on EIT: EIgnoredTest do
+        begin
+          Outcome := 'IGNORED';
           AResult.AddIgnored(Self.FName, EIT.FMessage);
+        end;
+        on E: Exception do
+        begin
+          Outcome := 'ERROR';
+          AResult.AddError(Self.FName, E.ClassName + ': ' + E.Message);
+        end;
         on ETO: TObject do
-          AResult.AddError(Self.FName, 'Unhandled exception');
+        begin
+          Outcome := 'ERROR';
+          AResult.AddError(Self.FName, 'Unhandled exception: ' + ETO.ClassName);
+        end;
       end;
     finally
       Self.TearDown;
     end;
   finally
-    AResult.EndTest(Self);
+    AResult.EndTest(Outcome);
   end;
 end;
 
@@ -422,6 +549,9 @@ begin
   Self.FNumberOfIgnored  := 0;
   Self.FFailureList      := TStringList.Create;
   Self.FErrorList        := TStringList.Create;
+  Self.FVerbose          := False;
+  Self.FCurrentClassName := '';
+  Self.FCurrentTestName  := '';
 end;
 
 destructor TTestResult.Destroy;
@@ -431,13 +561,19 @@ begin
   inherited Destroy;
 end;
 
-procedure TTestResult.StartTest(ATest: TObject);
+procedure TTestResult.StartTest(AClassName, ATestName: string);
 begin
-  Self.FNumberOfTests := Self.FNumberOfTests + 1;
+  Self.FNumberOfTests    := Self.FNumberOfTests + 1;
+  Self.FCurrentClassName := AClassName;
+  Self.FCurrentTestName  := ATestName;
+  if Self.FVerbose then
+    Write(AClassName + '.' + ATestName + ' ... ');
 end;
 
-procedure TTestResult.EndTest(ATest: TObject);
+procedure TTestResult.EndTest(AOutcome: string);
 begin
+  if Self.FVerbose then
+    WriteLn(AOutcome);
 end;
 
 procedure TTestResult.AddFailure(AName, AMessage: string);

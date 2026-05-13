@@ -149,25 +149,27 @@ end;
   CLI argument parsing
   ----------------------------------------------------------------------- }
 
-{ Parse --suite [ClassName[.MethodName]] from the process command line.
+{ Parse --suite and --verbose from the process command line.
   ASuite is set to the class name filter ('' = no filter).
   AMethod is set to the method name filter ('' = all methods in the class).
-  Returns True if --suite was found, False otherwise. }
-function ParseSuiteArg(out ASuite: string; out AMethod: string): Boolean;
+  AVerbose is set to True when --verbose is present. }
+procedure ParseArgs(out ASuite: string; out AMethod: string; out AVerbose: Boolean);
 var
   I:      Integer;
   Arg:    string;
   Filter: string;
   Dot:    Integer;
 begin
-  Result  := False;
-  ASuite  := '';
-  AMethod := '';
+  ASuite   := '';
+  AMethod  := '';
+  AVerbose := False;
   I := 1;
   while I <= ParamCount do
   begin
     Arg := ParamStr(I);
-    if (Arg = '--suite') and (I < ParamCount) then
+    if Arg = '--verbose' then
+      AVerbose := True
+    else if (Arg = '--suite') and (I < ParamCount) then
     begin
       I      := I + 1;
       Filter := ParamStr(I);
@@ -181,8 +183,6 @@ begin
       end
       else
         ASuite := Filter;
-      Result := True;
-      Exit;
     end;
     I := I + 1;
   end;
@@ -192,10 +192,10 @@ end;
   Test execution
   ----------------------------------------------------------------------- }
 
-{ Run tests with optional class/method filtering.
+{ Run tests with optional class/method filtering and verbosity.
   Pass '' for both ASuite and AMethod to run all registered tests. }
 function RunFilteredTests(const ASuite: string;
-  const AMethod: string): TTestResult;
+  const AMethod: string; AVerbose: Boolean): TTestResult;
 var
   ClsIdx:   Integer;
   Cls:      TTestCaseClass;
@@ -206,6 +206,7 @@ var
   Inst:     TTestCase;
 begin
   Result := TTestResult.Create;
+  Result.Verbose := AVerbose;
   for ClsIdx := 0 to GetRegisteredTestCount - 1 do
   begin
     Cls   := GetRegisteredTest(ClsIdx);
@@ -220,6 +221,7 @@ begin
       if (AMethod <> '') and (MethName <> AMethod) then
         Continue;
       Inst := ClassCreate(Cls, MethName);
+      Inst.SetClassName(CName);
       Inst.Run(Result);
     end;
   end;
@@ -227,7 +229,7 @@ end;
 
 function RunRegisteredTests: TTestResult;
 begin
-  Result := RunFilteredTests('', '');
+  Result := RunFilteredTests('', '', False);
 end;
 
 { -----------------------------------------------------------------------
@@ -272,14 +274,13 @@ end;
 
 function RunAll: Integer;
 var
-  R:      TTestResult;
-  Suite:  string;
-  Method: string;
+  R:       TTestResult;
+  Suite:   string;
+  Method:  string;
+  Verbose: Boolean;
 begin
-  if ParseSuiteArg(Suite, Method) then
-    R := RunFilteredTests(Suite, Method)
-  else
-    R := RunRegisteredTests;
+  ParseArgs(Suite, Method, Verbose);
+  R := RunFilteredTests(Suite, Method, Verbose);
   PrintSummary(R);
   if (R.NumberOfFailures = 0) and (R.NumberOfErrors = 0) then
     Result := 0
