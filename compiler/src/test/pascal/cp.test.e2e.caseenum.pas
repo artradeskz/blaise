@@ -24,6 +24,9 @@ type
     procedure TestRun_Case_ElseBranch;
     procedure TestRun_Enum_OrdinalValues;
     procedure TestRun_Enum_InCase;
+    procedure TestRun_Enum_ExplicitOrdinals;
+    procedure TestRun_Enum_AutoContinueAfterExplicit;
+    procedure TestRun_Enum_ExplicitInCase;
   end;
 
 implementation
@@ -132,6 +135,99 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcEnumCase, Output, RCode));
   AssertEquals('dEast=2', '2', Trim(Output));
+end;
+
+const
+  SrcExplicitOrdinals =
+    '''
+        program P;
+        type
+          TStatus = (Idle=10, Running=20, Done=30);
+        var S: TStatus;
+        begin
+          S := Idle;    WriteLn(S);
+          S := Running; WriteLn(S);
+          S := Done;    WriteLn(S)
+        end.
+        ''';
+
+  SrcAutoContinue =
+    '''
+        program P;
+        type
+          TCode = (A=100, B, C);
+        var X: TCode;
+        begin
+          X := A; WriteLn(X);
+          X := B; WriteLn(X);
+          X := C; WriteLn(X)
+        end.
+        ''';
+
+  SrcExplicitInCase =
+    '''
+        program P;
+        type
+          THTTPStatus = (OK=200, NotFound=404, ServerError=500);
+        var S: THTTPStatus;
+        begin
+          S := NotFound;
+          case S of
+            200: WriteLn('ok');
+            404: WriteLn('not found');
+            500: WriteLn('server error')
+          else
+            WriteLn('unknown')
+          end
+        end.
+        ''';
+
+procedure TE2ECaseEnumTests.TestRun_Enum_ExplicitOrdinals;
+var
+  Output: string;
+  RCode: Integer;
+  Lines: TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcExplicitOrdinals, Output, RCode));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('Idle=10',    '10', Lines.Strings[0]);
+    AssertEquals('Running=20', '20', Lines.Strings[1]);
+    AssertEquals('Done=30',    '30', Lines.Strings[2]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TE2ECaseEnumTests.TestRun_Enum_AutoContinueAfterExplicit;
+var
+  Output: string;
+  RCode: Integer;
+  Lines: TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcAutoContinue, Output, RCode));
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('A=100', '100', Lines.Strings[0]);
+    AssertEquals('B=101', '101', Lines.Strings[1]);
+    AssertEquals('C=102', '102', Lines.Strings[2]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TE2ECaseEnumTests.TestRun_Enum_ExplicitInCase;
+var
+  Output: string;
+  RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcExplicitInCase, Output, RCode));
+  AssertEquals('NotFound=404 matches case 404', 'not found', Trim(Output));
 end;
 
 initialization

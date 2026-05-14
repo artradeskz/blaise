@@ -1913,7 +1913,7 @@ begin
         MName           := EnumDef.Members.Strings[K];
         EnumDesc.Members.Add(MName);
         MSym            := TSymbol.Create(MName, skConstant, EnumDesc);
-        MSym.ConstValue := K;
+        MSym.ConstValue := EnumDef.OrdinalAt(K);
         if not FTable.Define(MSym) then
           MSym.Free;
       end;

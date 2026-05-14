@@ -8,8 +8,6 @@
 
 unit uAST;
 
-{$mode objfpc}{$H+}
-
 interface
 
 uses
@@ -471,12 +469,18 @@ type
     BaseTypeName: string;  { element type name — must resolve to an enum }
   end;
 
-  { Enum type definition: type TDir = (dNorth, dSouth, dEast, dWest); }
+  { Enum type definition: type TDir = (dNorth, dSouth, dEast, dWest);
+    or with explicit ordinals: type TCode = (Idle=10, Running=20, Done=30);
+    Members holds the member names; Members.Objects[I] carries the ordinal
+    value as Pointer(PtrUInt(Value)).  When no explicit value is given for a
+    member the parser assigns previous+1 (auto-increment), matching Delphi/FPC. }
   TEnumTypeDef = class(TASTTypeDef)
   public
-    Members: TStringList;  { owned — ordered member names }
+    Members: TStringList;  { owned — ordered member names; Objects[I] = ordinal }
     constructor Create;
     destructor Destroy; override;
+    procedure AddMember(const AName: string; AValue: Integer);
+    function OrdinalAt(AIndex: Integer): Integer;
   end;
 
   TFieldDecl = class(TASTNode)
@@ -1303,6 +1307,16 @@ destructor TEnumTypeDef.Destroy;
 begin
   Members.Free;
   inherited Destroy;
+end;
+
+procedure TEnumTypeDef.AddMember(const AName: string; AValue: Integer);
+begin
+  Members.AddObject(AName, TObject(Pointer(PtrUInt(AValue))));
+end;
+
+function TEnumTypeDef.OrdinalAt(AIndex: Integer): Integer;
+begin
+  Result := Integer(PtrUInt(Pointer(Members.Objects[AIndex])));
 end;
 
 { TCaseBranch }

@@ -627,25 +627,69 @@ begin
 end;
 
 function TParser.ParseEnumDef: TEnumTypeDef;
+var
+  MName: string;
+  NextVal: Integer;
+  Negative: Boolean;
+  ExplicitVal: Integer;
 begin
   Result := TEnumTypeDef.Create;
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
+    NextVal := 0;
     Expect(tkLParen);
     if not Check(tkIdent) then
       raise EParseError.Create(Format('Expected enum member at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-    Result.Members.Add(FCurrent.Value);
+    MName := FCurrent.Value;
     Advance;
+    if Check(tkEquals) then
+    begin
+      Advance;
+      Negative := False;
+      if Check(tkMinus) then
+      begin
+        Negative := True;
+        Advance;
+      end;
+      if not Check(tkIntLit) then
+        raise EParseError.Create(Format('Expected integer after ''='' in enum at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      ExplicitVal := StrToInt(FCurrent.Value);
+      if Negative then ExplicitVal := -ExplicitVal;
+      Advance;
+      NextVal := ExplicitVal;
+    end;
+    Result.AddMember(MName, NextVal);
+    Inc(NextVal);
     while Check(tkComma) do
     begin
       Advance;
       if not Check(tkIdent) then
         raise EParseError.Create(Format('Expected enum member at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      Result.Members.Add(FCurrent.Value);
+      MName := FCurrent.Value;
       Advance;
+      if Check(tkEquals) then
+      begin
+        Advance;
+        Negative := False;
+        if Check(tkMinus) then
+        begin
+          Negative := True;
+          Advance;
+        end;
+        if not Check(tkIntLit) then
+          raise EParseError.Create(Format('Expected integer after ''='' in enum at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        ExplicitVal := StrToInt(FCurrent.Value);
+        if Negative then ExplicitVal := -ExplicitVal;
+        Advance;
+        NextVal := ExplicitVal;
+      end;
+      Result.AddMember(MName, NextVal);
+      Inc(NextVal);
     end;
     Expect(tkRParen);
   except

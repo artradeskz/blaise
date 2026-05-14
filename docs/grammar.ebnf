@@ -424,6 +424,20 @@ ArrayType
     = ARRAY LBRACKET IntLit DOTDOT IntLit RBRACKET OF TypeName
     ;
 
+EnumDef
+    = LPAREN EnumMember { COMMA EnumMember } RPAREN
+    ;
+
+EnumMember
+    = IDENT [ EQUALS [ MINUS ] IntLit ]
+    ;
+
+(* When EQUALS is absent, the member's ordinal is the previous member's
+ * ordinal plus one (or zero for the first member).  When EQUALS is present,
+ * the specified integer (optionally negated by MINUS) becomes the ordinal;
+ * subsequent members without EQUALS continue incrementing from that value.
+ * This matches Delphi and FPC semantics. *)
+
 SetType
     = SET OF IDENT
     ;

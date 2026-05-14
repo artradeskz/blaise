@@ -70,6 +70,16 @@ type
     procedure TestCodegen_Enum_In_Case_Compiles;
 
     { ------------------------------------------------------------------ }
+    { enum — explicit ordinal values                                       }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_Enum_ExplicitOrdinals;
+    procedure TestParse_Enum_PartialExplicitOrdinals;
+    procedure TestParse_Enum_ExplicitNegativeOrdinal;
+    procedure TestSemantic_Enum_ExplicitOrdinals_CorrectValues;
+    procedure TestCodegen_Enum_ExplicitOrdinal_EmitsCorrectCopy;
+    procedure TestCodegen_Enum_AutoContinueAfterExplicit;
+
+    { ------------------------------------------------------------------ }
     { case — string selector (Step 11f prerequisite)                       }
     { ------------------------------------------------------------------ }
     procedure TestSemantic_CaseString_AcceptsStringSelector;
@@ -375,6 +385,112 @@ begin
   IR := GenIR(SrcEnumInCase);
   AssertTrue('enum-in-case produces IR', Length(IR) > 0);
   AssertTrue('enum-in-case emits ceqw', Pos('ceqw', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ enum — explicit ordinal values                                       }
+{ ------------------------------------------------------------------ }
+
+procedure TCaseEnumTests.TestParse_Enum_ExplicitOrdinals;
+begin
+  ParseOK(
+    '''
+        program P;
+        type
+          TStatus = (Idle=10, Running=20, Done=30);
+        begin
+        end.
+        ''');
+end;
+
+procedure TCaseEnumTests.TestParse_Enum_PartialExplicitOrdinals;
+begin
+  ParseOK(
+    '''
+        program P;
+        type
+          TCode = (A=100, B, C);
+        begin
+        end.
+        ''');
+end;
+
+procedure TCaseEnumTests.TestParse_Enum_ExplicitNegativeOrdinal;
+begin
+  ParseOK(
+    '''
+        program P;
+        type
+          TOffset = (Before=-1, At=0, After=1);
+        begin
+        end.
+        ''');
+end;
+
+procedure TCaseEnumTests.TestSemantic_Enum_ExplicitOrdinals_CorrectValues;
+var
+  Lex:  TLexer;
+  Par:  TParser;
+  SA:   TSemanticAnalyser;
+  Prog: TProgram;
+  Assign: TAssignment;
+begin
+  { Running=20 — the RHS ConstValue should be 20, not 1 }
+  Lex  := TLexer.Create(
+    '''
+        program P;
+        type
+          TStatus = (Idle=10, Running=20, Done=30);
+        var S: TStatus;
+        begin
+          S := Running
+        end.
+        ''');
+  Par  := TParser.Create(Lex);
+  Prog := Par.Parse;
+  Par.Free; Lex.Free;
+  SA := TSemanticAnalyser.Create;
+  SA.Analyse(Prog);
+  SA.Free;
+  Assign := TAssignment(Prog.Block.Stmts[0]);
+  AssertEquals('Running ordinal is 20', 20, TIdentExpr(Assign.Expr).ConstValue);
+  Prog.Free;
+end;
+
+procedure TCaseEnumTests.TestCodegen_Enum_ExplicitOrdinal_EmitsCorrectCopy;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    '''
+        program P;
+        type
+          TStatus = (Idle=10, Running=20, Done=30);
+        var S: TStatus;
+        begin
+          S := Running
+        end.
+        ''');
+  AssertTrue('Running=20 emits copy 20', Pos('copy 20', IR) > 0);
+  AssertTrue('Running does not emit positional copy 1', Pos('copy 1', IR) < 0);
+end;
+
+procedure TCaseEnumTests.TestCodegen_Enum_AutoContinueAfterExplicit;
+var
+  IR: string;
+begin
+  { A=100 → B auto-continues to 101, C to 102 }
+  IR := GenIR(
+    '''
+        program P;
+        type
+          TCode = (A=100, B, C);
+        var X: TCode;
+        begin
+          X := B
+        end.
+        ''');
+  AssertTrue('B auto-continues to 101', Pos('copy 101', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }
