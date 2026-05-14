@@ -30,7 +30,29 @@ unit Streams;
 
 interface
 
+uses
+  SysUtils;
+
 type
+  { Exception raised by stream operations on I/O failure.
+
+    Surfaces the underlying problem so the caller can act on it instead
+    of silently losing data (this is the lesson from Rust's BufWriter
+    drop-eats-errors footgun).  Errors raised:
+
+      * Open failure — TFileInputStream / TFileOutputStream constructors
+        raise when the OS rejects the open call.
+      * Read failure — Read raises when the underlying read returns < 0.
+      * Write failure — Write / Flush raise when the underlying write
+        returns < 0 or writes fewer bytes than requested.
+      * Buffered Close — when buffered data cannot be flushed.
+
+    ARC-driven Destroy is still allowed to swallow the error (the
+    finaliser cannot raise meaningfully); callers who care about
+    correctness must call Close explicitly inside a try-finally. }
+  EStreamError = class(Exception)
+  end;
+
   { TFileMode — how a file is opened.
 
     fmOpenRead   — open existing file for reading; fail if missing.
@@ -158,6 +180,52 @@ type
     function Position: Int64;
   end;
 
+  { TBufferedInputStream — decorator that pulls from Inner in chunks.
+
+    Reduces syscalls / per-call overhead when the consumer reads tiny
+    amounts (e.g. line-by-line text parsing).  Owns Inner by default —
+    closing the buffered stream also closes the inner stream.  Pass
+    OwnsInner=False when the caller wants to keep the inner alive past
+    the wrapper's lifetime (e.g. when the wrapper is a helper return). }
+  TBufferedInputStream = class(TInputStream)
+    FInner:     TInputStream;
+    FOwnsInner: Boolean;
+    FBuf:       Pointer;
+    FBufSize:   Integer;
+    FBufPos:    Integer;   // next byte to return
+    FBufEnd:    Integer;   // one past last valid byte (FBufEnd >= FBufPos)
+    FClosed:    Boolean;
+    constructor Create(AInner: TInputStream); overload;
+    constructor Create(AInner: TInputStream; ABufSize: Integer); overload;
+    constructor Create(AInner: TInputStream; ABufSize: Integer;
+                       AOwnsInner: Boolean); overload;
+    procedure Destroy;
+    function Read(Buf: Pointer; Count: Integer): Integer; override;
+    procedure Close; override;
+  end;
+
+  { TBufferedOutputStream — decorator that accumulates writes.
+
+    Buffers up to FBufSize bytes; on overflow (or explicit Flush) the
+    buffer is forwarded to Inner.  Owns Inner by default — Close flushes,
+    then closes the inner if OwnsInner is True. }
+  TBufferedOutputStream = class(TOutputStream)
+    FInner:     TOutputStream;
+    FOwnsInner: Boolean;
+    FBuf:       Pointer;
+    FBufSize:   Integer;
+    FBufFill:   Integer;
+    FClosed:    Boolean;
+    constructor Create(AInner: TOutputStream); overload;
+    constructor Create(AInner: TOutputStream; ABufSize: Integer); overload;
+    constructor Create(AInner: TOutputStream; ABufSize: Integer;
+                       AOwnsInner: Boolean); overload;
+    procedure Destroy;
+    function Write(Buf: Pointer; Count: Integer): Integer; override;
+    procedure Flush; override;
+    procedure Close; override;
+  end;
+
 { External C primitives — file descriptor I/O.
 
   Declared in the interface section per Blaise convention (declaring
@@ -193,7 +261,10 @@ begin
   Self.FFd := _FdOpenRead(Pointer(APath));
   Self.FClosed := False;
   if Self.FFd < 0 then
-    Self.FClosed := True
+  begin
+    Self.FClosed := True;
+    raise EStreamError.Create('Cannot open file for reading: ' + APath)
+  end
 end;
 
 procedure TFileInputStream.Destroy;
@@ -206,13 +277,17 @@ begin
 end;
 
 function TFileInputStream.Read(Buf: Pointer; Count: Integer): Integer;
+var N: Integer;
 begin
   if Self.FClosed then
   begin
     Result := 0;
     Exit
   end;
-  Result := _FdRead(Self.FFd, Buf, Count)
+  N := _FdRead(Self.FFd, Buf, Count);
+  if N < 0 then
+    raise EStreamError.Create('File read failed');
+  Result := N
 end;
 
 procedure TFileInputStream.Close;
@@ -257,7 +332,10 @@ begin
   end;
   Self.FClosed := False;
   if Self.FFd < 0 then
-    Self.FClosed := True
+  begin
+    Self.FClosed := True;
+    raise EStreamError.Create('Cannot open file for writing: ' + APath)
+  end
 end;
 
 procedure TFileOutputStream.Destroy;
@@ -270,13 +348,19 @@ begin
 end;
 
 function TFileOutputStream.Write(Buf: Pointer; Count: Integer): Integer;
+var N: Integer;
 begin
   if Self.FClosed then
   begin
     Result := 0;
     Exit
   end;
-  Result := _FdWrite(Self.FFd, Buf, Count)
+  N := _FdWrite(Self.FFd, Buf, Count);
+  if N < 0 then
+    raise EStreamError.Create('File write failed');
+  if N < Count then
+    raise EStreamError.Create('Short write to file (disk full?)');
+  Result := N
 end;
 
 procedure TFileOutputStream.Flush;
@@ -475,6 +559,200 @@ end;
 function TMemoryOutputStream.Position: Int64;
 begin
   Result := Int64(Self.FPos)
+end;
+
+{ ------------------------------------------------------------------ }
+{ TBufferedInputStream                                                }
+{ ------------------------------------------------------------------ }
+
+const
+  kDefaultBufSize = 8192;
+
+constructor TBufferedInputStream.Create(AInner: TInputStream);
+begin
+  Self.Create(AInner, kDefaultBufSize, True)
+end;
+
+constructor TBufferedInputStream.Create(AInner: TInputStream; ABufSize: Integer);
+begin
+  Self.Create(AInner, ABufSize, True)
+end;
+
+constructor TBufferedInputStream.Create(AInner: TInputStream; ABufSize: Integer;
+                                        AOwnsInner: Boolean);
+begin
+  Self.FInner := AInner;
+  Self.FOwnsInner := AOwnsInner;
+  if ABufSize < 64 then ABufSize := 64;
+  Self.FBufSize := ABufSize;
+  Self.FBuf := malloc(ABufSize);
+  Self.FBufPos := 0;
+  Self.FBufEnd := 0;
+  Self.FClosed := False
+end;
+
+procedure TBufferedInputStream.Destroy;
+begin
+  if not Self.FClosed then
+    Self.Close;
+  if Self.FBuf <> nil then
+  begin
+    free(Self.FBuf);
+    Self.FBuf := nil
+  end
+end;
+
+function TBufferedInputStream.Read(Buf: Pointer; Count: Integer): Integer;
+var
+  Total:     Integer;
+  Available: Integer;
+  Take:      Integer;
+  Src:       Pointer;
+  Dst:       Pointer;
+  N:         Integer;
+begin
+  if Self.FClosed or (Count <= 0) then
+  begin
+    Result := 0;
+    Exit
+  end;
+  Total := 0;
+  while Total < Count do
+  begin
+    Available := Self.FBufEnd - Self.FBufPos;
+    if Available = 0 then
+    begin
+      { Refill from inner.  Short reads from inner are OK — they just
+        give us a smaller buffer; the outer loop continues until the
+        caller's Count is filled or inner returns 0 (EOF). }
+      N := Self.FInner.Read(Self.FBuf, Self.FBufSize);
+      if N <= 0 then Break;
+      Self.FBufPos := 0;
+      Self.FBufEnd := N;
+      Available := N
+    end;
+    Take := Count - Total;
+    if Take > Available then Take := Available;
+    Src := Pointer(Int64(Self.FBuf) + Int64(Self.FBufPos));
+    Dst := Pointer(Int64(Buf) + Int64(Total));
+    memcpy(Dst, Src, Take);
+    Self.FBufPos := Self.FBufPos + Take;
+    Total := Total + Take
+  end;
+  Result := Total
+end;
+
+procedure TBufferedInputStream.Close;
+begin
+  if Self.FClosed then Exit;
+  Self.FClosed := True;
+  if Self.FOwnsInner and (Self.FInner <> nil) then
+    Self.FInner.Close
+end;
+
+{ ------------------------------------------------------------------ }
+{ TBufferedOutputStream                                               }
+{ ------------------------------------------------------------------ }
+
+constructor TBufferedOutputStream.Create(AInner: TOutputStream);
+begin
+  Self.Create(AInner, kDefaultBufSize, True)
+end;
+
+constructor TBufferedOutputStream.Create(AInner: TOutputStream; ABufSize: Integer);
+begin
+  Self.Create(AInner, ABufSize, True)
+end;
+
+constructor TBufferedOutputStream.Create(AInner: TOutputStream; ABufSize: Integer;
+                                         AOwnsInner: Boolean);
+begin
+  Self.FInner := AInner;
+  Self.FOwnsInner := AOwnsInner;
+  if ABufSize < 64 then ABufSize := 64;
+  Self.FBufSize := ABufSize;
+  Self.FBuf := malloc(ABufSize);
+  Self.FBufFill := 0;
+  Self.FClosed := False
+end;
+
+procedure TBufferedOutputStream.Destroy;
+begin
+  { ARC finaliser — best-effort flush.  If the inner write fails here
+    the error is intentionally swallowed because a finaliser cannot
+    meaningfully raise.  Callers who need to know whether the final
+    flush succeeded must Close explicitly inside a try-finally. }
+  if not Self.FClosed then
+  begin
+    try
+      Self.Close
+    except
+      on E: Exception do
+        Self.FClosed := True  { absorb — finaliser cannot propagate }
+    end
+  end;
+  if Self.FBuf <> nil then
+  begin
+    free(Self.FBuf);
+    Self.FBuf := nil
+  end
+end;
+
+function TBufferedOutputStream.Write(Buf: Pointer; Count: Integer): Integer;
+var
+  Remaining: Integer;
+  Space:     Integer;
+  Take:      Integer;
+  Src:       Pointer;
+  Dst:       Pointer;
+  Offset:    Integer;
+begin
+  if Self.FClosed or (Count <= 0) then
+  begin
+    Result := 0;
+    Exit
+  end;
+  Offset := 0;
+  Remaining := Count;
+  while Remaining > 0 do
+  begin
+    Space := Self.FBufSize - Self.FBufFill;
+    if Space = 0 then
+    begin
+      Self.FInner.Write(Self.FBuf, Self.FBufFill);
+      Self.FBufFill := 0;
+      Space := Self.FBufSize
+    end;
+    Take := Remaining;
+    if Take > Space then Take := Space;
+    Src := Pointer(Int64(Buf) + Int64(Offset));
+    Dst := Pointer(Int64(Self.FBuf) + Int64(Self.FBufFill));
+    memcpy(Dst, Src, Take);
+    Self.FBufFill := Self.FBufFill + Take;
+    Offset := Offset + Take;
+    Remaining := Remaining - Take
+  end;
+  Result := Count
+end;
+
+procedure TBufferedOutputStream.Flush;
+begin
+  if Self.FClosed then Exit;
+  if Self.FBufFill > 0 then
+  begin
+    Self.FInner.Write(Self.FBuf, Self.FBufFill);
+    Self.FBufFill := 0
+  end;
+  Self.FInner.Flush
+end;
+
+procedure TBufferedOutputStream.Close;
+begin
+  if Self.FClosed then Exit;
+  Self.Flush;
+  Self.FClosed := True;
+  if Self.FOwnsInner and (Self.FInner <> nil) then
+    Self.FInner.Close
 end;
 
 end.

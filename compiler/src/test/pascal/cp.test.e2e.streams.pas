@@ -29,6 +29,9 @@ type
     procedure TestRun_FileStream_RoundTrip;
     procedure TestRun_VirtualDispatch_ThroughAbstractBase;
     procedure TestRun_ISeekable_Supports;
+    procedure TestRun_BufferedFile_RoundTrip;
+    procedure TestRun_BufferedOutput_FlushOnClose;
+    procedure TestRun_FileOpen_MissingFile_Raises;
   end;
 
 implementation
@@ -137,6 +140,99 @@ const
     end.
     ''';
 
+  { Buffered round-trip through file: write 10 bytes through
+    TBufferedOutputStream → TFileOutputStream, read them back through
+    TBufferedInputStream → TFileInputStream.  Verifies the wrappers
+    correctly forward to the inner via virtual dispatch (the abstract
+    TInputStream/TOutputStream slots route through the vtable to the
+    file impls). }
+  SrcBufferedFileRoundTrip = '''
+    program P;
+    uses Streams;
+    var Fout: TFileOutputStream;
+        Bout: TBufferedOutputStream;
+        Fin:  TFileInputStream;
+        Bin:  TBufferedInputStream;
+        Buf:  array[0..31] of Byte;
+        N, I: Integer;
+    begin
+      for I := 0 to 9 do Buf[I] := 65 + I;
+      Fout := TFileOutputStream.Create('/tmp/blaise_buf_e2e.txt');
+      Bout := TBufferedOutputStream.Create(Fout);
+      try
+        Bout.Write(@Buf[0], 10);
+      finally
+        Bout.Close;
+        Bout.Free
+      end;
+      for I := 0 to 31 do Buf[I] := 0;
+      Fin := TFileInputStream.Create('/tmp/blaise_buf_e2e.txt');
+      Bin := TBufferedInputStream.Create(Fin);
+      try
+        N := Bin.Read(@Buf[0], 32);
+        WriteLn(N);
+        for I := 0 to N - 1 do WriteLn(Buf[I])
+      finally
+        Bin.Close;
+        Bin.Free
+      end
+    end.
+    ''';
+
+  { Buffered output with the default 8 KiB buffer; the 5 bytes never
+    fill the buffer, so they only reach the file when Close fires
+    Flush.  Confirms Close-flushes-on-exit. }
+  SrcBufferedFlushOnClose = '''
+    program P;
+    uses Streams;
+    var Fout: TFileOutputStream;
+        Bout: TBufferedOutputStream;
+        Fin:  TFileInputStream;
+        Buf:  array[0..7] of Byte;
+        N, I: Integer;
+    begin
+      Buf[0] := 1; Buf[1] := 2; Buf[2] := 3;
+      Buf[3] := 4; Buf[4] := 5;
+      Fout := TFileOutputStream.Create('/tmp/blaise_flush_e2e.bin');
+      Bout := TBufferedOutputStream.Create(Fout);
+      try
+        Bout.Write(@Buf[0], 5)
+        { intentionally no explicit Flush — Close must drain the buffer }
+      finally
+        Bout.Close;
+        Bout.Free
+      end;
+      for I := 0 to 7 do Buf[I] := 0;
+      Fin := TFileInputStream.Create('/tmp/blaise_flush_e2e.bin');
+      try
+        N := Fin.Read(@Buf[0], 8);
+        WriteLn(N);
+        for I := 0 to N - 1 do WriteLn(Buf[I])
+      finally
+        Fin.Close;
+        Fin.Free
+      end
+    end.
+    ''';
+
+  { Opening a non-existent file for reading must raise EStreamError;
+    the exception handler prints a recognisable token. }
+  SrcOpenMissingRaises = '''
+    program P;
+    uses Streams, SysUtils;
+    var Fin: TFileInputStream;
+    begin
+      try
+        Fin := TFileInputStream.Create('/tmp/blaise_does_not_exist_x42.bin');
+        WriteLn('unreachable');
+        Fin.Free
+      except
+        on E: EStreamError do
+          WriteLn('caught')
+      end
+    end.
+    ''';
+
   { TMemoryOutputStream implements ISeekable; Supports() must return
     True and let us query the buffered byte count. }
   SrcSupportsISeekable = '''
@@ -206,6 +302,38 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcSupportsISeekable, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('ISeekable.Size = 3', '3' + LE, Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_BufferedFile_RoundTrip;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcBufferedFileRoundTrip, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('buffered round-trip A..J',
+    '10' + LE + '65' + LE + '66' + LE + '67' + LE + '68' + LE + '69' + LE +
+    '70' + LE + '71' + LE + '72' + LE + '73' + LE + '74' + LE,
+    Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_BufferedOutput_FlushOnClose;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcBufferedFlushOnClose, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('Close drained the buffer',
+    '5' + LE + '1' + LE + '2' + LE + '3' + LE + '4' + LE + '5' + LE,
+    Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_FileOpen_MissingFile_Raises;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcOpenMissingRaises, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('EStreamError caught', 'caught' + LE, Output)
 end;
 
 initialization

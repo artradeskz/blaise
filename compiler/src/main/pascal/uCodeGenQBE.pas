@@ -3494,6 +3494,23 @@ begin
         ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
       end;
     end;
+    { Virtual methods on an arbitrary receiver expression must dispatch
+      through the vtable — the static-class type seen here may be an
+      abstract base whose direct method symbol does not exist (the slot
+      points at $_AbstractMethodError).  Mirror the same vtable-load
+      sequence used below for the IsImplicitSelf / ObjectName paths. }
+    if (MDecl <> nil) and (MDecl.VTableSlot >= 0) then
+    begin
+      VTblTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [VTblTemp, SelfTemp]));
+      FPtrTemp := AllocTemp;
+      SlotOff  := (MDecl.VTableSlot + 1) * 8;
+      ArgTemp  := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+      EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+      Exit;
+    end;
     if MDecl.OwnerTypeName <> '' then
       FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name)
     else
