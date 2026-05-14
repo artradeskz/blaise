@@ -116,6 +116,7 @@ type
     function  CountTryStmts(AStmt: TASTStmt): Integer;
     procedure EmitExcFrameAllocs(ABlock: TBlock);
     procedure EmitGlobalVarData(ABlock: TBlock);
+    procedure EmitGlobalConstData(ABlock: TBlock);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitArcCleanup(ABlock: TBlock);
     procedure EmitExcPathArcCleanup(ABlock: TBlock);
@@ -1256,6 +1257,52 @@ begin
         EmitLine(Format('export data $%s = { l 0 }', [VarName]));
       end;
     end;
+  end;
+end;
+
+procedure TCodeGenQBE.EmitGlobalConstData(ABlock: TBlock);
+{ Emit QBE data-section entries for array-typed constants.
+  Each array const is emitted as a labelled data object whose elements are
+  either pointer-sized string references ($__sN + 12) or word-sized integers.
+  String literals are pre-registered in FStrLits so EmitPendingStrLits writes
+  their headers before the referencing data object. }
+var
+  I, J:       Integer;
+  CD:         TConstDecl;
+  ElemVal:    string;
+  Parts:      string;
+  StrIdx:     Integer;
+  IsStrArray: Boolean;
+begin
+  for I := 0 to ABlock.ConstDecls.Count - 1 do
+  begin
+    CD := TConstDecl(ABlock.ConstDecls.Items[I]);
+    if not CD.IsArrayConst then Continue;
+    if (CD.ArrayElements = nil) or (CD.ArrayElements.Count = 0) then Continue;
+    IsStrArray := SameText(CD.ArrayElemType, 'string');
+    { Pre-register string literals so their data labels exist before the array }
+    if IsStrArray then
+    begin
+      for J := 0 to CD.ArrayElements.Count - 1 do
+        if FStrLits.IndexOf(CD.ArrayElements[J]) < 0 then
+          FStrLits.Add(CD.ArrayElements[J]);
+      EmitPendingStrLits;
+    end;
+    { Build the data initialiser }
+    Parts := '';
+    for J := 0 to CD.ArrayElements.Count - 1 do
+    begin
+      ElemVal := CD.ArrayElements[J];
+      if J > 0 then Parts := Parts + ', ';
+      if IsStrArray then
+      begin
+        StrIdx := FStrLits.IndexOf(ElemVal);
+        Parts := Parts + Format('l $__s%d + 12', [StrIdx]);
+      end
+      else
+        Parts := Parts + Format('w %s', [ElemVal]);
+    end;
+    EmitLine(Format('export data $%s = { %s }', [CD.Name, Parts]));
   end;
 end;
 
@@ -7102,7 +7149,9 @@ begin
       EmitLine(Format('  %s =l copy $typeinfo_%s',
         [T, QBEMangle(TIdentExpr(AExpr).Name)]));
     end
-    else if TIdentExpr(AExpr).IsConstant then
+    else if TIdentExpr(AExpr).IsConstant and
+            ((AExpr.ResolvedType = nil) or
+             (AExpr.ResolvedType.Kind <> tyStaticArray)) then
     begin
       if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyString) then
       begin
@@ -7766,6 +7815,7 @@ begin
     EmitLine('');
     EmitDataSection;
     EmitGlobalVarData(AProg.Block);
+    EmitGlobalConstData(AProg.Block);
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);
@@ -8044,6 +8094,8 @@ begin
       { Global variables from interface and impl sections }
       EmitGlobalVarData(AUnit.IntfBlock);
       EmitGlobalVarData(AUnit.ImplBlock);
+      EmitGlobalConstData(AUnit.IntfBlock);
+      EmitGlobalConstData(AUnit.ImplBlock);
 
       FOutput.AppendBuffer(Body);
 
@@ -8116,6 +8168,7 @@ begin
     EmitLine('');
     EmitDataSection;  { emits remaining string literals + $__fmt_* (once) }
     EmitGlobalVarData(AProg.Block);
+    EmitGlobalConstData(AProg.Block);
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);

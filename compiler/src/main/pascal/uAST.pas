@@ -681,18 +681,24 @@ type
     destructor Destroy; override;
   end;
 
-  { Constant declaration: const Name = Value; or const Name: Type = Value; }
+  { Constant declaration: const Name = Value; or const Name: Type = Value;
+    or const Name: array[IndexType] of ElemType = (v0, v1, ...); }
   TConstDecl = class(TASTNode)
   public
-    Name:       string;
-    TypeName:   string;   { non-empty when a type annotation was written }
-    IntVal:     Int64;    { used when kind = integer }
-    StrVal:     string;   { used when IsString = True or IsFloat = True (raw text) }
-    IsString:   Boolean;
-    IsFloat:    Boolean;  { set when the rhs is a float literal }
-    ConstParts: TStringList; { non-nil when const expr has ident refs;
-                               Objects[i] = nil → string literal,
-                               Objects[i] <> nil → ident reference }
+    Name:           string;
+    TypeName:       string;   { non-empty when a type annotation was written }
+    IntVal:         Int64;    { used when kind = integer }
+    StrVal:         string;   { used when IsString = True or IsFloat = True (raw text) }
+    IsString:       Boolean;
+    IsFloat:        Boolean;  { set when the rhs is a float literal }
+    ConstParts:     TStringList; { non-nil when const expr has ident refs;
+                                   Objects[i] = nil → string literal,
+                                   Objects[i] <> nil → ident reference }
+    { Array-typed constants — set when TypeName starts with 'array' }
+    IsArrayConst:   Boolean;
+    ArrayIndexType: string;   { enum type name used as index, e.g. 'TWeather' }
+    ArrayElemType:  string;   { element type name, e.g. 'string', 'Integer' }
+    ArrayElements:  TStringList; { ordered list of raw element values (strings or int literals) }
     destructor Destroy; override;
   end;
 
@@ -1365,6 +1371,7 @@ end;
 destructor TConstDecl.Destroy;
 begin
   ConstParts.Free;
+  ArrayElements.Free;
   inherited Destroy;
 end;
 

@@ -65,6 +65,7 @@ type
 
     procedure AnalyseBlock(ABlock: TBlock);
     procedure AnalyseConstDecls(ABlock: TBlock);
+    procedure AnalyseArrayConstDecls(ABlock: TBlock);
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
@@ -464,6 +465,7 @@ begin
     { Resolve interface type and constant declarations. }
     AnalyseConstDecls(AUnit.IntfBlock);
     AnalyseTypeDecls(AUnit.IntfBlock);
+    AnalyseArrayConstDecls(AUnit.IntfBlock);
 
     { Register interface-section global variables — visible to impl bodies. }
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
@@ -544,6 +546,7 @@ begin
       scope when their referencing routines are analysed. }
     AnalyseConstDecls(AUnit.ImplBlock);
     AnalyseTypeDecls(AUnit.ImplBlock);
+    AnalyseArrayConstDecls(AUnit.ImplBlock);
 
     { Register impl-section global variables. }
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
@@ -733,6 +736,7 @@ begin
 
   AnalyseConstDecls(AUnit.IntfBlock);
   AnalyseTypeDecls(AUnit.IntfBlock);
+  AnalyseArrayConstDecls(AUnit.IntfBlock);
 
   { Register interface-section global variables.  Marked IsGlobal so
     codegen emits them as data-segment slots rather than stack allocs;
@@ -819,6 +823,7 @@ begin
       emits them as data-segment slots rather than stack allocations. }
     AnalyseConstDecls(AUnit.ImplBlock);
     AnalyseTypeDecls(AUnit.ImplBlock);
+    AnalyseArrayConstDecls(AUnit.ImplBlock);
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
     begin
       VDecl := TVarDecl(AUnit.ImplBlock.Decls.Items[I]);
@@ -1815,6 +1820,7 @@ begin
     transferred symbol table used by codegen. }
   AnalyseConstDecls(ABlock);
   AnalyseTypeDecls(ABlock);
+  AnalyseArrayConstDecls(ABlock);
   { Link standalone TTypeName.MethodName implementations to their class method
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
@@ -1837,16 +1843,18 @@ end;
 
 procedure TSemanticAnalyser.AnalyseConstDecls(ABlock: TBlock);
 var
-  I, J: Integer;
-  CD:   TConstDecl;
-  Sym:  TSymbol;
+  I, J:   Integer;
+  CD:     TConstDecl;
+  Sym:    TSymbol;
   RefSym: TSymbol;
-  TD:   TTypeDesc;
+  TD:     TTypeDesc;
   Resolved: string;
 begin
   for I := 0 to ABlock.ConstDecls.Count - 1 do
   begin
     CD := TConstDecl(ABlock.ConstDecls.Items[I]);
+    if CD.IsArrayConst then Continue;  { handled by AnalyseArrayConstDecls }
+
     if CD.IsString and (CD.ConstParts <> nil) then
     begin
       Resolved := '';
@@ -1888,6 +1896,52 @@ begin
     Sym.ConstString  := CD.StrVal;
     if not FTable.Define(Sym) then
       Sym.Free;  { duplicate const — silently ignore }
+  end;
+end;
+
+procedure TSemanticAnalyser.AnalyseArrayConstDecls(ABlock: TBlock);
+{ Second-pass constant analysis for array-typed constants.
+  Called after AnalyseTypeDecls so that enum index types are in scope. }
+var
+  I, J:     Integer;
+  CD:       TConstDecl;
+  Sym:      TSymbol;
+  ElemTD:   TTypeDesc;
+  IdxTD:    TTypeDesc;
+  ArrTD:    TStaticArrayTypeDesc;
+  EnumDesc: TEnumTypeDesc;
+  Expected: Integer;
+begin
+  for I := 0 to ABlock.ConstDecls.Count - 1 do
+  begin
+    CD := TConstDecl(ABlock.ConstDecls.Items[I]);
+    if not CD.IsArrayConst then Continue;
+    IdxTD := FTable.FindType(CD.ArrayIndexType);
+    if IdxTD = nil then
+      SemanticError(Format('Unknown index type ''%s'' in array const ''%s''',
+        [CD.ArrayIndexType, CD.Name]), CD.Line, CD.Col);
+    if IdxTD.Kind <> tyEnum then
+      SemanticError(Format('Array const index type must be an enum, got ''%s''',
+        [IdxTD.Name]), CD.Line, CD.Col);
+    ElemTD := FTable.FindType(CD.ArrayElemType);
+    if ElemTD = nil then
+      SemanticError(Format('Unknown element type ''%s'' in array const ''%s''',
+        [CD.ArrayElemType, CD.Name]), CD.Line, CD.Col);
+    EnumDesc := TEnumTypeDesc(IdxTD);
+    Expected := EnumDesc.Members.Count;
+    if CD.ArrayElements.Count <> Expected then
+      SemanticError(Format(
+        'Array const ''%s'' has %d element(s) but index type ''%s'' has %d member(s)',
+        [CD.Name, CD.ArrayElements.Count, CD.ArrayIndexType, Expected]),
+        CD.Line, CD.Col);
+    ArrTD := FTable.NewStaticArrayType(ElemTD, 0, Expected - 1);
+    Sym := TSymbol.Create(CD.Name, skConstant, ArrTD);
+    Sym.IsGlobal := True;
+    Sym.ConstArray := TStringList.Create;
+    for J := 0 to CD.ArrayElements.Count - 1 do
+      Sym.ConstArray.Add(CD.ArrayElements[J]);
+    if not FTable.Define(Sym) then
+      Sym.Free;
   end;
 end;
 

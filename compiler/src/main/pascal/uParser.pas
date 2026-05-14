@@ -556,18 +556,105 @@ begin
     CD.Col  := FCurrent.Col;
     CD.Name := FCurrent.Value;
     Advance;
-    { Typed constant: const Name: TypeName = Value }
+    { Typed constant: const Name: TypeName = Value
+      or:             const Name: array[IndexType] of ElemType = (v, ...) }
     if Check(tkColon) then
     begin
       Advance;
-      if not Check(tkIdent) then
+      if Check(tkArray) then
+      begin
+        { array-typed constant }
+        Advance;
+        Expect(tkLBracket);
+        if not Check(tkIdent) then
+          raise EParseError.Create(Format(
+            'Expected index type name in array const at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        CD.ArrayIndexType := FCurrent.Value;
+        Advance;
+        Expect(tkRBracket);
+        Expect(tkOf);
+        if not Check(tkIdent) then
+          raise EParseError.Create(Format(
+            'Expected element type name in array const at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        CD.ArrayElemType := FCurrent.Value;
+        Advance;
+        CD.IsArrayConst := True;
+      end
+      else if Check(tkIdent) then
+      begin
+        CD.TypeName := FCurrent.Value;
+        Advance;
+      end
+      else
         raise EParseError.Create(Format(
           'Expected type name after '':'' in const at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      CD.TypeName := FCurrent.Value;
-      Advance;
     end;
     Expect(tkEquals);
+    { Array const value list: (elem, elem, ...) }
+    if CD.IsArrayConst then
+    begin
+      Expect(tkLParen);
+      CD.ArrayElements := TStringList.Create;
+      while True do
+      begin
+        { Each element may be a string literal, integer literal,
+          optionally preceded by a minus sign, or float literal }
+        if Check(tkMinus) then
+        begin
+          Advance;
+          if Check(tkFloatLit) then
+          begin
+            CD.ArrayElements.Add('-' + FCurrent.Value);
+            Advance;
+          end
+          else if Check(tkIntLit) then
+          begin
+            CD.ArrayElements.Add('-' + FCurrent.Value);
+            Advance;
+          end
+          else
+            raise EParseError.Create(Format(
+              'Expected numeric literal after minus in array const at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        end
+        else if Check(tkStringLit) then
+        begin
+          CD.ArrayElements.Add(FCurrent.Value);
+          Advance;
+        end
+        else if Check(tkIntLit) then
+        begin
+          CD.ArrayElements.Add(FCurrent.Value);
+          Advance;
+        end
+        else if Check(tkFloatLit) then
+        begin
+          CD.ArrayElements.Add(FCurrent.Value);
+          Advance;
+        end
+        else if Check(tkIdent) then
+        begin
+          { named constant or boolean literal }
+          CD.ArrayElements.Add(FCurrent.Value);
+          Advance;
+        end
+        else
+          raise EParseError.Create(Format(
+            'Expected constant value in array const at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        if Check(tkComma) then
+          Advance
+        else
+          Break;
+      end;
+      Expect(tkRParen);
+      Expect(tkSemicolon);
+      AList.Add(CD);
+      Continue;
+    end;
     if Check(tkMinus) then
     begin
       Advance;

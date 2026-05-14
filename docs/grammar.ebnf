@@ -375,7 +375,17 @@ ConstSection
     ;
 
 ConstDecl
-    = IDENT [ COLON TypeName ] EQUALS ConstExpr SEMICOLON
+    = IDENT [ COLON ConstTypeAnnotation ] EQUALS ConstRhs SEMICOLON
+    ;
+
+ConstTypeAnnotation
+    = TypeName                                            (* scalar typed const *)
+    | ARRAY LBRACKET TypeName RBRACKET OF TypeName        (* array-of-enum const *)
+    ;
+
+ConstRhs
+    = ConstExpr                                           (* scalar value *)
+    | LPAREN ConstExpr { COMMA ConstExpr } RPAREN         (* array value list *)
     ;
 
 ConstExpr
@@ -385,14 +395,14 @@ ConstExpr
     | IDENT                    (* named constant reference, e.g. True / False *)
     ;
 
-(* ConstDecl supports both untyped and typed forms:
- *   Untyped:  const MaxItems = 100;
- *   Typed:    const Pi: Double = 3.14159;
+(* ConstDecl supports untyped, scalar-typed, and array-typed forms:
+ *   Untyped:      const MaxItems = 100;
+ *   Scalar-typed: const Pi: Double = 3.14159;
+ *   Array-typed:  const Names: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
  *
- * When a TypeName is present the declared type is used as-is; the RHS
- * value must be representable in that type (enforced by the semantic pass).
- * Supported TypeNames for typed constants: Integer, Int64, Double, Single,
- * Boolean, string.
+ * Array-typed constants require an enum as the index type.  The element
+ * count in the value list must exactly match the number of enum members.
+ * Array consts are emitted as pre-initialised global data sections.
  *
  * ConstSection may appear in: program/unit Block, InterfaceSection,
  * ImplementationSection, standalone procedure/function/method bodies,

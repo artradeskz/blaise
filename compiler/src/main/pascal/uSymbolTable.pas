@@ -290,6 +290,7 @@ type
     Params:     TObjectList;  { owned TParamDesc; populated for procedures/functions }
     ConstValue:  Int64;       { valid when Kind = skConstant; integer/bool/enum value }
     ConstString: string;      { valid when Kind = skConstant and type is tyString }
+    ConstArray:  TStringList; { owned; non-nil for array-typed const; raw element values }
     IsWeak:     Boolean;      { true for variables declared [Weak]; codegen
                                 keys off this to emit _WeakAssign instead
                                 of the strong addref/release pattern. }
@@ -820,6 +821,7 @@ end;
 destructor TSymbol.Destroy;
 begin
   Params.Free;
+  ConstArray.Free;
   inherited Destroy;
 end;
 

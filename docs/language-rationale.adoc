@@ -2207,8 +2207,12 @@ to work unchanged with inferred types.
 
 === Supported types
 
-Integer, Int64, Double, Single, Boolean, string.  Record, class, enum, and
-pointer typed constants are not supported in this iteration — they require
+Scalar typed constants: Integer, Int64, Double, Single, Boolean, string.
+
+Array typed constants: `array[EnumType] of ScalarType` — see
+_Array-of-enum typed constants_ below.
+
+Record, class, and pointer typed constants are not supported — they require
 compound value syntax (record literals, address-of) that adds significant
 parser complexity for rare use cases.
 
@@ -2229,3 +2233,77 @@ opaque.
 to distinguish a type-cast expression from a function call inside a const
 initialiser, which is more complex than a simple colon annotation and is not
 the FPC/Delphi convention.
+
+== Array-of-enum Typed Constants
+
+=== Decision
+
+Blaise supports array-typed constants whose index is an enum type:
+
+[source,pascal]
+----
+type
+  TWeather = (wtSunny, wtCloudy, wtRainy);
+
+const
+  WeatherNames: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
+  WeatherCost:  array[TWeather] of Integer = (0, 1, 2);
+----
+
+The element count in the value list must exactly match the number of enum
+members; a mismatch is a semantic error.  The index type must be an enum
+declared in the same or an enclosing scope.
+
+Supported element types: the same scalar types supported by scalar typed
+constants (Integer, Int64, Double, Single, Boolean, string).
+
+=== Implementation
+
+Array-typed constants are emitted as pre-initialised global data objects in
+the QBE data section.  String elements are stored as immortal string pointer
+references (`$__sN + 12`); integer elements as `w`-typed words.
+
+The index type must be resolved before the const can be validated, so array
+const analysis is deferred to a second pass (`AnalyseArrayConstDecls`) that
+runs after `AnalyseTypeDecls` in every scope.  Scalar const analysis remains
+in the first pass (before type decls) so that constant values remain usable
+inside type declarations.
+
+=== Rationale
+
+The canonical Pascal idiom for mapping enum values to strings is a `case`
+statement helper function, which is verbose and must be kept in sync with the
+enum manually.  An array-of-enum constant is more concise, checked at compile
+time (wrong element count is an error), and matches FPC/Delphi syntax exactly.
+
+This was the primary motivator: making the following program work as written,
+without any workaround:
+
+[source,pascal]
+----
+const
+  WetherNames: array[TWetherType] of string = ('Sunny', 'Cloudy', 'Rainy');
+var
+  t1: TWetherType;
+begin
+  t1 := wtSunny;
+  WriteLn('Wether: ', WetherNames[t1]);
+end.
+----
+
+=== Constraint: enum index only
+
+Only enum types are permitted as the array index.  Integer-range indices
+(`array[0..2] of string`) are not supported for const arrays.  The enum
+constraint is deliberate: it ties the element count to a type the compiler
+already knows the cardinality of, enabling the mismatch error without
+additional syntax for an explicit bounds range.
+
+=== Alternatives Rejected
+
+*Integer range index* (`array[0..N-1] of T`) — requires the parser to evaluate
+a constant expression for the upper bound inside the const type annotation,
+which adds complexity and is rarely more readable than the enum form.
+
+*Named-constant workaround* (`case` statement) — correct but verbose and not
+checked by the compiler against enum additions.

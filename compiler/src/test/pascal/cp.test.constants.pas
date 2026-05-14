@@ -66,6 +66,15 @@ type
     procedure TestTypedConst_NegativeInteger;
     procedure TestTypedConst_InUnit;
     procedure TestTypedConst_UsedInExpression;
+
+    { Array-of-enum typed constants }
+    procedure TestArrayConst_StringElements_Parses;
+    procedure TestArrayConst_IntElements_Parses;
+    procedure TestArrayConst_StringElements_InIR;
+    procedure TestArrayConst_IntElements_InIR;
+    procedure TestArrayConst_IndexedByEnumVar;
+    procedure TestArrayConst_WrongElementCount_Error;
+    procedure TestArrayConst_InUnit;
   end;
 
 implementation
@@ -652,6 +661,145 @@ begin
     ''');
   AssertTrue('IR non-empty', IR <> '');
   AssertTrue('Scale value in IR', IRContains(IR, '2.5'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Array-of-enum typed constants                                        }
+{ ------------------------------------------------------------------ }
+
+procedure TConstTests.TestArrayConst_StringElements_Parses;
+var U: TUnit;
+begin
+  U := ParseUnit(
+    '''
+    unit W;
+    interface
+    type TWeather = (wtSunny, wtCloudy, wtRainy);
+    const WeatherNames: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
+    implementation
+    end.
+    ''');
+  AssertNotNull('unit parsed', U);
+  AssertEquals('one const decl', 1, U.IntfBlock.ConstDecls.Count);
+  U.Free;
+end;
+
+procedure TConstTests.TestArrayConst_IntElements_Parses;
+var U: TUnit;
+begin
+  U := ParseUnit(
+    '''
+    unit W;
+    interface
+    type TDir = (dNorth, dSouth, dEast, dWest);
+    const DirCost: array[TDir] of Integer = (1, 1, 2, 2);
+    implementation
+    end.
+    ''');
+  AssertNotNull('unit parsed', U);
+  AssertEquals('one const decl', 1, U.IntfBlock.ConstDecls.Count);
+  U.Free;
+end;
+
+procedure TConstTests.TestArrayConst_StringElements_InIR;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    type TWeather = (wtSunny, wtCloudy, wtRainy);
+    const WeatherNames: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('Sunny in IR', IRContains(IR, 'Sunny'));
+  AssertTrue('Cloudy in IR', IRContains(IR, 'Cloudy'));
+  AssertTrue('Rainy in IR', IRContains(IR, 'Rainy'));
+  AssertTrue('WeatherNames in IR', IRContains(IR, 'WeatherNames'));
+end;
+
+procedure TConstTests.TestArrayConst_IntElements_InIR;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    type TDir = (dNorth, dSouth, dEast, dWest);
+    const DirCost: array[TDir] of Integer = (1, 1, 2, 2);
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('DirCost in IR', IRContains(IR, 'DirCost'));
+end;
+
+procedure TConstTests.TestArrayConst_IndexedByEnumVar;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    type TWeather = (wtSunny, wtCloudy, wtRainy);
+    const WeatherNames: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
+    var W: TWeather; S: string;
+    begin
+      W := wtCloudy;
+      S := WeatherNames[W]
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('WeatherNames in IR', IRContains(IR, 'WeatherNames'));
+end;
+
+procedure TConstTests.TestArrayConst_WrongElementCount_Error;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  SA: TSemanticAnalyser;
+  GotError: Boolean;
+begin
+  GotError := False;
+  L  := TLexer.Create(
+    '''
+    program P;
+    type TWeather = (wtSunny, wtCloudy, wtRainy);
+    const WeatherNames: array[TWeather] of string = ('Sunny', 'Cloudy');
+    begin end.
+    ''');
+  P  := TParser.Create(L);
+  Pr := P.Parse;
+  SA := TSemanticAnalyser.Create;
+  try
+    try
+      SA.Analyse(Pr);
+    except
+      on E: ESemanticError do GotError := True;
+    end;
+  finally
+    SA.Free; Pr.Free; P.Free; L.Free;
+  end;
+  AssertTrue('wrong count raises error', GotError);
+end;
+
+procedure TConstTests.TestArrayConst_InUnit;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    type TWeather = (wtSunny, wtCloudy, wtRainy);
+    const WeatherNames: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
+    var W: TWeather; S: string;
+    begin
+      W := wtRainy;
+      S := WeatherNames[W];
+      WriteLn(S)
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('Rainy in IR', IRContains(IR, 'Rainy'));
 end;
 
 initialization
