@@ -122,7 +122,7 @@ type
   end;
 
   { TFileInputStream — reads bytes from a file on disk. }
-  TFileInputStream = class(TInputStream, ISeekable)
+  TFileInputStream = class(TInputStream, IInputStream, ICloseable, ISeekable)
     FFd:     Integer;     // file descriptor; -1 once closed
     FClosed: Boolean;
     constructor Create(const APath: string);
@@ -135,7 +135,7 @@ type
   end;
 
   { TFileOutputStream — writes bytes to a file on disk. }
-  TFileOutputStream = class(TOutputStream, ISeekable)
+  TFileOutputStream = class(TOutputStream, IOutputStream, ICloseable, ISeekable)
     FFd:     Integer;
     FClosed: Boolean;
     constructor Create(const APath: string); overload;
@@ -150,7 +150,7 @@ type
   end;
 
   { TMemoryInputStream — reads bytes from a Blaise string treated as bytes. }
-  TMemoryInputStream = class(TInputStream, ISeekable)
+  TMemoryInputStream = class(TInputStream, IInputStream, ICloseable, ISeekable)
     FData: string;
     FPos:  Int64;
     constructor Create(const AData: string);
@@ -164,7 +164,7 @@ type
   { TMemoryOutputStream — accumulates bytes into an in-memory buffer.
 
     Use ToString to snapshot the accumulated bytes as a Blaise string. }
-  TMemoryOutputStream = class(TOutputStream, ISeekable)
+  TMemoryOutputStream = class(TOutputStream, IOutputStream, ICloseable, ISeekable)
     FBuf:      Pointer;   // raw byte buffer
     FCapacity: Integer;
     FSize:     Integer;
@@ -187,7 +187,7 @@ type
     closing the buffered stream also closes the inner stream.  Pass
     OwnsInner=False when the caller wants to keep the inner alive past
     the wrapper's lifetime (e.g. when the wrapper is a helper return). }
-  TBufferedInputStream = class(TInputStream)
+  TBufferedInputStream = class(TInputStream, IInputStream, ICloseable)
     FInner:     TInputStream;
     FOwnsInner: Boolean;
     FBuf:       Pointer;
@@ -220,7 +220,7 @@ type
                    TFileInputStream.Create('config.txt')));
 
     OwnsInner=True (the default) tears the whole chain down on Close. }
-  TStreamReader = class(TInputStream)
+  TStreamReader = class(TInputStream, IInputStream, ICloseable)
     FInner:      TInputStream;
     FOwnsInner:  Boolean;
     FAtEof:      Boolean;
@@ -244,7 +244,7 @@ type
     bytes verbatim.
 
     OwnsInner=True closes the inner on Close.  Flush forwards to inner. }
-  TStreamWriter = class(TOutputStream)
+  TStreamWriter = class(TOutputStream, IOutputStream, ICloseable)
     FInner:     TOutputStream;
     FOwnsInner: Boolean;
     FClosed:    Boolean;
@@ -256,6 +256,27 @@ type
     procedure Close; override;
     procedure WriteString(const S: string);
     procedure WriteLine(const S: string);
+  end;
+
+  { IReaderFrom — capability marker.
+
+    A stream that knows how to pull bytes from a source efficiently
+    (e.g. sendfile(2) between two file descriptors, or segment
+    re-linking inside TBuffer) implements ReadFrom.  CopyStream
+    discovers the capability at runtime via Supports() / is and
+    dispatches to ReadFrom in preference to the byte-loop fallback. }
+  IReaderFrom = interface
+    function ReadFrom(Src: TInputStream): Int64;
+  end;
+
+  { IWriterTo — symmetrical capability marker.
+
+    A stream that knows how to push its bytes into a sink efficiently
+    implements WriteTo.  CopyStream tries IReaderFrom on the
+    destination first, then IWriterTo on the source, before falling
+    back to the byte-loop copy. }
+  IWriterTo = interface
+    function WriteTo(Dst: TOutputStream): Int64;
   end;
 
   { TBuffer — segmented in-memory buffer that is both source and sink.
@@ -318,7 +339,7 @@ type
     Buffers up to FBufSize bytes; on overflow (or explicit Flush) the
     buffer is forwarded to Inner.  Owns Inner by default — Close flushes,
     then closes the inner if OwnsInner is True. }
-  TBufferedOutputStream = class(TOutputStream)
+  TBufferedOutputStream = class(TOutputStream, IOutputStream, ICloseable)
     FInner:     TOutputStream;
     FOwnsInner: Boolean;
     FBuf:       Pointer;
@@ -358,6 +379,25 @@ function memcpy(Dst, Src: Pointer; Count: Integer): Pointer;
 function malloc(Count: Integer): Pointer; external name 'malloc';
 procedure free(P: Pointer); external name 'free';
 function realloc(P: Pointer; Count: Integer): Pointer; external name 'realloc';
+
+{ CopyStream — transfer all readable bytes from Src to Dst.
+
+  Returns the total byte count copied.  The implementation discovers
+  capability at runtime in this preference order:
+
+    1. Dst implements IReaderFrom   → dispatch to Dst.ReadFrom(Src).
+    2. Src implements IWriterTo     → dispatch to Src.WriteTo(Dst).
+    3. Fallback: an 8 KiB byte-loop copy through a stack buffer.
+
+  v1 ships no concrete fast-path implementations — every stream uses
+  the fallback.  Adding IReaderFrom to TFileOutputStream (with
+  sendfile(2) on Linux), or IWriterTo to TBuffer (with TransferTo),
+  is a future, non-breaking change: existing callers automatically
+  pick up the speedup.
+
+  This is Go's io.Copy idiom: callers write CopyStream(src, dst) once,
+  and the framework upgrades to zero-copy when both sides cooperate. }
+function CopyStream(Src: TInputStream; Dst: TOutputStream): Int64;
 
 implementation
 
@@ -1367,6 +1407,38 @@ begin
       Want := Want - Int64(Take)
     end
   end
+end;
+
+function CopyStream(Src: TInputStream; Dst: TOutputStream): Int64;
+var
+  Buf:   array[0..8191] of Byte;
+  N:     Integer;
+  Total: Int64;
+  RF:    IReaderFrom;
+  WT:    IWriterTo;
+begin
+  Total := 0;
+  { Capability discovery — dispatch to the optimised path when either
+    side cooperates.  v1 has no concrete implementations of these
+    interfaces; the checks return False and we fall through. }
+  if Supports(Dst, IReaderFrom, RF) then
+  begin
+    Result := RF.ReadFrom(Src);
+    Exit
+  end;
+  if Supports(Src, IWriterTo, WT) then
+  begin
+    Result := WT.WriteTo(Dst);
+    Exit
+  end;
+  { Fallback: byte-loop through an 8 KiB stack buffer. }
+  repeat
+    N := Src.Read(@Buf[0], 8192);
+    if N <= 0 then Break;
+    Dst.Write(@Buf[0], N);
+    Total := Total + Int64(N)
+  until False;
+  Result := Total
 end;
 
 function TBuffer.IndexOf(B: Byte): Int64;

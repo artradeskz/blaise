@@ -4475,6 +4475,13 @@ begin
         [Par.ParamName, Par.ParamName])
     else if Par.IsVarParam then
       Sig := Sig + Format('l %%_par_%s', [Par.ParamName])
+    else if (Par.ResolvedType <> nil) and
+            (Par.ResolvedType.Kind = tyInterface) then
+      { Interfaces are two-slot fat pointers: object reference and
+        interface dispatch table.  Caller passes both; callee allocs
+        two local slots in the param-storage prologue below. }
+      Sig := Sig + Format('l %%_par_%s_obj, l %%_par_%s_itab',
+        [Par.ParamName, Par.ParamName])
     else
       Sig := Sig + Format('%s %%_par_%s', [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
   end;
@@ -4537,6 +4544,18 @@ begin
           begin
             EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
             EmitLine(Format('  stores %%_par_%s, %%_var_%s',
+              [Par.ParamName, Par.ParamName]));
+          end;
+        tyInterface:
+          begin
+            { Two-slot fat pointer — matches the local-var layout used
+              by interface-aware codegen (e.g. EmitMethodCall reads
+              %_var_X_obj / %_var_X_itab to dispatch). }
+            EmitLine(Format('  %%_var_%s_obj =l alloc8 1', [Par.ParamName]));
+            EmitLine(Format('  storel %%_par_%s_obj, %%_var_%s_obj',
+              [Par.ParamName, Par.ParamName]));
+            EmitLine(Format('  %%_var_%s_itab =l alloc8 1', [Par.ParamName]));
+            EmitLine(Format('  storel %%_par_%s_itab, %%_var_%s_itab',
               [Par.ParamName, Par.ParamName]));
           end;
       else
@@ -4818,6 +4837,27 @@ begin
       else if Par.IsVarParam then
         ArgLine := ArgLine + Format('l %s',
           [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
+      else if (Par.ResolvedType <> nil) and
+              (Par.ResolvedType.Kind = tyInterface) then
+      begin
+        { Interface fat pointer — pass _obj and _itab as two l args.
+          Currently supports TIdentExpr (local or global var); other
+          interface-typed expressions (e.g. function returns) are not
+          yet wired. }
+        if not (TASTExpr(ACall.Args.Items[I]) is TIdentExpr) then
+          raise ECodeGenError.Create(
+            'Interface argument forms other than identifier not yet ' +
+            'supported by codegen — file an issue if you hit this');
+        ArgTemp  := AllocTemp;
+        ArgTemp2 := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s_obj', [ArgTemp,
+          VarRef(TIdentExpr(TASTExpr(ACall.Args.Items[I])).Name,
+                 TIdentExpr(TASTExpr(ACall.Args.Items[I])).IsGlobal)]));
+        EmitLine(Format('  %s =l loadl %s_itab', [ArgTemp2,
+          VarRef(TIdentExpr(TASTExpr(ACall.Args.Items[I])).Name,
+                 TIdentExpr(TASTExpr(ACall.Args.Items[I])).IsGlobal)]));
+        ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+      end
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));

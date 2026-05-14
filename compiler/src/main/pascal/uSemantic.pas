@@ -3588,7 +3588,15 @@ begin
         Format('Interface ''%s'' has no method ''%s''',
           [ObjSym.TypeDesc.Name, ACall.Name]),
         ACall.Line, ACall.Col);
-    { Args for interface methods not checked in Phase 3 (no param info stored) }
+    { Resolve arg expressions so codegen has ResolvedType on every node.
+      We don't have concrete param signatures at interface-dispatch sites
+      (Phase 3 limitation), so we can't validate types — but expressions
+      still need to be analysed so e.g. `@Buf[0]` annotates the
+      TStringSubscriptExpr's StrExpr.ResolvedType.  Without this,
+      EmitAddrOfExpr crashes on a nil ResolvedType when emitting the
+      argument. }
+    for I := 0 to ACall.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
     ACall.ResolvedClassType := ObjSym.TypeDesc;
     ACall.ResolvedMethod    := nil;  { nil = interface dispatch, not class dispatch }
     ACall.IsGlobal          := ObjSym.IsGlobal;

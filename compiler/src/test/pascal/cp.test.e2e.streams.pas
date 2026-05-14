@@ -38,6 +38,10 @@ type
     procedure TestRun_TBuffer_WriteThenRead;
     procedure TestRun_TBuffer_TransferTo_SplitsCorrectly;
     procedure TestRun_TBuffer_IndexOf_FindsByte;
+    procedure TestRun_InterfaceDispatch_ViaSupports;
+    procedure TestRun_InterfaceDispatch_AsFunctionParam;
+    procedure TestRun_CopyStream_MemoryToMemory;
+    procedure TestRun_CopyStream_FileToFile;
   end;
 
 implementation
@@ -410,6 +414,121 @@ const
     end.
     ''';
 
+  { Interface dispatch through Supports — query the concrete object
+    for IOutputStream and call Write through the interface.  Verifies
+    that the itab is correctly wired for the abstract-base hierarchy
+    (TMemoryOutputStream → TOutputStream → IOutputStream). }
+  SrcInterfaceViaSupports = '''
+    program P;
+    uses Streams;
+    var M:   TMemoryOutputStream;
+        Os:  IOutputStream;
+        Buf: array[0..3] of Byte;
+    begin
+      Buf[0] := 49; Buf[1] := 50; Buf[2] := 51; Buf[3] := 52;
+      M := TMemoryOutputStream.Create;
+      try
+        if Supports(M, IOutputStream, Os) then
+          Os.Write(@Buf[0], 4);
+        WriteLn(M.ToString)
+      finally
+        M.Free
+      end
+    end.
+    ''';
+
+  { Pass an interface variable to a function expecting an
+    IOutputStream parameter — exercises the two-slot fat-pointer
+    parameter ABI (compiler had to be extended to pass _obj and
+    _itab as two l args, alloc two var slots in the callee). }
+  SrcInterfaceAsParam = '''
+    program P;
+    uses Streams;
+    procedure WriteFour(S: IOutputStream);
+    var B: array[0..3] of Byte;
+    begin
+      B[0] := 65; B[1] := 66; B[2] := 67; B[3] := 68;
+      S.Write(@B[0], 4)
+    end;
+    var M:  TMemoryOutputStream;
+        Os: IOutputStream;
+    begin
+      M := TMemoryOutputStream.Create;
+      try
+        if Supports(M, IOutputStream, Os) then
+          WriteFour(Os);
+        WriteLn(M.ToString)
+      finally
+        M.Free
+      end
+    end.
+    ''';
+
+  { CopyStream from one memory stream to another via the fallback
+    byte-loop path (no concrete IReaderFrom/IWriterTo implementations
+    yet — those are a future optimisation). }
+  SrcCopyStreamMemMem = '''
+    program P;
+    uses Streams;
+    var Src: TMemoryInputStream;
+        Dst: TMemoryOutputStream;
+        N:   Int64;
+    begin
+      Src := TMemoryInputStream.Create('hello, world!');
+      Dst := TMemoryOutputStream.Create;
+      try
+        N := CopyStream(Src, Dst);
+        WriteLn(N);
+        WriteLn(Dst.ToString)
+      finally
+        Src.Free;
+        Dst.Free
+      end
+    end.
+    ''';
+
+  { CopyStream file → file.  Demonstrates the framework over real
+    file streams; same fallback path as memory→memory until specific
+    fast paths are added. }
+  SrcCopyStreamFileFile = '''
+    program P;
+    uses Streams;
+    var Wri:  TFileOutputStream;
+        Src:  TFileInputStream;
+        Dst:  TFileOutputStream;
+        Vrf:  TFileInputStream;
+        R:    TStreamReader;
+        Buf:  array[0..15] of Byte;
+        N:    Int64;
+        I:    Integer;
+    begin
+      Wri := TFileOutputStream.Create('/tmp/blaise_copy_src_e2e.txt');
+      try
+        for I := 0 to 9 do Buf[I] := 65 + I;
+        Wri.Write(@Buf[0], 10);
+      finally
+        Wri.Close;
+        Wri.Free
+      end;
+      Src := TFileInputStream.Create('/tmp/blaise_copy_src_e2e.txt');
+      Dst := TFileOutputStream.Create('/tmp/blaise_copy_dst_e2e.txt');
+      try
+        N := CopyStream(Src, Dst);
+        WriteLn(N)
+      finally
+        Src.Close; Src.Free;
+        Dst.Close; Dst.Free
+      end;
+      Vrf := TFileInputStream.Create('/tmp/blaise_copy_dst_e2e.txt');
+      R   := TStreamReader.Create(Vrf);
+      try
+        WriteLn(R.ReadAll)
+      finally
+        R.Free
+      end
+    end.
+    ''';
+
   { TMemoryOutputStream implements ISeekable; Supports() must return
     True and let us query the buffered byte count. }
   SrcSupportsISeekable = '''
@@ -577,6 +696,44 @@ begin
   AssertEquals('exit code', 0, RCode);
   AssertEquals('IndexOf: 0, 2, 9, -1; size unchanged',
     '0' + LE + '2' + LE + '9' + LE + '-1' + LE + '10' + LE, Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_InterfaceDispatch_ViaSupports;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceViaSupports, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('interface call via Supports reaches concrete Write', '1234' + LE, Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_InterfaceDispatch_AsFunctionParam;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceAsParam, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('interface as function param dispatches correctly', 'ABCD' + LE, Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_CopyStream_MemoryToMemory;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCopyStreamMemMem, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('CopyStream mem→mem',
+    '13' + LE + 'hello, world!' + LE, Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_CopyStream_FileToFile;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCopyStreamFileFile, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('CopyStream file→file',
+    '10' + LE + 'ABCDEFGHIJ' + LE, Output)
 end;
 
 initialization
