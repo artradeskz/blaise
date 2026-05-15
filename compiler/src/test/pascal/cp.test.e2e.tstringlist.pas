@@ -42,6 +42,10 @@ type
     procedure TestRun_Sorted_Find;
     procedure TestRun_CaseInsensitive_IndexOf;
     procedure TestRun_Duplicates_Ignore;
+    procedure TestRun_CustomSort;
+    procedure TestRun_CommaText_Get;
+    procedure TestRun_CommaText_Set;
+    procedure TestRun_CommaText_Quoted;
   end;
 
 implementation
@@ -337,6 +341,75 @@ const
       WriteLn(L.Count);
       WriteLn(L.Get(0));
       WriteLn(L.Get(1));
+      L.Free
+    end.
+    ''';
+
+  SrcCustomSort =
+    '''
+    program P;
+    uses Classes;
+    function DescCmp(const A: string; const B: string): Integer;
+    begin
+      { reverse lexicographic: B vs A }
+      Result := CompareStr(B, A)
+    end;
+    var L: TStringList;
+    begin
+      L := TStringList.Create;
+      L.Add('banana');
+      L.Add('apple');
+      L.Add('cherry');
+      L.CustomSort(@DescCmp);
+      WriteLn(L.Get(0));
+      WriteLn(L.Get(1));
+      WriteLn(L.Get(2));
+      L.Free
+    end.
+    ''';
+
+  SrcCommaTextGet =
+    '''
+    program P;
+    uses Classes;
+    var L: TStringList; S: string;
+    begin
+      L := TStringList.Create;
+      L.Add('alpha');
+      L.Add('beta');
+      L.Add('gamma');
+      S := L.CommaText;
+      WriteLn(S);
+      L.Free
+    end.
+    ''';
+
+  SrcCommaTextSet =
+    '''
+    program P;
+    uses Classes;
+    var L: TStringList;
+    begin
+      L := TStringList.Create;
+      L.CommaText := 'one,two,three';
+      WriteLn(L.Count);
+      WriteLn(L.Get(0));
+      WriteLn(L.Get(1));
+      WriteLn(L.Get(2));
+      L.Free
+    end.
+    ''';
+
+  SrcCommaTextQuoted =
+    '''
+    program P;
+    uses Classes;
+    var L: TStringList;
+    begin
+      L := TStringList.Create;
+      L.Add('hello world');
+      L.Add('foo');
+      WriteLn(L.CommaText);
       L.Free
     end.
     ''';
@@ -666,6 +739,70 @@ begin
   finally
     Lines.Free
   end
+end;
+
+procedure TE2ETStringListTests.TestRun_CustomSort;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCustomSort, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('CustomSort desc [0]=cherry', 'cherry', Lines.Strings[0]);
+    AssertEquals('CustomSort desc [1]=banana', 'banana', Lines.Strings[1]);
+    AssertEquals('CustomSort desc [2]=apple',  'apple',  Lines.Strings[2]);
+  finally
+    Lines.Free
+  end
+end;
+
+procedure TE2ETStringListTests.TestRun_CommaText_Get;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCommaTextGet, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('CommaText=alpha,beta,gamma', 'alpha,beta,gamma', Trim(Output));
+end;
+
+procedure TE2ETStringListTests.TestRun_CommaText_Set;
+var
+  Output: string;
+  RCode:  Integer;
+  Lines:  TStringList;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCommaTextSet, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('Count=3 after CommaText set', '3',     Lines.Strings[0]);
+    AssertEquals('Get(0)=one',                  'one',   Lines.Strings[1]);
+    AssertEquals('Get(1)=two',                  'two',   Lines.Strings[2]);
+    AssertEquals('Get(2)=three',                'three', Lines.Strings[3]);
+  finally
+    Lines.Free
+  end
+end;
+
+procedure TE2ETStringListTests.TestRun_CommaText_Quoted;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCommaTextQuoted, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  { item with space is quoted, plain item is not }
+  AssertEquals('CommaText quoted', '"hello world",foo', Trim(Output));
 end;
 
 initialization
