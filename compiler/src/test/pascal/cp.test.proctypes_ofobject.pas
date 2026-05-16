@@ -115,7 +115,7 @@ begin
   for Steps := 0 to 5 do
   begin
     if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
-       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
+       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'runtime') then
     begin
       Result := IncludeTrailingPathDelimiter(Dir);
       Exit;
