@@ -628,14 +628,16 @@ function TCodeGenQBE.IsPromotableKind(AKind: TTypeKind): Boolean;
 begin
   { Only promote pure scalar types that are never used as receivers for
     method calls or ARC operations that load the slot address.
-    tyClass, tyString, tyPointer, tyPChar, tyMetaClass are excluded because
-    many codegen paths emit 'loadl %_var_X' to get the heap pointer from the
-    local slot — those paths are not all promotion-aware yet. }
+    tyClass, tyString, tyMetaClass are excluded because many codegen
+    paths emit 'loadl %_var_X' to get the heap pointer from the local
+    slot — those paths are not all promotion-aware yet.
+    tyPointer, tyPChar are promotion-aware (audited 2026-05-16). }
   Result := AKind in [
     tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
     tyInt64,
     tyDouble, tySingle,
-    tySet
+    tySet,
+    tyPointer, tyPChar
   ];
 end;
 
@@ -8844,6 +8846,8 @@ begin
     PCharBase := AllocTemp;
     if AStmt.IsGlobal then
       EmitLine(Format('  %s =l loadl $%s', [PCharBase, AStmt.ArrayName]))
+    else if IsPromoted(AStmt.ArrayName) then
+      EmitLine(Format('  %s =l copy %%_var_%s', [PCharBase, AStmt.ArrayName]))
     else
       EmitLine(Format('  %s =l loadl %%_var_%s', [PCharBase, AStmt.ArrayName]));
     EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
@@ -8860,6 +8864,8 @@ begin
     { load the data pointer from the variable slot }
     if AStmt.IsGlobal then
       EmitLine(Format('  %s =l loadl $%s', [PCharBase, AStmt.ArrayName]))
+    else if IsPromoted(AStmt.ArrayName) then
+      EmitLine(Format('  %s =l copy %%_var_%s', [PCharBase, AStmt.ArrayName]))
     else
       EmitLine(Format('  %s =l loadl %%_var_%s', [PCharBase, AStmt.ArrayName]));
     IdxW    := EmitExpr(AStmt.IndexExpr);
