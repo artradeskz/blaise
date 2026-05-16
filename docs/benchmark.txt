@@ -46,6 +46,53 @@ All values in milliseconds.  Ratio = blaise_mem / malloc per
 workload; "—" when malloc baseline is 0 ms.
 
 ================================================================
+2026-05-16 — investigation: in-place arena-tail realloc growth
+================================================================
+
+  Approach (not committed):
+
+    In _BlaiseReallocMem, detect when the block being realloc'd sits
+    at the tail of the head arena (block end == arena bump pointer).
+    When the new size class still fits in the arena, extend in place
+    by advancing the offset and updating the header — saves the
+    SmallGetMem + memcpy + SmallFreeMem round trip.
+
+  Measured hit rate on R workload: 100% (every single realloc takes
+  the in-place path).
+
+  Measured R workload time:
+    baseline (memcpy path)  : ~13 ms
+    in-place path           : ~23-26 ms  (REGRESSION)
+
+  Why slower despite saving a memcpy:
+
+    Blaise's codegen does not register-allocate locals — every local
+    becomes a stack slot via alloc4 / alloc8 and every read/write
+    goes through memory.  The added checks (ArenaHead load, A^.Base
+    + A^.Offset arithmetic, two calls to RoundUpToClass) materialise
+    as ~30 extra memory operations per realloc.  glibc memcpy for
+    16-128 byte payloads is one or two SSE moves — faster than the
+    overhead our function-call prologue adds.
+
+  Conclusion: this microbenchmark is codegen-limited, not
+  algorithm-limited.  Closing the gap to malloc on small-realloc
+  workloads needs compiler-side improvements first:
+
+    - Function inlining for small leaf functions
+      (RoundUpToClass, SizeClassIndex, SmallGetMem fast path).
+    - Register allocation so locals do not round-trip through
+      alloc4/alloc8 stack slots.
+
+  Both improvements would benefit every workload, not just the
+  allocator.  Deferring algorithmic allocator tuning until codegen
+  catches up.
+
+  Lesson recorded for future allocator work: when borrowing ideas
+  from FPC heap.inc or glibc malloc, benchmark them — the better
+  algorithm is not always the faster one in a poorly-optimised
+  compiler.
+
+================================================================
 2026-05-16 — commit b1cb9d0 + IsLarge() fix (uncommitted)
 ================================================================
 
