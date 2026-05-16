@@ -25,6 +25,7 @@ type
     procedure TestRun_Pointer_TypedPointer_Deref;
     procedure TestRun_Pointer_NilCheck;
     procedure TestRun_PCharSubscript_ChrAssignment;
+    procedure TestRun_StaticArrayOfPChar_ElementPreservesAllBits;
   end;
 
 implementation
@@ -70,6 +71,35 @@ const
         WriteLn('nil')
       else
         WriteLn('not nil')
+    end.
+    ''';
+
+  { Regression: assigning a PChar value to Arr[I] of a static
+    array-of-PChar used to emit storew (32-bit) instead of storel,
+    truncating the heap pointer's high 32 bits to zero. }
+  SrcStaticArrayPChar = '''
+    program P;
+    procedure Print(P: PChar);
+    begin
+      WriteLn(string(P))
+    end;
+    var
+      Arr: array[0..1] of PChar;
+      A, B: PChar;
+      I: Integer;
+    begin
+      A := GetMem(3);
+      for I := 0 to 1 do A[I] := Chr(72 + I);
+      A[2] := Chr(0);
+      B := GetMem(3);
+      for I := 0 to 1 do B[I] := Chr(89 + I);
+      B[2] := Chr(0);
+      Arr[0] := A;
+      Arr[1] := B;
+      Print(Arr[0]);
+      Print(Arr[1]);
+      FreeMem(A);
+      FreeMem(B)
     end.
     ''';
 
@@ -124,6 +154,16 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcPCharSubscriptChr, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ABCD', 'ABCD' + LE, Output);
+end;
+
+procedure TE2EPointersTests.TestRun_StaticArrayOfPChar_ElementPreservesAllBits;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStaticArrayPChar, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('two PChar values round-tripped through static array',
+    'HI' + LE + 'YZ' + LE, Output);
 end;
 
 initialization

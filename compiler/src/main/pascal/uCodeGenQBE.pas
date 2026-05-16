@@ -1521,7 +1521,7 @@ begin
             EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyInt64:
           EmitLine(Format('export data $%s = { l 0 }', [VarName]));
-        tyString, tyClass, tyPointer, tyMetaClass:
+        tyString, tyClass, tyPointer, tyPChar, tyMetaClass:
           EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyProcedural:
           if TProceduralTypeDesc(Decl.ResolvedType).IsMethodPtr then
@@ -8973,7 +8973,7 @@ begin
     case SAT.ElementType.Kind of
       tyByte, tyBoolean: QLoad := 'loadub';
       tyInteger, tyUInt32, tyEnum: QLoad := 'loadw';
-      tyInt64, tyString, tyClass, tyPointer, tyMetaClass: QLoad := 'loadl';
+      tyInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: QLoad := 'loadl';
     else
       QLoad := 'loadl';
     end;
@@ -8991,7 +8991,7 @@ begin
     ElemSize := ElemType.ElementType.ByteSize;
     case ElemType.ElementType.Kind of
       tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum: QLoad := 'loadw';
-      tyInt64, tyString, tyClass, tyPointer, tyMetaClass: QLoad := 'loadl';
+      tyInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: QLoad := 'loadl';
     else
       QLoad := 'loadl';
     end;
@@ -9017,7 +9017,7 @@ begin
     case TDynArrayTypeDesc(AExpr.StrExpr.ResolvedType).ElementType.Kind of
       tyByte, tyBoolean:   QLoad := 'loadub';
       tyInteger, tyUInt32, tyEnum: QLoad := 'loadw';
-      tyInt64, tyString, tyClass, tyPointer, tyMetaClass: QLoad := 'loadl';
+      tyInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: QLoad := 'loadl';
     else
       QLoad := 'loadl';
     end;
@@ -9303,7 +9303,7 @@ begin
   case ElemType.Kind of
     tyByte, tyBoolean: StoreInstr := 'storeb';
     tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
-    tyInt64, tyString, tyClass, tyPointer, tyMetaClass: StoreInstr := 'storel';
+    tyInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: StoreInstr := 'storel';
   else
     StoreInstr := 'storew';
   end;
@@ -9365,7 +9365,7 @@ begin
   TotalBytes := AExpr.Elements.Count * ElemSize;
   if TotalBytes < 1 then TotalBytes := 1;
   case ElemType.Kind of
-    tyString, tyClass, tyPointer, tyInt64, tyMetaClass:
+    tyString, tyClass, tyPointer, tyPChar, tyInt64, tyMetaClass:
     begin
       AllocInstr := 'alloc8';
       StoreInstr := 'storel';
