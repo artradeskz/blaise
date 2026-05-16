@@ -18,8 +18,11 @@ Run procedure
 -------------
   1. cd runtime && make && make install && cd ..
   2. Recompile both benchmark programs against the fresh RTL:
-       compiler/target/blaise --source runtime/src/test/pascal/bench_blaise_mem.pas        ...
-       compiler/target/blaise --source runtime/src/test/pascal/bench_blaise_mem_custom.pas ...
+       compiler/target/blaise --source runtime/src/test/pascal/bench_libc_malloc.pas         ...
+       compiler/target/blaise --source runtime/src/test/pascal/bench_blaise_mem_custom.pas  ...
+     bench_blaise_mem.pas uses the GetMem builtin and post-cutover
+     measures blaise_mem (same as bench_blaise_mem_custom.pas).  Use
+     bench_libc_malloc.pas for the libc baseline.
   3. Run each binary three times; record the median.
   4. Keep the same workload constants in both programs:
        SMALL_COUNT   = 1 000 000   x 32 B
@@ -44,6 +47,52 @@ Workload columns
 
 All values in milliseconds.  Ratio = blaise_mem / malloc per
 workload; "—" when malloc baseline is 0 ms.
+
+================================================================
+2026-05-16 — commit d7e9caa — full cutover to blaise_mem
+================================================================
+
+  Workload | malloc | blaise_mem | ratio
+  ---------+--------+------------+--------
+     S     |   8    |      7     |  0.88x
+     M     |   5    |      4     |  0.80x
+     R     |   5    |      8     |  1.60x
+     L     |   0    |      0     |   —
+     H     |   5    |      4     |  0.80x
+
+  Notes:
+    The compiler RTL, codegen builtins, and all C runtime files now
+    route allocations through _BlaiseGetMem / _BlaiseFreeMem /
+    _BlaiseReallocMem.  libc malloc is no longer used for Blaise
+    strings, class instances, dynamic arrays, or explicit GetMem.
+
+    Median of three runs each.
+
+    blaise_mem now beats libc on three workloads (S, M, H).  The
+    R workload (1.6x) remains the only gap.  glibc memcpy uses SSE
+    moves for the 16->32->64->128->256 byte realloc chain; closing
+    that needs in-place arena-tail growth with a memcpy fast path
+    in the Blaise allocator.
+
+    Real-world compile workload (Blaise test suite, 1934 tests):
+      Pre-cutover (commit b815793):  ~87-89 s
+      Post-cutover (commit d7e9caa): ~80 s   (~10% faster)
+
+    The compile-time win exceeds the microbench gap on R because
+    real compilation is dominated by short-lived small allocations
+    (string ARC, parser AST nodes), where blaise_mem's freelist
+    pop/push beats glibc tcache's bookkeeping.
+
+    A third bench source was added: bench_libc_malloc.pas, which
+    uses explicit external 'malloc'/'free'/'realloc' bindings so the
+    libc baseline can still be measured post-cutover.
+
+    Fixpoint clean (stage-3 == stage-4, achieved at stage-3).
+
+    Diagnostic _StringReleaseCheck (commit a2c55be) catches header
+    corruption in _StringRelease before the wild segfault.  Not
+    triggered during the cutover test run; left in for future
+    heap-mismatch debugging.
 
 ================================================================
 2026-05-16 — commit 13bfbd3 — inlining phase 2
