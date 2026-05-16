@@ -46,6 +46,40 @@ All values in milliseconds.  Ratio = blaise_mem / malloc per
 workload; "—" when malloc baseline is 0 ms.
 
 ================================================================
+2026-05-16 — commit 13bfbd3 — inlining phase 2
+================================================================
+
+  Workload | malloc | blaise_mem | ratio
+  ---------+--------+------------+--------
+     S     |   7    |      8     |  1.1x
+     M     |   5    |      4     |  0.8x
+     R     |   5    |      8     |  1.6x
+     L     |   0    |      0     |   —
+     H     |   5    |      4-5   |  0.9x
+
+  Notes:
+    Phase 2 of the inliner: case statements and larger bodies (cap
+    raised from 8 to 24 statements) are now eligible.  This unlocks
+    inlining of SizeClassIndex (8 if/then/else chain) and
+    SizeClassBytes (case statement), both used by every call to
+    _BlaiseGetMem, _BlaiseFreeMem, and RoundUpToClass.
+
+    Median of three runs each.
+
+    Movement since c16249a (phase 1 inlining):
+      S: 9    -> 8   ms  (-11%)
+      M: 5    -> 4   ms  (-20%)
+      R: 10-11-> 8   ms  (-20-27%)   <-- headline target
+      L: 0    -> 0   ms  (unchanged)
+      H: 5    -> 4-5 ms  (small win)
+
+    R workload now within 1.6x of malloc (was 2.1x).  The remaining
+    gap is in glibc memcpy SSE moves vs Blaise's per-byte fallback
+    when realloc crosses size classes.
+
+    Fixpoint clean (stage-2 IR == stage-3 IR).
+
+================================================================
 2026-05-16 — commit c16249a + bootstrap binary refreshed
 ================================================================
 
