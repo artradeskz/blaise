@@ -24,6 +24,7 @@ type
     procedure TestRun_Pointer_GetMem_WriteRead_FreeMem;
     procedure TestRun_Pointer_TypedPointer_Deref;
     procedure TestRun_Pointer_NilCheck;
+    procedure TestRun_PCharSubscript_ChrAssignment;
   end;
 
 implementation
@@ -72,6 +73,23 @@ const
     end.
     ''';
 
+  { Regression: P[I] := Chr(N) previously stored the low byte of the
+    _Chr-allocated string pointer (garbage) instead of N itself. }
+  SrcPCharSubscriptChr = '''
+    program P;
+    var
+      P1: PChar;
+      I:  Integer;
+    begin
+      P1 := GetMem(5);
+      for I := 0 to 3 do
+        P1[I] := Chr(65 + I);
+      P1[4] := Chr(0);
+      WriteLn(string(P1));
+      FreeMem(P1)
+    end.
+    ''';
+
 procedure TE2EPointersTests.TestRun_Pointer_GetMem_WriteRead_FreeMem;
 var Output: string; RCode: Integer;
 begin
@@ -97,6 +115,15 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcPointerNilCheck, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nil', 'nil' + LE, Output);
+end;
+
+procedure TE2EPointersTests.TestRun_PCharSubscript_ChrAssignment;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcPCharSubscriptChr, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('ABCD', 'ABCD' + LE, Output);
 end;
 
 initialization

@@ -38,6 +38,7 @@ type
     procedure TestCodegen_PChar_EmitsAddOffset;
     procedure TestCodegen_PChar_AllocEmitted;
     procedure TestCodegen_String_EmitsRTLCall;
+    procedure TestCodegen_PCharSubscript_ChrByteShortCircuit;
   end;
 
 implementation
@@ -172,6 +173,29 @@ var IR: string;
 begin
   IR := GenIR(SrcStringCast);
   AssertTrue('_StringFromPChar called', Pos('$_StringFromPChar', IR) > 0);
+end;
+
+{ Regression test for: P[I] := Chr(N) used to emit a call to $_Chr (which
+  returns a heap string pointer) and then storeb of the pointer's low byte,
+  yielding garbage.  The fix short-circuits Chr(N) in byte-store context. }
+procedure TPCharTests.TestCodegen_PCharSubscript_ChrByteShortCircuit;
+const
+  Src =
+    '''
+      program PCC;
+      var p: PChar;
+      begin
+        p := GetMem(4);
+        p[0] := Chr(65);
+        FreeMem(p)
+      end.
+      ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('storeb is emitted for p[0] write', Pos('storeb', IR) >= 0);
+  AssertEquals('Chr(65) byte-store must not call $_Chr',
+    -1, Pos('call $_Chr(', IR));
 end;
 
 initialization

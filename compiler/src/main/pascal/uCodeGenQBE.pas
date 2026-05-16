@@ -84,6 +84,7 @@ type
     function  AllocTemp: string;
     function  AllocLabel(const APrefix: string): string;
     function  CoerceArg(const AArgTemp: string; AArgExpr: TASTExpr; const AParamQType: string): string;
+    function  EmitByteRhs(AExpr: TASTExpr): string;
     function  EmitStrLit(const AValue: string): string;
     { Emit a class-name string literal as a data-section label expression.
       Returns '$__cn_ClassName + 12' which can be embedded in another data item. }
@@ -434,6 +435,30 @@ begin
       Exit;
     Result := ExtTemp;
   end;
+end;
+
+{ Emit the RHS of a byte-store (storeb) as a w-typed value.
+
+  When the RHS is Chr(N), we must NOT lower it via the normal _Chr call,
+  because Chr returns a heap string Pointer (tyString) and a downstream
+  storeb would silently truncate to the low byte of that pointer — the
+  source of the historical "P[I] := Chr(N)" garbage bug.  Instead, emit
+  the argument N directly as a w temp.  Callers consume the result with
+  a storeb / byte-typed store. }
+function TCodeGenQBE.EmitByteRhs(AExpr: TASTExpr): string;
+var
+  FC: TFuncCallExpr;
+begin
+  if (AExpr is TFuncCallExpr) then
+  begin
+    FC := TFuncCallExpr(AExpr);
+    if SameText(FC.Name, 'Chr') and (FC.Args.Count = 1) then
+    begin
+      Result := EmitExpr(TASTExpr(FC.Args.Items[0]));
+      Exit;
+    end;
+  end;
+  Result := EmitExpr(AExpr);
 end;
 
 function TCodeGenQBE.EmitStrLit(const AValue: string): string;
@@ -5542,7 +5567,10 @@ begin
     EmitLine(Format('  storel %s, %s', [ValTemp, PtrTemp]));
     Exit;
   end;
-  ValTemp := EmitExpr(AStmt.ValExpr);
+  if (AStmt.BaseTy <> nil) and (AStmt.BaseTy.Kind in [tyByte, tyBoolean]) then
+    ValTemp := EmitByteRhs(AStmt.ValExpr)
+  else
+    ValTemp := EmitExpr(AStmt.ValExpr);
   QType   := QbeTypeOf(AStmt.BaseTy);
   { Byte/Boolean stores must use storeb — storew would write four
     bytes and clobber three adjacent bytes.  Symmetric with the
@@ -9177,13 +9205,15 @@ var
   ElemVal:    string;
   PCharBase:  string;
 begin
-  { PChar subscript write: P[I] := Integer — storeb at ptr + I }
+  { PChar subscript write: P[I] := Integer — storeb at ptr + I.
+    EmitByteRhs short-circuits Chr(N) so we store N directly instead of
+    truncating the low byte of a _Chr-allocated string pointer. }
   if AStmt.ResolvedArrayType.Kind = tyPChar then
   begin
     IdxW     := EmitExpr(AStmt.IndexExpr);
     IdxL     := AllocTemp;
     ElemPtr  := AllocTemp;
-    ElemVal  := EmitExpr(AStmt.ValueExpr);
+    ElemVal  := EmitByteRhs(AStmt.ValueExpr);
     PCharBase := AllocTemp;
     if AStmt.IsGlobal then
       EmitLine(Format('  %s =l loadl $%s', [PCharBase, AStmt.ArrayName]))
@@ -9213,7 +9243,10 @@ begin
     IdxL    := AllocTemp;
     Offset  := AllocTemp;
     ElemPtr := AllocTemp;
-    ElemVal := EmitExpr(AStmt.ValueExpr);
+    if ElemType.Kind in [tyByte, tyBoolean] then
+      ElemVal := EmitByteRhs(AStmt.ValueExpr)
+    else
+      ElemVal := EmitExpr(AStmt.ValueExpr);
     EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
     EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, Offset]));
@@ -9263,7 +9296,10 @@ begin
     EmitRecordCopy(TRecordTypeDesc(ElemType), ElemPtr, ElemVal);
     Exit;
   end;
-  ElemVal := EmitExpr(AStmt.ValueExpr);
+  if ElemType.Kind in [tyByte, tyBoolean] then
+    ElemVal := EmitByteRhs(AStmt.ValueExpr)
+  else
+    ElemVal := EmitExpr(AStmt.ValueExpr);
   case ElemType.Kind of
     tyByte, tyBoolean: StoreInstr := 'storeb';
     tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
