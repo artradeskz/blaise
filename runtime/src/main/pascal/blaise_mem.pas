@@ -9,25 +9,30 @@
 {
   blaise_mem — Pascal memory allocator for the Blaise runtime.
 
-  Replaces libc malloc/free/realloc with a simple allocator backed by
-  POSIX mmap/munmap.  Self-contained: no dependency on strings, ARC,
-  or any stdlib unit.
+  Replaces libc malloc/free/realloc with an allocator backed by POSIX
+  mmap/munmap.  Self-contained: no dependency on strings, ARC, or
+  any stdlib unit.
 
   Design:
 
   Small allocations (up to LARGE_THRESHOLD bytes):
-    Served from arenas (64 KB pages obtained via mmap).  Each allocation
-    has an 8-byte header storing the usable size.  Freed blocks go onto
-    a per-size-class freelist for O(1) reuse.  Size classes are powers
-    of two from 16 to LARGE_THRESHOLD.
+    Served from 64 KB arenas obtained via mmap.  Each allocation has
+    an 8-byte header storing the usable size.  Freed blocks go onto a
+    per-size-class freelist for O(1) reuse.  Size classes are powers
+    of two: 16, 32, 64, 128, 256, 512, 1024, 2048.
+
+    Only the head arena is used for bump allocation.  When it fills,
+    a new arena is allocated and becomes the head.  No arena-list walk.
 
   Large allocations (above LARGE_THRESHOLD):
-    Each gets its own mmap region with a 16-byte header (size + padding
-    for alignment).  munmap releases the entire region.
+    Each gets its own mmap region with a 16-byte header.  Freed large
+    blocks are cached on a LIFO freelist for O(1) reuse.  The cache
+    holds up to LARGE_CACHE_MAX entries; excess blocks are munmap-ed
+    immediately.  Large reallocs use Linux mremap to resize in-place
+    without copying.  All mmap sizes are rounded up to page granularity
+    (4 KB) for better cache hit rates.
 
-  All returned pointers are 8-byte aligned (guaranteed by the 8-byte
-  header on 8-byte-aligned arena blocks, and by mmap page alignment
-  for large blocks).
+  All returned pointers are 8-byte aligned.
 }
 
 unit blaise_mem;
@@ -42,11 +47,12 @@ function  _BlaiseReallocMem(Ptr: Pointer; NewSize: Integer): Pointer;
 
 implementation
 
-{ POSIX libc bindings — mmap/munmap for page-level allocation }
 function  _libc_mmap(Addr: Pointer; Length: Int64; Prot, Flags, Fd: Integer;
             Offset: Int64): Pointer; external name 'mmap';
 function  _libc_munmap(Addr: Pointer; Length: Int64): Integer;
             external name 'munmap';
+function  _libc_mremap(OldAddr: Pointer; OldSize, NewSize: Int64;
+            Flags: Integer): Pointer; external name 'mremap';
 procedure _libc_memcpy(Dst, Src: Pointer; N: Int64); external name 'memcpy';
 
 const
@@ -55,13 +61,14 @@ const
   MAP_PRIVATE     = 2;
   MAP_ANONYMOUS   = 32;
   MAP_FAILED_VAL  = -1;
+  MREMAP_MAYMOVE  = 1;
 
+  PAGE_SIZE       = 4096;
   ARENA_SIZE      = 65536;
   LARGE_THRESHOLD = 2048;
   HEADER_SIZE     = 8;
   LARGE_HEADER    = 16;
-  NUM_SIZE_CLASSES = 8;
-  MIN_CLASS_SIZE  = 16;
+  LARGE_CACHE_MAX = 32;
 
 type
   PBlockHeader = ^TBlockHeader;
@@ -73,12 +80,19 @@ type
   PLargeHeader = ^TLargeHeader;
   TLargeHeader = record
     TotalMapped: Int64;
-    AllocSize:   Int64;
+    AllocSize:   Integer;
+    Flags:       Integer;
   end;
 
   PFreeNode = ^TFreeNode;
   TFreeNode = record
     Next: PFreeNode;
+  end;
+
+  PLargeFreeNode = ^TLargeFreeNode;
+  TLargeFreeNode = record
+    Next:        PLargeFreeNode;
+    TotalMapped: Int64;
   end;
 
   PArena = ^TArena;
@@ -96,14 +110,22 @@ const
 var
   FreeLists: array[0..7] of PFreeNode;
   ArenaHead: PArena;
+  LargeFreeHead: PLargeFreeNode;
+  LargeFreeCount: Integer;
 
 function MapFailed(P: Pointer): Boolean;
 begin
   Result := (P = nil) or (PtrUInt(P) = PtrUInt(MAP_FAILED_VAL));
 end;
 
+function PageRound(Size: Int64): Int64;
+begin
+  Result := (Size + Int64(PAGE_SIZE - 1)) and Int64($FFFFFFFFFFFFF000);
+end;
+
 function MmapAlloc(Size: Int64): Pointer;
 begin
+  Size := PageRound(Size);
   Result := _libc_mmap(nil, Size,
     PROT_READ or PROT_WRITE,
     MAP_PRIVATE or MAP_ANONYMOUS,
@@ -113,26 +135,30 @@ begin
 end;
 
 function SizeClassIndex(Size: Integer): Integer;
-var
-  S: Integer;
 begin
-  S := MIN_CLASS_SIZE;
-  Result := 0;
-  while (S < Size) and (Result < NUM_SIZE_CLASSES - 1) do
-  begin
-    S := S * 2;
-    Inc(Result);
-  end;
+  if Size <= 16 then begin Result := 0; Exit end;
+  if Size <= 32 then begin Result := 1; Exit end;
+  if Size <= 64 then begin Result := 2; Exit end;
+  if Size <= 128 then begin Result := 3; Exit end;
+  if Size <= 256 then begin Result := 4; Exit end;
+  if Size <= 512 then begin Result := 5; Exit end;
+  if Size <= 1024 then begin Result := 6; Exit end;
+  Result := 7;
 end;
 
 function SizeClassBytes(Index: Integer): Integer;
-var
-  S, I: Integer;
 begin
-  S := MIN_CLASS_SIZE;
-  for I := 1 to Index do
-    S := S * 2;
-  Result := S;
+  case Index of
+    0: Result := 16;
+    1: Result := 32;
+    2: Result := 64;
+    3: Result := 128;
+    4: Result := 256;
+    5: Result := 512;
+    6: Result := 1024;
+  else
+    Result := 2048;
+  end;
 end;
 
 function RoundUpToClass(Size: Integer): Integer;
@@ -160,11 +186,6 @@ begin
   Result := A;
 end;
 
-function AlignUp8(V: Integer): Integer;
-begin
-  Result := (V + 7) and $FFFFFFF8;
-end;
-
 function ArenaAlloc(Size: Integer): Pointer;
 var
   A: PArena;
@@ -175,18 +196,14 @@ begin
   Needed := HEADER_SIZE + BlockSize;
 
   A := ArenaHead;
-  while A <> nil do
+  if (A <> nil) and (A^.Offset + Needed <= A^.Capacity) then
   begin
-    if A^.Offset + Needed <= A^.Capacity then
-    begin
-      Hdr := Pointer(PtrUInt(A^.Base) + PtrUInt(A^.Offset));
-      Hdr^.AllocSize := Size;
-      Hdr^.Flags := FLAG_SMALL;
-      A^.Offset := A^.Offset + Needed;
-      Result := Pointer(PtrUInt(Hdr) + HEADER_SIZE);
-      Exit;
-    end;
-    A := A^.Next;
+    Hdr := Pointer(PtrUInt(A^.Base) + PtrUInt(A^.Offset));
+    Hdr^.AllocSize := Size;
+    Hdr^.Flags := FLAG_SMALL;
+    A^.Offset := A^.Offset + Needed;
+    Result := Pointer(PtrUInt(Hdr) + HEADER_SIZE);
+    Exit;
   end;
 
   A := AllocArena;
@@ -227,12 +244,10 @@ procedure SmallFreeMem(Ptr: Pointer);
 var
   Hdr: PBlockHeader;
   Idx: Integer;
-  ClassSize: Integer;
   Node: PFreeNode;
 begin
   Hdr := PBlockHeader(Pointer(PtrUInt(Ptr) - HEADER_SIZE));
-  ClassSize := RoundUpToClass(Hdr^.AllocSize);
-  Idx := SizeClassIndex(ClassSize);
+  Idx := SizeClassIndex(Hdr^.AllocSize);
   Node := PFreeNode(Ptr);
   Node^.Next := FreeLists[Idx];
   FreeLists[Idx] := Node;
@@ -243,8 +258,40 @@ var
   Total: Int64;
   Base: Pointer;
   Hdr: PLargeHeader;
+  Node: PLargeFreeNode;
+  Needed, CachedSize: Int64;
 begin
-  Total := Int64(LARGE_HEADER) + Int64(Size);
+  Needed := PageRound(Int64(LARGE_HEADER) + Int64(Size));
+
+  Node := LargeFreeHead;
+  if Node <> nil then
+  begin
+    CachedSize := Node^.TotalMapped;
+    LargeFreeHead := Node^.Next;
+    Dec(LargeFreeCount);
+    if CachedSize >= Needed then
+    begin
+      Hdr := PLargeHeader(Pointer(Node));
+      Hdr^.TotalMapped := CachedSize;
+      Hdr^.AllocSize := Size;
+      Hdr^.Flags := FLAG_LARGE;
+      Result := Pointer(PtrUInt(Hdr) + LARGE_HEADER);
+      Exit;
+    end;
+    Base := _libc_mremap(Pointer(Node), CachedSize, Needed, MREMAP_MAYMOVE);
+    if not MapFailed(Base) then
+    begin
+      Hdr := PLargeHeader(Base);
+      Hdr^.TotalMapped := Needed;
+      Hdr^.AllocSize := Size;
+      Hdr^.Flags := FLAG_LARGE;
+      Result := Pointer(PtrUInt(Base) + LARGE_HEADER);
+      Exit;
+    end;
+    _libc_munmap(Pointer(Node), CachedSize);
+  end;
+
+  Total := Needed;
   Base := MmapAlloc(Total);
   if Base = nil then
   begin
@@ -253,16 +300,27 @@ begin
   end;
   Hdr := PLargeHeader(Base);
   Hdr^.TotalMapped := Total;
-  Hdr^.AllocSize := Int64(Size);
+  Hdr^.AllocSize := Size;
+  Hdr^.Flags := FLAG_LARGE;
   Result := Pointer(PtrUInt(Base) + LARGE_HEADER);
 end;
 
 procedure LargeFreeMem(Ptr: Pointer);
 var
   Hdr: PLargeHeader;
+  Node: PLargeFreeNode;
 begin
   Hdr := PLargeHeader(Pointer(PtrUInt(Ptr) - LARGE_HEADER));
-  _libc_munmap(Pointer(Hdr), Hdr^.TotalMapped);
+  if LargeFreeCount < LARGE_CACHE_MAX then
+  begin
+    Node := PLargeFreeNode(Pointer(Hdr));
+    Node^.TotalMapped := Hdr^.TotalMapped;
+    Node^.Next := LargeFreeHead;
+    LargeFreeHead := Node;
+    Inc(LargeFreeCount);
+  end
+  else
+    _libc_munmap(Pointer(Hdr), Hdr^.TotalMapped);
 end;
 
 function IsLarge(Ptr: Pointer): Boolean;
@@ -282,7 +340,7 @@ begin
   if SmallHdr^.Flags = FLAG_LARGE then
   begin
     LargeHdr := PLargeHeader(Pointer(PtrUInt(Ptr) - LARGE_HEADER));
-    Result := Integer(LargeHdr^.AllocSize);
+    Result := LargeHdr^.AllocSize;
   end
   else
     Result := SmallHdr^.AllocSize;
@@ -318,6 +376,9 @@ function _BlaiseReallocMem(Ptr: Pointer; NewSize: Integer): Pointer;
 var
   OldSize, CopySize: Integer;
   Hdr: PBlockHeader;
+  LHdr: PLargeHeader;
+  Base, NewBase: Pointer;
+  OldMapped, NewMapped: Int64;
 begin
   if Ptr = nil then
   begin
@@ -341,6 +402,29 @@ begin
       Exit;
     end;
   end;
+  if IsLarge(Ptr) and (NewSize > LARGE_THRESHOLD) then
+  begin
+    LHdr := PLargeHeader(Pointer(PtrUInt(Ptr) - LARGE_HEADER));
+    OldMapped := LHdr^.TotalMapped;
+    NewMapped := PageRound(Int64(LARGE_HEADER) + Int64(NewSize));
+    if NewMapped = OldMapped then
+    begin
+      LHdr^.AllocSize := NewSize;
+      Result := Ptr;
+      Exit;
+    end;
+    Base := Pointer(LHdr);
+    NewBase := _libc_mremap(Base, OldMapped, NewMapped, MREMAP_MAYMOVE);
+    if not MapFailed(NewBase) then
+    begin
+      LHdr := PLargeHeader(NewBase);
+      LHdr^.TotalMapped := NewMapped;
+      LHdr^.AllocSize := NewSize;
+      LHdr^.Flags := FLAG_LARGE;
+      Result := Pointer(PtrUInt(NewBase) + LARGE_HEADER);
+      Exit;
+    end;
+  end;
   Result := _BlaiseGetMem(NewSize);
   if Result = nil then Exit;
   if OldSize < NewSize then
@@ -353,5 +437,7 @@ end;
 
 initialization
   ArenaHead := nil;
+  LargeFreeHead := nil;
+  LargeFreeCount := 0;
 
 end.

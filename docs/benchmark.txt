@@ -1,0 +1,112 @@
+================================================================
+blaise_mem allocator — benchmark log
+================================================================
+
+Tracks performance of the Pascal memory allocator
+(runtime/src/main/pascal/blaise_mem.pas) over time.  One entry per
+measurement session.  Each entry records:
+
+  - Date
+  - Git revision and short commit message describing the state
+  - Host environment (CPU, kernel, gcc) when it changes
+  - Two columns: libc malloc baseline vs blaise_mem
+  - Ratio (blaise_mem / malloc) — lower is better; <1.0 means we
+    beat malloc
+  - Notes describing what changed since the last entry
+
+Run procedure
+-------------
+  1. cd runtime && make && make install && cd ..
+  2. Recompile both benchmark programs against the fresh RTL:
+       compiler/target/blaise --source runtime/src/test/pascal/bench_blaise_mem.pas        ...
+       compiler/target/blaise --source runtime/src/test/pascal/bench_blaise_mem_custom.pas ...
+  3. Run each binary three times; record the median.
+  4. Keep the same workload constants in both programs:
+       SMALL_COUNT   = 1 000 000   x 32 B
+       MIXED_COUNT   =   500 000   x 8/32/128/512/2048 B
+       REALLOC_COUNT =   100 000   x 5 grow steps
+       LARGE_COUNT   =    10 000   x 65 536 B
+       RETAIN_COUNT  =   100 000   x 64 B then bulk-free
+
+Host environment
+----------------
+  CPU      : AMD Ryzen 7 5800X 8-Core (x86_64)
+  Kernel   : Linux 6.14.0-37-generic
+  Toolchain: gcc 13.3.0, QBE 1.2
+
+Workload columns
+----------------
+  S = Small alloc/free   (1M x 32 B)
+  M = Mixed sizes        (500k x 8-2048 B)
+  R = Realloc growth     (100k x 5 steps)
+  L = Large alloc/free   (10k x 64 KB)
+  H = Retain + free-all  (100k x 64 B)
+
+All values in milliseconds.  Ratio = blaise_mem / malloc per
+workload; "—" when malloc baseline is 0 ms.
+
+================================================================
+2026-05-16 — commit b1cb9d0 + IsLarge() fix (uncommitted)
+================================================================
+
+  Workload | malloc | blaise_mem | ratio
+  ---------+--------+------------+--------
+     S     |   7    |     10     |  1.4x
+     M     |   5    |      9     |  1.8x
+     R     |   5    |     20     |  4.0x
+     L     |   0    |      0     |   —
+     H     |   5    |      5     |  1.0x
+
+  Notes:
+    First entry on the new tracking format.  Captures the state
+    immediately after fixing the LIFO-cache bug in LargeGetMem /
+    LargeFreeMem.
+
+    Bug fixed: IsLarge() was reading the small-header Flags field
+    at offset Ptr-4, but TLargeHeader laid its AllocSize: Int64
+    across Ptr-8..Ptr-1, so the Flags slot overlapped with the
+    high half of AllocSize and was always zero.  Every large free
+    therefore went through the small-block path and never
+    populated the LIFO cache, forcing a fresh mmap on every large
+    alloc (~32 ms for 10k x 64 KB).
+
+    Fix: restructured TLargeHeader to
+      TotalMapped: Int64    (Ptr-16..Ptr-9)
+      AllocSize:   Integer  (Ptr-8..Ptr-5)
+      Flags:       Integer  (Ptr-4..Ptr-1)
+    LargeGetMem now writes Flags := FLAG_LARGE.  IsLarge() reads
+    the correct value, free routes through LargeFreeMem, and the
+    cache reaches ~100 % hit rate on the L workload.
+
+    Result:
+      L workload: 32 ms → 0 ms (matches malloc)
+      Cache stats (10 000 calls): 9 999 hits, 1 mmap.
+
+    Open gaps (next targets):
+      R workload (4.0x malloc) — realloc still falls back to
+        copy on small-block size-class boundaries.  Investigate
+        in-place small-block growth when the next size class
+        still fits the same arena slot.
+      M workload (1.8x malloc) — extra header bookkeeping per
+        small alloc.  Possible win: drop per-block AllocSize when
+        the size class already encodes it.
+      S workload (1.4x malloc) — freelist push/pop overhead vs
+        glibc tcache.  Likely needs per-thread caching long term.
+
+================================================================
+2026-05-16 — commit b1cb9d0 (pre-fix baseline, for reference)
+================================================================
+
+  Workload | malloc | blaise_mem | ratio
+  ---------+--------+------------+--------
+     S     |   7    |     14     |  2.0x
+     M     |   5    |      8     |  1.6x
+     R     |   5    |     13     |  2.6x
+     L     |   0    |     33     |   —  (cache broken)
+     H     |   5    |      5     |  1.0x
+
+  Notes:
+    Initial Pascal-allocator measurement after introducing
+    blaise_mem.  LIFO cache for large allocations was wired up in
+    code but silently broken (see 2026-05-16 fix above).  Kept
+    here so the impact of the fix is visible in the log.
