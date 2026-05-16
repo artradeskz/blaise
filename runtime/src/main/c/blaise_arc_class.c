@@ -57,6 +57,39 @@ void _ClassRelease(void* user_ptr) {
     }
 }
 
+/* Diagnostic helper called from _StringRelease before freeing a string.
+   Verifies the header looks sane.  On failure, prints a clear message
+   to stderr and aborts so the bug is obvious instead of a wild segfault
+   inside libc or blaise_mem.  Compiled-in but cheap when called only on
+   the free path. */
+void _StringReleaseCheck(void* data_ptr, int32_t refcnt,
+                         int32_t length, int32_t capacity) {
+    /* refcnt sanity: must be non-negative when reached here (caller
+       already filtered IMMORTAL = -1).  Negative = double-free. */
+    if (refcnt < -1) {
+        fprintf(stderr,
+            "blaise: _StringRelease saw a string with refcount = %d "
+            "(double-free?) at data_ptr=%p\n", refcnt, data_ptr);
+        abort();
+    }
+    /* length sanity: 0 .. 1 GiB.  Anything beyond is almost certainly
+       a corrupted header (ASCII bytes in the length slot, etc). */
+    if (length < 0 || length > (1 << 30)) {
+        fprintf(stderr,
+            "blaise: _StringRelease saw length=%d at data_ptr=%p "
+            "(corrupted header)\n", length, data_ptr);
+        abort();
+    }
+    /* capacity must be at least length and not crazy. */
+    if (capacity < length || capacity > (1 << 30)) {
+        fprintf(stderr,
+            "blaise: _StringRelease saw capacity=%d (length=%d) at "
+            "data_ptr=%p (corrupted header)\n",
+            capacity, length, data_ptr);
+        abort();
+    }
+}
+
 /* Abstract-method tombstone.
  *
  * The compiler emits references to this symbol in two places:

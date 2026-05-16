@@ -64,6 +64,12 @@ procedure _libc_free(Ptr: Pointer);                        external name 'free';
 procedure _libc_memcpy(Dst, Src: Pointer; N: Int64);       external name 'memcpy';
 function  _libc_memcmp(P1, P2: Pointer; N: Int64): Integer; external name 'memcmp';
 
+{ Diagnostic check: verifies the string header looks sane before
+  we treat refcount==0 as a free signal.  Aborts with stderr message
+  on corruption. }
+procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
+  external name '_StringReleaseCheck';
+
 procedure MemCopy(Dst, Src: Pointer; N: Integer);
 begin
   if N > 0 then
@@ -95,12 +101,18 @@ end;
 procedure _StringRelease(Ptr: Pointer);
 var
   Base: Pointer;
-  RC:   ^Integer;
+  RC, LN, CP: ^Integer;
 begin
   if Ptr = nil then Exit;
   Base := Ptr - HDR_SIZE;  { header base = data_ptr − 12 }
   RC   := Base;
   if RC^ = IMMORTAL then Exit;
+  { Sanity-check the header before decrement.  Catches double-free,
+    use-after-free, and write-past-end corruption with a clear message
+    instead of a wild segfault later. }
+  LN := Base + 4;
+  CP := Base + 8;
+  _StringReleaseCheck(Ptr, RC^, LN^, CP^);
   RC^ := RC^ - 1;
   if RC^ = 0 then _libc_free(Base);
 end;
