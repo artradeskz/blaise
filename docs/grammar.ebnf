@@ -23,7 +23,49 @@
  * ═══════════════════════════════════════════════════════════════════════════ *)
 
 (* Literals *)
-INT_LIT       = digit { digit } ;
+(*
+ * Integer literals support four bases.  Underscore separators may appear
+ * between digits (never at the start or end of the digit run, and never
+ * immediately after the base prefix).
+ *
+ *   dec_digit   ::= "0" .. "9"
+ *   hex_digit   ::= "0" .. "9" | "A" .. "F" | "a" .. "f"
+ *   oct_digit   ::= "0" .. "7"
+ *   bin_digit   ::= "0" | "1"
+ *
+ *   digit_seq(d) ::= d { [ "_" ] d }
+ *      (underscore may appear between two digits of kind d, but not
+ *       before the first digit or after the last)
+ *
+ * INT_LIT is one of:
+ *   decimal  :  digit_seq(dec_digit)
+ *   hex      :  "$"  digit_seq(hex_digit)
+ *   octal    :  "&"  digit_seq(oct_digit)
+ *   binary   :  "%"  digit_seq(bin_digit)
+ *
+ * FLOAT_LIT is a decimal-only form (no base prefix):
+ *   digit_seq(dec_digit) "." digit_seq(dec_digit)
+ *       [ ( "e" | "E" ) [ "+" | "-" ] digit_seq(dec_digit) ]
+ *
+ * Underscores are also permitted between digits in the fractional and
+ * exponent parts of FLOAT_LIT, subject to the same adjacency rules.
+ * Underscores may not appear adjacent to the decimal point or the
+ * "e"/"E" exponent marker.
+ *)
+INT_LIT
+    = dec_digit { [ "_" ] dec_digit }
+    | "$" hex_digit { [ "_" ] hex_digit }
+    | "&" oct_digit { [ "_" ] oct_digit }
+    | "%" bin_digit { [ "_" ] bin_digit }
+    ;
+
+FLOAT_LIT
+    = dec_digit { [ "_" ] dec_digit }
+      "."
+      dec_digit { [ "_" ] dec_digit }
+      [ ( "e" | "E" ) [ "+" | "-" ] dec_digit { [ "_" ] dec_digit } ]
+    ;
+
 STRING_LIT    = "'" { char | "''" } "'" ;
 TEXT_BLOCK_LIT = "'''" NEWLINE { any_char | NEWLINE } "'''" ;
 (* TEXT_BLOCK_LIT: opening ''' must be followed immediately by a newline
