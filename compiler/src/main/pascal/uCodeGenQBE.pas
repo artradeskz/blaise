@@ -7504,8 +7504,8 @@ begin
           EmitLine(Format('  %s =%s call %s(l %s)', [T, QType, FPtrTemp, L]));
         end
         else
-          EmitLine(Format('  %s =%s call $%s_%s(l %s)',
-            [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
+          EmitLine(Format('  %s =%s call $%s(l %s)',
+            [T, QType, MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName), L]));
         Result := T;
       end;
     end
@@ -7607,9 +7607,9 @@ begin
       begin
         MDecl := TMethodDecl(FldAccess.ResolvedMethod);
         if MDecl.OwnerTypeName <> '' then
-          FuncName := '$' + MDecl.OwnerTypeName + '_' + FldAccess.FieldName
+          FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName)
         else
-          FuncName := '$' + QBEMangle(FldAccess.ResolvedType.Name) + '_' + FldAccess.FieldName;
+          FuncName := '$' + MethodEmitName(MDecl, QBEMangle(FldAccess.ResolvedType.Name), FldAccess.FieldName);
         EmitLine(Format('  call %s(l %s)', [FuncName, T]));
       end;
       Result := T;
@@ -8491,6 +8491,8 @@ function TCodeGenQBE.MethodEmitName(AMDecl: TMethodDecl;
 begin
   if (AMDecl <> nil) and (AMDecl.ResolvedQbeName <> '') then
     Result := QBEMangle(AMDecl.ResolvedQbeName)
+  else if AMDecl <> nil then
+    Result := QBEMangle(ATypeName + '_' + AMDecl.Name)
   else
     Result := QBEMangle(ATypeName + '_' + AMethodName);
 end;

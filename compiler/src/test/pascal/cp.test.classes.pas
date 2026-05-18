@@ -69,6 +69,7 @@ type
     procedure TestParse_SeparateImpl_QualifiedName;
     procedure TestSemantic_SeparateImpl_OK;
     procedure TestCodegen_SeparateImpl_EmitsMethod;
+    procedure TestCodegen_MethodCall_CaseInsensitive;
 
     { ------------------------------------------------------------------ }
     { Free built-in                                                        }
@@ -715,6 +716,36 @@ begin
   AssertTrue('TFoo_SetX emitted', Pos('$TFoo_SetX', IR) > 0);
   { The call site must use it }
   AssertTrue('call to TFoo_SetX', Pos('call $TFoo_SetX', IR) > 0);
+end;
+
+const
+  SrcMethodCaseInsensitive =
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+            procedure SetX(AVal: Integer);
+          end;
+        procedure TFoo.SetX(AVal: Integer);
+        begin
+          Self.X := AVal
+        end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.setx(42)
+        end.
+        ''';
+
+procedure TClassTests.TestCodegen_MethodCall_CaseInsensitive;
+var IR: string;
+begin
+  IR := GenIR(SrcMethodCaseInsensitive);
+  AssertTrue('call uses declared name TFoo_SetX',
+    Pos('call $TFoo_SetX', IR) > 0);
+  AssertTrue('no lowercase TFoo_setx in IR',
+    Pos('$TFoo_setx', IR) < 0);
 end;
 
 { ------------------------------------------------------------------ }
