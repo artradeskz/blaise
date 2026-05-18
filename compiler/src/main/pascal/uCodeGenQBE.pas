@@ -148,6 +148,10 @@ type
     procedure EmitArrayConstData(CD: TConstDecl; const APrefix: string);
     procedure EmitClassConstData(AClassDef: TClassTypeDef; const AClassName: string);
     procedure EmitGlobalConstData(ABlock: TBlock);
+    procedure EmitLocalArrayConstsInBlock(ABlock: TBlock);
+    procedure EmitLocalArrayConstsInTypeDecls(ABlock: TBlock);
+    procedure EmitLocalArrayConstsInProgram(AProg: TProgram);
+    procedure EmitLocalArrayConstsInUnit(AUnit: TUnit);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitArcCleanup(ABlock: TBlock);
     procedure EmitExcPathArcCleanup(ABlock: TBlock);
@@ -1644,6 +1648,81 @@ begin
     if TD.Def is TClassTypeDef then
       EmitClassConstData(TClassTypeDef(TD.Def), TD.Name);
   end;
+end;
+
+procedure TCodeGenQBE.EmitLocalArrayConstsInBlock(ABlock: TBlock);
+{ Walk ABlock's standalone proc/func decls and emit any local typed array
+  constants as top-level data items.  Local consts share the unprefixed
+  global symbol namespace, which is fine in practice because block-scoped
+  names are unique per program; if collisions ever arise a prefix mangling
+  would go here. }
+var
+  I, J:    Integer;
+  Decl:    TMethodDecl;
+  CD:      TConstDecl;
+begin
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.ProcDecls.Count - 1 do
+  begin
+    Decl := TMethodDecl(ABlock.ProcDecls.Items[I]);
+    if Decl.Body = nil then Continue;
+    for J := 0 to Decl.Body.ConstDecls.Count - 1 do
+    begin
+      CD := TConstDecl(Decl.Body.ConstDecls.Items[J]);
+      EmitArrayConstData(CD, '');
+    end;
+  end;
+end;
+
+procedure TCodeGenQBE.EmitLocalArrayConstsInTypeDecls(ABlock: TBlock);
+{ Walk ABlock's type decls and emit local typed array constants found in
+  class/record method bodies as top-level data items. }
+var
+  I, J, K: Integer;
+  TD:      TTypeDecl;
+  Methods: TObjectList;
+  Decl:    TMethodDecl;
+  CD:      TConstDecl;
+begin
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
+    if TD.Def is TClassTypeDef then
+      Methods := TClassTypeDef(TD.Def).Methods
+    else if TD.Def is TRecordTypeDef then
+      Methods := TRecordTypeDef(TD.Def).Methods
+    else
+      Continue;
+    for J := 0 to Methods.Count - 1 do
+    begin
+      Decl := TMethodDecl(Methods.Items[J]);
+      if Decl.Body = nil then Continue;
+      for K := 0 to Decl.Body.ConstDecls.Count - 1 do
+      begin
+        CD := TConstDecl(Decl.Body.ConstDecls.Items[K]);
+        EmitArrayConstData(CD, '');
+      end;
+    end;
+  end;
+end;
+
+procedure TCodeGenQBE.EmitLocalArrayConstsInProgram(AProg: TProgram);
+{ Emit local typed array constants from class/record method bodies and
+  standalone procs in the program block as top-level data items.  Mirrors
+  the EmitMethodDefs + EmitStandaloneDefs sweep but only looks at consts. }
+begin
+  EmitLocalArrayConstsInTypeDecls(AProg.Block);
+  EmitLocalArrayConstsInBlock(AProg.Block);
+end;
+
+procedure TCodeGenQBE.EmitLocalArrayConstsInUnit(AUnit: TUnit);
+begin
+  if AUnit = nil then Exit;
+  EmitLocalArrayConstsInTypeDecls(AUnit.IntfBlock);
+  EmitLocalArrayConstsInTypeDecls(AUnit.ImplBlock);
+  EmitLocalArrayConstsInBlock(AUnit.IntfBlock);
+  EmitLocalArrayConstsInBlock(AUnit.ImplBlock);
 end;
 
 procedure TCodeGenQBE.EmitArcCleanup(ABlock: TBlock);
@@ -8700,6 +8779,7 @@ begin
     EmitDataSection;
     EmitGlobalVarData(AProg.Block);
     EmitGlobalConstData(AProg.Block);
+    EmitLocalArrayConstsInProgram(AProg);
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);
@@ -8770,6 +8850,9 @@ begin
       EmitDataSection;
       EmitGlobalVarData(AUnit.IntfBlock);
       EmitGlobalVarData(AUnit.ImplBlock);
+      EmitGlobalConstData(AUnit.IntfBlock);
+      EmitGlobalConstData(AUnit.ImplBlock);
+      EmitLocalArrayConstsInUnit(AUnit);
       for I := 0 to AUnit.GenericInstances.Count - 1 do
       begin
         GI := TGenericInstance(AUnit.GenericInstances.Items[I]);
@@ -9047,6 +9130,7 @@ begin
       EmitGlobalVarData(AUnit.ImplBlock);
       EmitGlobalConstData(AUnit.IntfBlock);
       EmitGlobalConstData(AUnit.ImplBlock);
+      EmitLocalArrayConstsInUnit(AUnit);
 
       FOutput.AppendBuffer(Body);
 
@@ -9120,6 +9204,7 @@ begin
     EmitDataSection;  { emits remaining string literals + $__fmt_* (once) }
     EmitGlobalVarData(AProg.Block);
     EmitGlobalConstData(AProg.Block);
+    EmitLocalArrayConstsInProgram(AProg);
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);

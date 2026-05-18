@@ -33,6 +33,7 @@ type
     procedure TestRun_Const_IntegerConst;
     procedure TestRun_Const_StringConst;
     procedure TestRun_Const_NegativeConst;
+    procedure TestRun_Const_LocalArrayInFunction;
 
     { Procedural types }
     procedure TestRun_ProcType_CallViaVariable;
@@ -161,6 +162,24 @@ const
     begin
       X := MinVal * 2;
       WriteLn(X)
+    end.
+    ''';
+
+  { Regression: typed array constant declared inside a function body was
+    referenced as $Name but never emitted as a data item, producing a
+    link error.  Exercises the full toolchain (codegen + QBE + ld). }
+  SrcConstLocalArrayInFunc = '''
+    program P;
+    function DaysInMonth(M: Integer): Integer;
+    const
+      Days: array[1..12] of Integer = (31,28,31,30,31,30,31,31,30,31,30,31);
+    begin
+      Result := Days[M]
+    end;
+    begin
+      WriteLn(DaysInMonth(1));
+      WriteLn(DaysInMonth(2));
+      WriteLn(DaysInMonth(12))
     end.
     ''';
 
@@ -494,6 +513,16 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcConstStr, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Hello', 'Hello' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_Const_LocalArrayInFunction;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstLocalArrayInFunc, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Jan Feb Dec days',
+    '31' + LE + '28' + LE + '31' + LE, Output);
 end;
 
 procedure TE2EMiscTests.TestRun_Const_NegativeConst;

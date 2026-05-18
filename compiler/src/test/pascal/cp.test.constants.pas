@@ -86,6 +86,12 @@ type
     { Class-level array constants }
     procedure TestClassArrayConst_RangeIndexed_InIR;
     procedure TestClassArrayConst_EnumIndexed_InIR;
+
+    { Function-local typed array constants — must emit a data item in the
+      data section, not just reference $Name from the function body. }
+    procedure TestArrayConst_LocalInFunction_EmitsDataItem;
+    procedure TestArrayConst_LocalInProcedure_EmitsDataItem;
+    procedure TestArrayConst_LocalInMethod_EmitsDataItem;
   end;
 
 implementation
@@ -949,6 +955,83 @@ begin
     ''');
   AssertTrue('IR non-empty', IR <> '');
   AssertTrue('Names in IR', IRContains(IR, 'Names'));
+end;
+
+{ Regression: a typed array constant declared inside a function body
+  was referenced as `$Days` from the function code but no
+  `data $Days = ...` item was emitted, so the linker failed with
+  `undefined reference to Days`. EmitGlobalConstData was only called on
+  the top-level program/unit blocks and never recursed into method
+  bodies. }
+procedure TConstTests.TestArrayConst_LocalInFunction_EmitsDataItem;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    function DaysInMonth(M: Integer): Integer;
+    const
+      Days: array[1..12] of Integer = (31,28,31,30,31,30,31,31,30,31,30,31);
+    begin
+      Result := Days[M]
+    end;
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('$Days data item emitted',
+    Pos('data $Days =', IR) >= 0);
+  AssertTrue('Days[M] reference present',
+    Pos('add $Days', IR) >= 0);
+end;
+
+procedure TConstTests.TestArrayConst_LocalInProcedure_EmitsDataItem;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    procedure Dump;
+    const
+      Tbl: array[0..2] of Integer = (10, 20, 30);
+    begin
+      WriteLn(Tbl[0])
+    end;
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('$Tbl data item emitted',
+    Pos('data $Tbl =', IR) >= 0);
+end;
+
+procedure TConstTests.TestArrayConst_LocalInMethod_EmitsDataItem;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    type
+      TFoo = class
+      public
+        function Lookup(I: Integer): Integer;
+      end;
+    function TFoo.Lookup(I: Integer): Integer;
+    const
+      Vals: array[0..3] of Integer = (7, 8, 9, 10);
+    begin
+      Result := Vals[I]
+    end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create;
+      WriteLn(F.Lookup(0));
+      F.Free
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('$Vals data item emitted',
+    Pos('data $Vals =', IR) >= 0);
 end;
 
 initialization
