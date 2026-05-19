@@ -95,7 +95,11 @@ function _ExtractFileExt(Path: Pointer): Pointer;
 function _IncludeTrailingPathDelimiter(Path: Pointer): Pointer;
 function _ExcludeTrailingPathDelimiter(Path: Pointer): Pointer;
 
-{ _StringFormat is variadic and remains implemented in blaise_str.c }
+{ _StringFormatN — pure Pascal Format implementation.
+  Args points to an array of 16-byte records: [Tag:Int64, Value:Int64].
+  Tag=0 → integer (Value is the int), Tag=1 → string (Value is the pointer).
+  Supported specifiers: %d (integer), %s (string), %% (literal %). }
+function _StringFormatN(Fmt: Pointer; Args: Pointer; Count: Integer): Pointer;
 
 implementation
 
@@ -807,6 +811,197 @@ begin
   Result := StrAlloc(Len);
   if (Result <> nil) and (Len > 0) then
     MemCopy(StrData(Result), P, Len);
+end;
+
+{ ------------------------------------------------------------------ }
+{ _StringFormat                                                        }
+{ ------------------------------------------------------------------ }
+
+function _StringFormatN(Fmt: Pointer; Args: Pointer; Count: Integer): Pointer;
+var
+  F, Dst: PChar;
+  FLen, OutLen, I, ArgIdx, Tag, SLen, Written: Integer;
+  Val: Int64;
+  AP: Pointer;
+  TagPtr, ValPtr: ^Int64;
+  IntBuf: Pointer;
+  IBP: PChar;
+begin
+  F := StrData(Fmt);
+  FLen := StrLen(Fmt);
+  ArgIdx := 0;
+
+  { Pass 1: compute output length }
+  OutLen := 0;
+  I := 0;
+  while I < FLen do
+  begin
+    if (F[I] = 37) and (I + 1 < FLen) then  { '%' }
+    begin
+      Inc(I);
+      if F[I] = 100 then  { 'd' }
+      begin
+        if ArgIdx < Count then
+        begin
+          AP := Args + ArgIdx * 16;
+          TagPtr := AP;
+          ValPtr := AP + 8;
+          Tag := Integer(TagPtr^);
+          Val := ValPtr^;
+          if Tag = 0 then
+          begin
+            IntBuf := _BlaiseGetMem(22);
+            IBP := PChar(IntBuf);
+            Written := WriteDecimal(Val, IBP);
+            OutLen := OutLen + Written;
+            _BlaiseFreeMem(IntBuf);
+          end
+          else
+          begin
+            SLen := StrLen(Pointer(Val));
+            OutLen := OutLen + SLen;
+          end;
+        end;
+        Inc(ArgIdx);
+        Inc(I);
+      end
+      else if F[I] = 115 then  { 's' }
+      begin
+        if ArgIdx < Count then
+        begin
+          AP := Args + ArgIdx * 16;
+          TagPtr := AP;
+          ValPtr := AP + 8;
+          Tag := Integer(TagPtr^);
+          Val := ValPtr^;
+          if Tag = 1 then
+          begin
+            SLen := StrLen(Pointer(Val));
+            OutLen := OutLen + SLen;
+          end
+          else
+          begin
+            IntBuf := _BlaiseGetMem(22);
+            IBP := PChar(IntBuf);
+            Written := WriteDecimal(Val, IBP);
+            OutLen := OutLen + Written;
+            _BlaiseFreeMem(IntBuf);
+          end;
+        end;
+        Inc(ArgIdx);
+        Inc(I);
+      end
+      else if F[I] = 37 then  { '%%' → literal % }
+      begin
+        Inc(OutLen);
+        Inc(I);
+      end
+      else
+      begin
+        OutLen := OutLen + 2;
+        Inc(I);
+      end;
+    end
+    else
+    begin
+      Inc(OutLen);
+      Inc(I);
+    end;
+  end;
+
+  Result := StrAlloc(OutLen);
+  if Result = nil then Exit;
+  Dst := PChar(Result);
+
+  { Pass 2: fill buffer }
+  I := 0;
+  ArgIdx := 0;
+  while I < FLen do
+  begin
+    if (F[I] = 37) and (I + 1 < FLen) then
+    begin
+      Inc(I);
+      if F[I] = 100 then  { 'd' }
+      begin
+        if ArgIdx < Count then
+        begin
+          AP := Args + ArgIdx * 16;
+          TagPtr := AP;
+          ValPtr := AP + 8;
+          Tag := Integer(TagPtr^);
+          Val := ValPtr^;
+          if Tag = 0 then
+          begin
+            IntBuf := _BlaiseGetMem(22);
+            IBP := PChar(IntBuf);
+            Written := WriteDecimal(Val, IBP);
+            MemCopy(Dst, IBP, Written);
+            Dst := Dst + Written;
+            _BlaiseFreeMem(IntBuf);
+          end
+          else
+          begin
+            SLen := StrLen(Pointer(Val));
+            if SLen > 0 then
+              MemCopy(Dst, PChar(Pointer(Val)), SLen);
+            Dst := Dst + SLen;
+          end;
+        end;
+        Inc(ArgIdx);
+        Inc(I);
+      end
+      else if F[I] = 115 then  { 's' }
+      begin
+        if ArgIdx < Count then
+        begin
+          AP := Args + ArgIdx * 16;
+          TagPtr := AP;
+          ValPtr := AP + 8;
+          Tag := Integer(TagPtr^);
+          Val := ValPtr^;
+          if Tag = 1 then
+          begin
+            SLen := StrLen(Pointer(Val));
+            if SLen > 0 then
+              MemCopy(Dst, PChar(Pointer(Val)), SLen);
+            Dst := Dst + SLen;
+          end
+          else
+          begin
+            IntBuf := _BlaiseGetMem(22);
+            IBP := PChar(IntBuf);
+            Written := WriteDecimal(Val, IBP);
+            MemCopy(Dst, IBP, Written);
+            Dst := Dst + Written;
+            _BlaiseFreeMem(IntBuf);
+          end;
+        end;
+        Inc(ArgIdx);
+        Inc(I);
+      end
+      else if F[I] = 37 then
+      begin
+        Dst[0] := 37;
+        Dst := Dst + 1;
+        Inc(I);
+      end
+      else
+      begin
+        Dst[0] := 37;
+        Dst := Dst + 1;
+        Dst[0] := F[I];
+        Dst := Dst + 1;
+        Inc(I);
+      end;
+    end
+    else
+    begin
+      Dst[0] := F[I];
+      Dst := Dst + 1;
+      Inc(I);
+    end;
+  end;
+  Dst[0] := 0;
 end;
 
 { ------------------------------------------------------------------ }

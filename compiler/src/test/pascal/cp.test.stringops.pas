@@ -685,23 +685,23 @@ procedure TStringOpsTests.TestCodegen_Format_CallsRTL;
 var IR: string;
 begin
   IR := GenIR(SrcFormatOneInt);
-  AssertTrue('call $_StringFormat in IR', IRContains(IR, 'call $_StringFormat'));
+  AssertTrue('call $_StringFormatN in IR', IRContains(IR, 'call $_StringFormatN'));
 end;
 
 procedure TStringOpsTests.TestCodegen_Format_IntArgUsesTagZero;
 var IR: string;
 begin
   IR := GenIR(SrcFormatOneInt);
-  { Integer args are preceded by tag 0 }
-  AssertTrue('tag 0 for int arg', IRContains(IR, 'w 0,'));
+  { Integer args store tag 0 into the arg array }
+  AssertTrue('tag 0 for int arg', IRContains(IR, 'storel 0,'));
 end;
 
 procedure TStringOpsTests.TestCodegen_Format_StringArgUsesTagOne;
 var IR: string;
 begin
   IR := GenIR(SrcFormatOneStr);
-  { String args are preceded by tag 1 }
-  AssertTrue('tag 1 for str arg', IRContains(IR, 'w 1,'));
+  { String args store tag 1 into the arg array }
+  AssertTrue('tag 1 for str arg', IRContains(IR, 'storel 1,'));
 end;
 
 { ------------------------------------------------------------------ }

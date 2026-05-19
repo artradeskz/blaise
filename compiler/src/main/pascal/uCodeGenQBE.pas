@@ -5901,6 +5901,11 @@ var
   Ptr2:         string;
   SAT:          TStaticArrayTypeDesc;
   ElemSize:     Integer;
+  FmtArgCount:  Integer;
+  FmtArrTemp:   string;
+  FmtSlotTemp:  string;
+  FmtValTemp:   string;
+  IsIntArg:     Boolean;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -6567,39 +6572,68 @@ begin
         Exit;
       end;
 
-      { Format(fmt, arg0, arg1, ...) → $_StringFormat(l fmt, ..., tag val, ...)
-        Each arg is emitted as a (w tag, w/l value) pair after the variadic
-        marker.  tag=0 for integer types, tag=1 for string/pointer types. }
+      { Format(fmt, arg0, arg1, ...) → stack array of (tag, value) pairs
+        passed to $_StringFormat(l fmt, l args, w count).
+        Each arg is stored as a 16-byte record: [tag:l, value:l].
+        tag=0 for integer types, tag=1 for string/pointer types. }
       if SameText(FC.Name,'Format') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
-        { Build variadic arg pairs: "..., w tag, w/l val, ..." }
-        ArgLine := Format('l %s, ...', [L]);
-        { Support Pascal array-of-const notation: Format(str, [a, b, c]) }
+        { Collect format arguments into a list of (expr, isInt) pairs }
         if (FC.Args.Count = 2) and (FC.Args.Items[1] is TArrayLiteralExpr) then
+          FmtArgCount := TArrayLiteralExpr(FC.Args.Items[1]).Elements.Count
+        else
+          FmtArgCount := FC.Args.Count - 1;
+        if FmtArgCount > 0 then
         begin
-          for I := 0 to TArrayLiteralExpr(FC.Args.Items[1]).Elements.Count - 1 do
+          FmtArrTemp := AllocTemp;
+          EmitLine(Format('  %s =l alloc8 %d', [FmtArrTemp, FmtArgCount * 16]));
+          for I := 0 to FmtArgCount - 1 do
           begin
-            ArgTemp := EmitExpr(TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]));
-            if TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]).ResolvedType.Kind in
-               [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyEnum] then
-              ArgLine := ArgLine + Format(', w 0, w %s', [ArgTemp])
+            if (FC.Args.Count = 2) and (FC.Args.Items[1] is TArrayLiteralExpr) then
+            begin
+              ArgTemp := EmitExpr(TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]));
+              IsIntArg := TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]).ResolvedType.Kind in
+                [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyEnum];
+            end
             else
-              ArgLine := ArgLine + Format(', w 1, l %s', [ArgTemp]);
+            begin
+              ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I + 1]));
+              IsIntArg := TASTExpr(FC.Args.Items[I + 1]).ResolvedType.Kind in
+                [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyEnum];
+            end;
+            FmtSlotTemp := AllocTemp;
+            EmitLine(Format('  %s =l add %s, %d', [FmtSlotTemp, FmtArrTemp, I * 16]));
+            if IsIntArg then
+              EmitLine(Format('  storel 0, %s', [FmtSlotTemp]))
+            else
+              EmitLine(Format('  storel 1, %s', [FmtSlotTemp]));
+            FmtValTemp := AllocTemp;
+            EmitLine(Format('  %s =l add %s, 8', [FmtValTemp, FmtSlotTemp]));
+            if IsIntArg then
+            begin
+              { Integer args may be w-typed; widen to l for storel. }
+              if (FC.Args.Count = 2) and (FC.Args.Items[1] is TArrayLiteralExpr) then
+                QType := QbeTypeOf(TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]).ResolvedType)
+              else
+                QType := QbeTypeOf(TASTExpr(FC.Args.Items[I + 1]).ResolvedType);
+              if QType = 'w' then
+              begin
+                FmtSlotTemp := AllocTemp;
+                EmitLine(Format('  %s =l extsw %s', [FmtSlotTemp, ArgTemp]));
+                ArgTemp := FmtSlotTemp;
+              end;
+            end;
+            EmitLine(Format('  storel %s, %s', [ArgTemp, FmtValTemp]));
           end;
         end
         else
-          for I := 1 to FC.Args.Count - 1 do
-          begin
-            ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
-            if TASTExpr(FC.Args.Items[I]).ResolvedType.Kind in
-               [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyEnum] then
-              ArgLine := ArgLine + Format(', w 0, w %s', [ArgTemp])
-            else
-              ArgLine := ArgLine + Format(', w 1, l %s', [ArgTemp]);
-          end;
+        begin
+          FmtArrTemp := AllocTemp;
+          EmitLine(Format('  %s =l copy 0', [FmtArrTemp]));
+        end;
         T := AllocTemp;
-        EmitLine(Format('  %s =l call $_StringFormat(%s)', [T, ArgLine]));
+        EmitLine(Format('  %s =l call $_StringFormatN(l %s, l %s, w %d)', [T, L, FmtArrTemp, FmtArgCount]));
         Result := T;
         Exit;
       end;

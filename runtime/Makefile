@@ -22,10 +22,8 @@ QBE          = ../vendor/qbe/qbe
 # C sources — only those that cannot be expressed in Pascal remain.
 # blaise_exc.c: setjmp/longjmp, type identity, nil-check (QBE cannot express these).
 # blaise_arc_class.c: _ClassAlloc/_ClassRelease call a function-pointer field.
-# blaise_str_fmt.c: _StringFormat (variadic; va_list cannot be expressed in Pascal).
 C_SRCS = $(SRC_DIR)/blaise_arc_class.c \
-         $(SRC_DIR)/blaise_exc.c \
-         $(SRC_DIR)/blaise_str_fmt.c
+         $(SRC_DIR)/blaise_exc.c
 C_OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(C_SRCS))
 
 # Pascal RTL units compiled via the Blaise compiler.
