@@ -7,7 +7,7 @@
 }
 
 {
-  Blaise RTL — ARC management (Pascal port of blaise_arc.c)
+  Blaise RTL — ARC management (pure Pascal)
 
   String layout — data-pointer convention (shared with blaise_str.pas):
     data_ptr − 12  RefCount  (Integer, 4 bytes)
@@ -23,16 +23,16 @@
                                                ^--- user pointer (what Pascal code sees)
 
   nil = unassigned.  RefCount = -1 = immortal (string literals).
-
-  _ClassAlloc and _ClassRelease remain in blaise_arc.c because they
-  store and call a function pointer — not yet expressible in Blaise.
 }
 
 unit blaise_arc;
 
-{$mode objfpc}{$H+}
-
 interface
+
+type
+  TFieldCleanupProc = procedure(Self: Pointer);
+  PPointer = ^Pointer;
+  PInteger = ^Integer;
 
 procedure _StringAddRef(Ptr: Pointer);
 procedure _StringRelease(Ptr: Pointer);
@@ -44,14 +44,12 @@ function  _MethodAddress(Self, Name: Pointer): Pointer;
 function  _InheritsFrom(AChild, AParent: Pointer): Boolean;
 function  _ClassCreate(TInfo: Pointer): Pointer;
 procedure _ClassAddRef(UserPtr: Pointer);
+procedure _ClassRelease(UserPtr: Pointer);
+function  _ClassAlloc(Size: Int64; Cleanup: Pointer): Pointer;
 procedure _ClassFree(UserPtr: Pointer);
 function  _HasClassAttribute(AClassTI, AAttrTI: Pointer): Boolean;
-{ _ClassRelease and _ClassAlloc are implemented in blaise_arc_class.c
-  because they store and call a cleanup function pointer in the object
-  header — a pattern not yet expressible in Blaise's Pascal RTL.
-  We call _ClassAlloc from _ClassCreate via an external declaration. }
-procedure _ClassRelease(UserPtr: Pointer); external name '_ClassRelease';
-function  _ClassAlloc(Size: Int64; Cleanup: Pointer): Pointer; external name '_ClassAlloc';
+procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
+procedure _AbstractMethodError;
 
 implementation
 
@@ -59,19 +57,18 @@ const
   IMMORTAL  = -1;
   HDR_SIZE  = 12;   { string header: RefCount + Length + Capacity }
   CLASS_HDR = 16;   { class header:  RefCount + pad + cleanup ptr }
+  STDERR_FD = 2;
+  MAX_1GIB  = 1073741824;
 
 procedure _libc_memcpy(Dst, Src: Pointer; N: Int64);       external name 'memcpy';
 function  _libc_memcmp(P1, P2: Pointer; N: Int64): Integer; external name 'memcmp';
+procedure _libc_memset(Dst: Pointer; Val: Integer; N: Int64); external name 'memset';
+function  _libc_write(Fd: Integer; Buf: Pointer; Count: Int64): Int64; external name 'write';
+procedure _libc_abort; external name 'abort';
 
-{ Diagnostic check: verifies the string header looks sane before
-  we treat refcount==0 as a free signal.  Aborts with stderr message
-  on corruption. }
-procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
-  external name '_StringReleaseCheck';
-
-{ blaise_mem bindings — direct symbol-name link, no 'uses' clause. }
 function  _BlaiseGetMem(Size: Integer): Pointer; external name '_BlaiseGetMem';
 procedure _BlaiseFreeMem(Ptr: Pointer);          external name '_BlaiseFreeMem';
+procedure _WeakZeroSlots(Target: Pointer);       external name '_WeakZeroSlots';
 
 procedure MemCopy(Dst, Src: Pointer; N: Integer);
 begin
@@ -85,6 +82,78 @@ begin
     Result := 0
   else
     Result := _libc_memcmp(P1, P2, N);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Diagnostic helpers                                                   }
+{ ------------------------------------------------------------------ }
+
+procedure DiagAbort(Msg: Pointer; Len: Integer);
+var
+  NL: Byte;
+begin
+  _libc_write(STDERR_FD, Msg, Int64(Len));
+  NL := 10;
+  _libc_write(STDERR_FD, @NL, 1);
+  _libc_abort;
+end;
+
+procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
+begin
+  if RefCount < -1 then
+    DiagAbort('blaise: _StringRelease double-free (refcount < -1)', 51);
+  if (Length < 0) or (Length > MAX_1GIB) then
+    DiagAbort('blaise: _StringRelease corrupted header (bad length)', 55);
+  if (Capacity < Length) or (Capacity > MAX_1GIB) then
+    DiagAbort('blaise: _StringRelease corrupted header (bad capacity)', 57);
+end;
+
+procedure _AbstractMethodError;
+begin
+  DiagAbort('Runtime error: abstract method called.', 39);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Class ARC                                                            }
+{ ------------------------------------------------------------------ }
+
+function _ClassAlloc(Size: Int64; Cleanup: Pointer): Pointer;
+var
+  Total: Integer;
+  Base: PChar;
+  CleanupSlot: PPointer;
+begin
+  Total := Integer(Size) + CLASS_HDR;
+  Base := PChar(_BlaiseGetMem(Total));
+  if Base = nil then begin Result := nil; Exit end;
+  _libc_memset(Pointer(Base), 0, Int64(Total));
+  CleanupSlot := PPointer(Base + 8);
+  CleanupSlot^ := Cleanup;
+  Result := Pointer(Base + CLASS_HDR);
+end;
+
+procedure _ClassRelease(UserPtr: Pointer);
+var
+  Base: PChar;
+  RC: PInteger;
+  CleanupSlot: PPointer;
+  Cleanup: TFieldCleanupProc;
+begin
+  if UserPtr = nil then Exit;
+  Base := PChar(UserPtr) - CLASS_HDR;
+  RC := PInteger(Base);
+  RC^ := RC^ - 1;
+  if RC^ = 0 then
+  begin
+    _WeakZeroSlots(UserPtr);
+    CleanupSlot := PPointer(Base + 8);
+    if CleanupSlot^ <> nil then
+    begin
+      Cleanup := TFieldCleanupProc(CleanupSlot^);
+      Cleanup(UserPtr);
+    end;
+    _BlaiseFreeMem(Pointer(Base));
+  end;
 end;
 
 { ------------------------------------------------------------------ }
@@ -204,7 +273,7 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
-{ Class ARC (no function pointers needed here)                         }
+{ TObject virtuals                                                     }
 { ------------------------------------------------------------------ }
 
 procedure TObject_Destroy(Self: Pointer);

@@ -666,7 +666,7 @@ begin
     ''');
   AssertTrue('IR non-empty', IR <> '');
   { Abstract method vtable slot must reference the runtime abort stub
-    ($_AbstractMethodError, defined in blaise_arc_class.c), not a real body }
+    ($_AbstractMethodError, defined in blaise_arc.pas), not a real body }
   AssertTrue('abstract stub in IR', IRContains(IR, '_AbstractMethodError'));
 end;
 
