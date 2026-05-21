@@ -1500,7 +1500,11 @@ begin
       ClonedCD.Fields.Add(NewFDecl);
     end;
 
-    { Clone method declarations (shared body — OwnBody = False) }
+    { Clone method declarations.  Body is deep-cloned so each generic
+      instance has its own AST nodes for semantic re-analysis; without this
+      the Resolved* annotations on the shared body would carry whichever
+      instance was analysed last, causing call targets in instance N's
+      method body to resolve against instance M's class. }
     for I := 0 to Templ.ClassDef.Methods.Count - 1 do
     begin
       MDecl            := TMethodDecl(Templ.ClassDef.Methods.Items[I]);
@@ -1509,8 +1513,16 @@ begin
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsVirtual     := MDecl.IsVirtual;
       NewMDecl.IsOverride    := MDecl.IsOverride;
-      NewMDecl.Body          := MDecl.Body;
-      NewMDecl.OwnBody       := False;
+      if MDecl.Body <> nil then
+      begin
+        NewMDecl.Body    := CloneBlock(MDecl.Body);
+        NewMDecl.OwnBody := True;
+      end
+      else
+      begin
+        NewMDecl.Body    := nil;
+        NewMDecl.OwnBody := False;
+      end;
 
       for J := 0 to MDecl.Params.Count - 1 do
       begin
@@ -1887,8 +1899,19 @@ begin
 
     NewMDecl         := TMethodDecl.Create;
     NewMDecl.Name    := AInstName;
-    NewMDecl.OwnBody := False;   { share the template body }
-    NewMDecl.Body    := Templ.Body;
+    { Deep-clone the template body so each instance has its own analysed
+      AST.  Sharing would leave Resolved* annotations from the last
+      instance on the body, miscompiling earlier instances. }
+    if Templ.Body <> nil then
+    begin
+      NewMDecl.Body    := CloneBlock(Templ.Body);
+      NewMDecl.OwnBody := True;
+    end
+    else
+    begin
+      NewMDecl.Body    := nil;
+      NewMDecl.OwnBody := False;
+    end;
 
     { Substitute return type }
     RetTypeName := Templ.ReturnTypeName;

@@ -759,6 +759,15 @@ type
 function BinaryOpName(AOp: TBinaryOp): string;
 function IsComparisonOp(AOp: TBinaryOp): Boolean;
 
+{ Deep-clone helpers for generic-instance method body re-analysis.
+  Clones structure + raw textual fields (names, type names, operators).
+  Resolved* / FieldInfo / IsXxx semantic annotations are NOT copied: each
+  instance must re-run semantic analysis to populate them correctly for
+  its own concrete type arguments. }
+function CloneExpr(AExpr: TASTExpr): TASTExpr;
+function CloneStmt(AStmt: TASTStmt): TASTStmt;
+function CloneBlock(ABlock: TBlock): TBlock;
+
 implementation
 
 function BinaryOpName(AOp: TBinaryOp): string;
@@ -1438,6 +1447,603 @@ begin
   UsedUnits.Free;
   SymbolTable.Free;
   inherited Destroy;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Deep clone for generic-instance method body re-analysis              }
+{ ------------------------------------------------------------------ }
+
+function CloneVarDecl(ASrc: TVarDecl): TVarDecl; forward;
+function CloneFieldDecl(ASrc: TFieldDecl): TFieldDecl; forward;
+function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl; forward;
+function CloneConstDecl(ASrc: TConstDecl): TConstDecl; forward;
+function CloneMethodParam(ASrc: TMethodParam): TMethodParam; forward;
+function CloneMethodDecl(ASrc: TMethodDecl): TMethodDecl; forward;
+function CloneTypeDef(ASrc: TASTTypeDef): TASTTypeDef; forward;
+function CloneExceptHandler(ASrc: TExceptHandlerClause): TExceptHandlerClause; forward;
+function CloneCaseBranch(ASrc: TCaseBranch): TCaseBranch; forward;
+function CloneCompound(ASrc: TCompoundStmt): TCompoundStmt; forward;
+
+procedure CopyExprPos(ADst, ASrc: TASTExpr);
+begin
+  ADst.Line := ASrc.Line;
+  ADst.Col  := ASrc.Col;
+end;
+
+procedure CopyStmtPos(ADst, ASrc: TASTStmt);
+begin
+  ADst.Line := ASrc.Line;
+  ADst.Col  := ASrc.Col;
+end;
+
+function CloneExprList(ASrc: TObjectList): TObjectList;
+var
+  I: Integer;
+begin
+  Result := TObjectList.Create(True);
+  for I := 0 to ASrc.Count - 1 do
+    Result.Add(CloneExpr(TASTExpr(ASrc.Items[I])));
+end;
+
+function CloneExpr(AExpr: TASTExpr): TASTExpr;
+var
+  IL:  TIntLiteral;
+  FL:  TFloatLiteral;
+  SL:  TStringLiteral;
+  SS:  TStringSubscriptExpr;
+  AL:  TArrayLiteralExpr;
+  IE:  TIdentExpr;
+  FA:  TFieldAccessExpr;
+  IsE: TIsExpr;
+  AsE: TAsExpr;
+  SuE: TSupportsExpr;
+  BE:  TBinaryExpr;
+  NE:  TNotExpr;
+  FCE: TFuncCallExpr;
+  DE:  TDerefExpr;
+  AoE: TAddrOfExpr;
+  MCE: TMethodCallExpr;
+  I:   Integer;
+begin
+  if AExpr = nil then
+  begin Result := nil; Exit; end;
+
+  if AExpr is TIntLiteral then
+  begin
+    IL := TIntLiteral.Create;
+    IL.Value := TIntLiteral(AExpr).Value;
+    Result := IL;
+  end
+  else if AExpr is TFloatLiteral then
+  begin
+    FL := TFloatLiteral.Create;
+    FL.Value := TFloatLiteral(AExpr).Value;
+    Result := FL;
+  end
+  else if AExpr is TStringLiteral then
+  begin
+    SL := TStringLiteral.Create;
+    SL.Value := TStringLiteral(AExpr).Value;
+    Result := SL;
+  end
+  else if AExpr is TNilLiteral then
+  begin
+    Result := TNilLiteral.Create;
+  end
+  else if AExpr is TStringSubscriptExpr then
+  begin
+    SS := TStringSubscriptExpr.Create;
+    SS.StrExpr   := CloneExpr(TStringSubscriptExpr(AExpr).StrExpr);
+    SS.IndexExpr := CloneExpr(TStringSubscriptExpr(AExpr).IndexExpr);
+    Result := SS;
+  end
+  else if AExpr is TArrayLiteralExpr then
+  begin
+    AL := TArrayLiteralExpr.Create;
+    for I := 0 to TArrayLiteralExpr(AExpr).Elements.Count - 1 do
+      AL.Elements.Add(CloneExpr(TASTExpr(TArrayLiteralExpr(AExpr).Elements.Items[I])));
+    Result := AL;
+  end
+  else if AExpr is TIdentExpr then
+  begin
+    IE := TIdentExpr.Create;
+    IE.Name := TIdentExpr(AExpr).Name;
+    { Note: leave IsConstant/IsVarParam/IsImplicitSelf/etc. nil/false —
+      semantic analyser must re-resolve in the new instance's scope. }
+    Result := IE;
+  end
+  else if AExpr is TFieldAccessExpr then
+  begin
+    FA := TFieldAccessExpr.Create;
+    FA.RecordName    := TFieldAccessExpr(AExpr).RecordName;
+    FA.FieldName     := TFieldAccessExpr(AExpr).FieldName;
+    FA.Base          := CloneExpr(TFieldAccessExpr(AExpr).Base);
+    FA.PropIndexExpr := CloneExpr(TFieldAccessExpr(AExpr).PropIndexExpr);
+    Result := FA;
+  end
+  else if AExpr is TIsExpr then
+  begin
+    IsE := TIsExpr.Create;
+    IsE.Obj      := CloneExpr(TIsExpr(AExpr).Obj);
+    IsE.TypeName := TIsExpr(AExpr).TypeName;
+    Result := IsE;
+  end
+  else if AExpr is TAsExpr then
+  begin
+    AsE := TAsExpr.Create;
+    AsE.Obj      := CloneExpr(TAsExpr(AExpr).Obj);
+    AsE.TypeName := TAsExpr(AExpr).TypeName;
+    Result := AsE;
+  end
+  else if AExpr is TSupportsExpr then
+  begin
+    SuE := TSupportsExpr.Create;
+    SuE.Obj          := CloneExpr(TSupportsExpr(AExpr).Obj);
+    SuE.IntfTypeName := TSupportsExpr(AExpr).IntfTypeName;
+    SuE.OutVarName   := TSupportsExpr(AExpr).OutVarName;
+    Result := SuE;
+  end
+  else if AExpr is TBinaryExpr then
+  begin
+    BE := TBinaryExpr.Create;
+    BE.Op    := TBinaryExpr(AExpr).Op;
+    BE.Left  := CloneExpr(TBinaryExpr(AExpr).Left);
+    BE.Right := CloneExpr(TBinaryExpr(AExpr).Right);
+    Result := BE;
+  end
+  else if AExpr is TNotExpr then
+  begin
+    NE := TNotExpr.Create;
+    NE.Expr := CloneExpr(TNotExpr(AExpr).Expr);
+    Result := NE;
+  end
+  else if AExpr is TFuncCallExpr then
+  begin
+    FCE := TFuncCallExpr.Create;
+    FCE.Name := TFuncCallExpr(AExpr).Name;
+    for I := 0 to TFuncCallExpr(AExpr).Args.Count - 1 do
+      FCE.Args.Add(CloneExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Items[I])));
+    Result := FCE;
+  end
+  else if AExpr is TDerefExpr then
+  begin
+    DE := TDerefExpr.Create;
+    DE.Expr := CloneExpr(TDerefExpr(AExpr).Expr);
+    Result := DE;
+  end
+  else if AExpr is TAddrOfExpr then
+  begin
+    AoE := TAddrOfExpr.Create;
+    AoE.Expr := CloneExpr(TAddrOfExpr(AExpr).Expr);
+    Result := AoE;
+  end
+  else if AExpr is TMethodCallExpr then
+  begin
+    MCE := TMethodCallExpr.Create;
+    MCE.ObjectName := TMethodCallExpr(AExpr).ObjectName;
+    MCE.Name       := TMethodCallExpr(AExpr).Name;
+    MCE.ObjExpr    := CloneExpr(TMethodCallExpr(AExpr).ObjExpr);
+    for I := 0 to TMethodCallExpr(AExpr).Args.Count - 1 do
+      MCE.Args.Add(CloneExpr(TASTExpr(TMethodCallExpr(AExpr).Args.Items[I])));
+    Result := MCE;
+  end
+  else
+    raise Exception.CreateFmt('CloneExpr: unhandled expression node %s',
+      [AExpr.ClassName]);
+
+  CopyExprPos(Result, AExpr);
+end;
+
+function CloneCompound(ASrc: TCompoundStmt): TCompoundStmt;
+var
+  I: Integer;
+begin
+  if ASrc = nil then
+  begin Result := nil; Exit; end;
+  Result := TCompoundStmt.Create;
+  CopyStmtPos(Result, ASrc);
+  for I := 0 to ASrc.Stmts.Count - 1 do
+    Result.Stmts.Add(CloneStmt(TASTStmt(ASrc.Stmts.Items[I])));
+end;
+
+function CloneExceptHandler(ASrc: TExceptHandlerClause): TExceptHandlerClause;
+begin
+  Result := TExceptHandlerClause.Create;
+  Result.VarName  := ASrc.VarName;
+  Result.TypeName := ASrc.TypeName;
+  Result.Body     := CloneCompound(ASrc.Body);
+end;
+
+function CloneCaseBranch(ASrc: TCaseBranch): TCaseBranch;
+var
+  I: Integer;
+begin
+  Result := TCaseBranch.Create;
+  for I := 0 to ASrc.Values.Count - 1 do
+    Result.Values.Add(CloneExpr(TASTExpr(ASrc.Values.Items[I])));
+  Result.Stmt := CloneStmt(ASrc.Stmt);
+end;
+
+function CloneStmt(AStmt: TASTStmt): TASTStmt;
+var
+  AS_:  TAssignment;
+  IF_:  TIfStmt;
+  CS_:  TCompoundStmt;
+  WS_:  TWhileStmt;
+  RS_:  TRepeatStmt;
+  FS_:  TForStmt;
+  FIS_: TForInStmt;
+  TFS_: TTryFinallyStmt;
+  TES_: TTryExceptStmt;
+  RaS_: TRaiseStmt;
+  CSS_: TCaseStmt;
+  FAS_: TFieldAssignment;
+  SSA_: TStaticSubscriptAssign;
+  PWS_: TPointerWriteStmt;
+  PC_:  TProcCall;
+  MCS_: TMethodCallStmt;
+  ICS_: TInheritedCallStmt;
+  I:    Integer;
+begin
+  if AStmt = nil then
+  begin Result := nil; Exit; end;
+
+  if AStmt is TAssignment then
+  begin
+    AS_ := TAssignment.Create;
+    AS_.Name := TAssignment(AStmt).Name;
+    AS_.Expr := CloneExpr(TAssignment(AStmt).Expr);
+    Result := AS_;
+  end
+  else if AStmt is TIfStmt then
+  begin
+    IF_ := TIfStmt.Create;
+    IF_.Condition := CloneExpr(TIfStmt(AStmt).Condition);
+    IF_.ThenStmt  := CloneStmt(TIfStmt(AStmt).ThenStmt);
+    IF_.ElseStmt  := CloneStmt(TIfStmt(AStmt).ElseStmt);
+    Result := IF_;
+  end
+  else if AStmt is TCompoundStmt then
+  begin
+    CS_ := TCompoundStmt.Create;
+    for I := 0 to TCompoundStmt(AStmt).Stmts.Count - 1 do
+      CS_.Stmts.Add(CloneStmt(TASTStmt(TCompoundStmt(AStmt).Stmts.Items[I])));
+    Result := CS_;
+  end
+  else if AStmt is TWhileStmt then
+  begin
+    WS_ := TWhileStmt.Create;
+    WS_.Condition := CloneExpr(TWhileStmt(AStmt).Condition);
+    WS_.Body      := CloneStmt(TWhileStmt(AStmt).Body);
+    Result := WS_;
+  end
+  else if AStmt is TRepeatStmt then
+  begin
+    RS_ := TRepeatStmt.Create;
+    RS_.Body      := CloneCompound(TRepeatStmt(AStmt).Body);
+    RS_.Condition := CloneExpr(TRepeatStmt(AStmt).Condition);
+    Result := RS_;
+  end
+  else if AStmt is TForStmt then
+  begin
+    FS_ := TForStmt.Create;
+    FS_.VarName   := TForStmt(AStmt).VarName;
+    FS_.StartExpr := CloneExpr(TForStmt(AStmt).StartExpr);
+    FS_.EndExpr   := CloneExpr(TForStmt(AStmt).EndExpr);
+    FS_.IsDownTo  := TForStmt(AStmt).IsDownTo;
+    FS_.Body      := CloneStmt(TForStmt(AStmt).Body);
+    Result := FS_;
+  end
+  else if AStmt is TForInStmt then
+  begin
+    FIS_ := TForInStmt.Create;
+    FIS_.VarName  := TForInStmt(AStmt).VarName;
+    FIS_.CollExpr := CloneExpr(TForInStmt(AStmt).CollExpr);
+    FIS_.Body     := CloneStmt(TForInStmt(AStmt).Body);
+    Result := FIS_;
+  end
+  else if AStmt is TTryFinallyStmt then
+  begin
+    TFS_ := TTryFinallyStmt.Create;
+    TFS_.TryBody     := CloneCompound(TTryFinallyStmt(AStmt).TryBody);
+    TFS_.FinallyBody := CloneCompound(TTryFinallyStmt(AStmt).FinallyBody);
+    Result := TFS_;
+  end
+  else if AStmt is TTryExceptStmt then
+  begin
+    TES_ := TTryExceptStmt.Create;
+    TES_.TryBody := CloneCompound(TTryExceptStmt(AStmt).TryBody);
+    for I := 0 to TTryExceptStmt(AStmt).Handlers.Count - 1 do
+      TES_.Handlers.Add(
+        CloneExceptHandler(
+          TExceptHandlerClause(TTryExceptStmt(AStmt).Handlers.Items[I])));
+    TES_.ElseBody   := CloneCompound(TTryExceptStmt(AStmt).ElseBody);
+    TES_.ExceptBody := CloneCompound(TTryExceptStmt(AStmt).ExceptBody);
+    Result := TES_;
+  end
+  else if AStmt is TRaiseStmt then
+  begin
+    RaS_ := TRaiseStmt.Create;
+    RaS_.Expr := CloneExpr(TRaiseStmt(AStmt).Expr);
+    Result := RaS_;
+  end
+  else if AStmt is TExitStmt then
+    Result := TExitStmt.Create
+  else if AStmt is TBreakStmt then
+    Result := TBreakStmt.Create
+  else if AStmt is TContinueStmt then
+    Result := TContinueStmt.Create
+  else if AStmt is TCaseStmt then
+  begin
+    CSS_ := TCaseStmt.Create;
+    CSS_.Selector := CloneExpr(TCaseStmt(AStmt).Selector);
+    for I := 0 to TCaseStmt(AStmt).Branches.Count - 1 do
+      CSS_.Branches.Add(
+        CloneCaseBranch(TCaseBranch(TCaseStmt(AStmt).Branches.Items[I])));
+    CSS_.ElseStmt := CloneStmt(TCaseStmt(AStmt).ElseStmt);
+    Result := CSS_;
+  end
+  else if AStmt is TFieldAssignment then
+  begin
+    FAS_ := TFieldAssignment.Create;
+    FAS_.RecordName    := TFieldAssignment(AStmt).RecordName;
+    FAS_.FieldName     := TFieldAssignment(AStmt).FieldName;
+    FAS_.Expr          := CloneExpr(TFieldAssignment(AStmt).Expr);
+    FAS_.ObjExpr       := CloneExpr(TFieldAssignment(AStmt).ObjExpr);
+    FAS_.PropIndexExpr := CloneExpr(TFieldAssignment(AStmt).PropIndexExpr);
+    Result := FAS_;
+  end
+  else if AStmt is TStaticSubscriptAssign then
+  begin
+    SSA_ := TStaticSubscriptAssign.Create;
+    SSA_.ArrayName := TStaticSubscriptAssign(AStmt).ArrayName;
+    SSA_.IndexExpr := CloneExpr(TStaticSubscriptAssign(AStmt).IndexExpr);
+    SSA_.ValueExpr := CloneExpr(TStaticSubscriptAssign(AStmt).ValueExpr);
+    Result := SSA_;
+  end
+  else if AStmt is TPointerWriteStmt then
+  begin
+    PWS_ := TPointerWriteStmt.Create;
+    PWS_.PtrExpr := CloneExpr(TPointerWriteStmt(AStmt).PtrExpr);
+    PWS_.ValExpr := CloneExpr(TPointerWriteStmt(AStmt).ValExpr);
+    Result := PWS_;
+  end
+  else if AStmt is TProcCall then
+  begin
+    PC_ := TProcCall.Create;
+    PC_.Name := TProcCall(AStmt).Name;
+    for I := 0 to TProcCall(AStmt).Args.Count - 1 do
+      PC_.Args.Add(CloneExpr(TASTExpr(TProcCall(AStmt).Args.Items[I])));
+    Result := PC_;
+  end
+  else if AStmt is TMethodCallStmt then
+  begin
+    MCS_ := TMethodCallStmt.Create;
+    MCS_.ObjectName := TMethodCallStmt(AStmt).ObjectName;
+    MCS_.Name       := TMethodCallStmt(AStmt).Name;
+    MCS_.ObjExpr    := CloneExpr(TMethodCallStmt(AStmt).ObjExpr);
+    for I := 0 to TMethodCallStmt(AStmt).Args.Count - 1 do
+      MCS_.Args.Add(CloneExpr(TASTExpr(TMethodCallStmt(AStmt).Args.Items[I])));
+    Result := MCS_;
+  end
+  else if AStmt is TInheritedCallStmt then
+  begin
+    ICS_ := TInheritedCallStmt.Create;
+    ICS_.Name := TInheritedCallStmt(AStmt).Name;
+    for I := 0 to TInheritedCallStmt(AStmt).Args.Count - 1 do
+      ICS_.Args.Add(CloneExpr(TASTExpr(TInheritedCallStmt(AStmt).Args.Items[I])));
+    Result := ICS_;
+  end
+  else
+    raise Exception.CreateFmt('CloneStmt: unhandled statement node %s',
+      [AStmt.ClassName]);
+
+  CopyStmtPos(Result, AStmt);
+end;
+
+function CloneVarDecl(ASrc: TVarDecl): TVarDecl;
+var
+  I: Integer;
+begin
+  Result := TVarDecl.Create;
+  Result.Line     := ASrc.Line;
+  Result.Col      := ASrc.Col;
+  Result.TypeName := ASrc.TypeName;
+  for I := 0 to ASrc.Names.Count - 1 do
+    Result.Names.Add(ASrc.Names.Strings[I]);
+  for I := 0 to ASrc.Attributes.Count - 1 do
+    Result.Attributes.Add(ASrc.Attributes.Strings[I]);
+end;
+
+function CloneFieldDecl(ASrc: TFieldDecl): TFieldDecl;
+var
+  I: Integer;
+begin
+  Result := TFieldDecl.Create;
+  Result.Line     := ASrc.Line;
+  Result.Col      := ASrc.Col;
+  Result.TypeName := ASrc.TypeName;
+  for I := 0 to ASrc.Names.Count - 1 do
+    Result.Names.Add(ASrc.Names.Strings[I]);
+  for I := 0 to ASrc.Attributes.Count - 1 do
+    Result.Attributes.Add(ASrc.Attributes.Strings[I]);
+end;
+
+function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl;
+begin
+  Result := TTypeDecl.Create;
+  Result.Line := ASrc.Line;
+  Result.Col  := ASrc.Col;
+  Result.Name := ASrc.Name;
+  Result.Def  := CloneTypeDef(ASrc.Def);
+end;
+
+function CloneConstDecl(ASrc: TConstDecl): TConstDecl;
+var
+  I: Integer;
+begin
+  Result := TConstDecl.Create;
+  Result.Line     := ASrc.Line;
+  Result.Col      := ASrc.Col;
+  Result.Name     := ASrc.Name;
+  Result.TypeName := ASrc.TypeName;
+  Result.IntVal   := ASrc.IntVal;
+  Result.StrVal   := ASrc.StrVal;
+  Result.IsString := ASrc.IsString;
+  Result.IsFloat  := ASrc.IsFloat;
+  if ASrc.ConstParts <> nil then
+  begin
+    Result.ConstParts := TStringList.Create;
+    for I := 0 to ASrc.ConstParts.Count - 1 do
+      Result.ConstParts.AddObject(
+        ASrc.ConstParts.Strings[I], ASrc.ConstParts.Objects[I]);
+  end;
+  Result.IsArrayConst        := ASrc.IsArrayConst;
+  Result.ArrayIndexType      := ASrc.ArrayIndexType;
+  Result.ArrayElemType       := ASrc.ArrayElemType;
+  Result.ArrayIsRangeIndexed := ASrc.ArrayIsRangeIndexed;
+  Result.ArrayLowBound       := ASrc.ArrayLowBound;
+  Result.ArrayHighBound      := ASrc.ArrayHighBound;
+  if ASrc.ArrayElements <> nil then
+  begin
+    Result.ArrayElements := TStringList.Create;
+    for I := 0 to ASrc.ArrayElements.Count - 1 do
+      Result.ArrayElements.Add(ASrc.ArrayElements.Strings[I]);
+  end;
+end;
+
+function CloneMethodParam(ASrc: TMethodParam): TMethodParam;
+begin
+  Result := TMethodParam.Create;
+  Result.Line         := ASrc.Line;
+  Result.Col          := ASrc.Col;
+  Result.ParamName    := ASrc.ParamName;
+  Result.TypeName     := ASrc.TypeName;
+  Result.IsVarParam   := ASrc.IsVarParam;
+  Result.IsConstParam := ASrc.IsConstParam;
+  Result.IsOpenArray  := ASrc.IsOpenArray;
+  Result.DefaultValue := CloneExpr(ASrc.DefaultValue);
+end;
+
+function CloneMethodDecl(ASrc: TMethodDecl): TMethodDecl;
+var
+  I: Integer;
+begin
+  Result := TMethodDecl.Create;
+  Result.Line           := ASrc.Line;
+  Result.Col            := ASrc.Col;
+  Result.Name           := ASrc.Name;
+  Result.OwnerTypeName  := ASrc.OwnerTypeName;
+  Result.ReturnTypeName := ASrc.ReturnTypeName;
+  Result.IsVirtual      := ASrc.IsVirtual;
+  Result.IsOverride     := ASrc.IsOverride;
+  Result.IsAbstract     := ASrc.IsAbstract;
+  Result.IsOverload     := ASrc.IsOverload;
+  Result.IsPublished    := ASrc.IsPublished;
+  Result.IsExternal     := ASrc.IsExternal;
+  Result.ExternalName   := ASrc.ExternalName;
+  Result.IsRecordMethod := ASrc.IsRecordMethod;
+  for I := 0 to ASrc.Params.Count - 1 do
+    Result.Params.Add(CloneMethodParam(TMethodParam(ASrc.Params.Items[I])));
+  if ASrc.TypeParams <> nil then
+  begin
+    Result.TypeParams := TStringList.Create;
+    for I := 0 to ASrc.TypeParams.Count - 1 do
+      Result.TypeParams.Add(ASrc.TypeParams.Strings[I]);
+  end;
+  if ASrc.TypeParamConstraints <> nil then
+  begin
+    Result.TypeParamConstraints := TStringList.Create;
+    for I := 0 to ASrc.TypeParamConstraints.Count - 1 do
+      Result.TypeParamConstraints.Add(ASrc.TypeParamConstraints.Strings[I]);
+  end;
+  if ASrc.OwnerTypeParams <> nil then
+  begin
+    Result.OwnerTypeParams := TStringList.Create;
+    for I := 0 to ASrc.OwnerTypeParams.Count - 1 do
+      Result.OwnerTypeParams.Add(ASrc.OwnerTypeParams.Strings[I]);
+  end;
+  if (ASrc.Body <> nil) and ASrc.OwnBody then
+  begin
+    Result.Body    := CloneBlock(ASrc.Body);
+    Result.OwnBody := True;
+  end
+  else
+  begin
+    Result.Body    := ASrc.Body;
+    Result.OwnBody := False;
+  end;
+end;
+
+function CloneTypeDef(ASrc: TASTTypeDef): TASTTypeDef;
+var
+  TA: TTypeAliasDef;
+  ST: TSetTypeDef;
+  RT: TRecordTypeDef;
+  ET: TEnumTypeDef;
+  I:  Integer;
+begin
+  if ASrc = nil then
+  begin Result := nil; Exit; end;
+  if ASrc is TTypeAliasDef then
+  begin
+    TA := TTypeAliasDef.Create;
+    TA.TypeName := TTypeAliasDef(ASrc).TypeName;
+    Result := TA;
+  end
+  else if ASrc is TSetTypeDef then
+  begin
+    ST := TSetTypeDef.Create;
+    ST.BaseTypeName := TSetTypeDef(ASrc).BaseTypeName;
+    Result := ST;
+  end
+  else if ASrc is TEnumTypeDef then
+  begin
+    ET := TEnumTypeDef.Create;
+    for I := 0 to TEnumTypeDef(ASrc).Members.Count - 1 do
+      ET.Members.AddObject(
+        TEnumTypeDef(ASrc).Members.Strings[I],
+        TEnumTypeDef(ASrc).Members.Objects[I]);
+    Result := ET;
+  end
+  else if ASrc is TRecordTypeDef then
+  begin
+    RT := TRecordTypeDef.Create;
+    for I := 0 to TRecordTypeDef(ASrc).Fields.Count - 1 do
+      RT.Fields.Add(CloneFieldDecl(TFieldDecl(TRecordTypeDef(ASrc).Fields.Items[I])));
+    for I := 0 to TRecordTypeDef(ASrc).Methods.Count - 1 do
+      RT.Methods.Add(CloneMethodDecl(TMethodDecl(TRecordTypeDef(ASrc).Methods.Items[I])));
+    Result := RT;
+  end
+  else
+    { Class, generic, interface, procedural defs do not legally appear nested
+      inside a method body — fail loudly so we notice if that changes. }
+    raise Exception.CreateFmt(
+      'CloneTypeDef: unsupported nested type def %s', [ASrc.ClassName]);
+
+  Result.Line := ASrc.Line;
+  Result.Col  := ASrc.Col;
+end;
+
+function CloneBlock(ABlock: TBlock): TBlock;
+var
+  I: Integer;
+begin
+  if ABlock = nil then
+  begin Result := nil; Exit; end;
+  Result := TBlock.Create;
+  Result.Line := ABlock.Line;
+  Result.Col  := ABlock.Col;
+  for I := 0 to ABlock.TypeDecls.Count - 1 do
+    Result.TypeDecls.Add(CloneTypeDecl(TTypeDecl(ABlock.TypeDecls.Items[I])));
+  for I := 0 to ABlock.ConstDecls.Count - 1 do
+    Result.ConstDecls.Add(CloneConstDecl(TConstDecl(ABlock.ConstDecls.Items[I])));
+  for I := 0 to ABlock.Decls.Count - 1 do
+    Result.Decls.Add(CloneVarDecl(TVarDecl(ABlock.Decls.Items[I])));
+  for I := 0 to ABlock.ProcDecls.Count - 1 do
+    Result.ProcDecls.Add(CloneMethodDecl(TMethodDecl(ABlock.ProcDecls.Items[I])));
+  for I := 0 to ABlock.Stmts.Count - 1 do
+    Result.Stmts.Add(CloneStmt(TASTStmt(ABlock.Stmts.Items[I])));
 end;
 
 end.

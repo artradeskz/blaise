@@ -55,4 +55,5 @@ Phases (all ms wall-clock):
     * The compiler currently miscompiles a program that instantiates
       the same generic class with two different concrete arguments
       (e.g. TList<String> and TList<TObject> in one program) — that is
-      why the benchmark is split into two files.
+      why the benchmark is split into two files.  (Fixed in a later
+      commit via per-instance AST body cloning.)

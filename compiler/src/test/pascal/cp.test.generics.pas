@@ -81,6 +81,7 @@ type
     { ------------------------------------------------------------------ }
     procedure TestSemantic_Generic_TwoInstancesOfSameClass_Resolve;
     procedure TestSemantic_Generic_TwoInstances_PointerFieldDistinctTypes;
+    procedure TestCodegen_Generic_TwoInstances_MethodCallsResolveToOwnInstance;
   end;
 
 implementation
@@ -728,6 +729,35 @@ begin
   end;
 end;
 
+const
+  { Two instances of the same generic class; one method calls another method
+    on the same class.  If the method body is shared across instances without
+    re-analysis, the inner Self.SetValue call will resolve to the same
+    instance for both — so TBox_String_Init would emit
+      call $TBox_Integer_SetValue
+    instead of $TBox_String_SetValue.  Per-instance AST body cloning ensures
+    each instance has its own analysed body and the correct call targets. }
+  SrcTwoInstancesMethodCallsOwn =
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+            procedure SetValue(V: T);
+            begin
+              Self.FValue := V
+            end;
+            procedure Init(V: T);
+            begin
+              Self.SetValue(V)
+            end;
+          end;
+        var
+          A: TBox<Integer>;
+          B: TBox<String>;
+        begin end.
+        ''';
+
 procedure TGenericsTests.TestSemantic_Generic_TwoInstances_PointerFieldDistinctTypes;
 var
   Prog: TProgram;
@@ -753,6 +783,41 @@ begin
   finally
     Prog.Free;
   end;
+end;
+
+procedure TGenericsTests.TestCodegen_Generic_TwoInstances_MethodCallsResolveToOwnInstance;
+var
+  IR:        string;
+  IntInit:   Integer;
+  StrInit:   Integer;
+  IntBody:   string;
+  StrBody:   string;
+begin
+  IR := GenIR(SrcTwoInstancesMethodCallsOwn);
+
+  { Locate the two Init function bodies in the IR. }
+  IntInit := Pos('function $TBox_Integer_Init', IR);
+  StrInit := Pos('function $TBox_String_Init', IR);
+  AssertTrue('TBox_Integer_Init function emitted', IntInit > 0);
+  AssertTrue('TBox_String_Init function emitted',  StrInit > 0);
+
+  { Take a window from each function start until the next 'function ' marker
+    (or end of string). }
+  if IntInit < StrInit then
+  begin
+    IntBody := Copy(IR, IntInit, StrInit - IntInit);
+    StrBody := Copy(IR, StrInit, Length(IR) - StrInit + 1);
+  end
+  else
+  begin
+    StrBody := Copy(IR, StrInit, IntInit - StrInit);
+    IntBody := Copy(IR, IntInit, Length(IR) - IntInit + 1);
+  end;
+
+  AssertTrue('TBox_Integer_Init body calls $TBox_Integer_SetValue',
+    Pos('call $TBox_Integer_SetValue', IntBody) > 0);
+  AssertTrue('TBox_String_Init body calls $TBox_String_SetValue',
+    Pos('call $TBox_String_SetValue', StrBody) > 0);
 end;
 
 initialization
