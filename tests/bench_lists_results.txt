@@ -1,0 +1,58 @@
+Blaise list micro-benchmark — results log
+==========================================
+
+Each entry records the median of two consecutive runs of
+tests/bench_strings.pas and tests/bench_objects.pas, taken on the
+machine identified in the entry header.  Add new entries below the
+previous one (newest at the bottom) so the file forms a chronological
+trend.
+
+Workloads:
+  - bench_strings:  TStringList     vs  TList<String>
+  - bench_objects:  TObjectList     vs  TList<TObject>
+
+Phases (all ms wall-clock):
+  insert         1,000,000 Adds (item_<i> strings or fresh TItem instances)
+  sequential     Get(i) over the full list (linear sweep)
+  random         1,000,000 indexed reads in a pseudo-random pattern
+                 (deterministic LCG, seed=42)
+  for..in        full enumeration via the for-in protocol
+                 (strings benchmark only; objects benchmark omits this)
+  IndexOf/scan   1,000 lookups on the list (TList<T> uses a hand-rolled
+                 linear scan since it has no IndexOf method).  Note: the
+                 string benchmark searches a 100,000-item list; the object
+                 benchmark searches the full 1,000,000-item list.
+
+
+------------------------------------------------------------------------
+2026-05-21 — Graeme @ AMD Ryzen 7 5800X (Linux 6.14)
+  Blaise compiler v0.9.0-dev
+  Commit:        93358ed (fix codegen ARC for ^TClass writes)
+
+  --- bench_strings ---
+                                                TStringList    TList<String>
+    insert 1_000_000                                  98 ms          90 ms
+    sequential Get(i) x Count                         10 ms          10 ms
+    random  Get(i)  x 1_000_000                       19 ms          19 ms
+    for..in over 1_000_000                            15 ms          11 ms
+    IndexOf / hand-rolled scan x 1000                590 ms         277 ms
+
+  --- bench_objects ---
+                                                TObjectList    TList<TObject>
+    insert 1_000_000                                  36 ms          41 ms
+    sequential Get(i) x Count                          4 ms           6 ms
+    random  Get(i)  x 1_000_000                       10 ms          13 ms
+    IndexOf / hand-rolled scan x 1000                 16 ms         131 ms
+
+  Notes:
+    * TList<String> beats TStringList across every phase; the
+      TStringList.IndexOf cost includes sorted-mode/duplicates checks
+      the hand-rolled scan does not, hence the 2x gap.
+    * TObjectList beats TList<TObject> on writes and reads (raw pointer
+      storage vs. typed ^T with ARC), and is dramatically faster on
+      IndexOf because the call goes via a direct pointer scan in a
+      single function instead of one method call per element.
+    * The compiler currently miscompiles a program that instantiates
+      the same generic class with two different concrete arguments
+      (e.g. TList<String> and TList<TObject> in one program) — that is
+      why the benchmark is split into two files.
