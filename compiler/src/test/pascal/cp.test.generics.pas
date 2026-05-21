@@ -75,6 +75,12 @@ type
     { Codegen — unit-scope generic var                                     }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_UnitIntf_GenericVar_GlobalData;
+
+    { ------------------------------------------------------------------ }
+    { Multi-instance: same generic class with two different type args     }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Generic_TwoInstancesOfSameClass_Resolve;
+    procedure TestSemantic_Generic_TwoInstances_PointerFieldDistinctTypes;
   end;
 
 implementation
@@ -660,6 +666,93 @@ begin
     Pos('data $G', IR) > 0);
   AssertTrue('typeinfo for TBox_Integer emitted',
     Pos('$typeinfo_TBox_Integer', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Multi-instance: same generic class with two different type args     }
+{ ------------------------------------------------------------------ }
+
+const
+  { Two var decls of the same generic class with different type args.
+    Used to fail with 'Type mismatch: expected ''^T'' but got ''^TObject'''
+    because '^T' was cached globally under the unsubstituted name after
+    the first instantiation, and the unsubstituted constructor-call
+    receiver name '<T>' got mutated to '<String>' on the first analysis
+    and then incorrectly re-used on the second. }
+  SrcTwoInstancesSameGeneric =
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+            procedure SetIt(V: T);
+            begin
+              Self.FValue := V
+            end;
+          end;
+        var
+          A: TBox<Integer>;
+          B: TBox<String>;
+        begin end.
+        ''';
+
+  SrcTwoInstancesPointerField =
+    '''
+        program P;
+        type
+          TCell<T> = class
+            FData: ^T;
+            procedure SetData(P: ^T);
+            begin
+              Self.FData := P
+            end;
+          end;
+        var
+          CI: TCell<Integer>;
+          CS: TCell<String>;
+        begin end.
+        ''';
+
+procedure TGenericsTests.TestSemantic_Generic_TwoInstancesOfSameClass_Resolve;
+var
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcTwoInstancesSameGeneric);
+  try
+    AssertNotNull('TBox<Integer> instantiated',
+      Prog.SymbolTable.FindType('TBox<Integer>'));
+    AssertNotNull('TBox<string> instantiated',
+      Prog.SymbolTable.FindType('TBox<string>'));
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestSemantic_Generic_TwoInstances_PointerFieldDistinctTypes;
+var
+  Prog: TProgram;
+  CI, CS: TRecordTypeDesc;
+  FI, FS: TFieldInfo;
+begin
+  Prog := AnalyseSrc(SrcTwoInstancesPointerField);
+  try
+    CI := TRecordTypeDesc(Prog.SymbolTable.FindType('TCell<Integer>'));
+    CS := TRecordTypeDesc(Prog.SymbolTable.FindType('TCell<string>'));
+    AssertNotNull('TCell<Integer> instantiated', CI);
+    AssertNotNull('TCell<string>  instantiated', CS);
+    FI := CI.FindField('FData');
+    FS := CS.FindField('FData');
+    AssertNotNull('FData on TCell<Integer>', FI);
+    AssertNotNull('FData on TCell<string>',  FS);
+    { The two FData fields must resolve to distinct pointer types — '^T'
+      must NOT be shared across instances. }
+    AssertEquals('FData<Integer> base type',
+      '^Integer', FI.TypeDesc.Name);
+    AssertEquals('FData<string>  base type',
+      '^string',  FS.TypeDesc.Name);
+  finally
+    Prog.Free;
+  end;
 end;
 
 initialization

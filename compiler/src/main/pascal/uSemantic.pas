@@ -1207,26 +1207,34 @@ var
   Sym:      TSymbol;
   DDotPos, RBrPos, OfPos: Integer;
   LStr, HStr, ElemName: string;
+  CanonName: string;
   SAT: TStaticArrayTypeDesc;
   DAT: TDynArrayTypeDesc;
 begin
   Result := FTable.FindType(AName);
   if Result <> nil then Exit;
-  { Dynamic array: 'array of TypeName' — create on demand }
+  { Dynamic array: 'array of TypeName' — create on demand.  Key cache by
+    the canonical element-type name so 'array of T' under T=String and
+    T=TObject do not collide. }
   if (Length(AName) > 9) and (StrHead(AName, 9) = 'array of ') then
   begin
     ElemName := StrCopyTail(AName, 9);
     BaseType := FindTypeOrInstantiate(ElemName);
     if BaseType <> nil then
     begin
-      DAT := FTable.NewDynArrayType(BaseType);
-      Sym := TSymbol.Create(AName, skType, DAT);
-      FTable.DefineGlobal(Sym);
-      Result := DAT;
+      CanonName := 'array of ' + BaseType.Name;
+      Result    := FTable.FindType(CanonName);
+      if Result = nil then
+      begin
+        DAT := FTable.NewDynArrayType(BaseType);
+        Sym := TSymbol.Create(CanonName, skType, DAT);
+        FTable.DefineGlobal(Sym);
+        Result := DAT;
+      end;
     end;
     Exit;
   end;
-  { Static array: 'array[L..H] of TypeName' — create on demand }
+  { Static array: 'array[L..H] of TypeName' — create on demand. }
   if (Length(AName) > 6) and (StrHead(AName, 6) = 'array[') then
   begin
     DDotPos  := StrPos('..', AName);
@@ -1238,24 +1246,38 @@ begin
     BaseType := FindTypeOrInstantiate(ElemName);
     if BaseType <> nil then
     begin
-      SAT := FTable.NewStaticArrayType(BaseType, StrToInt(LStr), StrToInt(HStr));
-      Sym := TSymbol.Create(AName, skType, SAT);
-      FTable.DefineGlobal(Sym);
-      Result := SAT;
+      CanonName := 'array[' + LStr + '..' + HStr + '] of ' + BaseType.Name;
+      Result    := FTable.FindType(CanonName);
+      if Result = nil then
+      begin
+        SAT := FTable.NewStaticArrayType(BaseType, StrToInt(LStr), StrToInt(HStr));
+        Sym := TSymbol.Create(CanonName, skType, SAT);
+        FTable.DefineGlobal(Sym);
+        Result := SAT;
+      end;
     end;
     Exit;
   end;
-  { Typed pointer: '^TypeName' — create on demand }
+  { Typed pointer: '^TypeName' — create on demand.  When TypeName resolves
+    to a concrete type (e.g. T → String inside a generic method body), key
+    the cache by the canonical '^String' rather than the unsubstituted
+    '^T' — otherwise a second instantiation that binds T to a different
+    concrete type re-uses the stale '^T' → '^String' entry. }
   if (Length(AName) > 1) and (StrAt(AName, 0) = Ord('^')) then
   begin
     BaseName := StrCopyTail(AName, 1);
     BaseType := FindTypeOrInstantiate(BaseName);
     if BaseType <> nil then
     begin
-      PT := FTable.NewPointerType(AName, BaseType);
-      Sym := TSymbol.Create(AName, skType, PT);
-      FTable.DefineGlobal(Sym);
-      Result := PT;
+      CanonName := '^' + BaseType.Name;
+      Result    := FTable.FindType(CanonName);
+      if Result = nil then
+      begin
+        PT  := FTable.NewPointerType(CanonName, BaseType);
+        Sym := TSymbol.Create(CanonName, skType, PT);
+        FTable.DefineGlobal(Sym);
+        Result := PT;
+      end;
     end;
     Exit;
   end;
@@ -1266,10 +1288,15 @@ begin
     BaseType := FindTypeOrInstantiate(BaseName);
     if (BaseType <> nil) and (BaseType.Kind = tyClass) then
     begin
-      Sym := TSymbol.Create(AName, skType,
-        FTable.NewMetaClassType(AName, BaseType));
-      FTable.DefineGlobal(Sym);
-      Result := Sym.TypeDesc;
+      CanonName := 'class of ' + BaseType.Name;
+      Result    := FTable.FindType(CanonName);
+      if Result = nil then
+      begin
+        Sym := TSymbol.Create(CanonName, skType,
+          FTable.NewMetaClassType(CanonName, BaseType));
+        FTable.DefineGlobal(Sym);
+        Result := Sym.TypeDesc;
+      end;
     end;
     Exit;
   end;
@@ -5973,6 +6000,7 @@ var
   I:        Integer;
   IntfDesc: TInterfaceTypeDesc;
   ObjType:  TTypeDesc;
+  ResolvedObjName: string;
 begin
   { Call on an arbitrary expression (e.g. TCast(x).Method(y)) }
   if AExpr.ObjExpr <> nil then
@@ -6044,12 +6072,16 @@ begin
   { If the name contains '<' and wasn't found, resolve scope-bound type params
     (e.g. 'TListEnumerator<T>' → 'TListEnumerator<Integer>' when T=Integer is
     in scope) and trigger on-demand instantiation.  Mirrors the field-access
-    path so that 'TGen<T>.Create(args)' resolves inside a generic method body. }
+    path so that 'TGen<T>.Create(args)' resolves inside a generic method body.
+
+    The shared method body means we must NOT mutate AExpr.ObjectName — a
+    second instantiation with a different concrete arg would then see the
+    first instance's resolved name and skip its own substitution. }
   if (ObjSym = nil) and (StrPos('<', AExpr.ObjectName) >= 0) then
   begin
-    AExpr.ObjectName := ResolveScopeBoundTypeParams(AExpr.ObjectName);
-    FindTypeOrInstantiate(AExpr.ObjectName);
-    ObjSym := FTable.Lookup(AExpr.ObjectName);
+    ResolvedObjName := ResolveScopeBoundTypeParams(AExpr.ObjectName);
+    FindTypeOrInstantiate(ResolvedObjName);
+    ObjSym := FTable.Lookup(ResolvedObjName);
   end;
   if ObjSym = nil then
   begin
@@ -6137,7 +6169,15 @@ begin
       AExpr.Line, AExpr.Col);
   end;
 
-  AExpr.ObjectName := ObjSym.Name;  { normalise to declared casing }
+  { Normalise casing on the AST node ONLY when the lookup matched the
+    original name case-insensitively.  When the symbol came in via
+    scope-bound type-param substitution (e.g. AExpr.ObjectName was
+    'TFoo<T>' and we resolved it to 'TFoo<String>'), keep the AST
+    name as the template form so a second instantiation that binds T
+    to a different concrete type re-runs the same substitution.  The
+    resolved name is captured in ResolvedClassType for codegen. }
+  if SameText(ObjSym.Name, AExpr.ObjectName) then
+    AExpr.ObjectName := ObjSym.Name;
 
   { Constructor call with args: TypeName.Create(arg1, arg2, ...) or any
     method on a class type starting with Create (e.g. CreateFmt). }
@@ -6147,21 +6187,23 @@ begin
   begin
     if ObjSym.TypeDesc.Kind <> tyClass then
       SemanticError(
-        Format('Cannot construct non-class type ''%s''', [AExpr.ObjectName]),
+        Format('Cannot construct non-class type ''%s''', [ObjSym.Name]),
         AExpr.Line, AExpr.Col);
     if TRecordTypeDesc(ObjSym.TypeDesc).HasAbstractMethods then
       SemanticError(
-        Format('Cannot instantiate abstract class ''%s''', [AExpr.ObjectName]),
+        Format('Cannot instantiate abstract class ''%s''', [ObjSym.Name]),
         AExpr.Line, AExpr.Col);
     for I := 0 to AExpr.Args.Count - 1 do
       AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
     { Try to find a user-defined constructor method for type checking.
       Use overload resolution so the correct variant is chosen when multiple
-      constructors with the same name (e.g. Create) are declared. }
-    MDecl := ResolveMethodOverload(AExpr.ObjectName, AExpr.Name,
+      constructors with the same name (e.g. Create) are declared.  Look up
+      on the resolved class name (ObjSym.Name) so generic instances pick
+      the right concrete method set. }
+    MDecl := ResolveMethodOverload(ObjSym.Name, AExpr.Name,
       AExpr.Args, AExpr.Line, AExpr.Col);
     if MDecl = nil then
-      MDecl := FindMethodDecl(AExpr.ObjectName, AExpr.Name);
+      MDecl := FindMethodDecl(ObjSym.Name, AExpr.Name);
     if MDecl <> nil then
       AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
     AExpr.ResolvedMethod    := MDecl;
