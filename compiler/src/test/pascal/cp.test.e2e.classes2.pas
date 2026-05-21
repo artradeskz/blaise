@@ -47,6 +47,7 @@ type
     procedure TestRun_Interface_Is_As_Roundtrip;
     procedure TestRun_Supports_TwoArg_BooleanResult;
     procedure TestRun_Supports_ThreeArg_AssignsAndCalls;
+    procedure TestRun_ConstructorOverload_PicksCorrectArity;
   end;
 
 implementation
@@ -452,6 +453,32 @@ const
     end.
     ''';
 
+  { Constructor overload where the 2-arg variant is declared first.  The
+    1-arg call site must resolve to the 1-arg constructor; otherwise the
+    semantic pass rejects the program with "No default value for parameter
+    'B' of 'Create'".  Picks the body via A only, so the output proves
+    the 1-arg constructor body actually ran. }
+  SrcCtorOverloadArity =
+    '''
+        program P;
+        type
+          TFoo = class
+            FA: Integer;
+            constructor Create(A: Integer; B: Integer); overload;
+            constructor Create(A: Integer); overload;
+          end;
+          constructor TFoo.Create(A: Integer; B: Integer);
+          begin Self.FA := A + B end;
+          constructor TFoo.Create(A: Integer);
+          begin Self.FA := A end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create(42);
+          WriteLn(F.FA);
+          F.Free
+        end.
+        ''';
+
 function LoadMilestoneFile(const APath: string; out ASrc: string): Boolean;
 var Lst: TStringList;
 begin
@@ -780,6 +807,15 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcSupportsThreeArgRun, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('hello', 'hello' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ConstructorOverload_PicksCorrectArity;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcCtorOverloadArity, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1-arg constructor body ran', '42' + LE, Output);
 end;
 
 initialization

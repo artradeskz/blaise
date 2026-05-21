@@ -6108,8 +6108,13 @@ begin
         AExpr.Line, AExpr.Col);
     for I := 0 to AExpr.Args.Count - 1 do
       AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-    { Try to find a user-defined constructor method for type checking }
-    MDecl := FindMethodDecl(AExpr.ObjectName, AExpr.Name);
+    { Try to find a user-defined constructor method for type checking.
+      Use overload resolution so the correct variant is chosen when multiple
+      constructors with the same name (e.g. Create) are declared. }
+    MDecl := ResolveMethodOverload(AExpr.ObjectName, AExpr.Name,
+      AExpr.Args, AExpr.Line, AExpr.Col);
+    if MDecl = nil then
+      MDecl := FindMethodDecl(AExpr.ObjectName, AExpr.Name);
     if MDecl <> nil then
       AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
     AExpr.ResolvedMethod    := MDecl;

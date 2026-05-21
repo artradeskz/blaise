@@ -84,6 +84,14 @@ type
       to a method that has a 3-param and a 4-param (open-array) overload
       must resolve to the 3-param overload, not fail with arity mismatch. }
     procedure TestSemantic_ImplicitSelf_ExprCtx_PicksCorrectOverload;
+
+    { Constructor call site must use overload resolution.  When a class
+      declares two same-named constructors and the higher-arity overload
+      is indexed first, FindMethodDecl alone would pick it and then
+      AppendDefaultArgs would fail on the unfilled parameter that has no
+      default. }
+    procedure TestSemantic_ConstructorOverload_PicksCorrectArity;
+    procedure TestCodegen_ConstructorOverload_PicksCorrectArity;
   end;
 
 implementation
@@ -354,6 +362,29 @@ const
 
   { Two same-arity overloads — Double + Single — both reachable from an
     integer literal only by widening, with equal score → ambiguous. }
+  { Constructor overload where the 2-arg variant is declared first — so
+    FindMethodDecl would return it for the 1-arg call site.  Without
+    overload resolution at the constructor call, AppendDefaultArgs would
+    fail because parameter B of the 2-arg Create has no default. }
+  SrcCtorOverload =
+    '''
+        program P;
+        type
+          TFoo = class
+            constructor Create(A: Integer; B: Integer); overload;
+            constructor Create(A: Integer); overload;
+          end;
+          constructor TFoo.Create(A: Integer; B: Integer);
+          begin end;
+          constructor TFoo.Create(A: Integer);
+          begin end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create(42);
+          F.Free
+        end.
+        ''';
+
   SrcAmbiguousOverload =
     'program P;'                                            + LineEnding +
     'procedure F(D: Double); overload;'                     + LineEnding +
@@ -571,6 +602,31 @@ begin
     Mangled name: Run(const S; out R: string; out N: Integer) }
   AssertTrue('calls 3-param overload',
     Pos('call $THelper_Run_D_S_V_S_V_i(', IR) > 0);
+end;
+
+procedure TOverloadTests.TestSemantic_ConstructorOverload_PicksCorrectArity;
+var
+  Prog: TProgram;
+begin
+  { Must analyse without error.  Previously raised:
+    "No default value for parameter 'B' of 'Create'" because the
+    constructor call site used FindMethodDecl, which picked the 2-arg
+    overload (indexed first) and then failed to fill parameter B. }
+  Prog := AnalyseSrc(SrcCtorOverload);
+  Prog.Free;
+end;
+
+procedure TOverloadTests.TestCodegen_ConstructorOverload_PicksCorrectArity;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcCtorOverload);
+  { The 1-arg constructor must be called, not the 2-arg one.
+    Mangled name for Create(A: Integer) is $TFoo_Create_D_i. }
+  AssertTrue('calls 1-arg constructor overload',
+    Pos('call $TFoo_Create_D_i(', IR) > 0);
+  AssertFalse('does not call 2-arg constructor overload',
+    Pos('call $TFoo_Create_D_i_i(', IR) > 0);
 end;
 
 initialization
