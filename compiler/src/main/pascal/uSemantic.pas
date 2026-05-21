@@ -1906,11 +1906,15 @@ begin
   { Register standalone proc/func signatures before class method bodies so that
     methods can call free functions declared in the same block. }
   AnalyseStandaloneDecls(ABlock);
-  AnalyseMethodBodies(ABlock);
   FTable.PushScope;
   Inc(FScopeDepth);
   try
+    { Register var declarations before method bodies so that class methods can
+      resolve identifiers that refer to program-level globals (issue #43).
+      The same applies inside nested function/procedure blocks: locals must be
+      in scope before any method body declared in this block is analysed. }
     AnalyseVarDecls(ABlock);
+    AnalyseMethodBodies(ABlock);
     AnalyseStandaloneBodies(ABlock);
     AnalyseStmts(ABlock);
     { After all bodies are analysed, mark inline candidates so codegen can

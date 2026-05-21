@@ -68,8 +68,10 @@ type
     procedure TestParse_SeparateImpl_ForwardDeclNoBody;
     procedure TestParse_SeparateImpl_QualifiedName;
     procedure TestSemantic_SeparateImpl_OK;
+    procedure TestSemantic_MethodBody_AccessesProgramGlobal;
     procedure TestCodegen_SeparateImpl_EmitsMethod;
     procedure TestCodegen_MethodCall_CaseInsensitive;
+    procedure TestCodegen_MethodBody_ReadsProgramGlobal;
 
     { ------------------------------------------------------------------ }
     { Free built-in                                                        }
@@ -706,6 +708,49 @@ end;
 procedure TClassTests.TestSemantic_SeparateImpl_OK;
 begin
   AnalyseSrc(SrcSeparateImpl).Free;
+end;
+
+procedure TClassTests.TestSemantic_MethodBody_AccessesProgramGlobal;
+begin
+  { Regression for issue #43: a class method body must be able to resolve
+    program-level globals declared above the class type. }
+  AnalyseSrc(
+    '''
+        program P;
+        var gValue: Integer;
+        type
+          TFoo = class
+            function GetValue: Integer;
+          end;
+        function TFoo.GetValue: Integer;
+        begin
+          Result := gValue
+        end;
+        begin end.
+        ''').Free;
+end;
+
+procedure TClassTests.TestCodegen_MethodBody_ReadsProgramGlobal;
+var
+  IR: string;
+begin
+  { Regression for issue #43: method body codegen must emit a load of the
+    program-level global via its $-prefixed data symbol. }
+  IR := GenIR(
+    '''
+        program P;
+        var gValue: Integer;
+        type
+          TFoo = class
+            function GetValue: Integer;
+          end;
+        function TFoo.GetValue: Integer;
+        begin
+          Result := gValue
+        end;
+        begin end.
+        ''');
+  AssertTrue('method loads global $gValue', Pos('loadw $gValue', IR) > 0);
 end;
 
 procedure TClassTests.TestCodegen_SeparateImpl_EmitsMethod;

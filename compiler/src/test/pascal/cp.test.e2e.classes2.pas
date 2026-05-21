@@ -48,6 +48,7 @@ type
     procedure TestRun_Supports_TwoArg_BooleanResult;
     procedure TestRun_Supports_ThreeArg_AssignsAndCalls;
     procedure TestRun_ConstructorOverload_PicksCorrectArity;
+    procedure TestRun_MethodReadsProgramGlobal;
   end;
 
 implementation
@@ -458,6 +459,31 @@ const
     semantic pass rejects the program with "No default value for parameter
     'B' of 'Create'".  Picks the body via A only, so the output proves
     the 1-arg constructor body actually ran. }
+  { Regression for issue #43: a class method body must be able to read and
+    write a program-level global variable declared above the class type. }
+  SrcMethodReadsProgramGlobal =
+    '''
+        program GlobalAccessBug;
+        var
+          gValue: Integer;
+        type
+          TFoo = class
+            function GetValue: Integer;
+          end;
+        function TFoo.GetValue: Integer;
+        begin
+          Result := gValue
+        end;
+        var
+          Foo: TFoo;
+        begin
+          gValue := 42;
+          Foo := TFoo.Create;
+          WriteLn(Foo.GetValue);
+          Foo.Free
+        end.
+        ''';
+
   SrcCtorOverloadArity =
     '''
         program P;
@@ -816,6 +842,15 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcCtorOverloadArity, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1-arg constructor body ran', '42' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_MethodReadsProgramGlobal;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcMethodReadsProgramGlobal, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('global read by method', '42' + LE, Output);
 end;
 
 initialization
