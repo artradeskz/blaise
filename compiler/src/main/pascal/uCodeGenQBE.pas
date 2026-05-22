@@ -3117,7 +3117,7 @@ begin
     ValTemp := EmitExpr(AAssign.Expr);
     QType := QbeTypeOf(ISFld.TypeDesc);
     if QType = 'w' then
-      EmitLine(Format('  storew %s, %s', [ValTemp, ObjTemp]))
+      EmitLine(Format('  %s %s, %s', [StoreInstrFor(ISFld.TypeDesc), ValTemp, ObjTemp]))
     else
     begin
       if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
@@ -8317,14 +8317,14 @@ begin
         PtrT := AllocTemp;
         EmitLine(Format('  %s =l add %s, %d', [PtrT, SelfT, ImplFld.Offset]));
         if QType = 'w' then
-          EmitLine(Format('  %s =w loadw %s', [T, PtrT]))
+          EmitLine(Format('  %s =w %s %s', [T, LoadInstrFor(ImplFld.TypeDesc), PtrT]))
         else
           EmitLine(Format('  %s =l loadl %s', [T, PtrT]));
       end
       else
       begin
         if QType = 'w' then
-          EmitLine(Format('  %s =w loadw %s', [T, SelfT]))
+          EmitLine(Format('  %s =w %s %s', [T, LoadInstrFor(ImplFld.TypeDesc), SelfT]))
         else
           EmitLine(Format('  %s =l loadl %s', [T, SelfT]));
       end;

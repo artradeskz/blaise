@@ -54,6 +54,8 @@ type
     procedure TestRun_SmallInt_Negative;
     procedure TestRun_Word_MaxValue;
     procedure TestRun_MixedRecord_RoundTrip;
+    procedure TestRun_ImplicitSelf_ByteFields_NoBleed;
+    procedure TestRun_ImplicitSelf_SmallIntWord_Fields;
   end;
 
 implementation
@@ -361,6 +363,62 @@ const
     end.
     ''';
 
+  SrcImplicitSelfByteFields = '''
+    program P;
+    type
+      TFoo = class
+        A: Byte;
+        B: Byte;
+        C: Byte;
+        D: Byte;
+        procedure SetAll;
+        procedure Show;
+      end;
+    procedure TFoo.SetAll;
+    begin
+      A := 1; B := 2; C := 3; D := 4;
+    end;
+    procedure TFoo.Show;
+    begin
+      WriteLn(A); WriteLn(B); WriteLn(C); WriteLn(D);
+    end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create;
+      F.SetAll;
+      F.Show;
+      F.Free
+    end.
+    ''';
+
+  SrcImplicitSelfSmallIntFields = '''
+    program P;
+    type
+      TFoo = class
+        A: SmallInt;
+        B: Word;
+        procedure SetAll;
+        procedure Show;
+      end;
+    procedure TFoo.SetAll;
+    begin
+      A := -1000;
+      B := 60000;
+    end;
+    procedure TFoo.Show;
+    begin
+      WriteLn(A);
+      WriteLn(B);
+    end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create;
+      F.SetAll;
+      F.Show;
+      F.Free
+    end.
+    ''';
+
   SrcMixedRecord = '''
     program P;
     type
@@ -425,6 +483,26 @@ begin
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Tag, ID, Val, SizeOf',
     '9' + LE + '-100' + LE + '12345' + LE + '8' + LE, Output);
+end;
+
+procedure TSmallIntWordE2ETests.TestRun_ImplicitSelf_ByteFields_NoBleed;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcImplicitSelfByteFields, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('per-field bytes, no over-write bleed',
+    '1' + LE + '2' + LE + '3' + LE + '4' + LE, Output);
+end;
+
+procedure TSmallIntWordE2ETests.TestRun_ImplicitSelf_SmallIntWord_Fields;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcImplicitSelfSmallIntFields, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('SmallInt sign-extend + Word zero-extend',
+    '-1000' + LE + '60000' + LE, Output);
 end;
 
 initialization
