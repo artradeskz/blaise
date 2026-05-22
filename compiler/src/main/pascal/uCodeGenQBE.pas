@@ -6187,6 +6187,16 @@ begin
             EmitLine(Format('  %s =w sub %s, 1', [R, T]));
             T := R;
           end;
+          tyByte:     EmitLine(Format('  %s =w copy 255', [T]));
+          tyBoolean:  EmitLine(Format('  %s =w copy 1', [T]));
+          tySmallInt: EmitLine(Format('  %s =w copy 32767', [T]));
+          tyWord:     EmitLine(Format('  %s =w copy 65535', [T]));
+          tyInteger:  EmitLine(Format('  %s =w copy 2147483647', [T]));
+          tyUInt32:   EmitLine(Format('  %s =w copy 4294967295', [T]));
+          tyInt64:    EmitLine(Format('  %s =l copy 9223372036854775807', [T]));
+          tyUInt64:   EmitLine(Format('  %s =l copy 18446744073709551615', [T]));
+          tyEnum:     EmitLine(Format('  %s =w copy %d', [T,
+            TEnumTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).Members.Count - 1]));
         else
           begin
             { Open-array: load the high-index slot and truncate to Integer (w).
@@ -6210,6 +6220,12 @@ begin
               TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).LowBound]));
           tyString:
             EmitLine(Format('  %s =w copy 0', [T]));
+          tyByte, tyBoolean, tyWord, tyUInt32, tyEnum:
+            EmitLine(Format('  %s =w copy 0', [T]));
+          tySmallInt: EmitLine(Format('  %s =w copy -32768', [T]));
+          tyInteger:  EmitLine(Format('  %s =w copy -2147483648', [T]));
+          tyInt64:    EmitLine(Format('  %s =l copy -9223372036854775808', [T]));
+          tyUInt64:   EmitLine(Format('  %s =l copy 0', [T]));
         else
           EmitLine(Format('  %s =w copy 0', [T]));
         end;

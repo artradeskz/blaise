@@ -2847,3 +2847,68 @@ underlying bug rather than fix it.  `Round(10 / 3)` would still
 evaluate `10 / 3` as integer division to `3` before passing it to
 `Round`, so the result would silently be `3` regardless of whether
 the rational answer rounds up or down.
+
+== `High` and `Low` on Ordinal Types
+
+=== Decision
+
+`High(T)` and `Low(T)` accept any ordinal type — `Integer`, `Int64`,
+`UInt32`, `UInt64`, `SmallInt`, `Word`, `Byte`, `Boolean`, and any
+user-declared `enum` — in addition to the array and string forms
+documented above.  The argument may be either a type name (e.g.
+`High(Integer)`) or a value of that type (e.g. `High(SomeVar)`).
+The result type is the argument's own type, not `Integer`, so
+`High(Int64)` has type `Int64` and round-trips through 64-bit code
+paths without truncation.
+
+Floating-point types are explicitly rejected with a targeted error
+message that points the user at `MaxDouble`/`MinDouble` and the
+`Math.Infinity` constants.
+
+=== Rationale
+
+The idiom `for I := Low(T) to High(T)` is one of the few places in
+Pascal where the bounds of a primitive type are expressed without a
+magic number.  Restricting `High`/`Low` to arrays and strings forced
+users to write `2147483647` or `MaxInt` in scan loops and saturation
+guards, which is both noisier and easier to get wrong on the
+`Int64`/`UInt64` end of the range.
+
+The result type matches the argument deliberately.  Returning
+`Integer` for every form would make `High(Int64)` lossy and would
+also break overload resolution against `Int64`-typed call sites.
+Returning the argument type composes naturally with assignment and
+comparison.
+
+The bounds are folded at compile time — `High(Integer)` emits a single
+QBE `=w copy 2147483647` instruction.  No runtime call, no extra
+memory.
+
+=== Floating-point types
+
+`High(Double)` is a category error in Pascal: ordinal bounds and
+floating-point extremes are different concepts.  IEEE 754 has
+`+inf`/`-inf`, finite `MaxDouble`/`-MaxDouble`, a smallest positive
+normal `MinDouble`, and `NaN` — none of which `High`/`Low` could
+disambiguate.  The fix is to expose these as named constants in the
+`math` unit (`Math.Infinity`, `Math.NegInfinity`, `Math.NaN`,
+`MaxDouble`, `MinDouble`).  The compile-time error tells the user
+exactly that.
+
+=== Alternatives Rejected
+
+*Return `Integer` for every ordinal form* — rejected.  `High(Int64)`
+would lose its top bit at the call site, silently producing wrong
+results in 64-bit arithmetic.
+
+*Generalise to floats as `High(Double) = MaxDouble`* — rejected.
+Conflates two distinct concepts (ordinal upper bound vs. largest
+finite float) and doesn't generalise to `+inf` or `NaN` semantics.
+Named constants on the `math` unit are unambiguous and discoverable.
+
+*Leave the existing array/string-only behaviour and tell users to
+write `2147483647`* — rejected.  Discoverability is the point: every
+Pascal programmer reaches for `High`/`Low` first, and finding a
+helpful targeted error message ("use `Math.Infinity`...") only on
+floats is a much better DX than a generic "must be an array" error on
+every primitive.

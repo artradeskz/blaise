@@ -5307,28 +5307,48 @@ begin
     Exit;
   end;
 
-  if SameText(AExpr.Name, 'High') then
+  if SameText(AExpr.Name, 'High') or SameText(AExpr.Name, 'Low') then
   begin
     if AExpr.Args.Count <> 1 then
-      SemanticError('High requires exactly one argument', AExpr.Line, AExpr.Col);
-    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not (ArgType.Kind in [tyOpenArray, tyStaticArray, tyDynArray, tyString]) then
-      SemanticError('High argument must be an array or string', AExpr.Line, AExpr.Col);
-    Result := FTable.TypeInteger;
-    AExpr.ResolvedType := Result;
-    Exit;
-  end;
-
-  if SameText(AExpr.Name, 'Low') then
-  begin
-    if AExpr.Args.Count <> 1 then
-      SemanticError('Low requires exactly one argument', AExpr.Line, AExpr.Col);
-    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not (ArgType.Kind in [tyOpenArray, tyStaticArray, tyDynArray, tyString]) then
-      SemanticError('Low argument must be an array or string', AExpr.Line, AExpr.Col);
-    Result := FTable.TypeInteger;
-    AExpr.ResolvedType := Result;
-    Exit;
+      SemanticError(AExpr.Name + ' requires exactly one argument',
+        AExpr.Line, AExpr.Col);
+    { Accept either a type-name identifier (e.g. High(Integer)) or a typed
+      expression (e.g. High(SomeVar)).  For type-name form, record the type
+      on the argument node so codegen can read ResolvedType directly. }
+    Sym := nil;
+    if AExpr.Args.Items[0] is TIdentExpr then
+      Sym := FTable.Lookup(TIdentExpr(AExpr.Args.Items[0]).Name);
+    if (Sym <> nil) and (Sym.Kind = skType) then
+    begin
+      ArgType := Sym.TypeDesc;
+      TIdentExpr(AExpr.Args.Items[0]).ResolvedType := ArgType;
+    end
+    else
+      ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if ArgType = nil then
+      SemanticError(AExpr.Name + ' argument has no resolved type',
+        AExpr.Line, AExpr.Col);
+    if ArgType.IsFloat then
+      SemanticError(AExpr.Name +
+        ' is not defined for floating-point types; use MaxDouble/MinDouble or Math.Infinity',
+        AExpr.Line, AExpr.Col);
+    if ArgType.Kind in [tyOpenArray, tyStaticArray, tyDynArray, tyString] then
+    begin
+      { Index-bound form: result is Integer (existing behaviour). }
+      Result := FTable.TypeInteger;
+      AExpr.ResolvedType := Result;
+      Exit;
+    end;
+    if ArgType.IsOrdinal then
+    begin
+      { Ordinal-bound form: result type is the argument's own type. }
+      Result := ArgType;
+      AExpr.ResolvedType := Result;
+      Exit;
+    end;
+    SemanticError(AExpr.Name +
+      ' argument must be an ordinal type, array, or string',
+      AExpr.Line, AExpr.Col);
   end;
 
   Sym := FTable.Lookup(AExpr.Name);

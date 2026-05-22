@@ -783,11 +783,17 @@ ArrayLiteral
  *                                value; lowers to _ClassCreate(Cls)
  *                                followed by a static call to the
  *                                resolved constructor on Cls.BaseClass.
- *   Low  ( Array | String ) : Integer  — 0 for open/dynamic arrays and strings;
- *                                        LowBound for static arrays
- *   High ( Array | String ) : Integer  — HighBound for static arrays;
- *                                        high-index slot for open arrays;
- *                                        Length(S)-1 for strings (runtime)
+ *   Low  ( Ordinal | Array | String ) : T  — for ordinal type/expression
+ *                                             returns lower bound of T;
+ *                                             0 for open/dynamic arrays and
+ *                                             strings; LowBound for static
+ *                                             arrays.  Float types: error.
+ *   High ( Ordinal | Array | String ) : T  — for ordinal type/expression
+ *                                             returns upper bound of T;
+ *                                             HighBound for static arrays;
+ *                                             high-index slot for open arrays;
+ *                                             Length(S)-1 for strings (runtime).
+ *                                             Float types: error.
  *
  * Built-in types (pre-populated in the symbol table):
  *
