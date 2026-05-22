@@ -5255,17 +5255,23 @@ begin
     Exit;
   end;
 
-  { SizeOf(TypeName) — compile-time type size, returns Integer }
+  { SizeOf(TypeName) or SizeOf(expression) — compile-time byte size,
+    returns Integer.  The codegen reads Args[0].ResolvedType.ByteSize and
+    emits a literal, so the argument is never evaluated at runtime. }
   if SameText(AExpr.Name, 'SizeOf') then
   begin
     if AExpr.Args.Count <> 1 then
       SemanticError('SizeOf requires exactly one argument', AExpr.Line, AExpr.Col);
+    Sym := nil;
     if AExpr.Args.Items[0] is TIdentExpr then
-    begin
       Sym := FTable.Lookup(TIdentExpr(AExpr.Args.Items[0]).Name);
-      if (Sym <> nil) and (Sym.Kind = skType) then
-        TIdentExpr(AExpr.Args.Items[0]).ResolvedType := Sym.TypeDesc;
-    end;
+    if (Sym <> nil) and (Sym.Kind = skType) then
+      TIdentExpr(AExpr.Args.Items[0]).ResolvedType := Sym.TypeDesc
+    else
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if TASTExpr(AExpr.Args.Items[0]).ResolvedType = nil then
+      SemanticError('SizeOf argument must be a type or typed expression',
+        AExpr.Line, AExpr.Col);
     Result := FTable.TypeInteger;
     AExpr.ResolvedType := Result;
     Exit;

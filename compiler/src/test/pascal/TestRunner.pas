@@ -14,6 +14,7 @@ uses
   cp.test.runner_filters,
   cp.test.uint64,
   cp.test.sar,
+  cp.test.sizeof,
   cp.test.smallint_word,
   cp.test.lexer,
   cp.test.parser,
