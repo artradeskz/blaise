@@ -27,7 +27,6 @@ prioritise them.
 
 - reference to function/procedure (anonymous methods)
 - cdecl/stdcall calling-convention markers on procedural types
-- Procedural type as an open-array element (probably works for free)
 
 == Language — Features Required to Complete the punit Port
 

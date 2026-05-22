@@ -7709,7 +7709,47 @@ begin
     Exit;
   end;
 
-  if AExpr is TIntLiteral then
+  if AExpr is TIndirectFuncCallExpr then
+  begin
+    { Call through an expression of procedural type: Expr(args).
+      EmitExpr on the callee yields the function pointer value directly
+      (e.g. from an array element load).  Use it as the call target without
+      an additional loadl.  For method pointers the value is the address of
+      the 16-byte (Code, Data) block, so load both halves from it. }
+    T := EmitExpr(TIndirectFuncCallExpr(AExpr).CalleeExpr);
+    if TProceduralTypeDesc(TIndirectFuncCallExpr(AExpr).ResolvedProcType).IsMethodPtr then
+    begin
+      FPtrTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, T]));
+      ArgTemp2 := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 8', [ArgTemp2, T]));
+      ArgTemp  := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ArgTemp, ArgTemp2]));
+      ArgLine  := Format('l %s', [ArgTemp]);
+    end
+    else
+    begin
+      FPtrTemp := T;  { already the function pointer value }
+      ArgLine  := '';
+    end;
+    for I := 0 to TIndirectFuncCallExpr(AExpr).Args.Count - 1 do
+    begin
+      if ArgLine <> '' then ArgLine := ArgLine + ', ';
+      ArgTemp := EmitExpr(TASTExpr(TIndirectFuncCallExpr(AExpr).Args.Items[I]));
+      ArgLine := ArgLine + Format('%s %s',
+        [QbeTypeOf(TProcParamInfo(
+           TProceduralTypeDesc(TIndirectFuncCallExpr(AExpr).ResolvedProcType).Params.Items[I]
+         ).TypeDesc), ArgTemp]);
+    end;
+    if TProceduralTypeDesc(TIndirectFuncCallExpr(AExpr).ResolvedProcType).ReturnType <> nil then
+      QType := QbeTypeOf(TProceduralTypeDesc(TIndirectFuncCallExpr(AExpr).ResolvedProcType).ReturnType)
+    else
+      QType := 'w';
+    T := AllocTemp;
+    EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FPtrTemp, ArgLine]));
+    Result := T;
+  end
+  else if AExpr is TIntLiteral then
   begin
     T := AllocTemp;
     if TIntLiteral(AExpr).IsUInt64 or
@@ -10170,7 +10210,8 @@ begin
     tyByte, tyBoolean: StoreInstr := 'storeb';
     tySmallInt, tyWord: StoreInstr := 'storeh';
     tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
-    tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: StoreInstr := 'storel';
+    tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass,
+    tyProcedural: StoreInstr := 'storel';
   else
     StoreInstr := 'storew';
   end;

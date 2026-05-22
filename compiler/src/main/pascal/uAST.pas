@@ -394,6 +394,18 @@ type
     destructor Destroy; override;
   end;
 
+  { Call through an arbitrary expression of procedural type: Expr(args).
+    Used when the callee is not a simple identifier — e.g. an array element
+    (Fns[I]()) or a field access result.  ResolvedProcType is set by uSemantic. }
+  TIndirectFuncCallExpr = class(TASTExpr)
+  public
+    CalleeExpr:      TASTExpr;   { owned — the expression that yields the proc pointer }
+    Args:            TObjectList; { owned TASTExpr items }
+    ResolvedProcType: TObject;   { TProceduralTypeDesc — not owned; set by uSemantic }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   { Pointer dereference expression: 'PtrExpr^' — result type is BaseType of pointer }
   TDerefExpr = class(TASTExpr)
   public
@@ -1060,6 +1072,21 @@ end;
 
 destructor TFuncCallExpr.Destroy;
 begin
+  Args.Free;
+  inherited Destroy;
+end;
+
+{ TIndirectFuncCallExpr }
+
+constructor TIndirectFuncCallExpr.Create;
+begin
+  inherited Create;
+  Args := TObjectList.Create(True);
+end;
+
+destructor TIndirectFuncCallExpr.Destroy;
+begin
+  CalleeExpr.Free;
   Args.Free;
   inherited Destroy;
 end;

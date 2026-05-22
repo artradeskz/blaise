@@ -124,6 +124,7 @@ type
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
     function  AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
     function  AnalyseFuncCallExpr(AExpr: TFuncCallExpr): TTypeDesc;
+    function  AnalyseIndirectFuncCallExpr(AExpr: TIndirectFuncCallExpr): TTypeDesc;
     function  AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
     function  AnalyseBinaryExpr(ABin: TBinaryExpr): TTypeDesc;
     function  AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
@@ -6528,6 +6529,8 @@ begin
     end;
     Result := Sym.TypeDesc;
   end
+  else if AExpr is TIndirectFuncCallExpr then
+    Result := AnalyseIndirectFuncCallExpr(TIndirectFuncCallExpr(AExpr))
   else if AExpr is TFuncCallExpr then
     Result := AnalyseFuncCallExpr(TFuncCallExpr(AExpr))
   else if AExpr is TMethodCallExpr then
@@ -7599,6 +7602,32 @@ begin
       Format('String subscript index must be numeric, got ''%s''', [IdxType.Name]),
       AExpr.Line, AExpr.Col);
   Result := FTable.TypeInteger;
+end;
+
+function TSemanticAnalyser.AnalyseIndirectFuncCallExpr(AExpr: TIndirectFuncCallExpr): TTypeDesc;
+var
+  CalleeType: TTypeDesc;
+  ProcDesc:   TProceduralTypeDesc;
+  I:          Integer;
+begin
+  CalleeType := AnalyseExpr(AExpr.CalleeExpr);
+  if (CalleeType = nil) or (CalleeType.Kind <> tyProcedural) then
+  begin
+    SemanticError(
+      'Expression is not callable — expected procedural type',
+      AExpr.Line, AExpr.Col);
+    Result := FTable.TypeInteger;
+    Exit;
+  end;
+  ProcDesc := TProceduralTypeDesc(CalleeType);
+  AExpr.ResolvedProcType := ProcDesc;
+  for I := 0 to AExpr.Args.Count - 1 do
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+  if ProcDesc.ReturnType <> nil then
+    Result := ProcDesc.ReturnType
+  else
+    Result := FTable.TypeInteger;
+  AExpr.ResolvedType := Result;
 end;
 
 procedure TSemanticAnalyser.CoerceToCharOrd(ALit: TStringLiteral);

@@ -2908,8 +2908,9 @@ var
   Line, Col:  Integer;
   ZeroNode:   TIntLiteral;
   NegNode:    TBinaryExpr;
-  SubNode:    TStringSubscriptExpr;
-  ArrNode:    TArrayLiteralExpr;
+  SubNode:       TStringSubscriptExpr;
+  ArrNode:       TArrayLiteralExpr;
+  IndCallNode:   TIndirectFuncCallExpr;
   ParseIntV:    Int64;
   ParseIntFlag: Boolean;
 begin
@@ -3293,10 +3294,37 @@ begin
       'Expected expression at line %d col %d in %s',
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   end;
-  { Postfix chaining loop: Expr.Field, Expr.Method(...), Expr[i], Expr^ }
-  while Check(tkDot) or Check(tkLBracket) or Check(tkCaret) do
+  { Postfix chaining loop: Expr.Field, Expr.Method(...), Expr[i], Expr^, Expr(...) }
+  while Check(tkDot) or Check(tkLBracket) or Check(tkCaret) or Check(tkLParen) do
   begin
-    if Check(tkDot) then
+    if Check(tkLParen) then
+    begin
+      { Indirect call through a non-identifier expression: Expr(args).
+        Build TIndirectFuncCallExpr with Result as the callee. }
+      IndCallNode            := TIndirectFuncCallExpr.Create;
+      IndCallNode.Line       := FCurrent.Line;
+      IndCallNode.Col        := FCurrent.Col;
+      IndCallNode.CalleeExpr := Result;
+      Result                 := nil;
+      try
+        Advance;  { consume '(' }
+        if not Check(tkRParen) then
+        begin
+          IndCallNode.Args.Add(ParseExpr);
+          while Check(tkComma) do
+          begin
+            Advance;
+            IndCallNode.Args.Add(ParseExpr);
+          end;
+        end;
+        Expect(tkRParen);
+      except
+        IndCallNode.Free;
+        raise;
+      end;
+      Result := IndCallNode;
+    end
+    else if Check(tkDot) then
     begin
       Advance;  { consume '.' }
       if not Check(tkIdent) then

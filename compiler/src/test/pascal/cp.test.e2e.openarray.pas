@@ -36,6 +36,9 @@ type
     procedure TestRun_StaticToOpen_Sum;
     procedure TestRun_StaticToOpen_PassToNested;
     procedure TestRun_StaticToOpen_ConstParam_NoMutation;
+
+    { Procedural type as open-array element }
+    procedure TestRun_OpenArray_ProcType_CallEach;
   end;
 
 implementation
@@ -268,6 +271,46 @@ begin
   finally
     Lines.Free
   end
+end;
+
+{ ------------------------------------------------------------------ }
+{ Tests — procedural type as open-array element                      }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcProcTypeOpenArray =
+    '''
+    program P;
+    type TIntFn = function: Integer;
+
+    function ApplyAll(const Fns: array of TIntFn): Integer;
+    var I: Integer;
+    begin
+      Result := 0;
+      for I := 0 to High(Fns) do
+        Result := Result + Fns[I]();
+    end;
+
+    function One: Integer; begin Result := 1; end;
+    function Two: Integer; begin Result := 2; end;
+    function Three: Integer; begin Result := 3; end;
+
+    var A: array[0..2] of TIntFn;
+    begin
+      A[0] := @One;
+      A[1] := @Two;
+      A[2] := @Three;
+      WriteLn(ApplyAll(A));
+    end.
+    ''';
+
+procedure TE2EOpenArrayTests.TestRun_OpenArray_ProcType_CallEach;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(SrcProcTypeOpenArray, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1+2+3=6', '6', Trim(Output));
 end;
 
 initialization
