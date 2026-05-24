@@ -21,7 +21,8 @@ unit uSemantic;
 interface
 
 uses
-  SysUtils, Classes, contnrs, uAST, uSymbolTable, uStrCompat;
+  SysUtils, Classes, contnrs, uAST, uSymbolTable, uStrCompat,
+  uUnitInterface;
 
 type
   ESemanticError = class(Exception);
@@ -43,6 +44,13 @@ type
     FCurrentUnitName:      string;       { name of the unit/program currently being analysed }
     FCurrentEnclosingDecl: TMethodDecl;  { the innermost standalone proc/func currently being analysed;
                                            nil at program level.  Used to set EnclosingDecl on nested procs. }
+    FUnitIfaces:           TStringList;  { owned list (case-insensitive) — keys are unit
+                                           names, Objects[I] is the TUnitInterface (NOT
+                                           owned by the analyser; .bif ifaces are owned by
+                                           Loader.PrebuiltIfaces, source-built ifaces by
+                                           UnitIfaces in Blaise.pas).  Registered alongside
+                                           ImportUnitInterface and after AnalyseUnitForExport
+                                           so per-unit lookups can find an iface by name. }
     FCurrentUsesChain:     TStringList;  { owned — uses-chain visible to FCurrentUnitName.
                                            Index 0 is the implicit System unit; entries 1..N-1
                                            come from the analysed program/unit's UsedUnits in
@@ -237,6 +245,16 @@ type
       goes through FProcIndex instead. }
     procedure RegisterImportedRoutine(const AName: string;
                                       ADecl: TMethodDecl);
+
+    { Register a TUnitInterface in FUnitIfaces, keyed by AIface.Name.
+      AIface is NOT owned — caller (Blaise.pas) retains lifetime.
+      Subsequent registrations of the same name replace the entry
+      (last-wins, paralleling "uses-chain last-wins").  Task #44 step 3. }
+    procedure RegisterUnitIface(AIface: TUnitInterface);
+
+    { Look up a registered TUnitInterface by unit name.  Returns nil
+      if not registered.  Case-insensitive. }
+    function FindUnitIface(const AUnitName: string): TUnitInterface;
   end;
 
 implementation
@@ -258,11 +276,14 @@ begin
   FGenericFuncTemplates.CaseSensitive := False;
   FCurrentUsesChain     := TStringList.Create;
   FCurrentUsesChain.CaseSensitive := False;
+  FUnitIfaces           := TStringList.Create;
+  FUnitIfaces.CaseSensitive := False;
   FLoopDepth            := 0;
 end;
 
 destructor TSemanticAnalyser.Destroy;
 begin
+  FUnitIfaces.Free;
   FCurrentUsesChain.Free;
   FGenericFuncTemplates.Free;
   FProcIndex.Free;
@@ -1225,6 +1246,29 @@ procedure TSemanticAnalyser.RegisterImportedRoutine(const AName: string;
                                                     ADecl: TMethodDecl);
 begin
   FProcIndex.AddObject(AName, ADecl);
+end;
+
+procedure TSemanticAnalyser.RegisterUnitIface(AIface: TUnitInterface);
+var
+  Idx: Integer;
+begin
+  if AIface = nil then Exit;
+  Idx := FUnitIfaces.IndexOf(AIface.Name);
+  if Idx >= 0 then
+    FUnitIfaces.Objects[Idx] := AIface
+  else
+    FUnitIfaces.AddObject(AIface.Name, AIface);
+end;
+
+function TSemanticAnalyser.FindUnitIface(const AUnitName: string): TUnitInterface;
+var
+  Idx: Integer;
+begin
+  Idx := FUnitIfaces.IndexOf(AUnitName);
+  if Idx >= 0 then
+    Result := TUnitInterface(FUnitIfaces.Objects[Idx])
+  else
+    Result := nil;
 end;
 
 procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);

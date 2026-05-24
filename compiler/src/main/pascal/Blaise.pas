@@ -701,9 +701,13 @@ begin
             source-loaded deps.  Order is dependency-leaf-first so
             cross-references resolve. }
           for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
+          begin
             ImportUnitInterface(
               TUnitInterface(Loader.PrebuiltIfaces.Items[I]),
               Semantic.GetSymbolTable, Semantic);
+            Semantic.RegisterUnitIface(
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]));
+          end;
           for I := 0 to Units.Count - 1 do
           begin
             Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
@@ -713,6 +717,8 @@ begin
             UnitIfaces.Add(ExportUnitInterface(TUnit(Units.Items[I]),
                                                UnitIfaces,
                                                Semantic.GetSymbolTable));
+            Semantic.RegisterUnitIface(
+              TUnitInterface(UnitIfaces.Items[UnitIfaces.Count - 1]));
             { Emit on-disk artifact when --emit-iface DIR was passed.
               Naming is <DIR>/<UnitName>.bif — flat directory, lower-
               cased unit name is intentional so case-insensitive
