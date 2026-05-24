@@ -27,7 +27,7 @@ uses
 type
   ESemanticError = class(Exception);
 
-  TSemanticAnalyser = class
+  TSemanticAnalyser = class(TUsesChainProvider)
   private
     FTable:                TSymbolTable;
     FProg:                 TProgram;      { current program being analysed; set in Analyse }
@@ -316,8 +316,11 @@ type
       conflicts are possible — semantics already error on name
       duplicates), so this acts as an order-preserving probe that
       will become load-bearing only once step 9 removes the flat
-      merge.  Until then it's plumbing.  Task #44 step 5. }
-    function LookupViaUsesChain(const AName: string): TSymbol;
+      merge.  Until then it's plumbing.  Task #44 step 5.
+
+      Overrides TUsesChainProvider so TSymbolTable.Lookup can call
+      us back through the abstract base (step 7). }
+    function LookupViaUsesChain(const AName: string): TSymbol; override;
   end;
 
 implementation
@@ -718,6 +721,7 @@ begin
   FProg := AProg;
   FCurrentUnitName := AProg.Name;
   BuildUsesChain(AProg.UsedUnits);
+  FTable.UsesChainProvider := Self;
   AnalyseBlock(AProg.Block);
   { Transfer symbol table ownership to the program so that TTypeDesc
     objects (referenced by ResolvedType pointers on AST nodes) outlive
@@ -1034,6 +1038,7 @@ begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
   BuildUsesChain(AUnit.UsedUnits);
+  FTable.UsesChainProvider := Self;
   { Auto-tag every global Define within this unit's analysis with the
     unit name — populates TSymbol.OwningUnit for the source-compiled-
     dep path, paralleling uSemanticImport for the .bif-loaded path.
@@ -1352,30 +1357,36 @@ var
   Iface: TUnitInterface;
   Sym:   TSymbol;
 begin
-  { Right-to-left walk = "last in uses wins". }
-  for I := FCurrentUsesChain.Count - 1 downto 0 do
-  begin
-    Iface := FindUnitIface(FCurrentUsesChain.Strings[I]);
-    if Iface = nil then Continue;
-    if not Iface.HasSymbol(AName) then Continue;
-
-    { The flat FTable currently holds the canonical TSymbol for AName
-      (only one — name collisions are impossible at the semantic level
-      today).  Step 9 will remove the flat merge; this lookup will
-      then resolve from a per-unit symbol pool instead. }
-    Sym := FTable.Lookup(AName);
-    if Sym = nil then Continue;
-    if Sym.OwningUnit <> '' then
-      if not SameText(Sym.OwningUnit, FCurrentUsesChain.Strings[I]) then
-        Continue;
-
-    if IsVisibleFromUnit(Sym, FCurrentUnitName, FCurrentClass) then
-    begin
-      Result := Sym;
-      Exit;
-    end;
-  end;
   Result := nil;
+  if FTable = nil then Exit;
+  { Right-to-left walk = "last in uses wins". }
+  FTable.BypassUsesChain := True;
+  try
+    for I := FCurrentUsesChain.Count - 1 downto 0 do
+    begin
+      Iface := FindUnitIface(FCurrentUsesChain.Strings[I]);
+      if Iface = nil then Continue;
+      if not Iface.HasSymbol(AName) then Continue;
+
+      { The flat FTable currently holds the canonical TSymbol for
+        AName (only one — name collisions are impossible at the
+        semantic level today).  Step 9 will remove the flat merge;
+        this resolves from a per-unit symbol pool then. }
+      Sym := FTable.Lookup(AName);
+      if Sym = nil then Continue;
+      if Sym.OwningUnit <> '' then
+        if not SameText(Sym.OwningUnit, FCurrentUsesChain.Strings[I]) then
+          Continue;
+
+      if IsVisibleFromUnit(Sym, FCurrentUnitName, FCurrentClass) then
+      begin
+        Result := Sym;
+        Exit;
+      end;
+    end;
+  finally
+    FTable.BypassUsesChain := False;
+  end;
 end;
 
 function TSemanticAnalyser.IsVisibleFromUnit(ASym: TSymbol;

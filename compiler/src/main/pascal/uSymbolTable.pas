@@ -372,6 +372,15 @@ type
   {  Symbol table                                                       }
   { ------------------------------------------------------------------ }
 
+  { Abstract chain-lookup provider.  TSemanticAnalyser inherits from
+    this and overrides LookupViaUsesChain so TSymbolTable can call
+    back without depending on uSemantic.  Returns nil when the chain
+    has no visible binding for AName. }
+  TUsesChainProvider = class
+  public
+    function LookupViaUsesChain(const AName: string): TSymbol; virtual;
+  end;
+
   TSymbolTable = class
   private
     FScopeStack: TObjectList;   { owned TScope, index 0 = global }
@@ -412,6 +421,17 @@ type
     FTypePointer: TPointerTypeDesc;  { untyped Pointer }
     FTypePChar:   TTypeDesc;         { opaque C pointer }
 
+    { Optional hook into uses-chain lookup.  Set by TSemanticAnalyser
+      so Lookup() can consult per-unit visibility after exhausting the
+      pushed scopes but BEFORE falling back to the global scope.
+      Task #44 step 7. }
+    FUsesChainProvider: TUsesChainProvider;
+
+    { Recursion guard.  TSemanticAnalyser.LookupViaUsesChain (which
+      sits behind FUsesChainLookup) calls FTable.Lookup itself to
+      retrieve the canonical TSymbol — without this flag we'd loop. }
+    FBypassUsesChain: Boolean;
+
     FDefineOwningUnit: string;       { auto-applied to Sym.OwningUnit on Define
                                        when the symbol has no explicit value;
                                        set by AnalyseUnit/AnalyseUnitForExport
@@ -443,6 +463,19 @@ type
       explicit value.  Empty string clears the context. }
     property DefineOwningUnit: string read FDefineOwningUnit
                                        write FDefineOwningUnit;
+
+    { Hook into the analyser's uses-chain lookup.  When non-nil,
+      Lookup() consults the chain after pushed scopes and before the
+      global scope.  Wired by TSemanticAnalyser.  Task #44 step 7. }
+    property UsesChainProvider: TUsesChainProvider read FUsesChainProvider
+                                                    write FUsesChainProvider;
+
+    { Recursion guard for the chain hook.  TSemanticAnalyser's chain
+      walker calls Lookup itself to retrieve the canonical TSymbol;
+      flipping this flag for the duration of that call bypasses the
+      hook to break recursion. }
+    property BypassUsesChain: Boolean read FBypassUsesChain
+                                       write FBypassUsesChain;
 
     { Type lookup — case-insensitive, returns nil if not found }
     function FindType(const AName: string): TTypeDesc;
@@ -519,6 +552,18 @@ function IsUnmangledUnit(const AUnitName: string): Boolean;
 function MangleUnitPrefix(const AUnitName: string): string;
 
 implementation
+
+{ ------------------------------------------------------------------ }
+{ TUsesChainProvider                                                  }
+{ ------------------------------------------------------------------ }
+
+function TUsesChainProvider.LookupViaUsesChain(const AName: string): TSymbol;
+begin
+  { Base impl never matches; descendants override.  Provided so a
+    standalone TSymbolTable (no analyser attached) still behaves
+    sensibly if a provider isn't wired. }
+  Result := nil;
+end;
 
 { ------------------------------------------------------------------ }
 { TTypeDesc                                                           }
@@ -1634,15 +1679,40 @@ begin
 end;
 
 function TSymbolTable.Lookup(const AName: string): TSymbol;
+var
+  I: Integer;
 begin
-  Result := CurrentScope.Lookup(AName);
+  { Walk pushed scopes (1..N) first — locals, params, for-loop vars
+    etc.  Those don't carry OwningUnit and aren't subject to the
+    uses-chain filter. }
+  for I := FScopeStack.Count - 1 downto 1 do
+  begin
+    Result := TScope(FScopeStack.Items[I]).LookupLocal(AName);
+    if Result <> nil then Exit;
+  end;
+
+  { Pushed scopes exhausted.  Consult the uses-chain provider before
+    the global merged scope — this is the per-unit visibility switch
+    (task #44 step 7).  Bypassed when the chain walker itself is
+    calling us back for the canonical TSymbol. }
+  if (FUsesChainProvider <> nil) and not FBypassUsesChain then
+  begin
+    Result := FUsesChainProvider.LookupViaUsesChain(AName);
+    if Result <> nil then Exit;
+  end;
+
+  { Final fallback: global scope.  Holds language builtins (Length,
+    IntToStr, …) registered by RegisterBuiltins.  Today it also still
+    holds flat-merged unit imports — that redundancy goes away in
+    step 9 once the flat-merge is removed. }
+  Result := TScope(FScopeStack.Items[0]).LookupLocal(AName);
 end;
 
 function TSymbolTable.FindType(const AName: string): TTypeDesc;
 var
   Sym: TSymbol;
 begin
-  Sym := CurrentScope.Lookup(AName);
+  Sym := Lookup(AName);  { honour uses-chain visibility }
   if (Sym <> nil) and (Sym.Kind = skType) then
     Result := Sym.TypeDesc
   else
