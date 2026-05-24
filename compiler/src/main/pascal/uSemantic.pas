@@ -255,6 +255,32 @@ type
     { Look up a registered TUnitInterface by unit name.  Returns nil
       if not registered.  Case-insensitive. }
     function FindUnitIface(const AUnitName: string): TUnitInterface;
+
+    { Visibility filter — single chokepoint for both unqualified
+      uses-chain lookup and qualified class-member access.  Task #44
+      step 4.
+
+      AFromUnit  — name of the unit currently being analysed
+                   (FCurrentUnitName).  Used by future private (Pascal
+                   "unit is the privacy boundary") logic.
+      AFromClass — the class whose method body the lookup is happening
+                   inside, or nil for free-routine / unit-level code.
+                   Used by future protected logic to walk ParentClass
+                   up to ASym's declaring class.
+
+      Stub returns True unconditionally — private/protected modifiers
+      don't exist on Blaise class members yet.  When they land, this
+      seam plugs in without changing call sites.
+
+      Critical correctness note (see project_per_unit_visibility.md):
+        - For *unqualified* lookups, False means skip-and-keep-walking
+          the uses chain — "wasn't this unit's Foo".
+        - For *qualified* member access (obj.Foo), False is a hard
+          error at the resolution site — "Foo is not accessible from
+          here", NOT a fall-through. }
+    function IsVisibleFromUnit(ASym: TSymbol;
+                               const AFromUnit: string;
+                               AFromClass: TRecordTypeDesc): Boolean;
   end;
 
 implementation
@@ -1269,6 +1295,20 @@ begin
     Result := TUnitInterface(FUnitIfaces.Objects[Idx])
   else
     Result := nil;
+end;
+
+function TSemanticAnalyser.IsVisibleFromUnit(ASym: TSymbol;
+                                             const AFromUnit: string;
+                                             AFromClass: TRecordTypeDesc): Boolean;
+begin
+  { Stub — see declaration in interface section.  When private/
+    protected modifiers arrive on class members:
+      - private:   Result := (AFromUnit = ASym.OwningUnit);
+      - protected: Result := (AFromUnit = ASym.OwningUnit)
+                          or (AFromClass <> nil)
+                             and AFromClassDescendsFromDeclarer(...);
+    Free symbols default to public so AFromClass is ignored for them. }
+  Result := True;
 end;
 
 procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);
