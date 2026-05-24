@@ -51,6 +51,9 @@ begin
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
   WriteLn('  --emit-asm          Print native assembly to stdout (requires --backend native)');
   WriteLn('  --emit-iface <dir>  Write each unit''s TUnitInterface as <dir>/<unit>.bif');
+  WriteLn('  --skip-dep-codegen  Omit dep unit bodies from emitted IR (separate-compilation path)');
+  WriteLn('  --incremental       Compile each dep to its own .o as a side effect');
+  WriteLn('  --unit-cache <dir>  Where --incremental writes per-unit .o (default: alongside output)');
   WriteLn('  --debug             Enable runtime memory leak reporting on exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
   WriteLn('');
@@ -194,7 +197,9 @@ function ParseArgs(
   out Target:         TTargetDesc;
   out SearchPaths:    TStringList;
   out SkipDepCodegen: Boolean;
-  out EmitIfaceDir:   string): Boolean;
+  out EmitIfaceDir:   string;
+  out Incremental:    Boolean;
+  out UnitCacheDir:   string): Boolean;
 var
   I: Integer;
   Arg: string;
@@ -210,6 +215,8 @@ begin
   Target         := HostTarget;
   SkipDepCodegen := False;
   EmitIfaceDir   := '';
+  Incremental    := False;
+  UnitCacheDir   := '';
   SearchPaths    := TStringList.Create;
 
   I := 1;
@@ -242,6 +249,19 @@ begin
         for later use as a separate-compilation cache. }
       Inc(I);
       EmitIfaceDir := ParamStr(I);
+    end
+    else if Arg = '--incremental' then
+      { Phase 6c-H: compile each source-loaded dep to a stand-alone
+        .o (with embedded iface) as a side effect of the program
+        build.  Implies --skip-dep-codegen for the main IR (deps
+        are not inlined; they're linked from the per-unit .o
+        files instead).  Next compile auto-discovers the .o's
+        and skips parsing the .pas entirely. }
+      Incremental := True
+    else if (Arg = '--unit-cache') and (I < ParamCount) then
+    begin
+      Inc(I);
+      UnitCacheDir := ParamStr(I);
     end
     else if Arg = '--emit-ir' then
       EmitIR := True
@@ -526,6 +546,8 @@ var
   OPDFAsmFile: string;
   SkipDepCodegen: Boolean;
   EmitIfaceDir: string;
+  Incremental:    Boolean;
+  UnitCacheDir:   string;
   Source:   TStringList;
   Lexer:    TLexer;
   Parser:   TParser;
@@ -564,7 +586,12 @@ var
   I:        Integer;
   IR:       string;
   IRFile:   string;
-  AsmFile:  string;
+  AsmFile:     string;
+  UnitName:    string;
+  UnitPath:    string;
+  UnitOPath:   string;   { per-dep .o output path in --incremental mode }
+  UnitBifPath: string;   { per-dep iface temp path }
+  UnitIR:      string;   { per-dep IR text under --incremental }
 
 begin
   SearchPaths    := nil;
@@ -573,6 +600,8 @@ begin
   OPDFAsmFile    := '';
   SkipDepCodegen := False;
   EmitIfaceDir   := '';
+  Incremental    := False;
+  UnitCacheDir   := '';
   TopUnit        := nil;
   IsUnitMode     := False;
   if IsFPCStyleInvocation then
@@ -588,7 +617,8 @@ begin
   else
   begin
     if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, OPDFEnabled, DebugMode,
-                     UseNative, Target, SearchPaths, SkipDepCodegen, EmitIfaceDir) then
+                     UseNative, Target, SearchPaths, SkipDepCodegen, EmitIfaceDir,
+                     Incremental, UnitCacheDir) then
     begin
       PrintUsage;
       Halt(1);
@@ -747,6 +777,62 @@ begin
         WriteLn(StdErr, 'Compiler error: ', Exception(E).Message);
         Halt(1);
       end;
+    end;
+
+    { Phase 6c-H: incremental mode — compile each source-loaded dep
+      to its own .o (with embedded iface) before the main codegen
+      runs.  Sets SkipDepCodegen so the main IR doesn't redundantly
+      inline dep bodies; the per-unit .o files feed the link step
+      via PrebuiltObjPaths.  Side effect: filesystem gains an .o
+      next to (or in --unit-cache) each dep's source.  Next compile
+      will auto-discover these and skip parsing the .pas. }
+    if Incremental and (Units <> nil) and (Units.Count > 0) then
+    begin
+      for I := 0 to Units.Count - 1 do
+      begin
+        UnitOPath := UnitCacheDir;
+        if UnitOPath <> '' then
+          UnitOPath := IncludeTrailingPathDelimiter(UnitOPath) +
+                       LowerCase(TUnit(Units.Items[I]).Name) + '.o'
+        else if OutputFile <> '' then
+          UnitOPath := IncludeTrailingPathDelimiter(ExtractFilePath(OutputFile)) +
+                       LowerCase(TUnit(Units.Items[I]).Name) + '.o'
+        else
+          UnitOPath := LowerCase(TUnit(Units.Items[I]).Name) + '.o';
+
+        { Per-unit codegen: fresh TCodeGenQBE, shared symbol table. }
+        CG := TCodeGenQBE.Create;
+        try
+          CG.SetSymbolTable(Semantic.GetSymbolTable);
+          CG.AppendUnit(TUnit(Units.Items[I]));
+          UnitIR := CG.GetOutput;
+        finally
+          CG.Free;
+          CG := nil;
+        end;
+
+        IRFile := UnitOPath + '.ssa.tmp';
+        Source := TStringList.Create;
+        try
+          Source.Text := UnitIR;
+          Source.SaveToFile(IRFile);
+        finally
+          Source.Free;
+          Source := nil;
+        end;
+
+        UnitBifPath := UnitOPath + '.bif.tmp';
+        WriteUnitInterfaceToFile(
+          TUnitInterface(UnitIfaces.Items[I]), UnitBifPath);
+
+        CompileUnitToObject(IRFile, UnitOPath, UnitBifPath);
+
+        DeleteFile(IRFile);
+        DeleteFile(UnitBifPath);
+
+        PrebuiltObjPaths.Add(UnitOPath);
+      end;
+      SkipDepCodegen := True;
     end;
 
     try
