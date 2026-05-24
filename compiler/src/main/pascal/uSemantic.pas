@@ -650,6 +650,12 @@ begin
     begin
       MDecl := TMethodDecl(AUnit.IntfBlock.ProcDecls.Items[I]);
 
+      { Generic free routines: skip param/return resolution and
+        global-symbol registration; the impl-side AnalyseStandaloneDecl
+        registers the template for on-demand instantiation. }
+      if MDecl.TypeParams <> nil then
+        Continue;
+
       for J := 0 to MDecl.Params.Count - 1 do
       begin
         Par              := TMethodParam(MDecl.Params.Items[J]);
@@ -731,6 +737,11 @@ begin
     begin
       ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls.Items[I]);
       if (ImplDecl.OwnerTypeName <> '') and (ImplDecl.OwnerTypeParams <> nil) then
+        Continue;
+      { Generic free routine impls — handled via AnalyseStandaloneDecl /
+        FGenericFuncTemplates; their param types only resolve at
+        instantiation time. }
+      if (ImplDecl.OwnerTypeName = '') and (ImplDecl.TypeParams <> nil) then
         Continue;
 
       for J := 0 to ImplDecl.Params.Count - 1 do
@@ -831,8 +842,11 @@ begin
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
     begin
       MDecl   := TMethodDecl(AUnit.IntfBlock.ProcDecls.Items[I]);
-      ImplIdx := FProcIndex.IndexOf(MDecl.Name);
       if MDecl.IsExternal then Continue;
+      { Generic free routines live in FGenericFuncTemplates, not FProcIndex —
+        their impl is checked by AnalyseStandaloneDecl. }
+      if MDecl.TypeParams <> nil then Continue;
+      ImplIdx := FProcIndex.IndexOf(MDecl.Name);
       if (ImplIdx < 0) or
          (TMethodDecl(FProcIndex.Objects[ImplIdx]).Body = nil) then
         SemanticError(
@@ -840,11 +854,15 @@ begin
           MDecl.Line, MDecl.Col);
     end;
 
-    { Analyse standalone implementation bodies (skip generic class method impls) }
+    { Analyse standalone implementation bodies (skip generic class method
+      impls and generic free routines — both defer body analysis to
+      instantiation time). }
     for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
     begin
       ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls.Items[I]);
       if (ImplDecl.OwnerTypeName <> '') and (ImplDecl.OwnerTypeParams <> nil) then
+        Continue;
+      if (ImplDecl.OwnerTypeName = '') and (ImplDecl.TypeParams <> nil) then
         Continue;
       AnalyseStandaloneDecl(ImplDecl);
     end;
@@ -932,6 +950,13 @@ begin
   begin
     MDecl := TMethodDecl(AUnit.IntfBlock.ProcDecls.Items[I]);
 
+    { Generic free routines: defer param/return resolution to
+      instantiation time and skip global symbol registration —
+      the template is registered through FGenericFuncTemplates by
+      AnalyseStandaloneDecl on the impl side. }
+    if MDecl.TypeParams <> nil then
+      Continue;
+
     for J := 0 to MDecl.Params.Count - 1 do
     begin
       Par              := TMethodParam(MDecl.Params.Items[J]);
@@ -1011,6 +1036,10 @@ begin
     begin
       ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls.Items[I]);
       if ImplDecl.OwnerTypeName <> '' then Continue;  { class method — already handled }
+      { Generic free routines defer all param/return resolution to
+        instantiation time; AnalyseStandaloneDecl below registers
+        the template. }
+      if ImplDecl.TypeParams <> nil then Continue;
 
       for J := 0 to ImplDecl.Params.Count - 1 do
       begin
@@ -1110,8 +1139,10 @@ begin
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
     begin
       MDecl   := TMethodDecl(AUnit.IntfBlock.ProcDecls.Items[I]);
-      ImplIdx := FProcIndex.IndexOf(MDecl.Name);
       if MDecl.IsExternal then Continue;
+      { Generic free routines: impl lives in FGenericFuncTemplates. }
+      if MDecl.TypeParams <> nil then Continue;
+      ImplIdx := FProcIndex.IndexOf(MDecl.Name);
       if (ImplIdx < 0) or
          (TMethodDecl(FProcIndex.Objects[ImplIdx]).Body = nil) then
         SemanticError(
@@ -1119,11 +1150,14 @@ begin
           MDecl.Line, MDecl.Col);
     end;
 
-    { Analyse standalone implementation bodies (skip class method impls) }
+    { Analyse standalone implementation bodies (skip class method impls
+      and generic free routines, whose bodies only re-type-check at
+      instantiation time). }
     for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
     begin
       ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls.Items[I]);
       if ImplDecl.OwnerTypeName <> '' then Continue;
+      if ImplDecl.TypeParams <> nil then Continue;
       AnalyseStandaloneDecl(ImplDecl);
     end;
 
@@ -1963,10 +1997,16 @@ begin
   BaseName := StrHead(AInstName, BracPos);
   ArgsStr  := StrCopyFrom(AInstName, BracPos + 1, Length(AInstName) - BracPos - 2);
 
+  { Check both the in-unit template index and any imported templates
+    registered through the symbol table.  Imports landed via
+    uSemanticImport.RegisterUnitInterface populate FTable; in-unit
+    AnalyseStandaloneDecl populates both. }
   TemplIdx := FGenericFuncTemplates.IndexOf(BaseName);
-  if TemplIdx < 0 then Exit;  { not a known generic function template }
-
-  Templ := TMethodDecl(FGenericFuncTemplates.Objects[TemplIdx]);
+  if TemplIdx >= 0 then
+    Templ := TMethodDecl(FGenericFuncTemplates.Objects[TemplIdx])
+  else
+    Templ := TMethodDecl(FTable.FindGenericRoutine(BaseName));
+  if Templ = nil then Exit;  { not a known generic function template }
 
   Args := TStringList.Create;
   try
@@ -3478,10 +3518,13 @@ begin
     ADecl := TMethodDecl(ABlock.ProcDecls.Items[I]);
     { Class method implementations have their body transferred; skip them here }
     if ADecl.OwnerTypeName <> '' then Continue;
-    { Generic function templates — registered for on-demand instantiation }
+    { Generic function templates — registered for on-demand instantiation.
+      Mirrored on FTable so imported units (uSemanticImport) can share
+      the same lookup surface as in-unit templates. }
     if ADecl.TypeParams <> nil then
     begin
       FGenericFuncTemplates.AddObject(ADecl.Name, ADecl);
+      FTable.RegisterGenericRoutine(ADecl.Name, ADecl);
       Continue;
     end;
 

@@ -250,6 +250,7 @@ type
     procedure TestImport_Class_AttributePreserved;
     procedure TestImport_GenericClass_RegisteredAsTemplate;
     procedure TestImport_GenericInterface_RegisteredAsTemplate;
+    procedure TestImport_GenericRoutine_RegisteredOnTable;
   end;
 
 implementation
@@ -1241,13 +1242,31 @@ begin
 end;
 
 procedure TInlineGenericBodyTests.TestGenericRoutine_BodyExported;
+const
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'function Identity<T>(V: T): T;'                    + #10 +
+    'implementation'                                    + #10 +
+    'function Identity<T>(V: T): T;'                    + #10 +
+    'begin Result := V; end;'                           + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  G:     TGenericBody;
 begin
-  { Generic free-routine declarations are accepted in *programs* but
-    not currently in unit interface sections — uParser.ParseForwardDecl
-    doesn't consume a '<T>' between the name and parameter list.
-    Pending until the parser is extended (or the test moved to a
-    program-level harness). }
-  Fail('Pending parser support for generic free routines in unit interface');
+  Iface := ParseAndExport(SRC);
+  try
+    G := Iface.FindGeneric('Identity');
+    AssertTrue('generic routine entry', G <> nil);
+    AssertEquals('IsType', False, G.IsType);
+    AssertTrue('RoutineSig present', G.RoutineSig <> nil);
+    AssertTrue('Body present',       G.Body <> nil);
+    AssertEquals('type-param count', 1, G.TypeParams.Count);
+    AssertEquals('type-param[0]', 'T', G.TypeParams.Strings[0]);
+  finally
+    Iface.Free;
+  end;
 end;
 
 procedure TInlineGenericBodyTests.TestGeneric_ConstraintsPreserved;
@@ -2392,6 +2411,40 @@ begin
                Templ is TGenericInterfaceDef);
     AssertEquals('one type param', 1,
       TGenericInterfaceDef(Templ).ParamNames.Count);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_GenericRoutine_RegisteredOnTable;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'function Identity<T>(V: T): T;' + #10 +
+    'implementation' + #10 +
+    'function Identity<T>(V: T): T;' + #10 +
+    'begin Result := V; end;' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  Templ: TObject;
+  MD:    TMethodDecl;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    Templ := Tab.FindGenericRoutine('Identity');
+    AssertTrue('Identity template registered', Templ <> nil);
+    AssertTrue('is TMethodDecl', Templ is TMethodDecl);
+    MD := TMethodDecl(Templ);
+    AssertEquals('one type param', 1, MD.TypeParams.Count);
+    AssertEquals('param name', 'T', MD.TypeParams.Strings[0]);
+    AssertEquals('one value param', 1, MD.Params.Count);
+    AssertTrue('body cloned', MD.Body <> nil);
   finally
     Tab.Free;
     Iface.Free;

@@ -153,6 +153,14 @@ type
     TypeDef:      TASTTypeDef;    { owned; non-nil when IsType }
     RoutineSig:   TRoutineSig;    { owned; non-nil when not IsType }
     Body:         TBlock;         { owned; non-nil when not IsType }
+    MethodDecl:   TMethodDecl;    { owned; non-nil when not IsType.  Carries
+                                    the cloned TMethodDecl that
+                                    uSemantic.FGenericFuncTemplates uses as
+                                    its template — lets uSemanticImport
+                                    plumb generic free routines through
+                                    TSymbolTable.RegisterGenericRoutine
+                                    without synthesising an AST node at
+                                    import time. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -324,6 +332,7 @@ end;
 
 destructor TGenericBody.Destroy;
 begin
+  MethodDecl.Free;
   Body.Free;
   RoutineSig.Free;
   TypeDef.Free;

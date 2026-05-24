@@ -399,6 +399,9 @@ begin
     GBody.IsType     := False;
     GBody.RoutineSig := BuildRoutineSig(Decl, AIface, nil);
     GBody.Body       := CloneBlock(ImplDecl.Body);
+    { Clone the impl-side TMethodDecl (with body) so the AST template
+      is self-contained.  CloneMethodDecl owns the body it copies. }
+    GBody.MethodDecl := CloneMethodDecl(ImplDecl);
     for J := 0 to Decl.TypeParams.Count - 1 do
     begin
       GBody.TypeParams.Add(Decl.TypeParams.Strings[J]);

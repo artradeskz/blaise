@@ -532,6 +532,20 @@ end;
 
 { ----- Top-level ------------------------------------------------ }
 
+procedure RegisterGenericRoutines(AIface: TUnitInterface; ATable: TSymbolTable);
+var
+  I: Integer;
+  G: TGenericBody;
+begin
+  for I := 0 to AIface.GenericBodies.Count - 1 do
+  begin
+    G := TGenericBody(AIface.GenericBodies.Items[I]);
+    if G.IsType then Continue;
+    if G.MethodDecl = nil then Continue;
+    ATable.RegisterGenericRoutine(G.Name, G.MethodDecl);
+  end;
+end;
+
 procedure ImportUnitInterface(AIface: TUnitInterface; ATable: TSymbolTable);
 begin
   { Types FIRST — consts, vars, and routine params look up against
@@ -540,6 +554,7 @@ begin
   RegisterConsts (AIface, ATable);
   RegisterVars   (AIface, ATable);
   RegisterRoutines(AIface, ATable);
+  RegisterGenericRoutines(AIface, ATable);
 end;
 
 end.

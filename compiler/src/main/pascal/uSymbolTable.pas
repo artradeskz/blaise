@@ -383,6 +383,11 @@ type
       the same generic returns a wrong-class object and silently mis-wires the
       instance (no parent, no vtable). }
     FGenericTemplates: TObjectList;
+    FGenericRoutines: TStringList; { non-owning: routine name → TMethodDecl
+                                     (generic free-routine templates, populated
+                                     by AnalyseStandaloneDecl and by
+                                     uSemanticImport when registering a unit
+                                     interface's generic free routines) }
 
     FTypeInteger:  TTypeDesc;
     FTypeInt64:    TTypeDesc;
@@ -462,6 +467,8 @@ type
       circular unit dependency with uAST. Callers cast the result. }
     procedure RegisterGeneric(const AName: string; ATempl: TObject);
     function  FindGeneric(const AName: string): TObject;
+    procedure RegisterGenericRoutine(const AName: string; ATempl: TObject);
+    function  FindGenericRoutine(const AName: string): TObject;
 
     { Convenience type accessors }
     property TypeInteger:  TTypeDesc read FTypeInteger;
@@ -1157,6 +1164,8 @@ begin
   { Owns (retains) registered generic templates so FGenerics' references stay
     valid even after the originating AST is torn down. }
   FGenericTemplates := TObjectList.Create(True);
+  FGenericRoutines := TStringList.Create;
+  FGenericRoutines.CaseSensitive := False;
   { Global scope — parent = nil }
   FScopeStack.Add(TScope.Create(nil));
   RegisterBuiltins;
@@ -1164,7 +1173,8 @@ end;
 
 destructor TSymbolTable.Destroy;
 begin
-  { FGenerics, FScopeStack, FAllTypes are owned class fields — released by
+  FGenericRoutines.Free;
+  { FGenerics, FGenericTemplates, FScopeStack, FAllTypes are owned class fields — released by
     ARC field cleanup. }
   inherited Destroy;
 end;
@@ -1278,6 +1288,22 @@ begin
   Idx := FGenerics.IndexOf(AName);
   if Idx >= 0 then
     Result := TObject(FGenerics.Objects[Idx])
+  else
+    Result := nil;
+end;
+
+procedure TSymbolTable.RegisterGenericRoutine(const AName: string; ATempl: TObject);
+begin
+  FGenericRoutines.AddObject(AName, ATempl);
+end;
+
+function TSymbolTable.FindGenericRoutine(const AName: string): TObject;
+var
+  Idx: Integer;
+begin
+  Idx := FGenericRoutines.IndexOf(AName);
+  if Idx >= 0 then
+    Result := FGenericRoutines.Objects[Idx]
   else
     Result := nil;
 end;
