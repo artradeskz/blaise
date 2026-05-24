@@ -145,6 +145,64 @@ begin
     Result := TRecordTypeDesc(Sym.TypeDesc);
 end;
 
+{ Build the comma-separated '1'/'0' var-flag string AddMethod expects.
+  '1' for var params, '0' otherwise.  Matches the semantic-side
+  string built in AnalyseTypeDecls pass-2 for interfaces. }
+function ParamVarFlags(AMethod: TMethodDecl): string;
+var
+  K: Integer;
+  P: TMethodParam;
+begin
+  Result := '';
+  for K := 0 to AMethod.Params.Count - 1 do
+  begin
+    P := TMethodParam(AMethod.Params.Items[K]);
+    if K > 0 then Result := Result + ',';
+    if P.IsVarParam then Result := Result + '1' else Result := Result + '0';
+  end;
+end;
+
+procedure RegisterInterface(AEntry: TTypeEntry; ATable: TSymbolTable);
+var
+  IntfDef:  TInterfaceTypeDef;
+  IntfDesc: TInterfaceTypeDesc;
+  Sym:      TSymbol;
+  ParentSym: TSymbol;
+  M:        TMethodDecl;
+  I:        Integer;
+begin
+  IntfDef  := TInterfaceTypeDef(AEntry.Def);
+  IntfDesc := ATable.NewInterfaceType(AEntry.Name);
+
+  Sym := TSymbol.Create(AEntry.Name, skType, IntfDesc);
+  if not ATable.Define(Sym) then
+  begin
+    Sym.Free;
+    Exit;
+  end;
+
+  if IntfDef.ParentName <> '' then
+  begin
+    ParentSym := ATable.Lookup(IntfDef.ParentName);
+    if (ParentSym <> nil) and (ParentSym.TypeDesc is TInterfaceTypeDesc) then
+    begin
+      IntfDesc.Parent := TInterfaceTypeDesc(ParentSym.TypeDesc);
+      { Inherit parent methods so FindMethod walks transparently. }
+      for I := 0 to IntfDesc.Parent.MethodCount - 1 do
+        IntfDesc.AddMethod(
+          IntfDesc.Parent.MethodName(I),
+          IntfDesc.Parent.MethodReturnTypeName(I),
+          IntfDesc.Parent.MethodParamVarFlagsStr(I));
+    end;
+  end;
+
+  for I := 0 to IntfDef.Methods.Count - 1 do
+  begin
+    M := TMethodDecl(IntfDef.Methods.Items[I]);
+    IntfDesc.AddMethod(M.Name, M.ReturnTypeName, ParamVarFlags(M));
+  end;
+end;
+
 procedure RegisterClass(AEntry: TTypeEntry; ATable: TSymbolTable);
 var
   ClassDef: TClassTypeDef;
@@ -219,6 +277,37 @@ begin
     (overloaded class methods are not in the 6c-B happy path). }
   for I := 0 to AEntry.Methods.Count - 1 do
     RegisterClassMethod(RT, TRoutineSig(AEntry.Methods.Items[I]));
+
+  { Interface implements list — names are 'Unit.Type' (cross-unit) or
+    just 'Type' (local).  We strip any 'Unit.' prefix since the
+    flat symbol-table namespace doesn't carry unit qualification. }
+  for I := 0 to AEntry.Implements.Count - 1 do
+  begin
+    ParentName := AEntry.Implements.Strings[I];
+    J := Pos('.', ParentName);
+    if J > 0 then ParentName := Copy(ParentName, J + 1, Length(ParentName) - J);
+    Sym := ATable.Lookup(ParentName);
+    if (Sym <> nil) and (Sym.TypeDesc is TInterfaceTypeDesc) then
+      RT.AddImplements(TInterfaceTypeDesc(Sym.TypeDesc));
+  end;
+
+  { Class attributes.  uSemanticExport currently copies the raw
+    attribute names ('Threaded', not 'ThreadedAttribute') — but
+    AddClassAttribute downstream wants the resolved-name form.
+    For now, append the literal 'Attribute' suffix when missing;
+    this works for the common Delphi-style attribute convention
+    and matches what the symbol table receives from semantic.
+    A cleaner fix is to have uSemanticExport copy resolved names
+    out of the source TRecordTypeDesc.ClassAttributes — left as
+    an audit item. }
+  for I := 0 to AEntry.Attributes.Count - 1 do
+  begin
+    ParentName := AEntry.Attributes.Strings[I];
+    if (Length(ParentName) < 9) or
+       (Copy(ParentName, Length(ParentName) - 8, 9) <> 'Attribute') then
+      ParentName := ParentName + 'Attribute';
+    RT.AddClassAttribute(ParentName);
+  end;
 end;
 
 procedure RegisterRecord(AEntry: TTypeEntry; ATable: TSymbolTable);
@@ -307,6 +396,8 @@ begin
       RegisterSet(Entry, ATable)
     else if Entry.Def is TTypeAliasDef then
       RegisterAlias(Entry, ATable)
+    else if Entry.Def is TInterfaceTypeDef then
+      RegisterInterface(Entry, ATable)
     else if Entry.Def is TClassTypeDef then
       RegisterClass(Entry, ATable)
     else if Entry.Def is TRecordTypeDef then

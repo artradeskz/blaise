@@ -245,6 +245,9 @@ type
     procedure TestImport_Class_ExplicitParentChain;
     procedure TestImport_Class_VirtualMethod_AddsVTableSlot;
     procedure TestImport_Class_Override_ReusesParentSlot;
+    procedure TestImport_Interface_MethodsRegistered;
+    procedure TestImport_Class_ImplementsInterface;
+    procedure TestImport_Class_AttributePreserved;
   end;
 
 implementation
@@ -2232,6 +2235,100 @@ begin
     AssertEquals('TBase ImplName still own',
       '$TBase_Speak',
       Base.VTableEntryAt(BaseSlot).ImplName);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Interface_MethodsRegistered;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type IGreeter = interface' + #10 +
+    '  function Hello: string;' + #10 +
+    '  procedure Quit;' + #10 +
+    'end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  ITD:   TInterfaceTypeDesc;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    ITD := TInterfaceTypeDesc(Tab.FindType('IGreeter'));
+    AssertTrue('IGreeter defined', ITD <> nil);
+    AssertEquals('two methods', 2, ITD.MethodCount);
+    AssertTrue('has Hello',  ITD.HasMethod('Hello'));
+    AssertTrue('has Quit',   ITD.HasMethod('Quit'));
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Class_ImplementsInterface;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type' + #10 +
+    '  IGreeter = interface procedure Greet; end;' + #10 +
+    '  TFoo = class(TObject, IGreeter) procedure Greet; end;' + #10 +
+    'implementation' + #10 +
+    'procedure TFoo.Greet; begin end;' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  RT:    TRecordTypeDesc;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    RT := TRecordTypeDesc(Tab.FindType('TFoo'));
+    AssertTrue('TFoo defined', RT <> nil);
+    AssertEquals('one impl', 1, RT.ImplementsCount);
+    AssertEquals('impl is IGreeter', 'IGreeter',
+      RT.ImplementsIntfAt(0).Name);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Class_AttributePreserved;
+const
+  { Custom attribute defined inline so the test does not depend on
+    blaise.testing being parsed via 'uses'. }
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type' + #10 +
+    '  MarkerAttribute = class(TCustomAttribute) end;' + #10 +
+    '  [Marker]' + #10 +
+    '  TFoo = class end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  RT:    TRecordTypeDesc;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    RT := TRecordTypeDesc(Tab.FindType('TFoo'));
+    AssertTrue('TFoo defined', RT <> nil);
+    AssertEquals('one attribute',  1, RT.ClassAttributeCount);
+    AssertEquals('MarkerAttribute', 'MarkerAttribute', RT.ClassAttributeAt(0));
   finally
     Tab.Free;
     Iface.Free;
