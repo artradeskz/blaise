@@ -905,8 +905,11 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  { Auto-tag every symbol defined during this pass with AUnit.Name as
-    its OwningUnit (consumed by codegen's unit-prefix mangling). }
+  { Auto-tag every global Define within this unit's analysis with the
+    unit name — populates TSymbol.OwningUnit for the source-compiled-
+    dep path, paralleling uSemanticImport for the .bif-loaded path.
+    Consumed by codegen's unit-prefix mangling and by per-unit
+    visibility.  Cleared at the end. }
   FTable.DefineOwningUnit := AUnit.Name;
   { --- Interface section ------------------------------------------------
     No scope is pushed here: all FTable.Define calls go to the global scope,

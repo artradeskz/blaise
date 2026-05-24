@@ -622,14 +622,26 @@ end;
 procedure ImportUnitInterface(AIface: TUnitInterface;
                               ATable: TSymbolTable;
                               ASemantic: TSemanticAnalyser = nil);
+var
+  Saved: string;
 begin
-  { Types FIRST — consts, vars, and routine params look up against
-    the symbol table by name. }
-  RegisterTypes  (AIface, ATable);
-  RegisterConsts (AIface, ATable);
-  RegisterVars   (AIface, ATable);
-  RegisterRoutines(AIface, ATable, ASemantic);
-  RegisterGenericRoutines(AIface, ATable);
+  { Belt-and-braces: even though each Register* now sets OwningUnit
+    on its created TSymbols explicitly (task #44 step 1), also set
+    the table's auto-tag context so any helper that grows a new
+    Define site picks up OwningUnit by default.  Restored on exit. }
+  Saved := ATable.DefineOwningUnit;
+  ATable.DefineOwningUnit := AIface.Name;
+  try
+    { Types FIRST — consts, vars, and routine params look up against
+      the symbol table by name. }
+    RegisterTypes  (AIface, ATable);
+    RegisterConsts (AIface, ATable);
+    RegisterVars   (AIface, ATable);
+    RegisterRoutines(AIface, ATable, ASemantic);
+    RegisterGenericRoutines(AIface, ATable);
+  finally
+    ATable.DefineOwningUnit := Saved;
+  end;
 end;
 
 end.

@@ -412,18 +412,17 @@ type
     FTypePointer: TPointerTypeDesc;  { untyped Pointer }
     FTypePChar:   TTypeDesc;         { opaque C pointer }
 
+    FDefineOwningUnit: string;       { auto-applied to Sym.OwningUnit on Define
+                                       when the symbol has no explicit value;
+                                       set by AnalyseUnit/AnalyseUnitForExport
+                                       so semantic-side Define sites don't
+                                       each need to thread the unit name. }
+
     function GetCurrentScope: TScope;
     function GetScopeDepth: Integer;
     function NewType(AKind: TTypeKind; const AName: string): TTypeDesc;
     procedure RegisterBuiltins;
   public
-    { Tag for auto-population of TSymbol.OwningUnit during Define.
-      Semantic analysis sets this to the current unit being analysed
-      (AUnit.Name in AnalyseUnitForExport), then clears it back to ''.
-      When non-empty, every Define call that doesn't already have an
-      OwningUnit tag inherits this value. }
-    DefineOwningUnit: string;
-
     constructor Create;
     destructor Destroy; override;
 
@@ -438,6 +437,12 @@ type
     { Define in global (outermost) scope regardless of current push depth. }
     function DefineGlobal(ASymbol: TSymbol): Boolean;
     function Lookup(const AName: string): TSymbol;
+
+    { Auto-OwningUnit context.  When set, Define()/DefineGlobal() will
+      populate Sym.OwningUnit from this string if the symbol has no
+      explicit value.  Empty string clears the context. }
+    property DefineOwningUnit: string read FDefineOwningUnit
+                                       write FDefineOwningUnit;
 
     { Type lookup — case-insensitive, returns nil if not found }
     function FindType(const AName: string): TTypeDesc;
@@ -1589,6 +1594,8 @@ end;
 
 function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;
 begin
+  if (ASymbol.OwningUnit = '') and (FDefineOwningUnit <> '') then
+    ASymbol.OwningUnit := FDefineOwningUnit;
   Result := TScope(FScopeStack.Items[0]).Define(ASymbol);
 end;
 
@@ -1616,8 +1623,13 @@ end;
 
 function TSymbolTable.Define(ASymbol: TSymbol): Boolean;
 begin
-  if (ASymbol.OwningUnit = '') and (DefineOwningUnit <> '') then
-    ASymbol.OwningUnit := DefineOwningUnit;
+  { Only auto-tag global-scope symbols.  Locals (parameters, var
+    blocks inside method bodies, etc.) live in pushed scopes and
+    must remain OwningUnit='' — uses-chain visibility doesn't apply
+    to them. }
+  if (ASymbol.OwningUnit = '') and (FDefineOwningUnit <> '')
+     and (FScopeStack.Count = 1) then
+    ASymbol.OwningUnit := FDefineOwningUnit;
   Result := CurrentScope.Define(ASymbol);
 end;
 
