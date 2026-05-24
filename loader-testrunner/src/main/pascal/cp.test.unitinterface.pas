@@ -251,6 +251,8 @@ type
     procedure TestImport_GenericClass_RegisteredAsTemplate;
     procedure TestImport_GenericInterface_RegisteredAsTemplate;
     procedure TestImport_GenericRoutine_RegisteredOnTable;
+    procedure TestEndToEnd_MainProgramSeesImportedConst;
+    procedure TestEndToEnd_MainProgramSeesImportedClass;
   end;
 
 implementation
@@ -2447,6 +2449,101 @@ begin
     AssertTrue('body cloned', MD.Body <> nil);
   finally
     Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+{ Parse a program string into a TProgram and analyse it through the
+  supplied TSemanticAnalyser.  Returns the program (caller owns).
+  Used to prove ImportUnitInterface populates a TSymbolTable
+  equivalent to what AnalyseUnitForExport would have produced. }
+function ParseAndAnalyseProgram(const ASource: string;
+                                ASem: TSemanticAnalyser): TProgram;
+var
+  Lex:    TLexer;
+  Parser: TParser;
+begin
+  Lex := TLexer.Create(ASource, '<main>');
+  try
+    Parser := TParser.Create(Lex);
+    try
+      Result := Parser.ParseProgram;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lex.Free;
+  end;
+  ASem.Analyse(Result);
+end;
+
+procedure TImportRoundTripTests.TestEndToEnd_MainProgramSeesImportedConst;
+const
+  DEP_SRC =
+    'unit DepU;' + #10 +
+    'interface' + #10 +
+    'const K = 42;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+  MAIN_SRC =
+    'program M;' + #10 +
+    'var X: Integer;' + #10 +
+    'begin X := K; end.' + #10;
+var
+  Iface: TUnitInterface;
+  Sem:   TSemanticAnalyser;
+  Prog:  TProgram;
+begin
+  Iface := ParseAnalyseAndExport(DEP_SRC);  { also frees DEP source TUnit }
+  Sem   := TSemanticAnalyser.Create;
+  try
+    ImportUnitInterface(Iface, Sem.GetSymbolTable);
+    Prog := ParseAndAnalyseProgram(MAIN_SRC, Sem);
+    try
+      { Analyse() transferred the table to Prog.SymbolTable. }
+      AssertTrue('main analysed', Prog.SymbolTable <> nil);
+      AssertTrue('K still visible after free',
+                 Prog.SymbolTable.Lookup('K') <> nil);
+    finally
+      Prog.Free;
+    end;
+  finally
+    Sem.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestEndToEnd_MainProgramSeesImportedClass;
+const
+  DEP_SRC =
+    'unit DepU;' + #10 +
+    'interface' + #10 +
+    'type TFoo = class V: Integer; end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+  MAIN_SRC =
+    'program M;' + #10 +
+    'var F: TFoo;' + #10 +
+    'begin F := nil; end.' + #10;
+var
+  Iface: TUnitInterface;
+  Sem:   TSemanticAnalyser;
+  Prog:  TProgram;
+begin
+  Iface := ParseAnalyseAndExport(DEP_SRC);
+  Sem   := TSemanticAnalyser.Create;
+  try
+    ImportUnitInterface(Iface, Sem.GetSymbolTable);
+    Prog := ParseAndAnalyseProgram(MAIN_SRC, Sem);
+    try
+      AssertTrue('main analysed', Prog.SymbolTable <> nil);
+      AssertTrue('TFoo still visible after free',
+                 Prog.SymbolTable.FindType('TFoo') <> nil);
+    finally
+      Prog.Free;
+    end;
+  finally
+    Sem.Free;
     Iface.Free;
   end;
 end;
