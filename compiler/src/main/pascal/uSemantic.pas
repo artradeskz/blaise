@@ -281,6 +281,20 @@ type
     function IsVisibleFromUnit(ASym: TSymbol;
                                const AFromUnit: string;
                                AFromClass: TRecordTypeDesc): Boolean;
+
+    { Uses-chain lookup for *unqualified* identifiers.  Walks
+      FCurrentUsesChain right-to-left ("last in uses wins"); for
+      each chain entry whose TUnitInterface advertises AName via
+      HasSymbol, retrieves the canonical TSymbol from FTable and
+      applies IsVisibleFromUnit (with FCurrentClass for the class
+      context).  Returns the first visible hit, or nil.
+
+      Today the flat FTable holds only one TSymbol per name (no
+      conflicts are possible — semantics already error on name
+      duplicates), so this acts as an order-preserving probe that
+      will become load-bearing only once step 9 removes the flat
+      merge.  Until then it's plumbing.  Task #44 step 5. }
+    function LookupViaUsesChain(const AName: string): TSymbol;
   end;
 
 implementation
@@ -652,16 +666,28 @@ var
   I: Integer;
 begin
   FCurrentUsesChain.Clear;
-  { In Blaise there is no separately-named "System" unit — language
-    builtins live in the symbol table's global scope from
-    TSymbolTable.RegisterBuiltins, so they're always reachable as a
-    fallback after the chain.  The chain therefore holds only the
-    user's `uses` entries in source order.  Lookup walks it
-    right-to-left ("last in uses wins"); a non-hit falls back to the
-    global builtins. }
+  { Implicit `System` is always the first entry in every unit's
+    effective uses chain (Pascal "Uses System(hidden), Classes;"
+    rule).  User code never has to write it; it sits at the bottom
+    of the right-to-left walk, so any user-supplied unit that
+    re-exports a System name shadows it.  TSymbolTable's
+    RegisterBuiltins also defines a small set of compiler intrinsics
+    directly in global scope — those remain reachable as the final
+    fallback after the chain.
+
+    Skip the prepend when the unit being analysed IS System — a unit
+    cannot use itself.  FCurrentUnitName is set by Analyse/
+    AnalyseUnitForExport just before BuildUsesChain runs. }
+  if not SameText(FCurrentUnitName, 'System') then
+    FCurrentUsesChain.Add('System');
   if AUsedUnits = nil then Exit;
   for I := 0 to AUsedUnits.Count - 1 do
-    FCurrentUsesChain.Add(AUsedUnits.Strings[I]);
+    { Defensive: a user `uses System` (case-insensitive) is the same
+      as the implicit one — skip the dup so right-to-left doesn't
+      shadow itself.  TStringList is CaseSensitive=False so IndexOf
+      handles it. }
+    if FCurrentUsesChain.IndexOf(AUsedUnits.Strings[I]) < 0 then
+      FCurrentUsesChain.Add(AUsedUnits.Strings[I]);
 end;
 
 procedure TSemanticAnalyser.Analyse(AProg: TProgram);
@@ -1295,6 +1321,38 @@ begin
     Result := TUnitInterface(FUnitIfaces.Objects[Idx])
   else
     Result := nil;
+end;
+
+function TSemanticAnalyser.LookupViaUsesChain(const AName: string): TSymbol;
+var
+  I:     Integer;
+  Iface: TUnitInterface;
+  Sym:   TSymbol;
+begin
+  { Right-to-left walk = "last in uses wins". }
+  for I := FCurrentUsesChain.Count - 1 downto 0 do
+  begin
+    Iface := FindUnitIface(FCurrentUsesChain.Strings[I]);
+    if Iface = nil then Continue;
+    if not Iface.HasSymbol(AName) then Continue;
+
+    { The flat FTable currently holds the canonical TSymbol for AName
+      (only one — name collisions are impossible at the semantic level
+      today).  Step 9 will remove the flat merge; this lookup will
+      then resolve from a per-unit symbol pool instead. }
+    Sym := FTable.Lookup(AName);
+    if Sym = nil then Continue;
+    if Sym.OwningUnit <> '' then
+      if not SameText(Sym.OwningUnit, FCurrentUsesChain.Strings[I]) then
+        Continue;
+
+    if IsVisibleFromUnit(Sym, FCurrentUnitName, FCurrentClass) then
+    begin
+      Result := Sym;
+      Exit;
+    end;
+  end;
+  Result := nil;
 end;
 
 function TSemanticAnalyser.IsVisibleFromUnit(ASym: TSymbol;

@@ -222,6 +222,14 @@ type
     function FindRoutine(const AName: string): TRoutineSig;
     function FindInlineBody(const ARoutineName: string): TInlineBody;
     function FindGeneric(const AName: string): TGenericBody;
+
+    { True iff the interface exports a publicly-visible symbol of
+      this name.  Probes types, consts, vars, routines, generic
+      bodies, and enum-member names (each member of every enum
+      type counts as its own top-level symbol — matches what
+      uSemanticImport.RegisterEnum publishes).  Used by task #44
+      uses-chain lookup. }
+    function HasSymbol(const AName: string): Boolean;
   end;
 
 { Helpers for TQualTypeRef. }
@@ -476,6 +484,49 @@ begin
   Idx := FGenericIndex.IndexOf(AName);
   if Idx >= 0 then Result := TGenericBody(FGenericIndex.Objects[Idx])
               else Result := nil;
+end;
+
+function TUnitInterface.HasSymbol(const AName: string): Boolean;
+var
+  I, J: Integer;
+  T:    TTypeEntry;
+  V:    TVarEntry;
+  EnumDef: TEnumTypeDef;
+begin
+  if FindType(AName) <> nil    then begin Result := True; Exit; end;
+  if FindConst(AName) <> nil   then begin Result := True; Exit; end;
+  if FindRoutine(AName) <> nil then begin Result := True; Exit; end;
+  if FindGeneric(AName) <> nil then begin Result := True; Exit; end;
+
+  { Vars lack an index — linear walk. }
+  for I := 0 to Vars.Count - 1 do
+  begin
+    V := TVarEntry(Vars.Items[I]);
+    if SameText(V.Name, AName) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+
+  { Enum members are top-level identifiers (uSemanticImport.RegisterEnum
+    Define's each as skConstant).  Walk types, look inside enum defs. }
+  for I := 0 to Types.Count - 1 do
+  begin
+    T := TTypeEntry(Types.Items[I]);
+    if T.Def is TEnumTypeDef then
+    begin
+      EnumDef := TEnumTypeDef(T.Def);
+      for J := 0 to EnumDef.Members.Count - 1 do
+        if SameText(EnumDef.Members.Strings[J], AName) then
+        begin
+          Result := True;
+          Exit;
+        end;
+    end;
+  end;
+
+  Result := False;
 end;
 
 end.
