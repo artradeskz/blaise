@@ -43,6 +43,17 @@ type
     FCurrentUnitName:      string;       { name of the unit/program currently being analysed }
     FCurrentEnclosingDecl: TMethodDecl;  { the innermost standalone proc/func currently being analysed;
                                            nil at program level.  Used to set EnclosingDecl on nested procs. }
+    FCurrentUsesChain:     TStringList;  { owned — uses-chain visible to FCurrentUnitName.
+                                           Index 0 is the implicit System unit; entries 1..N-1
+                                           come from the analysed program/unit's UsedUnits in
+                                           source order.  Lookup walks this list right-to-left
+                                           ("last in uses wins"); System is the final fallback.
+                                           Empty during pure import phases. }
+
+    { Populates FCurrentUsesChain from a program/unit's UsedUnits list.
+      Pure plumbing — no behavior change today; consumed by uses-chain
+      lookup in a later step. }
+    procedure BuildUsesChain(AUsedUnits: TStringList);
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
@@ -245,11 +256,14 @@ begin
   FProcIndex.CaseSensitive := False;
   FGenericFuncTemplates := TStringList.Create;
   FGenericFuncTemplates.CaseSensitive := False;
+  FCurrentUsesChain     := TStringList.Create;
+  FCurrentUsesChain.CaseSensitive := False;
   FLoopDepth            := 0;
 end;
 
 destructor TSemanticAnalyser.Destroy;
 begin
+  FCurrentUsesChain.Free;
   FGenericFuncTemplates.Free;
   FProcIndex.Free;
   FMethodIndex.Free;
@@ -586,10 +600,28 @@ begin
     Result := MangleUnitPrefix(FCurrentUnitName);
 end;
 
+procedure TSemanticAnalyser.BuildUsesChain(AUsedUnits: TStringList);
+var
+  I: Integer;
+begin
+  FCurrentUsesChain.Clear;
+  { In Blaise there is no separately-named "System" unit — language
+    builtins live in the symbol table's global scope from
+    TSymbolTable.RegisterBuiltins, so they're always reachable as a
+    fallback after the chain.  The chain therefore holds only the
+    user's `uses` entries in source order.  Lookup walks it
+    right-to-left ("last in uses wins"); a non-hit falls back to the
+    global builtins. }
+  if AUsedUnits = nil then Exit;
+  for I := 0 to AUsedUnits.Count - 1 do
+    FCurrentUsesChain.Add(AUsedUnits.Strings[I]);
+end;
+
 procedure TSemanticAnalyser.Analyse(AProg: TProgram);
 begin
   FProg := AProg;
   FCurrentUnitName := AProg.Name;
+  BuildUsesChain(AProg.UsedUnits);
   AnalyseBlock(AProg.Block);
   { Transfer symbol table ownership to the program so that TTypeDesc
     objects (referenced by ResolvedType pointers on AST nodes) outlive
@@ -905,6 +937,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
+  BuildUsesChain(AUnit.UsedUnits);
   { Auto-tag every global Define within this unit's analysis with the
     unit name — populates TSymbol.OwningUnit for the source-compiled-
     dep path, paralleling uSemanticImport for the .bif-loaded path.
