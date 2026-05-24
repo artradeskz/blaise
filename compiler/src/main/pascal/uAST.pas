@@ -870,6 +870,7 @@ function CloneConstDecl(ASrc: TConstDecl): TConstDecl;
 function CloneMethodDecl(ASrc: TMethodDecl): TMethodDecl;
 function CloneMethodParam(ASrc: TMethodParam): TMethodParam;
 function CloneTypeDef(ASrc: TASTTypeDef): TASTTypeDef;
+function CloneClassTypeDef(ASrc: TClassTypeDef): TClassTypeDef;
 
 implementation
 
@@ -1531,7 +1532,6 @@ function CloneVarDecl(ASrc: TVarDecl): TVarDecl; forward;
 function CloneFieldDecl(ASrc: TFieldDecl): TFieldDecl; forward;
 { CloneTypeDecl, CloneConstDecl, CloneMethodDecl, CloneMethodParam,
   CloneTypeDef are now declared in the interface section. }
-function CloneClassTypeDef(ASrc: TClassTypeDef): TClassTypeDef; forward;
 function CloneGenericTypeDef(ASrc: TGenericTypeDef): TGenericTypeDef; forward;
 function CloneInterfaceTypeDef(ASrc: TInterfaceTypeDef): TInterfaceTypeDef; forward;
 function CloneProceduralTypeDef(ASrc: TProceduralTypeDef): TProceduralTypeDef; forward;

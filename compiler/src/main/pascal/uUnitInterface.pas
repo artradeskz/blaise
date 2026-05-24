@@ -68,6 +68,9 @@ type
     Params:       TObjectList;   { owned TMethodParam — cloned from source }
     ReturnType:   TQualTypeRef;  { TypeName = '' for procedures }
     IsInline:     Boolean;       { → InlineBodies has matching entry }
+    IsPublished:  Boolean;       { set by parser on class methods inside
+                                   a 'published' section; carries through
+                                   for RTL MethodAddress lookups }
     IsExternal:   Boolean;
     ExternalName: string;
     CallingConv:  string;        { 'cdecl', 'stdcall', '' }

@@ -918,18 +918,153 @@ begin
     Iface.Free;
   end;
 end;
+{ ----- TRecordClassLayoutTests (class subset, Phase 3) ---------- }
+
 procedure TRecordClassLayoutTests.TestClass_ParentClassResolved;
-begin Fail(TODO_MSG); end;
+const
+  DEP =
+    'unit DepU;'                                       + #10 +
+    'interface'                                        + #10 +
+    'type TBase = class end;'                          + #10 +
+    'implementation'                                   + #10 +
+    'end.'                                             + #10;
+  MAIN =
+    'unit MainU;'                                      + #10 +
+    'interface'                                        + #10 +
+    'uses DepU;'                                       + #10 +
+    'type TDerived = class(TBase) end;'                + #10 +
+    'implementation'                                   + #10 +
+    'end.'                                             + #10;
+var
+  DepIface:  TUnitInterface;
+  MainIface: TUnitInterface;
+  Deps:           TObjectList;
+  E:              TTypeEntry;
+begin
+  DepIface := ParseAndExport(DEP);
+  Deps := TObjectList.Create(False);
+  try
+    Deps.Add(DepIface);
+    MainIface := ParseAndExportWithDeps(MAIN, Deps);
+    try
+      E := MainIface.FindType('TDerived');
+      AssertEquals('found',         True,     E <> nil);
+      AssertEquals('parent name',   'TBase',  E.ParentClass.TypeName);
+      AssertEquals('parent unit',   'DepU',   E.ParentClass.UnitName);
+    finally
+      MainIface.Free;
+    end;
+  finally
+    Deps.Free;
+    DepIface.Free;
+  end;
+end;
+
 procedure TRecordClassLayoutTests.TestClass_ImplementsListPopulated;
-begin Fail(TODO_MSG); end;
+const
+  SRC =
+    'unit TestU;'                                                + #10 +
+    'interface'                                                  + #10 +
+    'type'                                                       + #10 +
+    '  IFirst  = interface end;'                                 + #10 +
+    '  ISecond = interface end;'                                 + #10 +
+    '  TWidget = class(TObject, IFirst, ISecond) end;'           + #10 +
+    'implementation'                                             + #10 +
+    'end.'                                                       + #10;
+var
+  Iface: TUnitInterface;
+  E:     TTypeEntry;
+begin
+  Iface := ParseAndExport(SRC);
+  try
+    E := Iface.FindType('TWidget');
+    AssertEquals('found',           True, E <> nil);
+    AssertEquals('implements count', 2, E.Implements.Count);
+    AssertEquals('impl[0]', 'IFirst',  E.Implements.Strings[0]);
+    AssertEquals('impl[1]', 'ISecond', E.Implements.Strings[1]);
+  finally
+    Iface.Free;
+  end;
+end;
+
 procedure TRecordClassLayoutTests.TestClass_MethodSignaturesExported;
-begin Fail(TODO_MSG); end;
+const
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'type'                                              + #10 +
+    '  TWidget = class'                                 + #10 +
+    '    procedure Step;'                               + #10 +
+    '    function  Count: Integer;'                     + #10 +
+    '  end;'                                            + #10 +
+    'implementation'                                    + #10 +
+    'procedure TWidget.Step; begin end;'                + #10 +
+    'function  TWidget.Count: Integer; begin Result := 0; end;' + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  E:     TTypeEntry;
+  Step:  TRoutineSig;
+  Count: TRoutineSig;
+begin
+  Iface := ParseAndExport(SRC);
+  try
+    E := Iface.FindType('TWidget');
+    AssertEquals('found', True, E <> nil);
+    AssertEquals('method count', 2, E.Methods.Count);
+
+    Step  := TRoutineSig(E.Methods.Items[0]);
+    Count := TRoutineSig(E.Methods.Items[1]);
+    AssertEquals('m0 name',     'Step',    Step.Name);
+    AssertEquals('m0 not func', False,     Step.IsFunction);
+    AssertEquals('m1 name',     'Count',   Count.Name);
+    AssertEquals('m1 is func',  True,      Count.IsFunction);
+    AssertEquals('m1 return',   'Integer', Count.ReturnType.TypeName);
+  finally
+    Iface.Free;
+  end;
+end;
+
 procedure TRecordClassLayoutTests.TestClass_VTableSlotsAssigned;
-begin Fail(TODO_MSG); end;
+begin
+  { VTableSlot is assigned by uSemantic, not the parser.  Until Phase 4
+    wires AnalyseUnit-then-ExportUnitInterface together, every method
+    arrives at the export with VTableSlot = -1, so VTableLayout stays
+    empty.  Pending Phase 4. }
+  Fail('Pending Phase 4: AnalyseUnit-then-Export pipeline');
+end;
+
 procedure TRecordClassLayoutTests.TestClass_InstanceSizeComputed;
-begin Fail(TODO_MSG); end;
+begin
+  { InstanceSize is computed by uSemantic too.  Same Phase 4 dependency
+    as VTableSlotsAssigned. }
+  Fail('Pending Phase 4: AnalyseUnit-then-Export pipeline');
+end;
+
 procedure TRecordClassLayoutTests.TestClass_AttributesPreserved;
-begin Fail(TODO_MSG); end;
+const
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'type'                                              + #10 +
+    '  [Threaded]'                                      + #10 +
+    '  TJob = class end;'                               + #10 +
+    'implementation'                                    + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  E:     TTypeEntry;
+begin
+  Iface := ParseAndExport(SRC);
+  try
+    E := Iface.FindType('TJob');
+    AssertEquals('found',          True, E <> nil);
+    AssertEquals('attribute count', 1, E.Attributes.Count);
+    AssertEquals('attribute name', 'Threaded', E.Attributes.Strings[0]);
+  finally
+    Iface.Free;
+  end;
+end;
 
 { ----- TInlineGenericBodyTests ---------------------------------- }
 
@@ -1103,11 +1238,78 @@ begin
   end;
 end;
 
+{ ----- TVisibilityTests ----------------------------------------- }
+
 procedure TVisibilityTests.TestClassMember_VisibilityPreserved;
-begin Fail(TODO_MSG); end;
+const
+  { Today the parser only tracks 'published' as a distinct
+    visibility (used for RTL MethodAddress lookups); private /
+    protected / public are accepted but silently dropped to the
+    same default state.  Pin down what we DO carry through. }
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'type'                                              + #10 +
+    '  TWidget = class'                                 + #10 +
+    '  published'                                       + #10 +
+    '    procedure Pub;'                                + #10 +
+    '  public'                                          + #10 +
+    '    procedure Pub2;'                               + #10 +
+    '  end;'                                            + #10 +
+    'implementation'                                    + #10 +
+    'procedure TWidget.Pub;  begin end;'                + #10 +
+    'procedure TWidget.Pub2; begin end;'                + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  E:     TTypeEntry;
+  Pub:   TRoutineSig;
+  Pub2:  TRoutineSig;
+begin
+  Iface := ParseAndExport(SRC);
+  try
+    E    := Iface.FindType('TWidget');
+    Pub  := TRoutineSig(E.Methods.Items[0]);
+    Pub2 := TRoutineSig(E.Methods.Items[1]);
+
+    AssertEquals('Pub  IsPublished',  True,  Pub.IsPublished);
+    AssertEquals('Pub2 IsPublished',  False, Pub2.IsPublished);
+  finally
+    Iface.Free;
+  end;
+end;
+
+{ ----- TForwardDeclTests ---------------------------------------- }
 
 procedure TForwardDeclTests.TestForwardDeclClass_FullBodyExported;
-begin Fail(TODO_MSG); end;
+const
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'type TWidget = class;'                             + #10 +
+    'implementation'                                    + #10 +
+    'type'                                              + #10 +
+    '  TWidget = class'                                 + #10 +
+    '    procedure Step;'                               + #10 +
+    '    N: Integer;'                                   + #10 +
+    '  end;'                                            + #10 +
+    'procedure TWidget.Step; begin end;'                + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  E:     TTypeEntry;
+begin
+  Iface := ParseAndExport(SRC);
+  try
+    E := Iface.FindType('TWidget');
+    AssertEquals('found',        True, E <> nil);
+    AssertEquals('is class',     True, E.IsClass);
+    AssertEquals('method count', 1, E.Methods.Count);
+    AssertEquals('field count',  1, TClassTypeDef(E.Def).Fields.Count);
+  finally
+    Iface.Free;
+  end;
+end;
 
 { ----- TRoutineSigTests ----------------------------------------- }
 

@@ -92,13 +92,69 @@ end;
 
 { ----- Per-declaration builders ---------------------------------- }
 
-function BuildTypeEntry(ASrc: TTypeDecl): TTypeEntry;
+{ Populate the class-specific fields of a TTypeEntry from its
+  TClassTypeDef.  Parent and implements references are resolved
+  against ADeps (and the in-progress AIface for forward-references
+  inside the same unit).  Methods are exported as TRoutineSig — no
+  bodies; downstream consumers re-emit them from the class
+  declaration when instantiating the class. }
+procedure PopulateClassEntry(AEntry:      TTypeEntry;
+                             ASrc:        TClassTypeDef;
+                             AIface:      TUnitInterface;
+                             ADeps:       TObjectList);
+var
+  I:    Integer;
+  M:    TMethodDecl;
+  Sig:  TRoutineSig;
+  IRef: TQualTypeRef;
+begin
+  AEntry.ParentClass := ResolveTypeRef(ASrc.ParentName, AIface, ADeps);
+
+  for I := 0 to ASrc.ImplementsNames.Count - 1 do
+  begin
+    IRef := ResolveTypeRef(ASrc.ImplementsNames.Strings[I], AIface, ADeps);
+    if IRef.UnitName = '' then
+      AEntry.Implements.Add(IRef.TypeName)
+    else
+      AEntry.Implements.Add(IRef.UnitName + '.' + IRef.TypeName);
+  end;
+
+  for I := 0 to ASrc.Attributes.Count - 1 do
+    AEntry.Attributes.Add(ASrc.Attributes.Strings[I]);
+
+  for I := 0 to ASrc.Methods.Count - 1 do
+  begin
+    M   := TMethodDecl(ASrc.Methods.Items[I]);
+    Sig := BuildRoutineSig(M, AIface, ADeps);
+    AEntry.Methods.Add(Sig);
+  end;
+
+  { VTableLayout: pre-semantic every VTableSlot is -1, so the layout
+    list stays empty.  Phase 4 (run AnalyseUnit then Export) will
+    populate it. }
+end;
+
+function BuildTypeEntry(ASrc:   TTypeDecl;
+                        AIface: TUnitInterface;
+                        ADeps:  TObjectList): TTypeEntry;
+var
+  GenDef:   TGenericTypeDef;
 begin
   Result := TTypeEntry.Create;
   Result.Name := ASrc.Name;
   Result.Def  := CloneTypeDef(ASrc.Def);
   Result.IsClass   := ASrc.Def is TClassTypeDef;
   Result.IsGeneric := ASrc.Def is TGenericTypeDef;
+
+  if ASrc.Def is TClassTypeDef then
+    PopulateClassEntry(Result, TClassTypeDef(ASrc.Def), AIface, ADeps)
+  else if ASrc.Def is TGenericTypeDef then
+  begin
+    { Generic class — the class body lives inside the wrapper. }
+    GenDef := TGenericTypeDef(ASrc.Def);
+    if GenDef.ClassDef <> nil then
+      PopulateClassEntry(Result, GenDef.ClassDef, AIface, ADeps);
+  end;
 end;
 
 function BuildConstEntry(ASrc:        TConstDecl;
@@ -145,6 +201,7 @@ begin
   Result.Name         := ASrc.Name;
   Result.IsFunction   := ASrc.ReturnTypeName <> '';
   Result.IsInline     := ASrc.IsInline or ASrc.IsInlineCandidate;
+  Result.IsPublished  := ASrc.IsPublished;
   Result.IsExternal   := ASrc.IsExternal;
   Result.ExternalName := ASrc.ExternalName;
   Result.ReturnType   := ResolveTypeRef(ASrc.ReturnTypeName, AIface, ADeps);
@@ -159,18 +216,73 @@ end;
 
 { ----- Walk passes ----------------------------------------------- }
 
-procedure ExportTypes(AUnit:       TUnit;
-                      AIface:      TUnitInterface;
-                      ADeps: TObjectList);
+{ Forward-declared class merging: a `type TFoo = class;` in the
+  interface section parses to a TClassTypeDef with empty Fields and
+  Methods.  The full body is in the implementation section.  For
+  separate compilation the exported interface must carry the full
+  body — locate the impl-side completion and substitute it.
+
+  This is the documented impl-leak (see TUnitInterface unit header). }
+function FindImplClassCompletion(AUnit: TUnit;
+                                 const AName: string): TClassTypeDef;
 var
-  I:    Integer;
-  Decl: TTypeDecl;
+  I: Integer;
+  D: TTypeDecl;
+begin
+  Result := nil;
+  if AUnit.ImplBlock = nil then Exit;
+  for I := 0 to AUnit.ImplBlock.TypeDecls.Count - 1 do
+  begin
+    D := TTypeDecl(AUnit.ImplBlock.TypeDecls.Items[I]);
+    if not SameText(D.Name, AName) then Continue;
+    if D.Def is TClassTypeDef then
+    begin
+      Result := TClassTypeDef(D.Def);
+      Exit;
+    end;
+  end;
+end;
+
+function IsForwardClass(ADef: TClassTypeDef): Boolean;
+begin
+  Result := (ADef.Fields.Count = 0) and (ADef.Methods.Count = 0);
+end;
+
+procedure ExportTypes(AUnit:  TUnit;
+                      AIface: TUnitInterface;
+                      ADeps:  TObjectList);
+var
+  I:        Integer;
+  Decl:     TTypeDecl;
+  ClassDef: TClassTypeDef;
+  ImplDef:  TClassTypeDef;
+  Entry:    TTypeEntry;
 begin
   if AUnit.IntfBlock = nil then Exit;
   for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
   begin
     Decl := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
-    AIface.AddType(BuildTypeEntry(Decl));
+
+    if Decl.Def is TClassTypeDef then
+    begin
+      ClassDef := TClassTypeDef(Decl.Def);
+      if IsForwardClass(ClassDef) then
+      begin
+        ImplDef := FindImplClassCompletion(AUnit, Decl.Name);
+        if ImplDef <> nil then
+        begin
+          Entry := TTypeEntry.Create;
+          Entry.Name    := Decl.Name;
+          Entry.Def     := CloneClassTypeDef(ImplDef);
+          Entry.IsClass := True;
+          PopulateClassEntry(Entry, ImplDef, AIface, ADeps);
+          AIface.AddType(Entry);
+          Continue;
+        end;
+      end;
+    end;
+
+    AIface.AddType(BuildTypeEntry(Decl, AIface, ADeps));
   end;
 end;
 
