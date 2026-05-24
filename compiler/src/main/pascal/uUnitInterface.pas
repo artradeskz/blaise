@@ -74,6 +74,10 @@ type
     IsExternal:   Boolean;
     ExternalName: string;
     CallingConv:  string;        { 'cdecl', 'stdcall', '' }
+    VTableSlot:   Integer;       { -1 = static; >= 0 = vtable index.
+                                   Populated by ExportUnitInterface
+                                   only when AnalyseUnitForExport has
+                                   run first.  Pre-semantic stays -1. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -252,6 +256,7 @@ begin
   inherited Create;
   Params := TObjectList.Create(True);
   ReturnType := MakeQualRef('', '');
+  VTableSlot := -1;
 end;
 
 destructor TRoutineSig.Destroy;

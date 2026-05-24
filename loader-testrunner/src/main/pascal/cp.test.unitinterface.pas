@@ -25,7 +25,7 @@ interface
 
 uses
   Classes, contnrs, blaise.testing,
-  uAST, uLexer, uParser, uUnitInterface, uSemanticExport;
+  uAST, uLexer, uParser, uSemantic, uUnitInterface, uSemanticExport;
 
 type
   { ParseAndExport helper — shared across fixtures.  Stubbed for now;
@@ -233,6 +233,41 @@ const
   ASource is treated as the entire content of a .pas file: must begin
   with 'unit Name;' and contain interface/implementation/end.
   Deps is empty for now; cross-unit tests will pre-populate it. }
+{ Like ParseAndExport but also runs uSemantic.AnalyseUnitForExport
+  on the parsed unit before producing the TUnitInterface.  Use this
+  when a test needs semantic-populated fields (VTableSlot,
+  InstanceSize, resolved field types). }
+function ParseAnalyseAndExport(const ASource: string): TUnitInterface;
+var
+  Lex:    TLexer;
+  Parser: TParser;
+  U:      TUnit;
+  Sem:    TSemanticAnalyser;
+begin
+  Lex := TLexer.Create(ASource, '<test>');
+  try
+    Parser := TParser.Create(Lex);
+    try
+      U := Parser.ParseUnit;
+      try
+        Sem := TSemanticAnalyser.Create;
+        try
+          Sem.AnalyseUnitForExport(U);
+          Result := ExportUnitInterface(U, nil, Sem.GetSymbolTable);
+        finally
+          Sem.Free;
+        end;
+      finally
+        U.Free;
+      end;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lex.Free;
+  end;
+end;
+
 function ParseAndExportWithDeps(const ASource: string;
                                 ADeps: TObjectList): TUnitInterface;
 var
@@ -1026,19 +1061,63 @@ begin
 end;
 
 procedure TRecordClassLayoutTests.TestClass_VTableSlotsAssigned;
+const
+  { Override of TObject.ToString gets a real (non-negative) slot.
+    Non-overriding regular methods are static — slot -1. }
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'type'                                              + #10 +
+    '  TWidget = class'                                 + #10 +
+    '    function ToString: string; override;'          + #10 +
+    '    procedure Plain;'                              + #10 +
+    '  end;'                                            + #10 +
+    'implementation'                                    + #10 +
+    'function TWidget.ToString: string; begin Result := ''w''; end;' + #10 +
+    'procedure TWidget.Plain; begin end;'               + #10 +
+    'end.'                                              + #10;
+var
+  Iface:    TUnitInterface;
+  E:        TTypeEntry;
+  ToString: TRoutineSig;
+  Plain:    TRoutineSig;
 begin
-  { VTableSlot is assigned by uSemantic, not the parser.  Until Phase 4
-    wires AnalyseUnit-then-ExportUnitInterface together, every method
-    arrives at the export with VTableSlot = -1, so VTableLayout stays
-    empty.  Pending Phase 4. }
-  Fail('Pending Phase 4: AnalyseUnit-then-Export pipeline');
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    E        := Iface.FindType('TWidget');
+    ToString := TRoutineSig(E.Methods.Items[0]);
+    Plain    := TRoutineSig(E.Methods.Items[1]);
+
+    AssertEquals('ToString virtual slot', True, ToString.VTableSlot >= 0);
+    AssertEquals('Plain static',          -1,   Plain.VTableSlot);
+  finally
+    Iface.Free;
+  end;
 end;
 
 procedure TRecordClassLayoutTests.TestClass_InstanceSizeComputed;
+const
+  { Class header (typeinfo + ARC + monitor) plus one Integer field
+    rounds to some positive size > 0 — exact value depends on the
+    backend layout, so just assert positivity. }
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'type TWidget = class N: Integer; end;'             + #10 +
+    'implementation'                                    + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  E:     TTypeEntry;
 begin
-  { InstanceSize is computed by uSemantic too.  Same Phase 4 dependency
-    as VTableSlotsAssigned. }
-  Fail('Pending Phase 4: AnalyseUnit-then-Export pipeline');
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    E := Iface.FindType('TWidget');
+    AssertEquals('found',                  True, E <> nil);
+    AssertEquals('instance size positive', True, E.InstanceSize > 0);
+  finally
+    Iface.Free;
+  end;
 end;
 
 procedure TRecordClassLayoutTests.TestClass_AttributesPreserved;

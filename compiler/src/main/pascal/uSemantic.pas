@@ -211,7 +211,9 @@ type
       can resolve them.  Use this when compiling a unit as a dependency. }
     procedure AnalyseUnitForExport(AUnit: TUnit);
     { Read-only handle to the analyser's symbol table.  Codegen needs it
-      in unit-as-top-level mode where no TProgram exists to hand it off. }
+      in unit-as-top-level mode where no TProgram exists to hand it off.
+      Also used by uSemanticExport.ExportUnitInterface to look up resolved
+      types (e.g. for InstanceSize).  Non-owning — do not free. }
     function  GetSymbolTable: TSymbolTable;
     { Returns MangleUnitPrefix(FCurrentUnitName) when analysing a unit
       via AnalyseUnitForExport (FProg=nil), '' otherwise.  Used by

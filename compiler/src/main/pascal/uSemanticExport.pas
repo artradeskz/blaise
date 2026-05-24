@@ -36,13 +36,20 @@ unit uSemanticExport;
 interface
 
 uses
-  Classes, Contnrs, uAST, uUnitInterface;
+  Classes, Contnrs, uAST, uSymbolTable, uUnitInterface;
 
 { Build a TUnitInterface from AUnit.  AUnit must have been semantically
   analysed already.  ADeps holds the already-exported interfaces of
-  every unit listed in AUnit's interface uses clause, in any order. }
-function ExportUnitInterface(AUnit: TUnit;
-                             ADeps: TObjectList)
+  every unit listed in AUnit's interface uses clause, in any order.
+
+  ASymbolTable is optional.  Pass the table populated by
+  TSemanticAnalyser.AnalyseUnitForExport(AUnit) when you want
+  VTableSlot / InstanceSize / resolved type info to flow into the
+  produced TUnitInterface.  Pass nil to skip — the artifact still
+  builds, just without semantic-derived fields. }
+function ExportUnitInterface(AUnit:        TUnit;
+                             ADeps:        TObjectList;
+                             ASymbolTable: TSymbolTable = nil)
                              : TUnitInterface;
 
 implementation
@@ -98,15 +105,17 @@ end;
   inside the same unit).  Methods are exported as TRoutineSig — no
   bodies; downstream consumers re-emit them from the class
   declaration when instantiating the class. }
-procedure PopulateClassEntry(AEntry:      TTypeEntry;
-                             ASrc:        TClassTypeDef;
-                             AIface:      TUnitInterface;
-                             ADeps:       TObjectList);
+procedure PopulateClassEntry(AEntry:       TTypeEntry;
+                             ASrc:         TClassTypeDef;
+                             AIface:       TUnitInterface;
+                             ADeps:        TObjectList;
+                             ASymbolTable: TSymbolTable);
 var
-  I:    Integer;
-  M:    TMethodDecl;
-  Sig:  TRoutineSig;
-  IRef: TQualTypeRef;
+  I:        Integer;
+  M:        TMethodDecl;
+  Sig:      TRoutineSig;
+  IRef:     TQualTypeRef;
+  TypeDesc: TTypeDesc;
 begin
   AEntry.ParentClass := ResolveTypeRef(ASrc.ParentName, AIface, ADeps);
 
@@ -129,14 +138,26 @@ begin
     AEntry.Methods.Add(Sig);
   end;
 
-  { VTableLayout: pre-semantic every VTableSlot is -1, so the layout
-    list stays empty.  Phase 4 (run AnalyseUnit then Export) will
-    populate it. }
+  { InstanceSize — read the resolved TRecordTypeDesc from the
+    symbol table.  Without a symbol table (parse-only export) this
+    stays 0. }
+  if ASymbolTable <> nil then
+  begin
+    TypeDesc := ASymbolTable.FindType(AEntry.Name);
+    if (TypeDesc <> nil) and (TypeDesc is TRecordTypeDesc) then
+      AEntry.InstanceSize := TRecordTypeDesc(TypeDesc).TotalSize;
+  end;
+
+  { VTableLayout: TRoutineSig.VTableSlot is populated by
+    BuildRoutineSig from the source TMethodDecl.  Pre-semantic every
+    slot is -1; once AnalyseUnitForExport has run, slot indices are
+    filled in. }
 end;
 
-function BuildTypeEntry(ASrc:   TTypeDecl;
-                        AIface: TUnitInterface;
-                        ADeps:  TObjectList): TTypeEntry;
+function BuildTypeEntry(ASrc:         TTypeDecl;
+                        AIface:       TUnitInterface;
+                        ADeps:        TObjectList;
+                        ASymbolTable: TSymbolTable): TTypeEntry;
 var
   GenDef:   TGenericTypeDef;
 begin
@@ -147,13 +168,13 @@ begin
   Result.IsGeneric := ASrc.Def is TGenericTypeDef;
 
   if ASrc.Def is TClassTypeDef then
-    PopulateClassEntry(Result, TClassTypeDef(ASrc.Def), AIface, ADeps)
+    PopulateClassEntry(Result, TClassTypeDef(ASrc.Def), AIface, ADeps, ASymbolTable)
   else if ASrc.Def is TGenericTypeDef then
   begin
     { Generic class — the class body lives inside the wrapper. }
     GenDef := TGenericTypeDef(ASrc.Def);
     if GenDef.ClassDef <> nil then
-      PopulateClassEntry(Result, GenDef.ClassDef, AIface, ADeps);
+      PopulateClassEntry(Result, GenDef.ClassDef, AIface, ADeps, ASymbolTable);
   end;
 end;
 
@@ -202,6 +223,7 @@ begin
   Result.IsFunction   := ASrc.ReturnTypeName <> '';
   Result.IsInline     := ASrc.IsInline or ASrc.IsInlineCandidate;
   Result.IsPublished  := ASrc.IsPublished;
+  Result.VTableSlot   := ASrc.VTableSlot;
   Result.IsExternal   := ASrc.IsExternal;
   Result.ExternalName := ASrc.ExternalName;
   Result.ReturnType   := ResolveTypeRef(ASrc.ReturnTypeName, AIface, ADeps);
@@ -248,9 +270,10 @@ begin
   Result := (ADef.Fields.Count = 0) and (ADef.Methods.Count = 0);
 end;
 
-procedure ExportTypes(AUnit:  TUnit;
-                      AIface: TUnitInterface;
-                      ADeps:  TObjectList);
+procedure ExportTypes(AUnit:        TUnit;
+                      AIface:       TUnitInterface;
+                      ADeps:        TObjectList;
+                      ASymbolTable: TSymbolTable);
 var
   I:        Integer;
   Decl:     TTypeDecl;
@@ -275,14 +298,14 @@ begin
           Entry.Name    := Decl.Name;
           Entry.Def     := CloneClassTypeDef(ImplDef);
           Entry.IsClass := True;
-          PopulateClassEntry(Entry, ImplDef, AIface, ADeps);
+          PopulateClassEntry(Entry, ImplDef, AIface, ADeps, ASymbolTable);
           AIface.AddType(Entry);
           Continue;
         end;
       end;
     end;
 
-    AIface.AddType(BuildTypeEntry(Decl, AIface, ADeps));
+    AIface.AddType(BuildTypeEntry(Decl, AIface, ADeps, ASymbolTable));
   end;
 end;
 
@@ -419,9 +442,9 @@ end;
 
 { ----- Top-level ------------------------------------------------- }
 
-function ExportUnitInterface(AUnit: TUnit;
-                             ADeps: TObjectList)
-                             : TUnitInterface;
+function ExportUnitInterface(AUnit:        TUnit;
+                             ADeps:        TObjectList;
+                             ASymbolTable: TSymbolTable): TUnitInterface;
 begin
   Result := TUnitInterface.Create(AUnit.Name);
   Result.SourceFile := AUnit.SourceFile;
@@ -430,7 +453,7 @@ begin
 
   { Types FIRST — subsequent passes' ResolveTypeRef calls need to be
     able to find local types in the index. }
-  ExportTypes   (AUnit, Result, ADeps);
+  ExportTypes   (AUnit, Result, ADeps, ASymbolTable);
   ExportConsts  (AUnit, Result, ADeps);
   ExportRoutines(AUnit, Result, ADeps);
 
