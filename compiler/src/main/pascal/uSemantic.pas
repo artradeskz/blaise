@@ -219,6 +219,13 @@ type
       via AnalyseUnitForExport (FProg=nil), '' otherwise.  Used by
       ResolvedQbeName generation to prefix cross-unit symbol names. }
     function  CurrentUnitPrefix: string;
+    { Push an imported free routine into FProcIndex (the call-site
+      lookup table used by AnalyseFuncCall et al.).  Used by
+      uSemanticImport when materialising symbols from a .bif —
+      FTable.Define alone isn't enough because the call-site path
+      goes through FProcIndex instead. }
+    procedure RegisterImportedRoutine(const AName: string;
+                                      ADecl: TMethodDecl);
   end;
 
 implementation
@@ -1176,6 +1183,12 @@ begin
   end;
   FCurrentUnit := nil;
   FTable.DefineOwningUnit := '';
+end;
+
+procedure TSemanticAnalyser.RegisterImportedRoutine(const AName: string;
+                                                    ADecl: TMethodDecl);
+begin
+  FProcIndex.AddObject(AName, ADecl);
 end;
 
 procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);

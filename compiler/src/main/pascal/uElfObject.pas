@@ -145,6 +145,13 @@ function FindSection(const ASections: TElfSectionArray;
 procedure AppendSection(const APath, ASectionName: string;
                         const AData: string);
 
+  { Read the bytes of section ASectionName out of APath into a Blaise
+    byte-string.  Returns True + fills AData on success, False if the
+    section is absent (AData is set to '').  Raises EElfObject on a
+    malformed ELF or I/O failure. }
+function ReadSection(const APath, ASectionName: string;
+                     var AData: string): Boolean;
+
 implementation
 
 { ---- Endian helpers --------------------------------------------------
@@ -202,7 +209,7 @@ end;
 
 { Read ACount bytes from AStream at AOffset into a fresh Blaise string.
   Returns False (and leaves AOut empty) if the read came up short. }
-function ReadBlock(AStream: TFileInputStream; AOffset: Int64; ACount: Integer;
+function BlockRead(AStream: TFileInputStream; AOffset: Int64; ACount: Integer;
                    var AOut: string): Boolean;
 var
   Got: Integer;
@@ -258,7 +265,7 @@ begin
     if FS.Size < HSize then
       HSize := ELF32_EHDR_SIZE;
 
-    if not ReadBlock(FS, 0, HSize, Buf) then
+    if not BlockRead(FS, 0, HSize, Buf) then
       Exit;
 
     { Magic. }
@@ -696,6 +703,43 @@ begin
   { Atomic-ish rename. }
   if not RenameFile(TmpPath, APath) then
     raise EElfObject.Create(APath + ': rename of temp file failed');
+end;
+
+{ ---- ReadSection ---------------------------------------------------- }
+
+function ReadSection(const APath, ASectionName: string;
+                     var AData: string): Boolean;
+var
+  Info:  TElfInfo;
+  Secs:  TElfSectionArray;
+  Idx:   Integer;
+  FIn:   TFileInputStream;
+  Sec:   TElfSection;
+begin
+  AData  := '';
+  Result := False;
+  if not ProbeElf(APath, Info) then
+    Exit;
+  Secs := LoadSections(APath, Info);
+  Idx := FindSection(Secs, ASectionName);
+  if Idx < 0 then
+    Exit;
+  Sec := Secs[Idx];
+  if Sec.Size <= 0 then
+  begin
+    Result := True;
+    Exit;
+  end;
+  FIn := TFileInputStream.Create(APath);
+  try
+    FIn.Seek(Sec.Offset, soBeginning);
+    SetLength(AData, Integer(Sec.Size));
+    if FIn.Read(PChar(AData), Integer(Sec.Size)) <> Integer(Sec.Size) then
+      raise EElfObject.Create(APath + ': short read on section ' + ASectionName);
+  finally
+    FIn.Free;
+  end;
+  Result := True;
 end;
 
 end.

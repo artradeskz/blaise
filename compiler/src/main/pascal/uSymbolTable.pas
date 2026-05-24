@@ -388,6 +388,10 @@ type
                                      by AnalyseStandaloneDecl and by
                                      uSemanticImport when registering a unit
                                      interface's generic free routines) }
+    FImportedDecls:   TObjectList; { owned TMethodDecl — synthesised by
+                                     uSemanticImport when materialising
+                                     routines / methods that came in via a
+                                     .bif (no source TUnit holds them). }
 
     FTypeInteger:  TTypeDesc;
     FTypeInt64:    TTypeDesc;
@@ -469,6 +473,10 @@ type
     function  FindGeneric(const AName: string): TObject;
     procedure RegisterGenericRoutine(const AName: string; ATempl: TObject);
     function  FindGenericRoutine(const AName: string): TObject;
+    { Take ownership of a synthesised TMethodDecl produced during
+      .bif import.  Lifetime tracks the symbol table; callers do
+      not free.  Returns the same pointer for caller convenience. }
+    function  OwnImportedDecl(ADecl: TObject): TObject;
 
     { Convenience type accessors }
     property TypeInteger:  TTypeDesc read FTypeInteger;
@@ -1166,6 +1174,7 @@ begin
   FGenericTemplates := TObjectList.Create(True);
   FGenericRoutines := TStringList.Create;
   FGenericRoutines.CaseSensitive := False;
+  FImportedDecls   := TObjectList.Create(True);
   { Global scope — parent = nil }
   FScopeStack.Add(TScope.Create(nil));
   RegisterBuiltins;
@@ -1173,6 +1182,7 @@ end;
 
 destructor TSymbolTable.Destroy;
 begin
+  FImportedDecls.Free;
   FGenericRoutines.Free;
   { FGenerics, FGenericTemplates, FScopeStack, FAllTypes are owned class fields — released by
     ARC field cleanup. }
@@ -1306,6 +1316,12 @@ begin
     Result := FGenericRoutines.Objects[Idx]
   else
     Result := nil;
+end;
+
+function TSymbolTable.OwnImportedDecl(ADecl: TObject): TObject;
+begin
+  FImportedDecls.Add(ADecl);
+  Result := ADecl;
 end;
 
 procedure TSymbolTable.RegisterBuiltins;

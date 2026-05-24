@@ -37,7 +37,8 @@ unit uSemanticImport;
 interface
 
 uses
-  Classes, Contnrs, SysUtils, uAST, uSymbolTable, uUnitInterface;
+  Classes, Contnrs, SysUtils, uAST, uSymbolTable, uUnitInterface,
+  uSemantic;
 
 type
   EImportError = class(Exception);
@@ -45,8 +46,17 @@ type
 { Register everything in AIface into ATable.  ATable must already have
   the dependencies of AIface (the units in AIface.UsedUnits) imported,
   so cross-unit type references can be resolved by simple name lookup
-  against ATable.  Builtin types must also be present (RegisterBuiltins). }
-procedure ImportUnitInterface(AIface: TUnitInterface; ATable: TSymbolTable);
+  against ATable.  Builtin types must also be present (RegisterBuiltins).
+
+  When ASemantic is non-nil, free routines are *also* pushed into
+  the analyser's FProcIndex via RegisterImportedRoutine — needed
+  because AnalyseFuncCall looks up callees in that index rather
+  than going through the symbol table.  The synthesised
+  TMethodDecls are owned by ATable.OwnImportedDecl so the symbol
+  table's lifetime covers them. }
+procedure ImportUnitInterface(AIface: TUnitInterface;
+                              ATable: TSymbolTable;
+                              ASemantic: TSemanticAnalyser = nil);
 
 implementation
 
@@ -494,7 +504,44 @@ begin
     expect all param types to resolve. }
 end;
 
-procedure RegisterRoutines(AIface: TUnitInterface; ATable: TSymbolTable);
+{ Synthesise a TMethodDecl from a TRoutineSig + its return-type
+  qual-ref, sufficient for downstream call-site analysis: param
+  list with ResolvedType set, ResolvedReturnType, ResolvedQbeName,
+  IsOverload.  Body stays nil. }
+function SynthesiseMethodDecl(ASig: TRoutineSig;
+                              ATable: TSymbolTable): TMethodDecl;
+var
+  J:     Integer;
+  Param: TMethodParam;
+  PSyn:  TMethodParam;
+  Sym:   TSymbol;
+begin
+  Result := TMethodDecl.Create;
+  Result.Name           := ASig.Name;
+  Result.ReturnTypeName := ASig.ReturnType.TypeName;
+  Result.ResolvedReturnType :=
+    ResolveTypeName(ASig.ReturnType.TypeName, ATable);
+  Result.ResolvedQbeName := ASig.ResolvedQbeName;
+  if Result.ResolvedQbeName = '' then
+    Result.ResolvedQbeName := ASig.Name;
+  for J := 0 to ASig.Params.Count - 1 do
+  begin
+    Param := TMethodParam(ASig.Params.Items[J]);
+    PSyn := TMethodParam.Create;
+    PSyn.ParamName    := Param.ParamName;
+    PSyn.TypeName     := Param.TypeName;
+    PSyn.IsVarParam   := Param.IsVarParam;
+    PSyn.IsConstParam := Param.IsConstParam;
+    PSyn.IsOpenArray  := Param.IsOpenArray;
+    Sym := ATable.Lookup(Param.TypeName);
+    if (Sym <> nil) and (Sym.Kind = skType) then
+      PSyn.ResolvedType := Sym.TypeDesc;
+    Result.Params.Add(PSyn);
+  end;
+end;
+
+procedure RegisterRoutines(AIface: TUnitInterface; ATable: TSymbolTable;
+                           ASemantic: TSemanticAnalyser);
 var
   I, J: Integer;
   Sig: TRoutineSig;
@@ -502,6 +549,7 @@ var
   RetType: TTypeDesc;
   Param: TMethodParam;
   PDesc: TParamDesc;
+  MDecl: TMethodDecl;
 begin
   for I := 0 to AIface.Routines.Count - 1 do
   begin
@@ -515,14 +563,23 @@ begin
     else
       Sym := TSymbol.Create(Sig.Name, skProcedure, nil);
 
-    Sym.IsOverload := False;  { overload chains rebuilt by 6c-B once
-                                we carry IsOverload through TRoutineSig }
+    Sym.IsOverload := False;
 
     for J := 0 to Sig.Params.Count - 1 do
     begin
       Param := TMethodParam(Sig.Params.Items[J]);
       PDesc := BuildParamDesc(Param, ATable);
       Sym.Params.Add(PDesc);
+    end;
+
+    { Build a synthetic TMethodDecl so call-site analysis can resolve
+      via FProcIndex.  Owned by the symbol table to outlive imports. }
+    if ASemantic <> nil then
+    begin
+      MDecl := SynthesiseMethodDecl(Sig, ATable);
+      ATable.OwnImportedDecl(MDecl);
+      Sym.Decl := MDecl;
+      ASemantic.RegisterImportedRoutine(Sig.Name, MDecl);
     end;
 
     if not ATable.Define(Sym) then
@@ -546,14 +603,16 @@ begin
   end;
 end;
 
-procedure ImportUnitInterface(AIface: TUnitInterface; ATable: TSymbolTable);
+procedure ImportUnitInterface(AIface: TUnitInterface;
+                              ATable: TSymbolTable;
+                              ASemantic: TSemanticAnalyser = nil);
 begin
   { Types FIRST — consts, vars, and routine params look up against
     the symbol table by name. }
   RegisterTypes  (AIface, ATable);
   RegisterConsts (AIface, ATable);
   RegisterVars   (AIface, ATable);
-  RegisterRoutines(AIface, ATable);
+  RegisterRoutines(AIface, ATable, ASemantic);
   RegisterGenericRoutines(AIface, ATable);
 end;
 

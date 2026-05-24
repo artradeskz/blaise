@@ -24,7 +24,8 @@ uses
   SysUtils, Classes, Process, contnrs,
   uLexer, uParser, uAST, uSemantic, uCodeGen, uCodeGenQBE,
   blaise.codegen.target, blaise.codegen.native, uToolchain,
-  uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uUnitInterfaceIO,
+  uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
+  uUnitInterfaceIO, uIfaceObject,
   uStrCompat, uConfig;
 
 const
@@ -352,10 +353,17 @@ begin
   Result := '';
 end;
 
-{ Unit-as-top-level: qbe → .s → cc -c → .o.  Stops at the object file
-  so the caller can link multiple unit-objects + a program object
-  together.  No RTL, no -lm/-lpthread — those are link-time concerns. }
-procedure CompileUnitToObject(const AIRFile, AOutputFile: string);
+{ Unit-as-top-level: qbe → .s → cc -c → .o.  Stops at the object
+  file so the caller can link multiple unit-objects + a program
+  object together.  No RTL, no -lm/-lpthread — those are link-time
+  concerns.
+
+  When ABifFile is non-empty, also embeds those bytes into the
+  resulting .o via uElfObject into a non-loaded ELF section.  Keeps
+  the on-disk .o + iface inseparable so the loader can read the
+  iface straight out of the .o without a parallel filename. }
+procedure CompileUnitToObject(const AIRFile, AOutputFile,
+                              ABifFile: string);
 var
   AsmFile:  string;
   Msg:      string;
@@ -397,14 +405,20 @@ begin
   end;
 
   DeleteFile(AsmFile);
+
+  if (ABifFile <> '') and FileExists(ABifFile) then
+    if not EmbedBifInObject(AOutputFile, ABifFile, ofELF) then
+      Halt(1);
 end;
 
-procedure CompileToNative(const AIRFile, AOutputFile, AOPDFAsmFile: string);
+procedure CompileToNative(const AIRFile, AOutputFile, AOPDFAsmFile: string;
+                          AExtraObjects: TStringList = nil);
 var
   AsmFile, RTLPath: string;
   Msg:              string;
   ExitCode:         Integer;
   Args:             TStringList;
+  I:                Integer;
 begin
   AsmFile := ChangeFileExt(AIRFile, '.s');
   RTLPath := FindRTL;
@@ -434,6 +448,12 @@ begin
     Args.Add(AsmFile);
     if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
       Args.Add(AOPDFAsmFile);
+    { Pre-built dep object files (auto-discovered by the loader).
+      Linked alongside the main object so their symbols resolve
+      what AppendUnit skipped. }
+    if AExtraObjects <> nil then
+      for I := 0 to AExtraObjects.Count - 1 do
+        Args.Add(AExtraObjects.Strings[I]);
     if RTLPath <> '' then
       Args.Add(RTLPath);
     Args.Add('-lm');       { math functions (sqrt, sin, cos, etc.) }
@@ -510,10 +530,21 @@ var
   Lexer:    TLexer;
   Parser:   TParser;
   Prog:     TProgram;
-  TopUnit:  TUnit;       { non-nil when the source begins with 'unit' —
-                           Prog stays nil, pipeline runs in unit-only mode. }
-  IsUnitMode: Boolean;   { mirrors TopUnit's non-nil status but survives
-                           TopUnit.Free in the finally block. }
+  TopUnit:  TUnit;            { non-nil when the source begins with 'unit',
+                                in which case Prog stays nil and the
+                                pipeline runs in unit-only mode. }
+  IsUnitMode: Boolean;        { mirrors TopUnit's non-nil status but
+                                survives past TopUnit.Free in the finally
+                                block, so the post-codegen output dispatch
+                                can pick CompileUnitToObject. }
+  TopIfacePath: string;       { Temp .bif file produced for the top
+                                unit, embedded into the output .o by
+                                CompileUnitToObject and then deleted.
+                                Empty when not in unit mode. }
+  PrebuiltObjPaths: TStringList; { Auto-discovered dep .o files,
+                                copied off the loader before its Free
+                                so the link-step dispatch can still
+                                see them. }
   Semantic: TSemanticAnalyser;
   NativeCG: TCodeGenNative;
   CG:       ICodeGen;
@@ -593,6 +624,8 @@ begin
   Lexer      := nil;
   Parser     := nil;
   Prog       := nil;
+  TopIfacePath := '';
+  PrebuiltObjPaths := TStringList.Create;
   Semantic   := nil;
   { CG (ICodeGen) is zero-initialised by default; no explicit nil-assignment
     (stage-1 mis-compiles interface-global nil stores — see EmitAssign note). }
@@ -633,6 +666,14 @@ begin
         if Units <> nil then
         begin
           UnitIfaces := TObjectList.Create(True);  { owns TUnitInterface }
+          { Auto-discovered prebuilt ifaces: import each into the
+            shared FTable before AnalyseUnitForExport runs on the
+            source-loaded deps.  Order is dependency-leaf-first so
+            cross-references resolve. }
+          for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
+            ImportUnitInterface(
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]),
+              Semantic.GetSymbolTable, Semantic);
           for I := 0 to Units.Count - 1 do
           begin
             Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
@@ -656,7 +697,33 @@ begin
         end;
       end;
       if IsUnitMode then
-        Semantic.AnalyseUnitForExport(TopUnit)
+      begin
+        { Unit-as-top-level: same analysis pass deps go through, no
+          program 'main' to wrap.  Sym tables and class layouts
+          end up in Semantic's FTable just like for a regular dep. }
+        Semantic.AnalyseUnitForExport(TopUnit);
+        { Always produce the iface — it's about to be embedded into
+          the .o by CompileUnitToObject.  The dedicated --emit-iface
+          DIR remains as a debug aid that also writes a loose .bif
+          alongside the embedded copy. }
+        { Build the iface path deterministically alongside the
+          output so we don't depend on a SysUtils helper that may
+          not be on the bootstrap binary's RTL.  The .bif.tmp
+          extension keeps it out of the way of any .bif emitted
+          by --emit-iface in the same dir. }
+        if OutputFile <> '' then
+          TopIfacePath := OutputFile + '.bif.tmp'
+        else
+          TopIfacePath := LowerCase(TopUnit.Name) + '.bif.tmp';
+        WriteUnitInterfaceToFile(
+          ExportUnitInterface(TopUnit, UnitIfaces, Semantic.GetSymbolTable),
+          TopIfacePath);
+        if EmitIfaceDir <> '' then
+          WriteUnitInterfaceToFile(
+            ExportUnitInterface(TopUnit, UnitIfaces, Semantic.GetSymbolTable),
+            IncludeTrailingPathDelimiter(EmitIfaceDir) +
+              LowerCase(TopUnit.Name) + '.bif');
+      end
       else
         Semantic.Analyse(Prog);
     except
@@ -745,6 +812,12 @@ begin
     UnitIfaces.Free;  { must free before Units — TUnitInterface entries
                        hold cloned AST that points at nothing in Units,
                        but the destructor order is still cleaner first }
+    { Capture the prebuilt object paths off the loader before
+      Loader.Free wipes them — needed by the link-step dispatch
+      below the finally block. }
+    if Loader <> nil then
+      for I := 0 to Loader.PrebuiltObjectPaths.Count - 1 do
+        PrebuiltObjPaths.Add(Loader.PrebuiltObjectPaths.Strings[I]);
     Units.Free;
     Loader.Free;
     SearchPaths.Free;
@@ -810,9 +883,20 @@ begin
     end;
 
     if IsUnitMode then
-      CompileUnitToObject(IRFile, OutputFile)
+    begin
+      CompileUnitToObject(IRFile, OutputFile, TopIfacePath);
+      if (TopIfacePath <> '') and FileExists(TopIfacePath) then
+        DeleteFile(TopIfacePath);
+    end
     else
-      CompileToNative(IRFile, OutputFile, OPDFAsmFile);
+    begin
+      { Auto-discovered prebuilt dep object paths feed straight into the cc command line. }
+      if PrebuiltObjPaths.Count > 0 then
+        CompileToNative(IRFile, OutputFile, OPDFAsmFile, PrebuiltObjPaths)
+      else
+        CompileToNative(IRFile, OutputFile, OPDFAsmFile);
+    end;
+    PrebuiltObjPaths.Free;
     DeleteFile(IRFile);
     if OPDFAsmFile <> '' then
       DeleteFile(OPDFAsmFile);
