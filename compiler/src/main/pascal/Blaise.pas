@@ -24,7 +24,7 @@ uses
   SysUtils, Classes, Process, contnrs,
   uLexer, uParser, uAST, uSemantic, uCodeGen, uCodeGenQBE,
   blaise.codegen.target, blaise.codegen.native, uToolchain,
-  uUnitLoader, uDebugOPDF,
+  uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport,
   uStrCompat, uConfig;
 
 const
@@ -509,6 +509,16 @@ var
   OE:       TOPDFEmitter;
   Loader:   TUnitLoader;
   Units:    TObjectList;
+  UnitIfaces: TObjectList;   { owned TUnitInterface, in dependency order
+                               (leaves first).  Populated alongside the
+                               existing AnalyseUnitForExport pass.
+                               Phase 5 of the loader work: build the
+                               cache during every real compile so
+                               downstream phases (consumer migration)
+                               can rely on it.  Currently the cache
+                               isn't queried yet — building it surfaces
+                               any ExportUnitInterface bugs against real
+                               codebases. }
   I:        Integer;
   IR:       string;
   IRFile:   string;
@@ -568,14 +578,15 @@ begin
     end;
   end;
 
-  Lexer    := nil;
-  Parser   := nil;
-  Prog     := nil;
-  Semantic := nil;
+  Lexer      := nil;
+  Parser     := nil;
+  Prog       := nil;
+  Semantic   := nil;
   { CG (ICodeGen) is zero-initialised by default; no explicit nil-assignment
     (stage-1 mis-compiles interface-global nil stores — see EmitAssign note). }
-  Loader   := nil;
-  Units    := nil;
+  Loader     := nil;
+  Units      := nil;
+  UnitIfaces := nil;
   try
     try
       Lexer  := TLexer.Create(Source.Text, SourceFile);
@@ -608,8 +619,19 @@ begin
           Units  := Loader.LoadAll(Prog.UsedUnits);
         end;
         if Units <> nil then
+        begin
+          UnitIfaces := TObjectList.Create(True);  { owns TUnitInterface }
           for I := 0 to Units.Count - 1 do
+          begin
             Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
+            { Build the self-contained interface artifact for each dep.
+              Each unit gets the previously-built ifaces as its ADeps
+              so cross-unit type references resolve to qualified names. }
+            UnitIfaces.Add(ExportUnitInterface(TUnit(Units.Items[I]),
+                                               UnitIfaces,
+                                               Semantic.GetSymbolTable));
+          end;
+        end;
       end;
       if IsUnitMode then
         Semantic.AnalyseUnitForExport(TopUnit)
@@ -698,6 +720,9 @@ begin
       end;
     end;
   finally
+    UnitIfaces.Free;  { must free before Units — TUnitInterface entries
+                       hold cloned AST that points at nothing in Units,
+                       but the destructor order is still cleaner first }
     Units.Free;
     Loader.Free;
     SearchPaths.Free;
