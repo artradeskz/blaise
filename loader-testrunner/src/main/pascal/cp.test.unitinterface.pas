@@ -2549,13 +2549,31 @@ begin
 end;
 
 procedure TImportRoundTripTests.TestImport_GlobalVar_MarkedIsGlobal;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'var Counter: Integer;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  Sym:   TSymbol;
 begin
-  { uSemanticExport does not currently emit TVarEntry records — vars
-    are not part of the exported interface yet.  Once that gap is
-    closed (planned alongside 6c-B coverage audit), wire up the
-    round-trip assertion here.  Documenting the gap as a pending
-    test so the green/red bar tracks coverage. }
-  Fail('Pending TVarEntry export from uSemanticExport');
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    Sym := Tab.Lookup('Counter');
+    AssertTrue('Counter defined', Sym <> nil);
+    AssertTrue('skVariable', Sym.Kind = skVariable);
+    AssertTrue('IsGlobal', Sym.IsGlobal);
+    AssertTrue('type Integer', Sym.TypeDesc = Tab.FindType('Integer'));
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
 end;
 
 initialization

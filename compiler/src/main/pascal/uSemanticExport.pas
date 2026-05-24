@@ -312,6 +312,28 @@ begin
   end;
 end;
 
+procedure ExportVars(AUnit:  TUnit;
+                     AIface: TUnitInterface;
+                     ADeps:  TObjectList);
+var
+  I, J:  Integer;
+  Decl:  TVarDecl;
+  Entry: TVarEntry;
+begin
+  if AUnit.IntfBlock = nil then Exit;
+  for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
+  begin
+    Decl := TVarDecl(AUnit.IntfBlock.Decls.Items[I]);
+    for J := 0 to Decl.Names.Count - 1 do
+    begin
+      Entry := TVarEntry.Create;
+      Entry.Name    := Decl.Names.Strings[J];
+      Entry.TypeRef := ResolveTypeRef(Decl.TypeName, AIface, ADeps);
+      AIface.AddVar(Entry);
+    end;
+  end;
+end;
+
 procedure ExportConsts(AUnit:       TUnit;
                        AIface:      TUnitInterface;
                        ADeps: TObjectList);
@@ -461,6 +483,7 @@ begin
     able to find local types in the index. }
   ExportTypes   (AUnit, Result, ADeps, ASymbolTable);
   ExportConsts  (AUnit, Result, ADeps);
+  ExportVars    (AUnit, Result, ADeps);
   ExportRoutines(AUnit, Result, ADeps);
 
   ExportInlineBodies (AUnit, Result);
