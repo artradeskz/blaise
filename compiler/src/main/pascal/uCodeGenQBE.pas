@@ -93,6 +93,17 @@ type
       leave the linear entry-prelude region of a function — see SeenArcStore. }
     FArcSlotWritten: TStringList;
 
+    { Record types referenced by a record-by-value FFI (cdecl external) call
+      parameter.  Each entry is a record name; Objects[] holds the
+      TRecordTypeDesc.  At end of Generate/GenerateUnit/AppendUnit/
+      AppendProgram, EmitFFIRecordTypeDecls writes a QBE `type :_ffi_<Name>`
+      declaration for each entry not already in FFFIRecordEmitted, lets QBE
+      classify the aggregate per SysV (or Win64) ABI at the call site, then
+      moves the entry to FFFIRecordEmitted so chained AppendUnit/Program
+      calls don't re-emit duplicates. }
+    FFFIRecordTypes:   TStringList;
+    FFFIRecordEmitted: TStringList;
+
     { Inlining: stack of active inline contexts.
       When non-empty, the topmost context maps parameter names of the
       callee (currently being emitted inline) to caller-side temps,
@@ -267,6 +278,7 @@ type
       Used before overwriting a record slot to prevent reference leaks. }
     procedure EmitRecordReleaseFields(ARec: TRecordTypeDesc; const AAddr: string);
     function  QbeTypeOf(AType: TTypeDesc): string;
+    function  QbeParamTypeOf(AType: TTypeDesc): string;
     function  LoadInstrFor(AType: TTypeDesc): string;
     function  StoreInstrFor(AType: TTypeDesc): string;
     function  QbeEscapeString(const AStr: string): string;
@@ -286,6 +298,18 @@ type
       garbage in those bits — `if Foo() <> 0 then` mis-fires silently. }
     function  MaybeNormalizeExtReturn(const ASrcTemp: string;
       AMDecl: TMethodDecl): string;
+    { Returns the QBE primitive letter ('b','h','w','l','s','d') for a
+      scalar record-field type, or '' for non-scalar fields (nested
+      records, static arrays, etc.).  An '' result tells the type-decl
+      emitter to fall back to the opaque size form. }
+    function  QbeAggFieldType(AType: TTypeDesc): string;
+    { Registers ARec for FFI-aggregate type emission and returns the QBE
+      type reference ':_ffi_<Name>' to splice into a call or declare. }
+    function  FFIRecordTypeRef(ARec: TRecordTypeDesc): string;
+    { Emit a QBE aggregate type decl per entry of FFFIRecordTypes that
+      is not already in FFFIRecordEmitted, then mark each one emitted so
+      chained AppendUnit/Program calls do not duplicate. }
+    procedure EmitFFIRecordTypeDecls;
   public
     FDebugMode: Boolean;
     constructor Create;
@@ -407,6 +431,14 @@ begin
   FPromotedTypes   := TStringList.Create;
   FArcSlotWritten  := TStringList.Create;
   FArcSlotWritten.CaseSensitive := True;
+  FFFIRecordTypes  := TStringList.Create;
+  FFFIRecordTypes.CaseSensitive := True;
+  FFFIRecordTypes.Sorted := True;
+  FFFIRecordTypes.Duplicates := dupIgnore;
+  FFFIRecordEmitted := TStringList.Create;
+  FFFIRecordEmitted.CaseSensitive := True;
+  FFFIRecordEmitted.Sorted := True;
+  FFFIRecordEmitted.Duplicates := dupIgnore;
   FInlineParamNames   := TStringList.Create;
   FInlineParamTemps   := TStringList.Create;
   FInlineResultTemps  := TStringList.Create;
@@ -426,6 +458,8 @@ begin
   FPromotedLocals.Free;
   FPromotedTypes.Free;
   FArcSlotWritten.Free;
+  FFFIRecordTypes.Free;
+  FFFIRecordEmitted.Free;
   FCapturedVars.Free;
   FInlineParamNames.Free;
   FInlineParamTemps.Free;
@@ -724,6 +758,86 @@ begin
         Result := NewT;
       end;
   end;
+end;
+
+{ Returns the QBE parameter type for AType.  For tyRecord this is the
+  `:_ffi_<Name>` aggregate type so QBE classifies the value per SysV /
+  Win64 ABI (caller scatters fields into INTEGER / SSE eightbytes,
+  callee receives a pointer to a gathered struct buffer).  For every
+  other type it is just QbeTypeOf.  Used uniformly in param signatures
+  and call-site arg lists — Pascal-to-Pascal calls and C-FFI calls go
+  through the same ABI to keep callbacks consistent. }
+function TCodeGenQBE.QbeParamTypeOf(AType: TTypeDesc): string;
+begin
+  if (AType <> nil) and (AType.Kind = tyRecord) then
+    Result := FFIRecordTypeRef(TRecordTypeDesc(AType))
+  else
+    Result := QbeTypeOf(AType);
+end;
+
+{ Maps a scalar record-field type to its QBE aggregate-type letter.
+  Aggregate type decls use 'b' (byte) / 'h' (half) / 'w' (word) /
+  'l' (long) / 's' / 'd' rather than the load-suffix variants. }
+function TCodeGenQBE.QbeAggFieldType(AType: TTypeDesc): string;
+begin
+  case AType.Kind of
+    tyByte, tyBoolean:           Result := 'b';
+    tySmallInt, tyWord:          Result := 'h';
+    tyInteger, tyUInt32, tyEnum: Result := 'w';
+    tyInt64, tyUInt64:           Result := 'l';
+    tySingle:                    Result := 's';
+    tyDouble:                    Result := 'd';
+    tyPointer, tyClass, tyString, tyPChar, tyDynArray,
+    tyProcedural, tyMetaClass:   Result := 'l';
+  else
+    Result := '';
+  end;
+end;
+
+{ Registers ARec for `type :_ffi_<Name>` emission and returns the QBE
+  type reference. }
+function TCodeGenQBE.FFIRecordTypeRef(ARec: TRecordTypeDesc): string;
+begin
+  if FFFIRecordEmitted.IndexOf(ARec.Name) < 0 then
+    FFFIRecordTypes.AddObject(ARec.Name, ARec);
+  Result := ':_ffi_' + ARec.Name;
+end;
+
+procedure TCodeGenQBE.EmitFFIRecordTypeDecls;
+var
+  I, J:   Integer;
+  R:      TRecordTypeDesc;
+  F:      TFieldInfo;
+  Letter: string;
+  Frag:   string;
+  AllOk:  Boolean;
+begin
+  for I := 0 to FFFIRecordTypes.Count - 1 do
+  begin
+    R := TRecordTypeDesc(FFFIRecordTypes.Objects[I]);
+    if FFFIRecordEmitted.IndexOf(R.Name) >= 0 then Continue;
+    Frag  := '';
+    AllOk := True;
+    for J := 0 to R.Fields.Count - 1 do
+    begin
+      F := TFieldInfo(R.Fields.Items[J]);
+      Letter := QbeAggFieldType(F.TypeDesc);
+      if Letter = '' then begin AllOk := False; Break; end;
+      if Frag <> '' then Frag := Frag + ', ';
+      Frag := Frag + Letter;
+    end;
+    if AllOk then
+      EmitLine(Format('type :_ffi_%s = align %d { %s }',
+        [R.Name, R.AllocAlign, Frag]))
+    else
+      { Opaque-byte fallback: SysV will classify as INTEGER regardless of
+        actual field types.  Acceptable for records with non-scalar fields
+        — those are unlikely to round-trip through a stable C ABI anyway. }
+      EmitLine(Format('type :_ffi_%s = align %d { %d }',
+        [R.Name, R.AllocAlign, R.TotalSize]));
+    FFFIRecordEmitted.Add(R.Name);
+  end;
+  FFFIRecordTypes.Clear;
 end;
 
 function TCodeGenQBE.CountTryStmts(AStmt: TASTStmt): Integer;
@@ -4105,7 +4219,7 @@ begin
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(FCallExpr.Args.Items[I]),
           QbeTypeOf(Par.ResolvedType));
         ArgLine := ArgLine + Format(', %s %s',
-          [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+          [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
@@ -4145,7 +4259,7 @@ begin
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
           QbeTypeOf(Par.ResolvedType));
         ArgLine := ArgLine + Format(', %s %s',
-          [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+          [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
@@ -4550,7 +4664,7 @@ begin
         ArgTemps.Add(ArgTemp);
         QType   := QbeTypeOf(Par.ResolvedType);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
-        ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+        ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
     { Virtual methods on an arbitrary receiver expression must dispatch
@@ -4689,7 +4803,8 @@ begin
       ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
       QType   := QbeTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc);
       ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
-      ArgLine := ArgLine + Format('%s %s', [QType, ArgTemp]);
+      ArgLine := ArgLine + Format('%s %s',
+        [QbeParamTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc), ArgTemp]);
     end;
     EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
     Exit;
@@ -4714,7 +4829,8 @@ begin
         ArgTemps.Add(ArgTemp);
         QType   := QbeTypeOf(Par.ResolvedType);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
-        ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+        ArgLine := ArgLine + Format(', %s %s',
+          [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
 
@@ -4841,7 +4957,7 @@ begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
     QType   := QbeTypeOf(Par.ResolvedType);
     ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
-    ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+    ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
   end;
 
   { Always a direct (static) call — inherited bypasses vtable dispatch.
@@ -4967,7 +5083,7 @@ begin
       Sig := Sig + Format(', l %%_par_%s', [Par.ParamName])
     else
       Sig := Sig + Format(', %s %%_par_%s',
-        [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
+        [QbeParamTypeOf(Par.ResolvedType), Par.ParamName]);
   end;
 
   if IsFunc then
@@ -5690,7 +5806,7 @@ begin
       Sig := Sig + Format('l %%_par_%s_obj, l %%_par_%s_itab',
         [Par.ParamName, Par.ParamName])
     else
-      Sig := Sig + Format('%s %%_par_%s', [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
+      Sig := Sig + Format('%s %%_par_%s', [QbeParamTypeOf(Par.ResolvedType), Par.ParamName]);
   end;
 
   if IsFunc then
@@ -6018,7 +6134,7 @@ begin
           ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
           ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
           ArgLine := ArgLine + Format(', %s %s',
-            [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+            [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
         end;
       end;
       EmitLine(Format('  call $%s(%s)',
@@ -6094,7 +6210,7 @@ begin
           ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
           ArgTemps.Add(ArgTemp);
           ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
-          ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+          ArgLine := ArgLine + Format('%s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
         end;
       end;
       if MDecl.IsExternal and (MDecl.ExternalName <> '') then
@@ -7235,7 +7351,7 @@ begin
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]),
               QbeTypeOf(Par.ResolvedType));
             ArgLine := ArgLine + Format(', %s %s',
-              [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
           EmitLine(Format('  call $%s(%s)',
             [MethodEmitName(MDecl, MDecl.OwnerTypeName, 'Create'), ArgLine]));
@@ -7799,7 +7915,7 @@ begin
             ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
             ArgLine := ArgLine + Format(', %s %s',
-              [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
         end;
         T := AllocTemp;
@@ -7866,7 +7982,7 @@ begin
             ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
             ArgTemps.Add(ArgTemp);
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
-            ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+            ArgLine := ArgLine + Format('%s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
         end;
         T := AllocTemp;
@@ -7967,7 +8083,8 @@ begin
             if Par.IsVarParam then ArgTemps.Add('') else ArgTemps.Add(ArgTemp);
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
               QbeTypeOf(Par.ResolvedType));
-            ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+            ArgLine := ArgLine + Format(', %s %s',
+              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
           if MDecl.OwnerTypeName <> '' then
             FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name)
@@ -8122,7 +8239,7 @@ begin
         ArgTemps.Add(ArgTemp);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
           QbeTypeOf(Par.ResolvedType));
-        ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+        ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
 
@@ -9759,6 +9876,7 @@ begin
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);
+    EmitFFIRecordTypeDecls;
     FOutput.AppendBuffer(Body);
   finally
     Body.Free;
@@ -9851,7 +9969,8 @@ begin
         end;
         EmitFieldCleanupFn(GI.TypeName, RT);
       end;
-      FOutput.AppendBuffer(Body);
+      EmitFFIRecordTypeDecls;
+    FOutput.AppendBuffer(Body);
     finally
       Body.Free;
     end;
@@ -10226,7 +10345,8 @@ begin
       EmitGlobalConstData(AUnit.ImplBlock);
       EmitLocalArrayConstsInUnit(AUnit);
 
-      FOutput.AppendBuffer(Body);
+      EmitFFIRecordTypeDecls;
+    FOutput.AppendBuffer(Body);
 
       { Initialization section: emit as export function $<Unit>_init() }
       if (AUnit.InitStmts <> nil) and (AUnit.InitStmts.Count > 0) then
@@ -10302,6 +10422,7 @@ begin
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);
+    EmitFFIRecordTypeDecls;
     FOutput.AppendBuffer(Body);
   finally
     Body.Free;

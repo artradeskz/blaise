@@ -55,6 +55,14 @@ type
       into the float-by-value slot and the C `float` callee reads the
       low mantissa half as IEEE-754 single — pure noise. }
     procedure TestCodegen_ExternalSingleParam_DoubleArgNarrowed;
+    { A record passed by value to a cdecl external must go through the
+      backend's aggregate-by-value mechanism so the callee sees the
+      struct contents in registers per the platform C ABI.  Passing
+      the record's address in a single integer register would make the
+      callee read the low bits of a pointer as struct data — e.g. a
+      4-byte RGBA struct given to ClearBackground would clear the
+      window to whatever colour fell out of the stack frame address. }
+    procedure TestCodegen_ExternalRecordParam_PassedAsAggregateType;
   end;
 
 implementation
@@ -457,6 +465,33 @@ begin
   { Double literal narrowed to single via truncd before the arg slot. }
   AssertTrue('Double-typed arg narrowed to Single before FFI call',
     IRContains(IR, '=s truncd'));
+end;
+
+procedure TExternalTests.TestCodegen_ExternalRecordParam_PassedAsAggregateType;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+        program Test;
+        type
+          TColor = record r, g, b, a: Byte; end;
+        procedure CheckColor(c: TColor); cdecl; external name 'check_color';
+        var c: TColor;
+        begin
+          c.r := 18; c.g := 18; c.b := 24; c.a := 255;
+          CheckColor(c);
+        end.
+        '''
+  );
+  { Aggregate type decl emitted at module scope with one entry per field. }
+  AssertTrue('Record type decl emitted for FFI call',
+    IRContains(IR, 'type :_ffi_TColor = align 1 { b, b, b, b }'));
+  { Call passes the record through the aggregate type, not as a bare 'l'
+    pointer.  The aggregate type triggers ABI-correct register packing
+    in the backend; 'l <addr>' would pass the *address* in a single
+    integer register, which the C callee would read as struct data. }
+  AssertTrue('Call uses :_ffi_TColor aggregate type, not l pointer',
+    IRContains(IR, 'call $check_color(:_ffi_TColor '));
 end;
 
 initialization
