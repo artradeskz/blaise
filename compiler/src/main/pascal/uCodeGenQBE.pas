@@ -4424,6 +4424,22 @@ begin
         ValTemp := ExtTemp;
       end;
     end;
+    { Float-width coercion: real-typed literals and double sub-exprs land
+      in the SSA as 'd' even when the destination field is a 32-bit
+      'Single' ('s').  Without this, 'rec.s := 1.5' emits
+      'stores d_1.5, ...' — a type mismatch the assembler rejects. }
+    if (QType = 's') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 'd') then
+    begin
+      ExtTemp := AllocTemp;
+      EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
+      ValTemp := ExtTemp;
+    end
+    else if (QType = 'd') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 's') then
+    begin
+      ExtTemp := AllocTemp;
+      EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
+      ValTemp := ExtTemp;
+    end;
     EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, Ptr]));
   end;
 end;

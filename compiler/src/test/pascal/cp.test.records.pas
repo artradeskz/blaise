@@ -58,6 +58,12 @@ type
     procedure TestCodegen_RecordVar_HasAlloc;
     procedure TestCodegen_FieldStore_EmitsOffset;
     procedure TestCodegen_FieldLoad_EmitsOffset;
+    { Real-typed literals and double sub-expressions land in the SSA
+      at double width; storing them into a Single record field needs
+      an explicit narrowing or the IR is type-mismatched and the
+      assembler refuses to lower it. }
+    procedure TestCodegen_FieldStore_DoubleLiteralToSingleField_Trunced;
+    procedure TestCodegen_FieldStore_SingleSrcToDoubleField_Extended;
     procedure TestCodegen_TwoIntFields_CorrectSize;
     procedure TestCodegen_StringField_CorrectSize;
 
@@ -599,6 +605,45 @@ begin
         end.
         ''');
   AssertTrue('loadw in IR', Pos('loadw', IR) > 0);
+end;
+
+procedure TRecordTests.TestCodegen_FieldStore_DoubleLiteralToSingleField_Trunced;
+var IR: string;
+begin
+  { Assigning a real-typed literal to a Single record field must emit a
+    narrowing before the store; previously the IR contained
+    'stores d_<lit>, ...' which the assembler rejected as a type
+    mismatch on the operand width. }
+  IR := GenIR(
+    '''
+        program P;
+        type TRec = record v: Single; end;
+        var r: TRec;
+        begin r.v := 1.5 end.
+        ''');
+  AssertTrue('field-store narrows double literal to single (truncd)',
+    Pos('truncd', IR) > 0);
+  { The bug shape: a double-typed literal stored straight into the
+    Single field's storage slot. }
+  AssertFalse('field-store MUST NOT directly store a double into a single slot',
+    Pos('stores d_', IR) > 0);
+end;
+
+procedure TRecordTests.TestCodegen_FieldStore_SingleSrcToDoubleField_Extended;
+var IR: string;
+begin
+  { Symmetric direction: a Single value stored into a Double record
+    field must be extended first.  Verifies the coercion is bidirectional
+    and not just a half-fix. }
+  IR := GenIR(
+    '''
+        program P;
+        type TRec = record v: Double; end;
+        var r: TRec; s: Single;
+        begin s := 0.5; r.v := s end.
+        ''');
+  AssertTrue('field-store widens single source to double (exts)',
+    Pos(' =d exts ', IR) > 0);
 end;
 
 procedure TRecordTests.TestCodegen_TwoIntFields_CorrectSize;
