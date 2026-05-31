@@ -543,6 +543,7 @@ begin
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyByte, tyBoolean:   Result := 1;  { natural alignment }
     tySmallInt, tyWord:  Result := 2;
+    tySingle:            Result := 4;
     tyInt64, tyUInt64, tyString:   Result := 8;
     tyRecord:            Result := TRecordTypeDesc(Self).MaxAlign;
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;

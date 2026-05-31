@@ -75,6 +75,9 @@ type
     procedure TestSemantic_ByteFieldOffsets_Are0123;
     procedure TestCodegen_SizeOfByte_Is1;
     procedure TestCodegen_SizeOfFourByteRecord_Is4;
+    { Single is a 4-byte IEEE-754 float — alignment 4, not 8.  A record
+      of three back-to-back Single fields totals 12 bytes, not 24. }
+    procedure TestSemantic_ThreeSingleRecord_TotalSizeIs12;
   end;
 
 implementation
@@ -810,6 +813,34 @@ begin
         ''');
   AssertTrue('SizeOf(TFourBytes) emits copy 4', Pos('copy 4', IR) > 0);
   AssertFalse('not 16', Pos('copy 16', IR) > 0);
+end;
+
+procedure TRecordTests.TestSemantic_ThreeSingleRecord_TotalSizeIs12;
+const
+  Src =
+    '''
+        program P;
+        type
+          TVec3 = record
+            X: Single;
+            Y: Single;
+            Z: Single;
+          end;
+        var V: TVec3;
+        begin end.
+        ''';
+var
+  Prog: TProgram;
+  RT:   TRecordTypeDesc;
+begin
+  Prog := AnalyseSrc(Src);
+  try
+    RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
+    AssertEquals('record of three Single fields totals 12 bytes (4-byte align)',
+      12, RT.TotalSize);
+  finally
+    Prog.Free;
+  end;
 end;
 
 initialization
