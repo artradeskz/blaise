@@ -3247,8 +3247,13 @@ begin
     else
       ADecl.ResolvedQbeName := ADecl.Name;
 
-    { Index for call resolution — overloaded names appear multiple times. }
-    FProcIndex.AddObject(ADecl.Name, ADecl);
+    { Index for call resolution — overloaded names appear multiple times.
+      Nested procs (those inside another proc's body) are resolved via the
+      scoped symbol table only; adding them to the global FProcIndex would
+      make same-named nested procs in different outer procs appear as
+      ambiguous overloads of each other. }
+    if FCurrentEnclosingDecl = nil then
+      FProcIndex.AddObject(ADecl.Name, ADecl);
 
     { Register in symbol table }
     if ADecl.ReturnTypeName <> '' then
@@ -5269,6 +5274,25 @@ begin
     SemanticError(
       Format('''%s'' is not a procedure or function', [ACall.Name]),
       ACall.Line, ACall.Col);
+
+  { Nested proc: found in scope but not in FProcIndex (nested procs are
+    excluded from the global index to prevent same-name clashes across
+    different outer procs).  Resolve directly from the symbol's Decl. }
+  if (Sym.Kind in [skProcedure, skFunction]) and
+     (Sym.Decl <> nil) and
+     (TMethodDecl(Sym.Decl).EnclosingDecl <> nil) then
+  begin
+    MDecl := TMethodDecl(Sym.Decl);
+    if ACall.Args.Count <> MDecl.Params.Count then
+      SemanticError(
+        Format('Nested procedure ''%s'' expects %d argument(s), got %d',
+          [ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+        ACall.Line, ACall.Col);
+    for I := 0 to ACall.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+    ACall.ResolvedDecl := MDecl;
+    Exit;
+  end;
 
   { For user-defined procs/funcs, validate arg count and types.
     Phase B: analyse all args FIRST so overload resolution can score

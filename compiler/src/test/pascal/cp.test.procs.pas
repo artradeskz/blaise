@@ -71,6 +71,7 @@ type
     { Nested procedures }
     procedure TestCodegen_NestedProc_IsEmittedBeforeOuter;
     procedure TestCodegen_NestedProc_CapturedVarPassedByPtr;
+    procedure TestCodegen_NestedProc_SameNameInTwoOuters_NoAmbiguity;
   end;
 
 implementation
@@ -633,6 +634,43 @@ begin
   { Call site in Outer must pass the address of x }
   AssertTrue('Call to Outer_Inner passes l %_var_x',
     StrPos('$Outer_Inner(l %_var_x)', IR) >= 0);
+end;
+
+{ Regression: two outer procs each containing a nested proc named 'Inner'
+  must not trigger "Ambiguous overload" — nested procs are scoped locally
+  and must not be entered in the global FProcIndex. }
+procedure TProcFuncTests.TestCodegen_NestedProc_SameNameInTwoOuters_NoAmbiguity;
+const
+  Src =
+    '''
+        program TwinNested;
+        procedure OuterA;
+          procedure Inner;
+          begin
+            WriteLn(1);
+          end;
+        begin
+          Inner;
+        end;
+        procedure OuterB;
+          procedure Inner;
+          begin
+            WriteLn(2);
+          end;
+        begin
+          Inner;
+        end;
+        begin
+          OuterA;
+          OuterB;
+        end.
+        ''';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('OuterA_Inner is emitted', StrPos('$OuterA_Inner', IR) >= 0);
+  AssertTrue('OuterB_Inner is emitted', StrPos('$OuterB_Inner', IR) >= 0);
 end;
 
 initialization
