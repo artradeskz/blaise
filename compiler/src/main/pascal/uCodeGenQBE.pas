@@ -67,6 +67,13 @@ type
     FPromotedLocals: TStringList;
     FPromotedTypes:  TStringList;
 
+    { Nested-proc capture: when emitting a nested function, this holds the
+      names of variables captured from the enclosing scope.  Each captured
+      variable is received as an implicit leading pointer parameter named
+      %_cap_<VarName>, and reads/writes are transparently redirected through
+      that pointer.  Nil when not inside a nested function. }
+    FCapturedVars: TStringList;
+
     { Nil-slot ARC tracking: set of local variable names whose class/string
       slot has already been written in the current function.  EmitVarAllocs
       zeroes all class/string slots at function entry, so the *first* store
@@ -138,6 +145,7 @@ type
     { Walk an expression adding any address-taken local names to ASet. }
     procedure CollectAddressTakenExpr(AExpr: TASTExpr; ASet: TStringList);
     { Returns True if AName is currently a promoted SSA temp. }
+    function  IsCaptured(const AName: string): Boolean;
     function  IsPromoted(const AName: string): Boolean;
     { Returns True if the named local class/string slot is still provably nil
       at the current emit position.  Used to elide _ClassRelease/_StringRelease
@@ -394,6 +402,7 @@ begin
   FPromotedLocals.Free;
   FPromotedTypes.Free;
   FArcSlotWritten.Free;
+  FCapturedVars.Free;
   FInlineParamNames.Free;
   FInlineParamTemps.Free;
   FInlineResultTemps.Free;
@@ -800,6 +809,11 @@ begin
   else
     Result := 'l';
   end;
+end;
+
+function TCodeGenQBE.IsCaptured(const AName: string): Boolean;
+begin
+  Result := (FCapturedVars <> nil) and (FCapturedVars.IndexOf(AName) >= 0);
 end;
 
 function TCodeGenQBE.IsPromoted(const AName: string): Boolean;
@@ -1414,6 +1428,16 @@ begin
   if not BlockHasTry(ABlock) then
   begin
     AddrTaken := CollectAddressTaken(ABlock);
+    { Vars captured by nested procs have their address passed to the nested
+      function — treat them as address-taken so they get stack slots. }
+    for I := 0 to ABlock.ProcDecls.Count - 1 do
+      if TMethodDecl(ABlock.ProcDecls.Items[I]).CapturedVars <> nil then
+        for J := 0 to TMethodDecl(ABlock.ProcDecls.Items[I]).CapturedVars.Count - 1 do
+        begin
+          VarName := TMethodDecl(ABlock.ProcDecls.Items[I]).CapturedVars.Strings[J];
+          if AddrTaken.IndexOf(VarName) < 0 then
+            AddrTaken.Add(VarName);
+        end;
     try
       for I := 0 to ABlock.Decls.Count - 1 do
       begin
@@ -3080,6 +3104,24 @@ begin
       's': EmitLine(Format('  stores %s, %s', [ValTemp, InlineResultTemp]));
     else
       EmitLine(Format('  storel %s, %s', [ValTemp, InlineResultTemp]));
+    end;
+    Exit;
+  end;
+
+  { Captured outer-scope variable: %_cap_Name IS the address of the var in
+    the enclosing frame — store directly to that address. }
+  if (AAssign.ImplicitSelfField = nil) and IsCaptured(AAssign.Name) then
+  begin
+    ValTemp := EmitExpr(AAssign.Expr);
+    QType   := QbeTypeOf(AAssign.ResolvedLhsType);
+    ValTemp := CoerceArg(ValTemp, AAssign.Expr, QType);
+    case QType of
+      'w': EmitLine(Format('  storew %s, %%_cap_%s', [ValTemp, AAssign.Name]));
+      'l': EmitLine(Format('  storel %s, %%_cap_%s', [ValTemp, AAssign.Name]));
+      'd': EmitLine(Format('  stored %s, %%_cap_%s', [ValTemp, AAssign.Name]));
+      's': EmitLine(Format('  stores %s, %%_cap_%s', [ValTemp, AAssign.Name]));
+    else
+      EmitLine(Format('  storel %s, %%_cap_%s', [ValTemp, AAssign.Name]));
     end;
     Exit;
   end;
@@ -5323,19 +5365,39 @@ end;
 
 procedure TCodeGenQBE.EmitFuncDef(ADecl: TMethodDecl; AExported: Boolean);
 var
-  Sig:          string;
-  I:            Integer;
-  Par:          TMethodParam;
-  FuncName:     string;
-  IsFunc:       Boolean;
-  RetQType:     string;
-  RetTemp:      string;
-  ValTemp:      string;
-  Prefix:       string;
-  SavedExitLbl: string;
+  Sig:             string;
+  I:               Integer;
+  Par:             TMethodParam;
+  FuncName:        string;
+  IsFunc:          Boolean;
+  RetQType:        string;
+  RetTemp:         string;
+  ValTemp:         string;
+  Prefix:          string;
+  SavedExitLbl:    string;
+  SavedCaptures:   TStringList;
+  NestedDecl:      TMethodDecl;
+  CapName:         string;
+  NestedFuncName:  string;
 begin
   if ADecl.IsExternal then Exit;  { no body to emit for external declarations }
   if ADecl.Body = nil then Exit;  { forward declaration — impl appears elsewhere }
+
+  { Emit any nested procedures declared inside this function's body before
+    emitting this function itself.  Each nested proc gets a mangled name
+    OuterName_InnerName to avoid global symbol collisions.  They are emitted
+    as non-exported (file-scope) functions. }
+  for I := 0 to ADecl.Body.ProcDecls.Count - 1 do
+  begin
+    NestedDecl := TMethodDecl(ADecl.Body.ProcDecls.Items[I]);
+    if NestedDecl.Body = nil then Continue;
+    { Assign a mangled QBE name: OuterName_InnerName.
+      Always override — the semantic pass set it to just InnerName,
+      but nested procs must be unique in the global symbol space. }
+    NestedDecl.ResolvedQbeName := ADecl.Name + '_' + NestedDecl.Name;
+    EmitFuncDef(NestedDecl, False);
+  end;
+
   if ADecl.ResolvedQbeName <> '' then
     FuncName := '$' + QBEMangle(ADecl.ResolvedQbeName)
   else
@@ -5343,7 +5405,17 @@ begin
   IsFunc   := ADecl.ResolvedReturnType <> nil;
   if AExported then Prefix := 'export ' else Prefix := '';
 
+  { Captured outer-scope variables are prepended as implicit pointer params.
+    The call site in the enclosing function passes the address of each var. }
   Sig := '';
+  if (ADecl.CapturedVars <> nil) and (ADecl.CapturedVars.Count > 0) then
+    for I := 0 to ADecl.CapturedVars.Count - 1 do
+    begin
+      CapName := ADecl.CapturedVars.Strings[I];
+      Sig := Sig + Format('l %%_cap_%s', [CapName]);
+      if ADecl.Params.Count > 0 then Sig := Sig + ', ';
+    end;
+
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params.Items[I]);
@@ -5492,12 +5564,18 @@ begin
     end;
   end;
 
-  SavedExitLbl := FExitLabel;
-  FExitLabel   := AllocLabel('func_exit');
+  SavedExitLbl  := FExitLabel;
+  SavedCaptures := FCapturedVars;
+  FExitLabel    := AllocLabel('func_exit');
+  if (ADecl.CapturedVars <> nil) and (ADecl.CapturedVars.Count > 0) then
+    FCapturedVars := ADecl.CapturedVars
+  else
+    FCapturedVars := nil;
   try
     EmitBlock(ADecl.Body);
   finally
-    FExitLabel := SavedExitLbl;
+    FExitLabel    := SavedExitLbl;
+    FCapturedVars := SavedCaptures;
   end;
 
   { ARC: release string and class value params on exit (balances the
@@ -5690,6 +5768,22 @@ begin
       Exit;
     end;
     ArgLine := '';
+    { Captured-var pointers are prepended as implicit leading args.
+      The callee receives them as l %_cap_<Name> params.
+      Each captured var is stack-allocated in the outer function (ensured by
+      EmitVarAllocs treating captured vars as address-taken), so %_var_<Name>
+      is a valid alloc slot whose address can be passed directly.
+      If we are ourselves nested and this var is one of our own captures,
+      forward the pointer we received. }
+    if (MDecl.CapturedVars <> nil) and (MDecl.CapturedVars.Count > 0) then
+      for I := 0 to MDecl.CapturedVars.Count - 1 do
+      begin
+        if ArgLine <> '' then ArgLine := ArgLine + ', ';
+        if IsCaptured(MDecl.CapturedVars.Strings[I]) then
+          ArgLine := ArgLine + Format('l %%_cap_%s', [MDecl.CapturedVars.Strings[I]])
+        else
+          ArgLine := ArgLine + Format('l %%_var_%s', [MDecl.CapturedVars.Strings[I]]);
+      end;
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Par := TMethodParam(MDecl.Params.Items[I]);
@@ -8504,6 +8598,28 @@ begin
         { Use IntToStr (Int64-aware) instead of %d to avoid the
           self-hosted Format runtime truncating Int64 args to int32. }
         EmitLine(Format('  %s =w copy %s', [T, IntToStr(TIdentExpr(AExpr).ConstValue)]));
+    end
+    else if IsCaptured(TIdentExpr(AExpr).Name) then
+    begin
+      { Captured outer-scope variable: %_cap_Name IS the address of the var
+        in the enclosing function's stack frame.  Load the value directly
+        from that address (no extra pointer hop). }
+      QType := QbeTypeOf(AExpr.ResolvedType);
+      if (AExpr.ResolvedType <> nil) and
+         (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+      begin
+        { Aggregate: %_cap_Name is the storage address — return directly. }
+        EmitLine(Format('  %s =l copy %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
+        Result := T;
+        Exit;
+      end;
+      case QType of
+        'l': EmitLine(Format('  %s =l loadl %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
+        'd': EmitLine(Format('  %s =d loadd %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
+        's': EmitLine(Format('  %s =s loads %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
+      else
+        EmitLine(Format('  %s =w loadw %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
+      end;
     end
     else if TIdentExpr(AExpr).IsVarParam and
             (AExpr.ResolvedType <> nil) and

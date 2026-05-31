@@ -67,6 +67,10 @@ type
       rejects 'storel %_par_D' for a 'd %_par_D' parameter. }
     procedure TestCodegen_DoubleParam_SpillsWithStored;
     procedure TestCodegen_SingleParam_SpillsWithStores;
+
+    { Nested procedures }
+    procedure TestCodegen_NestedProc_IsEmittedBeforeOuter;
+    procedure TestCodegen_NestedProc_CapturedVarPassedByPtr;
   end;
 
 implementation
@@ -571,6 +575,64 @@ begin
     Pos('stores %_par_S', IR) > 0);
   AssertFalse('Single param must NOT use ''storel''',
     Pos('storel %_par_S', IR) > 0);
+end;
+
+procedure TProcFuncTests.TestCodegen_NestedProc_IsEmittedBeforeOuter;
+const
+  Src =
+    '''
+        program P;
+        procedure Outer;
+          procedure Inner;
+          begin
+          end;
+        begin
+          Inner;
+        end;
+        begin
+          Outer;
+        end.
+        ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('Outer_Inner symbol present',
+    StrPos('$Outer_Inner', IR) >= 0);
+  AssertTrue('Inner appears before Outer in IR',
+    StrPos('$Outer_Inner', IR) < StrPos('$Outer(', IR));
+end;
+
+{ The E2E test (TestRun_NestedProc_MutatesCapturedVar) lives in
+  cp.test.e2e.misc.pas which has access to CompileAndRun. }
+
+procedure TProcFuncTests.TestCodegen_NestedProc_CapturedVarPassedByPtr;
+const
+  Src =
+    '''
+        program P;
+        procedure Outer;
+        var x: Integer;
+          procedure Inner;
+          begin
+            x := x + 1;
+          end;
+        begin
+          x := 0;
+          Inner;
+        end;
+        begin
+          Outer;
+        end.
+        ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  { Outer_Inner must accept the capture pointer }
+  AssertTrue('Inner signature has l %_cap_x',
+    StrPos('%_cap_x', IR) >= 0);
+  { Call site in Outer must pass the address of x }
+  AssertTrue('Call to Outer_Inner passes l %_var_x',
+    StrPos('$Outer_Inner(l %_var_x)', IR) >= 0);
 end;
 
 initialization

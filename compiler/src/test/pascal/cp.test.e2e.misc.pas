@@ -64,6 +64,9 @@ type
     procedure TestRun_ForIn_Array_Integer_PrintsElements;
     procedure TestRun_ForIn_ClassEnumerator_PrintsElements;
     procedure TestRun_ForIn_Set_PrintsMembers;
+
+    { Nested procedures }
+    procedure TestRun_NestedProc_MutatesCapturedVar;
   end;
 
 implementation
@@ -688,6 +691,37 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcForInSet, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Red=0 Blue=2', '0' + LE + '2' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_NestedProc_MutatesCapturedVar;
+const
+  Src =
+    '''
+        program P;
+        procedure Outer;
+        var x: Integer;
+          procedure Inner;
+          begin
+            x := x + 10;
+            WriteLn(IntToStr(x))
+          end;
+        begin
+          x := 5;
+          WriteLn(IntToStr(x));
+          Inner;
+          WriteLn(IntToStr(x))
+        end;
+        begin
+          Outer
+        end.
+        ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('x=5, inner mutates to 15, outer sees 15',
+    '5' + LE + '15' + LE + '15' + LE, Output);
 end;
 
 initialization

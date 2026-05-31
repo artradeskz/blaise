@@ -40,6 +40,8 @@ type
     FCurrentLocalBlock:    TBlock;       { block currently being stmt-analysed; for-in injects synthetic TVarDecl here }
     FForInCounter:         Integer;      { counter for generating unique __forin_N variable names }
     FCurrentUnitName:      string;       { name of the unit/program currently being analysed }
+    FCurrentEnclosingDecl: TMethodDecl;  { the innermost standalone proc/func currently being analysed;
+                                           nil at program level.  Used to set EnclosingDecl on nested procs. }
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
@@ -73,6 +75,7 @@ type
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
     procedure AnalyseStandaloneBodies(ABlock: TBlock);
     procedure AnalyseStandaloneDecl(ADecl: TMethodDecl);
+    procedure CollectCaptures(ADecl: TMethodDecl; AOuterBlock: TBlock);
     { Inlining: after bodies are analysed, mark each TMethodDecl whose body
       qualifies for codegen-side inlining.  Conservative: primitive params
       + return + locals only; no try/loops/raise/nested defs; small body.
@@ -3267,10 +3270,14 @@ end;
 
 procedure TSemanticAnalyser.AnalyseStandaloneDecl(ADecl: TMethodDecl);
 var
-  I:   Integer;
-  Par: TMethodParam;
-  Sym: TSymbol;
+  I:           Integer;
+  Par:         TMethodParam;
+  Sym:         TSymbol;
+  SavedEncl:   TMethodDecl;
 begin
+  ADecl.EnclosingDecl := FCurrentEnclosingDecl;
+  SavedEncl := FCurrentEnclosingDecl;
+  FCurrentEnclosingDecl := ADecl;
   FTable.PushScope;
   Inc(FScopeDepth);
   try
@@ -3299,10 +3306,17 @@ begin
     end;
 
     if (not ADecl.IsExternal) and (ADecl.Body <> nil) then
+    begin
       AnalyseBlock(ADecl.Body);
+      { After analysing the body, determine which outer-scope variables are
+        captured by any nested proc declared inside this one. }
+      if ADecl.EnclosingDecl <> nil then
+        CollectCaptures(ADecl, ADecl.EnclosingDecl.Body);
+    end;
   finally
     Dec(FScopeDepth);
     FTable.PopScope;
+    FCurrentEnclosingDecl := SavedEncl;
   end;
 end;
 
@@ -3321,6 +3335,156 @@ begin
     { Forward declarations have no body; the later impl handles analysis }
     if ADecl.Body = nil then Continue;
     AnalyseStandaloneDecl(ADecl);
+  end;
+end;
+
+procedure TSemanticAnalyser.CollectCaptures(ADecl: TMethodDecl; AOuterBlock: TBlock);
+{ Walk ADecl's body statements/expressions to find all TIdentExpr nodes whose
+  name matches a variable declared in AOuterBlock (the enclosing proc's locals).
+  Each such variable is "captured": ADecl will receive an implicit hidden
+  var-by-pointer parameter, and the call site will pass the variable's address. }
+var
+  OuterVars: TStringList;
+  I, J:      Integer;
+  VDecl:     TVarDecl;
+  VName:     string;
+  TodoExprs: TObjectList;
+  TodoStmts: TObjectList;
+  CurExpr:   TASTExpr;
+  CurStmt:   TASTStmt;
+begin
+  if ADecl.Body = nil then Exit;
+
+  OuterVars := TStringList.Create;
+  TodoExprs := TObjectList.Create(False);
+  TodoStmts := TObjectList.Create(False);
+  try
+    { Build set of outer-block local variable names }
+    for I := 0 to AOuterBlock.Decls.Count - 1 do
+    begin
+      VDecl := TVarDecl(AOuterBlock.Decls.Items[I]);
+      for J := 0 to VDecl.Names.Count - 1 do
+      begin
+        VName := VDecl.Names.Strings[J];
+        if OuterVars.IndexOf(VName) < 0 then
+          OuterVars.Add(VName);
+      end;
+    end;
+    if OuterVars.Count = 0 then Exit;
+
+    { Seed work-list with all statements in the inner body }
+    for I := 0 to ADecl.Body.Stmts.Count - 1 do
+      TodoStmts.Add(ADecl.Body.Stmts.Items[I]);
+
+    { Iterative BFS over stmts, pushing child exprs/stmts onto the work-lists }
+    while (TodoStmts.Count > 0) or (TodoExprs.Count > 0) do
+    begin
+      { Process one stmt }
+      while TodoStmts.Count > 0 do
+      begin
+        CurStmt := TASTStmt(TodoStmts.Items[TodoStmts.Count - 1]);
+        TodoStmts.Delete(TodoStmts.Count - 1);
+        if CurStmt = nil then Continue;
+
+        if CurStmt is TAssignment then
+        begin
+          { LHS name — check if it's an outer var (direct assign) }
+          if TAssignment(CurStmt).ImplicitSelfField = nil then
+          begin
+            VName := TAssignment(CurStmt).Name;
+            if (OuterVars.IndexOf(VName) >= 0) and
+               ((ADecl.CapturedVars = nil) or
+                (ADecl.CapturedVars.IndexOf(VName) < 0)) then
+            begin
+              if ADecl.CapturedVars = nil then
+                ADecl.CapturedVars := TStringList.Create;
+              ADecl.CapturedVars.Add(VName);
+            end;
+          end;
+          TodoExprs.Add(TAssignment(CurStmt).Expr);
+        end
+        else if CurStmt is TProcCall then
+        begin
+          for J := 0 to TProcCall(CurStmt).Args.Count - 1 do
+            TodoExprs.Add(TProcCall(CurStmt).Args.Items[J]);
+        end
+        else if CurStmt is TMethodCallStmt then
+        begin
+          for J := 0 to TMethodCallStmt(CurStmt).Args.Count - 1 do
+            TodoExprs.Add(TMethodCallStmt(CurStmt).Args.Items[J]);
+        end
+        else if CurStmt is TIfStmt then
+        begin
+          TodoExprs.Add(TIfStmt(CurStmt).Condition);
+          TodoStmts.Add(TIfStmt(CurStmt).ThenStmt);
+          TodoStmts.Add(TIfStmt(CurStmt).ElseStmt);
+        end
+        else if CurStmt is TWhileStmt then
+        begin
+          TodoExprs.Add(TWhileStmt(CurStmt).Condition);
+          TodoStmts.Add(TWhileStmt(CurStmt).Body);
+        end
+        else if CurStmt is TRepeatStmt then
+        begin
+          for J := 0 to TRepeatStmt(CurStmt).Body.Stmts.Count - 1 do
+            TodoStmts.Add(TRepeatStmt(CurStmt).Body.Stmts.Items[J]);
+          TodoExprs.Add(TRepeatStmt(CurStmt).Condition);
+        end
+        else if CurStmt is TForStmt then
+        begin
+          TodoExprs.Add(TForStmt(CurStmt).StartExpr);
+          TodoExprs.Add(TForStmt(CurStmt).EndExpr);
+          TodoStmts.Add(TForStmt(CurStmt).Body);
+        end
+        else if CurStmt is TCompoundStmt then
+        begin
+          for J := 0 to TCompoundStmt(CurStmt).Stmts.Count - 1 do
+            TodoStmts.Add(TCompoundStmt(CurStmt).Stmts.Items[J]);
+        end
+      end;
+
+      { Process one expr }
+      if TodoExprs.Count > 0 then
+      begin
+        CurExpr := TASTExpr(TodoExprs.Items[TodoExprs.Count - 1]);
+        TodoExprs.Delete(TodoExprs.Count - 1);
+        if CurExpr = nil then Continue;
+
+        if CurExpr is TIdentExpr then
+        begin
+          VName := TIdentExpr(CurExpr).Name;
+          if (OuterVars.IndexOf(VName) >= 0) and
+             ((ADecl.CapturedVars = nil) or
+              (ADecl.CapturedVars.IndexOf(VName) < 0)) then
+          begin
+            if ADecl.CapturedVars = nil then
+              ADecl.CapturedVars := TStringList.Create;
+            ADecl.CapturedVars.Add(VName);
+          end;
+        end
+        else if CurExpr is TBinaryExpr then
+        begin
+          TodoExprs.Add(TBinaryExpr(CurExpr).Left);
+          TodoExprs.Add(TBinaryExpr(CurExpr).Right);
+        end
+        else if CurExpr is TNotExpr then
+          TodoExprs.Add(TNotExpr(CurExpr).Expr)
+        else if CurExpr is TFuncCallExpr then
+        begin
+          for J := 0 to TFuncCallExpr(CurExpr).Args.Count - 1 do
+            TodoExprs.Add(TFuncCallExpr(CurExpr).Args.Items[J]);
+        end
+        else if CurExpr is TMethodCallExpr then
+        begin
+          for J := 0 to TMethodCallExpr(CurExpr).Args.Count - 1 do
+            TodoExprs.Add(TMethodCallExpr(CurExpr).Args.Items[J]);
+        end;
+      end;
+    end;
+  finally
+    OuterVars.Free;
+    TodoExprs.Free;
+    TodoStmts.Free;
   end;
 end;
 

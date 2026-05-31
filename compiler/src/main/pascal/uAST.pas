@@ -612,6 +612,14 @@ type
                                        params and locals, no try/loops/raise/nested defs.
                                        Codegen may inline calls to this function at the call
                                        site instead of emitting a real call instruction. }
+    { Nested procedures (procedure declared inside another procedure's var block):
+      CapturedVars lists the names of outer-scope variables that this nested
+      proc reads or writes (set by uSemantic).  Codegen passes each as an
+      implicit leading 'var' (by-pointer) parameter so the nested function can
+      share the outer variable's storage.  EnclosingDecl points to the directly
+      enclosing standalone proc/function (nil for top-level decls). }
+    CapturedVars:  TStringList; { owned; nil when no captures }
+    EnclosingDecl: TMethodDecl; { not owned — enclosing standalone proc, or nil }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1215,6 +1223,7 @@ begin
   TypeParams.Free;
   TypeParamConstraints.Free;
   OwnerTypeParams.Free;
+  CapturedVars.Free;
   if OwnBody then Body.Free;
   inherited Destroy;
 end;

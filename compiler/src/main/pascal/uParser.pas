@@ -76,7 +76,7 @@ type
     procedure ParseFieldDecl(AFields: TObjectList);
     procedure ParseAttributeList(AAttrs: TStringList);
     function  ParsePropertyDecl: TPropertyDecl;
-    function  ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
+    function  ParseMethodDecl(IsFunction: Boolean; ACanHaveNestedProcs: Boolean = False): TMethodDecl;
     procedure ParseParamList(AParams: TObjectList);
     procedure ParseStandaloneDecl(ABlock: TBlock);
     procedure ParseVarBlock(ABlock: TBlock);
@@ -1078,7 +1078,7 @@ begin
   end;
 end;
 
-function TParser.ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
+function TParser.ParseMethodDecl(IsFunction: Boolean; ACanHaveNestedProcs: Boolean): TMethodDecl;
 var
   TempParams:       TStringList;
   TempConstraints:  TStringList;
@@ -1265,9 +1265,13 @@ begin
         Break;
     end;
     { Body is optional — present for standalone impls and inline class methods,
-      absent for class forward declarations, external declarations, etc. }
+      absent for class forward declarations, external declarations, etc.
+      When ACanHaveNestedProcs is True (standalone proc context), a bare
+      'procedure'/'function' keyword triggers body parsing so that a nested
+      sub-procedure declaration is parsed as part of the enclosing routine. }
     if (not Result.IsExternal) and
-       (Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst)) then
+       (Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst) or
+        (ACanHaveNestedProcs and (Check(tkProcedure) or Check(tkFunction)))) then
     begin
       Result.Body := ParseBlock;
       Expect(tkSemicolon);
@@ -1377,7 +1381,7 @@ var
   MD:     TMethodDecl;
 begin
   IsFunc := Check(tkFunction);
-  MD     := ParseMethodDecl(IsFunc);
+  MD     := ParseMethodDecl(IsFunc, True);  { True = may have nested proc/func decls }
   ABlock.ProcDecls.Add(MD);
 end;
 
