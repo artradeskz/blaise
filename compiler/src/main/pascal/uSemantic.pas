@@ -5522,8 +5522,8 @@ begin
       SemanticError('Pointer cast requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     if not (ArgType.Kind in [tyInteger, tyInt64, tyUInt64, tyUInt32, tyByte,
-                              tySmallInt, tyWord, tyPointer, tyPChar, tyClass,
-                              tyMetaClass, tyProcedural, tyNil]) then
+                              tySmallInt, tyWord, tyPointer, tyPChar, tyString,
+                              tyClass, tyMetaClass, tyProcedural, tyNil]) then
       SemanticError(
         Format('Pointer cast requires an integer, pointer, or class expression, got ''%s''',
           [ArgType.Name]),
@@ -5542,8 +5542,8 @@ begin
       SemanticError('PtrUInt cast requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     if not (ArgType.Kind in [tyInteger, tyInt64, tyUInt64, tyUInt32, tyByte,
-                              tySmallInt, tyWord, tyPointer, tyPChar, tyClass,
-                              tyNil]) then
+                              tySmallInt, tyWord, tyPointer, tyPChar, tyString,
+                              tyClass, tyNil]) then
       SemanticError(
         Format('PtrUInt cast requires an integer, pointer, or class expression, got ''%s''',
           [ArgType.Name]),

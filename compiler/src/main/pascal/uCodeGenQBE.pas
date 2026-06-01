@@ -3073,6 +3073,63 @@ begin
     EmitStmt(TASTStmt(AStmt.Stmts.Items[I]));
 end;
 
+{ Returns True when AExpr already carries a +1 owned reference on return,
+  meaning the assignment site must NOT emit an additional _ClassAddRef.
+
+  Only function and method calls that return a class value qualify — because
+  the callee's Result assignment already emitted _ClassAddRef, transferring
+  ownership to the caller.  Constructors are excluded: the constructor EmitExpr
+  path emits only _ClassAlloc (rc=0); the sole _ClassAddRef is emitted by the
+  assignment site.
+
+  Variable reads, field reads, type casts, and lookups do NOT own their result
+  and always need the assignment-site AddRef. }
+function ExprOwnsRef(AExpr: TASTExpr): Boolean;
+var
+  FA: TFieldAccessExpr;
+  MC: TMethodCallExpr;
+  IE: TIdentExpr;
+begin
+  Result := False;
+  if AExpr = nil then Exit;
+  if AExpr.ResolvedType = nil then Exit;
+  if AExpr.ResolvedType.Kind <> tyClass then Exit;
+  { TIdentExpr with IsNoArgFuncCall: bare zero-arg function call (no parens) }
+  if AExpr is TIdentExpr then
+  begin
+    IE := TIdentExpr(AExpr);
+    if IE.IsNoArgFuncCall or IE.IsImplicitSelfMethod then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  { Constructor calls via TFieldAccessExpr (TFoo.Create) — do NOT own }
+  if AExpr is TFieldAccessExpr then
+  begin
+    FA := TFieldAccessExpr(AExpr);
+    if FA.IsConstructorCall then Exit;
+    if FA.IsMethodCall then begin Result := True; Exit end;
+  end;
+  { TMethodCallExpr: constructor calls do NOT own; all other method calls DO }
+  if AExpr is TMethodCallExpr then
+  begin
+    MC := TMethodCallExpr(AExpr);
+    if not MC.IsConstructorCall then Result := True;
+    Exit;
+  end;
+  { Explicit function calls (free functions returning a class) — owns +1.
+    Type casts (TClassName(expr)) are also TFuncCallExpr but have nil
+    ResolvedDecl — they reinterpret the pointer without AddRef. }
+  if AExpr is TFuncCallExpr then
+  begin
+    if (TFuncCallExpr(AExpr).ResolvedDecl <> nil) or
+       TFuncCallExpr(AExpr).IsIndirectCall then
+      Result := True;
+    Exit;
+  end;
+end;
+
 procedure TCodeGenQBE.EmitAssignment(AAssign: TAssignment);
 var
   ValTemp, OldTemp, QType, StoreInstr, PtrTemp: string;
@@ -3184,7 +3241,8 @@ begin
       begin
         OldTemp := AllocTemp;
         EmitLine(Format('  %s =l loadl %s', [OldTemp, ObjTemp]));
-        EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+        if not ExprOwnsRef(AAssign.Expr) then
+          EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
         EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       end;
       EmitLine(Format('  storel %s, %s', [ValTemp, ObjTemp]));
@@ -3253,7 +3311,8 @@ begin
     begin
       OldTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %s_obj', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
-      EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+      if not ExprOwnsRef(AAssign.Expr) then
+        EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       EmitLine(Format('  storel %s, %s_obj',  [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end;
@@ -3310,7 +3369,8 @@ begin
       OldTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %s', [OldTemp, PtrTemp]));
       ValTemp := EmitExpr(AAssign.Expr);
-      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+      if not ExprOwnsRef(AAssign.Expr) then
+        EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       EmitLine(Format('  storel %s, %s', [ValTemp, PtrTemp]));
     end
@@ -3395,7 +3455,8 @@ begin
        ArcSlotIsNil(AAssign.Name) then
     begin
       ValTemp := EmitExpr(AAssign.Expr);
-      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+      if not ExprOwnsRef(AAssign.Expr) then
+        EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
       EmitLine(Format('  storel %s, %s',
         [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
       MarkArcSlotWritten(AAssign.Name);
@@ -3408,7 +3469,8 @@ begin
       else
         EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
       ValTemp := EmitExpr(AAssign.Expr);
-      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+      if not ExprOwnsRef(AAssign.Expr) then
+        EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
         EmitLine(Format('  %%_var_%s =l copy %s', [AAssign.Name, ValTemp]))

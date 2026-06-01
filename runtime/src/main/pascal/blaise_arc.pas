@@ -631,8 +631,7 @@ end;
 
 procedure _ClassFree(UserPtr: Pointer);
 begin
-  if UserPtr = nil then Exit;
-  _BlaiseFreeMem(UserPtr - CLASS_HDR);
+  _ClassRelease(UserPtr);
 end;
 
 { _HasClassAttribute: check whether a class (identified by its typeinfo pointer
