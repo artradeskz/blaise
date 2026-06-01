@@ -182,29 +182,31 @@ begin
 end;
 
 function ParseArgs(
-  out SourceFile:  string;
-  out OutputFile:  string;
-  out EmitIR:      Boolean;
-  out EmitAsm:     Boolean;
-  out OPDFEnabled: Boolean;
-  out DebugMode:   Boolean;
-  out UseNative:   Boolean;
-  out Target:      TTargetDesc;
-  out SearchPaths: TStringList): Boolean;
+  out SourceFile:     string;
+  out OutputFile:     string;
+  out EmitIR:         Boolean;
+  out EmitAsm:        Boolean;
+  out OPDFEnabled:    Boolean;
+  out DebugMode:      Boolean;
+  out UseNative:      Boolean;
+  out Target:         TTargetDesc;
+  out SearchPaths:    TStringList;
+  out SkipDepCodegen: Boolean): Boolean;
 var
   I: Integer;
   Arg: string;
 begin
-  Result      := False;
-  SourceFile  := '';
-  OutputFile  := '';
-  EmitIR      := False;
-  EmitAsm     := False;
-  OPDFEnabled := False;
-  DebugMode   := False;
-  UseNative   := False;
-  Target      := HostTarget;
-  SearchPaths := TStringList.Create;
+  Result         := False;
+  SourceFile     := '';
+  OutputFile     := '';
+  EmitIR         := False;
+  EmitAsm        := False;
+  OPDFEnabled    := False;
+  DebugMode      := False;
+  UseNative      := False;
+  Target         := HostTarget;
+  SkipDepCodegen := False;
+  SearchPaths    := TStringList.Create;
 
   I := 1;
   while I <= ParamCount do
@@ -225,6 +227,11 @@ begin
       Inc(I);
       SearchPaths.Add(ParamStr(I));
     end
+    else if Arg = '--skip-dep-codegen' then
+      { Omit dep unit bodies from the main codegen pass — every cross-
+        unit call becomes an extern reference.  Caller is responsible
+        for linking pre-built dep object files at link time. }
+      SkipDepCodegen := True
     else if Arg = '--emit-ir' then
       EmitIR := True
     else if Arg = '--emit-asm' then
@@ -335,6 +342,53 @@ begin
   Result := '';
 end;
 
+{ Unit-as-top-level: qbe → .s → cc -c → .o.  Stops at the object file
+  so the caller can link multiple unit-objects + a program object
+  together.  No RTL, no -lm/-lpthread — those are link-time concerns. }
+procedure CompileUnitToObject(const AIRFile, AOutputFile: string);
+var
+  AsmFile:  string;
+  Msg:      string;
+  ExitCode: Integer;
+  Args:     TStringList;
+begin
+  AsmFile := ChangeFileExt(AIRFile, '.s');
+  Args := TStringList.Create;
+  try
+    Args.Add('-o');
+    Args.Add(AsmFile);
+    Args.Add(AIRFile);
+    ExitCode := RunProcess('qbe', Args, Msg);
+  finally
+    Args.Free;
+  end;
+  if ExitCode <> 0 then
+  begin
+    WriteLn(StdErr, 'qbe error (exit ', ExitCode, '):');
+    Write(StdErr, Msg);
+    Halt(1);
+  end;
+
+  Args := TStringList.Create;
+  try
+    Args.Add('-c');           { compile only, no link }
+    Args.Add('-o');
+    Args.Add(AOutputFile);
+    Args.Add(AsmFile);
+    ExitCode := RunProcess('cc', Args, Msg);
+  finally
+    Args.Free;
+  end;
+  if ExitCode <> 0 then
+  begin
+    WriteLn(StdErr, 'cc -c error (exit ', ExitCode, '):');
+    Write(StdErr, Msg);
+    Halt(1);
+  end;
+
+  DeleteFile(AsmFile);
+end;
+
 procedure CompileToNative(const AIRFile, AOutputFile, AOPDFAsmFile: string);
 var
   AsmFile, RTLPath: string;
@@ -440,10 +494,15 @@ var
   UseNative:   Boolean;
   Target:      TTargetDesc;
   OPDFAsmFile: string;
+  SkipDepCodegen: Boolean;
   Source:   TStringList;
   Lexer:    TLexer;
   Parser:   TParser;
   Prog:     TProgram;
+  TopUnit:  TUnit;       { non-nil when the source begins with 'unit' —
+                           Prog stays nil, pipeline runs in unit-only mode. }
+  IsUnitMode: Boolean;   { mirrors TopUnit's non-nil status but survives
+                           TopUnit.Free in the finally block. }
   Semantic: TSemanticAnalyser;
   NativeCG: TCodeGenNative;
   CG:       ICodeGen;
@@ -456,10 +515,13 @@ var
   AsmFile:  string;
 
 begin
-  SearchPaths := nil;
-  OPDFEnabled := False;
-  DebugMode   := False;
-  OPDFAsmFile := '';
+  SearchPaths    := nil;
+  OPDFEnabled    := False;
+  DebugMode      := False;
+  OPDFAsmFile    := '';
+  SkipDepCodegen := False;
+  TopUnit        := nil;
+  IsUnitMode     := False;
   if IsFPCStyleInvocation then
   begin
     if not ParseFPCArgs(SourceFile, OutputFile, SearchPaths, OPDFEnabled) then
@@ -472,7 +534,8 @@ begin
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, OPDFEnabled, DebugMode, UseNative, Target, SearchPaths) then
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, OPDFEnabled, DebugMode,
+                     UseNative, Target, SearchPaths, SkipDepCodegen) then
     begin
       PrintUsage;
       Halt(1);
@@ -517,7 +580,11 @@ begin
     try
       Lexer  := TLexer.Create(Source.Text, SourceFile);
       Parser := TParser.Create(Lexer);
-      Prog   := Parser.Parse;
+      IsUnitMode := Parser.IsUnitTopLevel;
+      if IsUnitMode then
+        TopUnit := Parser.ParseUnit
+      else
+        Prog := Parser.Parse;
     except
       on E: Exception do
       begin
@@ -528,14 +595,26 @@ begin
 
     try
       Semantic := TSemanticAnalyser.Create;
-      if (SearchPaths <> nil) and (Prog.UsedUnits.Count > 0) then
+      if (SearchPaths <> nil) then
       begin
-        Loader := TUnitLoader.Create(SearchPaths);
-        Units  := Loader.LoadAll(Prog.UsedUnits);
-        for I := 0 to Units.Count - 1 do
-          Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
+        if IsUnitMode and (TopUnit.UsedUnits.Count > 0) then
+        begin
+          Loader := TUnitLoader.Create(SearchPaths);
+          Units  := Loader.LoadAll(TopUnit.UsedUnits);
+        end
+        else if (Prog <> nil) and (Prog.UsedUnits.Count > 0) then
+        begin
+          Loader := TUnitLoader.Create(SearchPaths);
+          Units  := Loader.LoadAll(Prog.UsedUnits);
+        end;
+        if Units <> nil then
+          for I := 0 to Units.Count - 1 do
+            Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
       end;
-      Semantic.Analyse(Prog);
+      if IsUnitMode then
+        Semantic.AnalyseUnitForExport(TopUnit)
+      else
+        Semantic.Analyse(Prog);
     except
       on E: ESemanticError do
       begin
@@ -574,11 +653,21 @@ begin
       else
         CG := TCodeGenQBE.Create;
       CG.SetDebugMode(DebugMode);
-      if (Units <> nil) and (Units.Count > 0) then
+      if IsUnitMode then
+      begin
+        { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }
+        CG.SetSymbolTable(Semantic.GetSymbolTable);
+        if (Units <> nil) and not SkipDepCodegen then
+          for I := 0 to Units.Count - 1 do
+            CG.AppendUnit(TUnit(Units.Items[I]));
+        CG.AppendUnit(TopUnit);
+      end
+      else if (Units <> nil) and (Units.Count > 0) then
       begin
         CG.SetSymbolTable(Prog.SymbolTable);
-        for I := 0 to Units.Count - 1 do
-          CG.AppendUnit(TUnit(Units.Items[I]));
+        if not SkipDepCodegen then
+          for I := 0 to Units.Count - 1 do
+            CG.AppendUnit(TUnit(Units.Items[I]));
         CG.AppendProgram(Prog);
       end
       else
@@ -673,7 +762,10 @@ begin
       end;
     end;
 
-    CompileToNative(IRFile, OutputFile, OPDFAsmFile);
+    if IsUnitMode then
+      CompileUnitToObject(IRFile, OutputFile)
+    else
+      CompileToNative(IRFile, OutputFile, OPDFAsmFile);
     DeleteFile(IRFile);
     if OPDFAsmFile <> '' then
       DeleteFile(OPDFAsmFile);

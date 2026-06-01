@@ -210,9 +210,17 @@ type
       scope so that subsequent Analyse(Prog) or AnalyseUnitForExport calls
       can resolve them.  Use this when compiling a unit as a dependency. }
     procedure AnalyseUnitForExport(AUnit: TUnit);
+    { Read-only handle to the analyser's symbol table.  Codegen needs it
+      in unit-as-top-level mode where no TProgram exists to hand it off. }
+    function  GetSymbolTable: TSymbolTable;
   end;
 
 implementation
+
+function TSemanticAnalyser.GetSymbolTable: TSymbolTable;
+begin
+  Result := FTable;
+end;
 
 constructor TSemanticAnalyser.Create;
 begin

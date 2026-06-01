@@ -110,6 +110,9 @@ type
     constructor Create(ALexer: TLexer);
     function Parse: TProgram;
     function ParseUnit: TUnit;
+    { True iff the primed first token is `unit` — caller forks to
+      ParseUnit instead of Parse.  Safe to call straight after Create. }
+    function IsUnitTopLevel: Boolean;
   end;
 
 implementation
@@ -269,6 +272,11 @@ end;
 function TParser.Parse: TProgram;
 begin
   Result := ParseProgram;
+end;
+
+function TParser.IsUnitTopLevel: Boolean;
+begin
+  Result := FCurrent.Kind = tkUnit;
 end;
 
 function TParser.ParseProgram: TProgram;
