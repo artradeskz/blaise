@@ -401,8 +401,8 @@ procedure TUnitTests.TestCodegen_Unit_FunctionBodyInIR;
 var IR: string;
 begin
   IR := GenUnitIR(SrcUnitFuncs);
-  AssertTrue('$Add in IR',    Pos('$Add', IR) > 0);
-  AssertTrue('$Mul in IR',    Pos('$Mul', IR) > 0);
+  AssertTrue('$MathUtils_Add in IR', Pos('$MathUtils_Add', IR) > 0);
+  AssertTrue('$MathUtils_Mul in IR', Pos('$MathUtils_Mul', IR) > 0);
 end;
 
 procedure TUnitTests.TestCodegen_Unit_ImplOnlyFuncNotExported;
@@ -411,12 +411,12 @@ begin
   IR := GenUnitIR(SrcUnitImplOnly);
   { Helper is impl-only: its definition must NOT have 'export' prefix.
     Pub is interface-declared: it must have 'export'. }
-  HelperPos := Pos('$Helper', IR);
+  HelperPos := Pos('$Internals_Helper', IR);
   ExportPos := Pos('export function', IR);
-  AssertTrue('$Helper present', HelperPos > 0);
-  { The 'export' keyword must not appear immediately before $Helper }
-  AssertTrue('$Pub exported', Pos('export function w $Pub', IR) > 0);
-  AssertFalse('$Helper not exported', Pos('export function w $Helper', IR) > 0);
+  AssertTrue('$Internals_Helper present', HelperPos > 0);
+  { The 'export' keyword must not appear immediately before $Internals_Helper }
+  AssertTrue('$Internals_Pub exported', Pos('export function w $Internals_Pub', IR) > 0);
+  AssertFalse('$Internals_Helper not exported', Pos('export function w $Internals_Helper', IR) > 0);
 end;
 
 procedure TUnitTests.TestCodegen_Unit_CorrectArithmetic;

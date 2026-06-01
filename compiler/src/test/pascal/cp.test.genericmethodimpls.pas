@@ -284,7 +284,7 @@ var
 begin
   IR := GenIR(SrcForwardOnly);
   AssertTrue('SetVal body emitted',
-    Pos('$TBox_Integer_SetVal', IR) > 0);
+    Pos('$P_TBox_Integer_SetVal', IR) > 0);
 end;
 
 procedure TGenericMethodImplTests.TestCodegen_SeparateImpl_ProducesGetValBody;
@@ -293,7 +293,7 @@ var
 begin
   IR := GenIR(SrcForwardOnly);
   AssertTrue('GetVal body emitted',
-    Pos('$TBox_Integer_GetVal', IR) > 0);
+    Pos('$P_TBox_Integer_GetVal', IR) > 0);
 end;
 
 procedure TGenericMethodImplTests.TestCodegen_SeparateImpl_IRMatchesInlineVersion;

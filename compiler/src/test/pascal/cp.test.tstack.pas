@@ -244,7 +244,7 @@ var
 begin
   IR := GenIR(SrcPush);
   AssertTrue('Push method body emitted',
-    Pos('$TStack_Integer_Push', IR) >= 0);
+    Pos('$P_TStack_Integer_Push', IR) >= 0);
   AssertTrue('Push emits storew for Integer element',
     Pos('storew', IR) >= 0);
 end;
@@ -255,7 +255,7 @@ var
 begin
   IR := GenIR(SrcPop);
   AssertTrue('Pop method body emitted',
-    Pos('$TStack_Integer_Pop', IR) >= 0);
+    Pos('$P_TStack_Integer_Pop', IR) >= 0);
   AssertTrue('Pop emits loadw for Integer element',
     Pos('loadw', IR) >= 0);
 end;
@@ -266,7 +266,7 @@ var
 begin
   IR := GenIR(SrcPeek);
   AssertTrue('Peek method body emitted',
-    Pos('$TStack_Integer_Peek', IR) >= 0);
+    Pos('$P_TStack_Integer_Peek', IR) >= 0);
   AssertTrue('Peek emits loadw for Integer element',
     Pos('loadw', IR) >= 0);
 end;

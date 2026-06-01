@@ -338,6 +338,10 @@ type
                                 nil = last (or only) overload }
     [Unretained] Decl:         TObject;    { not owned — TMethodDecl backing this proc/func symbol;
                                 nil for non-callable symbols }
+    OwningUnit:   string;     { name of the unit that exported this symbol; empty
+                                for program-scope globals and builtins.  Set by
+                                semantic analysis; consumed by codegen to apply
+                                unit-prefix mangling on cross-unit references. }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;
@@ -401,6 +405,13 @@ type
     function NewType(AKind: TTypeKind; const AName: string): TTypeDesc;
     procedure RegisterBuiltins;
   public
+    { Tag for auto-population of TSymbol.OwningUnit during Define.
+      Semantic analysis sets this to the current unit being analysed
+      (AUnit.Name in AnalyseUnitForExport), then clears it back to ''.
+      When non-empty, every Define call that doesn't already have an
+      OwningUnit tag inherits this value. }
+    DefineOwningUnit: string;
+
     constructor Create;
     destructor Destroy; override;
 
@@ -469,6 +480,20 @@ type
     property TypeDouble:  TTypeDesc        read FTypeDouble;
     property TypeSingle:  TTypeDesc        read FTypeSingle;
   end;
+
+{ Foundational units whose exports stay as literal global symbols (no
+  unit prefix) so codegen-emitted hardcoded references like
+  @_BlaiseGetMem, @TObject_Destroy, @_StartUp, @_StringRelease keep
+  resolving.  The empty unit name is also unmangled — that's
+  program-level code or builtins. }
+function IsUnmangledUnit(const AUnitName: string): Boolean;
+
+{ Returns 'UnitName_' (dots collapse to underscores) for mangled
+  units, '' for unmangled ones.  The same prefix is applied at both
+  the symbol-defining site (codegen of the exporting unit) and the
+  symbol-using site (call/reference in another unit), so they always
+  agree on the QBE global name. }
+function MangleUnitPrefix(const AUnitName: string): string;
 
 implementation
 
@@ -1546,6 +1571,8 @@ end;
 
 function TSymbolTable.Define(ASymbol: TSymbol): Boolean;
 begin
+  if (ASymbol.OwningUnit = '') and (DefineOwningUnit <> '') then
+    ASymbol.OwningUnit := DefineOwningUnit;
   Result := CurrentScope.Define(ASymbol);
 end;
 
@@ -1563,6 +1590,38 @@ begin
     Result := Sym.TypeDesc
   else
     Result := nil;
+end;
+
+function IsUnmangledUnit(const AUnitName: string): Boolean;
+begin
+  Result := True;
+  if AUnitName = '' then Exit;
+  if SameText(AUnitName, 'System') then Exit;
+  if (Length(AUnitName) >= 4)
+     and SameText(Copy(AUnitName, 0, 4), 'rtl.') then Exit;
+  if (Length(AUnitName) >= 7)
+     and SameText(Copy(AUnitName, 0, 7), 'blaise_') then Exit;
+  Result := False;
+end;
+
+function MangleUnitPrefix(const AUnitName: string): string;
+var
+  I:  Integer;
+  Ch: string;
+begin
+  if IsUnmangledUnit(AUnitName) then
+  begin
+    Result := '';
+    Exit;
+  end;
+  Result := '';
+  for I := 0 to Length(AUnitName) - 1 do
+  begin
+    Ch := Copy(AUnitName, I, 1);
+    if Ch = '.' then Result := Result + '_'
+    else             Result := Result + Ch;
+  end;
+  Result := Result + '_';
 end;
 
 end.

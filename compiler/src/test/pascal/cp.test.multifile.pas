@@ -424,7 +424,7 @@ begin
     CG.AppendProgram(Prog);
     IR := CG.GetOutput;
     AssertTrue('unit func exported',
-      (Pos('export function', IR) > 0) and (Pos('$Add', IR) > 0));
+      (Pos('export function', IR) > 0) and (Pos('$MathU_Add', IR) > 0));
   finally
     CG.Free;
     SA.Free;

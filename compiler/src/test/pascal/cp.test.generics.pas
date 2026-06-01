@@ -827,7 +827,7 @@ var
 begin
   IR := GenCombinedIR(SrcUnitWithGenericClass, SrcProgUsesUnitGeneric);
   AssertTrue('constructor body emitted with mangled name',
-    Pos('function $TPair_Integer_Integer_Create', IR) > 0);
+    Pos('function $UPair_TPair_Integer_Integer_Create', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }
@@ -895,8 +895,8 @@ const
     on the same class.  If the method body is shared across instances without
     re-analysis, the inner Self.SetValue call will resolve to the same
     instance for both — so TBox_String_Init would emit
-      call $TBox_Integer_SetValue
-    instead of $TBox_String_SetValue.  Per-instance AST body cloning ensures
+      call $P_TBox_Integer_SetValue
+    instead of $P_TBox_String_SetValue.  Per-instance AST body cloning ensures
     each instance has its own analysed body and the correct call targets. }
   SrcTwoInstancesMethodCallsOwn =
     '''
@@ -957,8 +957,8 @@ begin
   IR := GenIR(SrcTwoInstancesMethodCallsOwn);
 
   { Locate the two Init function bodies in the IR. }
-  IntInit := Pos('function $TBox_Integer_Init', IR);
-  StrInit := Pos('function $TBox_String_Init', IR);
+  IntInit := Pos('function $P_TBox_Integer_Init', IR);
+  StrInit := Pos('function $P_TBox_String_Init', IR);
   AssertTrue('TBox_Integer_Init function emitted', IntInit > 0);
   AssertTrue('TBox_String_Init function emitted',  StrInit > 0);
 
@@ -975,10 +975,10 @@ begin
     IntBody := Copy(IR, IntInit, Length(IR) - IntInit + 1);
   end;
 
-  AssertTrue('TBox_Integer_Init body calls $TBox_Integer_SetValue',
-    Pos('call $TBox_Integer_SetValue', IntBody) > 0);
-  AssertTrue('TBox_String_Init body calls $TBox_String_SetValue',
-    Pos('call $TBox_String_SetValue', StrBody) > 0);
+  AssertTrue('TBox_Integer_Init body calls $P_TBox_Integer_SetValue',
+    Pos('call $P_TBox_Integer_SetValue', IntBody) > 0);
+  AssertTrue('TBox_String_Init body calls $P_TBox_String_SetValue',
+    Pos('call $P_TBox_String_SetValue', StrBody) > 0);
 end;
 
 { ------------------------------------------------------------------ }

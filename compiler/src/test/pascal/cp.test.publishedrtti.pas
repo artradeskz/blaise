@@ -412,7 +412,7 @@ var IR: string;
 begin
   IR := GenIR(Src);
   AssertTrue('table includes name pointer for Bar',
-    Pos('$__cn_Bar + 12, l $TFoo_Bar', IR) > 0);
+    Pos('$__mn_TFoo_Bar + 12, l $TFoo_Bar', IR) > 0);
 end;
 
 procedure TPublishedRTTITests.TestCodegen_MethodAddress_BuiltinCall;

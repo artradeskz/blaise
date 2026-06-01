@@ -213,6 +213,10 @@ type
     { Read-only handle to the analyser's symbol table.  Codegen needs it
       in unit-as-top-level mode where no TProgram exists to hand it off. }
     function  GetSymbolTable: TSymbolTable;
+    { Returns MangleUnitPrefix(FCurrentUnitName) when analysing a unit
+      via AnalyseUnitForExport (FProg=nil), '' otherwise.  Used by
+      ResolvedQbeName generation to prefix cross-unit symbol names. }
+    function  CurrentUnitPrefix: string;
   end;
 
 implementation
@@ -560,6 +564,19 @@ begin
     ALine, ACol);
 end;
 
+function TSemanticAnalyser.CurrentUnitPrefix: string;
+begin
+  { Program-scope routines (compiled via Analyse(AProg) with FProg
+    non-nil) keep their bare names — they aren't shared across
+    compilation units.  Unit-scope routines (AnalyseUnitForExport,
+    FProg = nil) get the unit prefix via MangleUnitPrefix's
+    allowlist semantics. }
+  if FProg <> nil then
+    Result := ''
+  else
+    Result := MangleUnitPrefix(FCurrentUnitName);
+end;
+
 procedure TSemanticAnalyser.Analyse(AProg: TProgram);
 begin
   FProg := AProg;
@@ -650,9 +667,9 @@ begin
 
       { Compute mangled QBE name for overloaded forward decls. }
       if MDecl.IsOverload then
-        MDecl.ResolvedQbeName := MDecl.Name + '$' + MangleParamSig(MDecl)
+        MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name + '$' + MangleParamSig(MDecl)
       else
-        MDecl.ResolvedQbeName := MDecl.Name;
+        MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name;
 
       FProcIndex.AddObject(MDecl.Name, MDecl);
 
@@ -786,9 +803,9 @@ begin
       begin
         { Impl-only declaration — register symbol and index it }
         if ImplDecl.IsOverload then
-          ImplDecl.ResolvedQbeName := ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
-          ImplDecl.ResolvedQbeName := ImplDecl.Name;
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name;
         FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
@@ -861,6 +878,9 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
+  { Auto-tag every symbol defined during this pass with AUnit.Name as
+    its OwningUnit (consumed by codegen's unit-prefix mangling). }
+  FTable.DefineOwningUnit := AUnit.Name;
   { --- Interface section ------------------------------------------------
     No scope is pushed here: all FTable.Define calls go to the global scope,
     making these symbols visible to callers of this unit. }
@@ -928,9 +948,9 @@ begin
     end;
 
     if MDecl.IsOverload then
-      MDecl.ResolvedQbeName := MDecl.Name + '$' + MangleParamSig(MDecl)
+      MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name + '$' + MangleParamSig(MDecl)
     else
-      MDecl.ResolvedQbeName := MDecl.Name;
+      MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name;
 
     FProcIndex.AddObject(MDecl.Name, MDecl);
 
@@ -1062,9 +1082,9 @@ begin
       begin
         { Impl-only declaration — register in impl scope (does not persist) }
         if ImplDecl.IsOverload then
-          ImplDecl.ResolvedQbeName := ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
-          ImplDecl.ResolvedQbeName := ImplDecl.Name;
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name;
         FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
@@ -1119,6 +1139,7 @@ begin
     FTable.PopScope;
   end;
   FCurrentUnit := nil;
+  FTable.DefineOwningUnit := '';
 end;
 
 procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);
@@ -1662,11 +1683,11 @@ begin
     begin
       NewMDecl := TMethodDecl(ClonedCD.Methods.Items[J]);
       if NewMDecl.IsVirtual then
-        RT.AddVTableSlot(NewMDecl.Name, '$' + ATypeName + '_' + NewMDecl.Name)
+        RT.AddVTableSlot(NewMDecl.Name, '$' + CurrentUnitPrefix + ATypeName + '_' + NewMDecl.Name)
       else if NewMDecl.IsOverride then
         RT.OverrideVTableSlot(
           RT.FindVTableSlot(NewMDecl.Name),
-          '$' + ATypeName + '_' + NewMDecl.Name);
+          '$' + CurrentUnitPrefix + ATypeName + '_' + NewMDecl.Name);
     end;
 
     { Resolve fields }
@@ -1692,6 +1713,15 @@ begin
       NewMDecl := TMethodDecl(ClonedCD.Methods.Items[J]);
       Key      := ATypeName + '.' + NewMDecl.Name;
       FMethodIndex.AddObject(Key, NewMDecl);
+      { Pin the QBE symbol now so the def and call sites agree.  The
+        instance's type symbol inherits OwningUnit from the analysing
+        compilation (program/unit name) via DefineGlobal's auto-tag;
+        the same prefix has to appear on every method this loop clones
+        otherwise codegen emits 'TBox_Integer_Create' on one side and
+        'UseBox_TBox_Integer_Create' on the other. }
+      NewMDecl.OwningUnit     := Sym.OwningUnit;
+      NewMDecl.ResolvedQbeName := MangleUnitPrefix(Sym.OwningUnit) +
+                                  ATypeName + '_' + NewMDecl.Name;
       if SameText(NewMDecl.Name, 'Destroy') then
         RT.HasDestroyMethod := True;
 
@@ -2818,7 +2848,7 @@ begin
             MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
           if MDecl.IsVirtual then
           begin
-            Slot := RT.AddVTableSlot(MangledKey, '$' + TD.Name + '_' + MangledKey);
+            Slot := RT.AddVTableSlot(MangledKey, '$' + CurrentUnitPrefix + TD.Name + '_' + MangledKey);
             if MDecl.IsAbstract then
             begin
               RT.VTableEntryAt(Slot).IsAbstract := True;
@@ -2843,7 +2873,7 @@ begin
                 end;
               end;
             end;
-            RT.OverrideVTableSlot(Slot, '$' + TD.Name + '_' + MangledKey);
+            RT.OverrideVTableSlot(Slot, '$' + CurrentUnitPrefix + TD.Name + '_' + MangledKey);
             { Override clears the abstract flag on the inherited slot }
             if Slot >= 0 then
               RT.VTableEntryAt(Slot).IsAbstract := False;
@@ -2924,7 +2954,7 @@ begin
         MangledKey := MDecl.Name;
         if MDecl.IsOverload then
           MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
-        MDecl.ResolvedQbeName := TD.Name + '_' + MangledKey;
+        MDecl.ResolvedQbeName := CurrentUnitPrefix + TD.Name + '_' + MangledKey;
 
         { Reject duplicate-without-overload at registration time.  Walk
           existing FMethodIndex entries for this (TypeName.Name) — if
@@ -8018,6 +8048,11 @@ begin
       ProcDesc.ReturnType := MD.ResolvedReturnType;  { nil for procedure }
       Result := ProcDesc;
       IdentExpr.ResolvedType := ProcDesc;
+      { Stash the resolved decl on the address-of node so codegen can
+        read MD.ResolvedQbeName directly — keeps the mangled label
+        out of TIdentExpr and lets a future patch evolve the mangling
+        without touching every reference site. }
+      AExpr.ResolvedFreeRoutine := MD;
       AExpr.ResolvedType := Result;
       Exit;
     end;

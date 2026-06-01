@@ -1039,7 +1039,7 @@ begin
     var S, Sub: string; B: Boolean;
     begin B := ContainsStr(S, Sub) end.
     ''');
-  AssertTrue('ContainsStr appears in IR', IRContains(IR, '$ContainsStr'));
+  AssertTrue('ContainsStr appears in IR', IRContains(IR, '$StrUtils_ContainsStr'));
 end;
 
 procedure TStrUtilsTests.TestCodegen_ReplaceStr_InIR;
@@ -1051,7 +1051,7 @@ begin
     var S, T: string;
     begin T := ReplaceStr(S, 'x', 'y') end.
     ''');
-  AssertTrue('ReplaceStr appears in IR', IRContains(IR, '$ReplaceStr'));
+  AssertTrue('ReplaceStr appears in IR', IRContains(IR, '$StrUtils_ReplaceStr'));
 end;
 
 procedure TStrUtilsTests.TestCodegen_TrimLeft_InIR;
@@ -1063,7 +1063,7 @@ begin
     var S, T: string;
     begin T := TrimLeft(S) end.
     ''');
-  AssertTrue('TrimLeft appears in IR', IRContains(IR, '$TrimLeft'));
+  AssertTrue('TrimLeft appears in IR', IRContains(IR, '$StrUtils_TrimLeft'));
 end;
 
 procedure TStrUtilsTests.TestCodegen_PosEx_InIR;

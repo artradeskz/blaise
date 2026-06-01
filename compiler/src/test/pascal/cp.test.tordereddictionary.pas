@@ -359,7 +359,7 @@ var
 begin
   IR := GenIR(SrcAddGet);
   AssertTrue('Add body emitted',
-    Pos('$TOrderedDictionary_Integer_Integer_Add', IR) >= 0);
+    Pos('$P_TOrderedDictionary_Integer_Integer_Add', IR) >= 0);
 end;
 
 procedure TTOrderedDictionaryTests.TestCodegen_OrdDict_TryGetValueEmitted;
@@ -368,7 +368,7 @@ var
 begin
   IR := GenIR(SrcTryGet);
   AssertTrue('TryGetValue body emitted',
-    Pos('$TOrderedDictionary_Integer_Integer_TryGetValue', IR) >= 0);
+    Pos('$P_TOrderedDictionary_Integer_Integer_TryGetValue', IR) >= 0);
 end;
 
 procedure TTOrderedDictionaryTests.TestCodegen_OrdDict_ContainsKeyEmitted;
@@ -377,7 +377,7 @@ var
 begin
   IR := GenIR(SrcAddGet);
   AssertTrue('ContainsKey body emitted',
-    Pos('$TOrderedDictionary_Integer_Integer_ContainsKey', IR) >= 0);
+    Pos('$P_TOrderedDictionary_Integer_Integer_ContainsKey', IR) >= 0);
 end;
 
 procedure TTOrderedDictionaryTests.TestCodegen_OrdDict_RemoveEmitted;
@@ -386,7 +386,7 @@ var
 begin
   IR := GenIR(SrcRemove);
   AssertTrue('Remove body emitted',
-    Pos('$TOrderedDictionary_Integer_Integer_Remove', IR) >= 0);
+    Pos('$P_TOrderedDictionary_Integer_Integer_Remove', IR) >= 0);
 end;
 
 procedure TTOrderedDictionaryTests.TestCodegen_OrdDict_GetKeyEmitted;
@@ -395,7 +395,7 @@ var
 begin
   IR := GenIR(SrcIndexed);
   AssertTrue('GetKey body emitted',
-    Pos('$TOrderedDictionary_Integer_Integer_GetKey', IR) >= 0);
+    Pos('$P_TOrderedDictionary_Integer_Integer_GetKey', IR) >= 0);
 end;
 
 procedure TTOrderedDictionaryTests.TestCodegen_OrdDict_GetValueEmitted;
@@ -404,7 +404,7 @@ var
 begin
   IR := GenIR(SrcIndexed);
   AssertTrue('GetValue body emitted',
-    Pos('$TOrderedDictionary_Integer_Integer_GetValue', IR) >= 0);
+    Pos('$P_TOrderedDictionary_Integer_Integer_GetValue', IR) >= 0);
 end;
 
 initialization

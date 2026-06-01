@@ -272,7 +272,7 @@ var
 begin
   IR := GenIR(SrcInclude);
   AssertTrue('Include method body emitted',
-    Pos('$TSet_Integer_Include', IR) >= 0);
+    Pos('$P_TSet_Integer_Include', IR) >= 0);
   AssertTrue('Include emits storew for Integer element',
     Pos('storew', IR) >= 0);
 end;
@@ -283,7 +283,7 @@ var
 begin
   IR := GenIR(SrcContains);
   AssertTrue('Contains method body emitted',
-    Pos('$TSet_Integer_Contains', IR) >= 0);
+    Pos('$P_TSet_Integer_Contains', IR) >= 0);
   AssertTrue('Contains/IndexOf emits loadw for Integer element',
     Pos('loadw', IR) >= 0);
 end;

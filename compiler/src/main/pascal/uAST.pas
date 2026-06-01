@@ -431,6 +431,12 @@ type
   TAddrOfExpr = class(TASTExpr)
   public
     Expr: TASTExpr;  { owned — the inner expression whose address is taken }
+    ResolvedFreeRoutine: TObject;  { TMethodDecl — not owned; populated by
+                                    uSemantic when Expr is a bare identifier
+                                    naming a standalone routine.  Lets codegen
+                                    emit @<MDecl.ResolvedQbeName> instead of
+                                    @<source-name>, which matters once routine
+                                    names get unit-prefixed. }
     destructor Destroy; override;
   end;
 
@@ -618,6 +624,9 @@ type
                                        walks at runtime. }
     ResolvedQbeName:    string;      { set by uSemantic — mangled QBE symbol name;
                                        empty string means use Name verbatim }
+    OwningUnit:         string;      { name of the unit that exported this routine;
+                                       empty for program-scope.  Set by uSemantic;
+                                       consumed by codegen for cross-unit references. }
     IsExternal:         Boolean;     { declared with 'external' directive — no body }
     ExternalName:       string;      { C symbol name from 'external name ''c_foo'''; empty = use Pascal name }
     IsRecordMethod:     Boolean;     { set by uSemantic — owner type is a record (not a class) }

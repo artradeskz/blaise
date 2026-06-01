@@ -269,7 +269,7 @@ var
 begin
   IR := GenIR(SrcEnqueue);
   AssertTrue('Enqueue method body emitted',
-    Pos('$TQueue_Integer_Enqueue', IR) >= 0);
+    Pos('$P_TQueue_Integer_Enqueue', IR) >= 0);
   AssertTrue('Enqueue emits storew for Integer element',
     Pos('storew', IR) >= 0);
 end;
@@ -280,7 +280,7 @@ var
 begin
   IR := GenIR(SrcDequeue);
   AssertTrue('Dequeue method body emitted',
-    Pos('$TQueue_Integer_Dequeue', IR) >= 0);
+    Pos('$P_TQueue_Integer_Dequeue', IR) >= 0);
   AssertTrue('Dequeue emits loadw for Integer element',
     Pos('loadw', IR) >= 0);
 end;
@@ -291,7 +291,7 @@ var
 begin
   IR := GenIR(SrcPeek);
   AssertTrue('Peek method body emitted',
-    Pos('$TQueue_Integer_Peek', IR) >= 0);
+    Pos('$P_TQueue_Integer_Peek', IR) >= 0);
   AssertTrue('Peek emits loadw for Integer element',
     Pos('loadw', IR) >= 0);
 end;
