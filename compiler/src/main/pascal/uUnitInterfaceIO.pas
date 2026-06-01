@@ -558,7 +558,6 @@ begin
         EncodeLpstr(R.Name) +
         EncodeLpstr(IntToStr(Ord(R.IsFunction))) +
         EncodeQualRefParts(R.ReturnType.UnitName, R.ReturnType.TypeName) +
-        EncodeLpstr(R.ResolvedQbeName) +
         EncodeLpstr(IntToStr(R.Params.Count));
       for J := 0 to R.Params.Count - 1 do
       begin
@@ -2022,7 +2021,6 @@ begin
     RefStr        := ReadLpstrAt(AText, APos);
     DecodeQualRef(RefStr, RefUnit, RefType);
     R.ReturnType  := MakeQualRef(RefUnit, RefType);
-    R.ResolvedQbeName := ReadLpstrAt(AText, APos);
     PCount := StrToInt(ReadLpstrAt(AText, APos));
     for J := 1 to PCount do
     begin

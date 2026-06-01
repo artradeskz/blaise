@@ -522,8 +522,12 @@ end;
 { Synthesise a TMethodDecl from a TRoutineSig + its return-type
   qual-ref, sufficient for downstream call-site analysis: param
   list with ResolvedType set, ResolvedReturnType, ResolvedQbeName,
-  IsOverload.  Body stays nil. }
+  IsOverload.  Body stays nil.  AOwningUnit is the iface's unit name
+  — combined with the routine's bare Name through MangleUnitPrefix
+  to produce ResolvedQbeName, so the call site emits the same global
+  symbol the exporting unit defines. }
 function SynthesiseMethodDecl(ASig: TRoutineSig;
+                              const AOwningUnit: string;
                               ATable: TSymbolTable): TMethodDecl;
 var
   J:     Integer;
@@ -533,12 +537,11 @@ var
 begin
   Result := TMethodDecl.Create;
   Result.Name           := ASig.Name;
+  Result.OwningUnit     := AOwningUnit;
   Result.ReturnTypeName := ASig.ReturnType.TypeName;
   Result.ResolvedReturnType :=
     ResolveTypeName(ASig.ReturnType.TypeName, ATable);
-  Result.ResolvedQbeName := ASig.ResolvedQbeName;
-  if Result.ResolvedQbeName = '' then
-    Result.ResolvedQbeName := ASig.Name;
+  Result.ResolvedQbeName := MangleUnitPrefix(AOwningUnit) + ASig.Name;
   for J := 0 to ASig.Params.Count - 1 do
   begin
     Param := TMethodParam(ASig.Params.Items[J]);
@@ -591,8 +594,7 @@ begin
       via FProcIndex.  Owned by the symbol table to outlive imports. }
     if ASemantic <> nil then
     begin
-      MDecl := SynthesiseMethodDecl(Sig, ATable);
-      MDecl.OwningUnit := AIface.Name;
+      MDecl := SynthesiseMethodDecl(Sig, AIface.Name, ATable);
       ATable.OwnImportedDecl(MDecl);
       Sym.Decl := MDecl;
       ASemantic.RegisterImportedRoutine(Sig.Name, MDecl);
