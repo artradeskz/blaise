@@ -526,31 +526,35 @@ begin
     Source.Free;
   end;
 
+  { --emit-ir: write the IR to stdout and fall through to normal program
+    exit so the main block's scope-exit ARC cleanup runs.  Calling Halt(0)
+    here would lower to libc exit(), which skips every Pascal stack frame and
+    leaves main's locals unreleased — defeating the leak tracker and leaking
+    anything not freed in the finally block above. }
   if EmitIR then
+    Write(IR)
+  else
   begin
-    Write(IR);
-    Halt(0);
-  end;
-
-  IRFile := ChangeFileExt(OutputFile, '.ssa');
-  try
-    Source := TStringList.Create;
+    IRFile := ChangeFileExt(OutputFile, '.ssa');
     try
-      Source.Text := IR;
-      Source.SaveToFile(IRFile);
-    finally
-      Source.Free;
+      Source := TStringList.Create();
+      try
+        Source.Text := IR;
+        Source.SaveToFile(IRFile);
+      finally
+        Source.Free();
+      end;
+    except
+      on E: Exception do
+      begin
+        WriteLn(StdErr, 'Error writing IR: ', Exception(E).Message);
+        Halt(1);
+      end;
     end;
-  except
-    on E: Exception do
-    begin
-      WriteLn(StdErr, 'Error writing IR: ', Exception(E).Message);
-      Halt(1);
-    end;
-  end;
 
-  CompileToNative(IRFile, OutputFile, OPDFAsmFile);
-  DeleteFile(IRFile);
-  if OPDFAsmFile <> '' then
-    DeleteFile(OPDFAsmFile);
+    CompileToNative(IRFile, OutputFile, OPDFAsmFile);
+    DeleteFile(IRFile);
+    if OPDFAsmFile <> '' then
+      DeleteFile(OPDFAsmFile);
+  end;
 end.
