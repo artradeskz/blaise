@@ -25,6 +25,7 @@ type
     procedure SetUp; override;
   published
     procedure TestDebug_NoLeak_NoReport;
+    procedure TestDebug_ConstructorWithArgs_NoDoubleAddRef;
     procedure TestDebug_LeakedObject_ReportedOnExit;
     procedure TestDebug_MultipleLeaks_AllReported;
     procedure TestDebug_CycleRetained_Reported;
@@ -55,6 +56,27 @@ const
     begin
       B := TBox.Create;
       B.Value := 99;
+      WriteLn(B.Value)
+    end.
+    ''';
+
+  { Constructor with args — must not double-AddRef; object must be clean after scope. }
+  SrcConstructorWithArgs = '''
+    program P;
+    uses blaise_arc;
+    type
+      TBox = class
+        Value: Integer;
+        constructor Create(V: Integer);
+      end;
+    constructor TBox.Create(V: Integer);
+    begin
+      Self.Value := V
+    end;
+    var
+      B: TBox;
+    begin
+      B := TBox.Create(42);
       WriteLn(B.Value)
     end.
     ''';
@@ -140,6 +162,18 @@ begin
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '99' + LE, Output);
   AssertTrue('no leak report', Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_ConstructorWithArgs_NoDoubleAddRef;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcConstructorWithArgs, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertEquals('stdout', '42' + LE, Output);
+  AssertTrue('no leak report', Pos('Blaise leak report', Output) < 0);
 end;
 
 procedure TE2ELeakCheckTests.TestDebug_LeakedObject_ReportedOnExit;

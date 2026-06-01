@@ -91,6 +91,7 @@ type
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Constructor_NoArgs_StoresVTable;
     procedure TestCodegen_Constructor_WithArgs_StoresVTable;
+    procedure TestCodegen_Constructor_WithArgs_ExactlyOneAddRef;
 
     { ------------------------------------------------------------------ }
     { ARC on method string parameters                                      }
@@ -977,6 +978,38 @@ begin
         end.
         ''');
   AssertTrue('with-arg ctor stores vtable', Pos('storel $vtable_TFoo', IR) > 0);
+end;
+
+procedure TClassTests.TestCodegen_Constructor_WithArgs_ExactlyOneAddRef;
+var
+  IR: string;
+  AddRefCount: Integer;
+  P: Integer;
+begin
+  { TFoo.Create(N) must produce exactly one _ClassAddRef — from the
+    assignment site.  The constructor path itself must NOT add a second. }
+  IR := GenIR(
+    '''
+        program P;
+        type
+          TFoo = class
+            FN: Integer;
+            constructor Create(N: Integer);
+          end;
+        constructor TFoo.Create(N: Integer);
+        begin FN := N end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create(42)
+        end.
+        ''');
+  AddRefCount := 0;
+  P := 0;
+  repeat
+    P := PosEx('_ClassAddRef', IR, P);
+    if P >= 0 then begin Inc(AddRefCount); Inc(P) end;
+  until P < 0;
+  AssertEquals('exactly one _ClassAddRef for constructor-with-args', 1, AddRefCount);
 end;
 
 { ------------------------------------------------------------------ }

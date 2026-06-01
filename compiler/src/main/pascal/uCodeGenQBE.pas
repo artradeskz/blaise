@@ -7662,7 +7662,10 @@ begin
       if RT.HasVTable then
         EmitLine(Format('  storel $vtable_%s, %s',
           [QBEMangle(RT.Name), SelfTemp]));
-      EmitLine(Format('  call $_ClassAddRef(l %s)', [SelfTemp]));
+      { No _ClassAddRef here — the assignment site (EmitAssignment) is
+        responsible for the retain on the receiving slot.  Adding it here
+        as well produces a double-AddRef that prevents the object from
+        ever reaching refcount zero. }
       if FDebugMode then
       begin
         L := AllocTemp;
