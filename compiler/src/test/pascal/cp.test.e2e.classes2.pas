@@ -44,6 +44,7 @@ type
     procedure TestRun_MultiLevel_Inheritance_Chain;
     procedure TestRun_Interface_Dispatch_CallsImpl;
     procedure TestRun_Interface_ARC_NoLeak;
+    procedure TestRun_Interface_GlobalNil_LinksAndRuns;
     procedure TestRun_Interface_Is_As_Roundtrip;
     procedure TestRun_Supports_TwoArg_BooleanResult;
     procedure TestRun_Supports_ThreeArg_AssignsAndCalls;
@@ -402,6 +403,31 @@ const
       G := H;
       G.Greet;
       H.Free
+    end.
+    ''';
+
+  { Regression: assigning nil to an interface-typed GLOBAL variable.  An
+    interface global is emitted as a fat-pointer pair ($G_obj / $G_itab); the
+    `:= nil` path previously fell through to a scalar store against a bare $G
+    symbol with no data definition, causing an undefined-reference link error.
+    Must be an e2e test: the IR-only harness never links, so it cannot see it. }
+  SrcIntfGlobalNil = '''
+    program P;
+    type
+      ISpeaker = interface
+        procedure Speak;
+      end;
+      TSpeaker = class(TObject, ISpeaker)
+        procedure Speak;
+      end;
+    procedure TSpeaker.Speak;
+    begin WriteLn('spoke') end;
+    var G: ISpeaker;
+    begin
+      G := TSpeaker.Create;
+      G.Speak;
+      G := nil;
+      WriteLn('after nil')
     end.
     ''';
 
@@ -974,6 +1000,16 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfDispatch, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
+end;
+
+procedure TE2EClasses2Tests.TestRun_Interface_GlobalNil_LinksAndRuns;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIntfGlobalNil, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('spoke then after nil',
+    'spoke' + LE + 'after nil' + LE, Output);
 end;
 
 procedure TE2EClasses2Tests.TestRun_Interface_Is_As_Roundtrip;

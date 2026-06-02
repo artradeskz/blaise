@@ -3645,6 +3645,28 @@ begin
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       EmitLine(Format('  storel %s, %s', [ValTemp, PtrTemp]));
     end
+    else if (AAssign.ResolvedLhsType <> nil) and
+            (AAssign.ResolvedLhsType.Kind = tyRecord) then
+    begin
+      { Record through a var/out param: PtrTemp already holds the caller's
+        record address (loaded from the pointer slot).  Copy into it as for a
+        normal record LHS — sret for a record-returning call, else ARC-aware
+        field copy.  Storing a single word here (the old default branch) would
+        write only 8 bytes and corrupt the record. }
+      ClassRT := TRecordTypeDesc(AAssign.ResolvedLhsType);
+      if IsRecordCall(AAssign.Expr) then
+      begin
+        EmitRecordReleaseFields(ClassRT, PtrTemp);
+        EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+          [PtrTemp, ClassRT.TotalSize]));
+        EmitRecordCallSret(AAssign.Expr, PtrTemp);
+      end
+      else
+      begin
+        ValTemp := EmitExpr(AAssign.Expr);
+        EmitRecordCopy(ClassRT, PtrTemp, ValTemp);
+      end;
+    end
     else
     begin
       ValTemp    := EmitExpr(AAssign.Expr);
@@ -3655,7 +3677,9 @@ begin
   else if (AAssign.ResolvedLhsType <> nil) and
           (AAssign.ResolvedLhsType.Kind = tyRecord) then
   begin
-    { Record assignment: use sret (directly into dest) or field-by-field copy }
+    { Record assignment (non-var-param LHS — the var/out case is handled in the
+      IsVarParam branch above): use sret (directly into dest) or field-by-field
+      copy. }
     ClassRT := TRecordTypeDesc(AAssign.ResolvedLhsType);
     if IsRecordCall(AAssign.Expr) then
     begin

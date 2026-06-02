@@ -22,7 +22,9 @@ program Blaise;
 
 uses
   SysUtils, Classes, Process, contnrs,
-  uLexer, uParser, uAST, uSemantic, uCodeGen, uCodeGenQBE, uUnitLoader, uDebugOPDF,
+  uLexer, uParser, uAST, uSemantic, uCodeGen, uCodeGenQBE,
+  blaise.codegen.target, blaise.codegen.native, uToolchain,
+  uUnitLoader, uDebugOPDF,
   uStrCompat, uConfig;
 
 const
@@ -42,7 +44,9 @@ begin
   WriteLn('  --source <path>     Pascal source file');
   WriteLn('  --output <path>     Output binary path');
   WriteLn('  --unit-path <dir>   Add directory to unit search path (repeatable)');
-  WriteLn('  --target <id>       linux-x86_64 (default), macos-arm64');
+  WriteLn('  --backend <id>      qbe (default) | native');
+  WriteLn('  --target <os>-<cpu> linux-x86_64 (default), linux-i386, linux-arm64,');
+  WriteLn('                      freebsd-x86_64, windows-x86_64, macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
   WriteLn('  --debug             Enable runtime memory leak reporting on exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
@@ -183,6 +187,8 @@ function ParseArgs(
   out EmitIR:      Boolean;
   out OPDFEnabled: Boolean;
   out DebugMode:   Boolean;
+  out UseNative:   Boolean;
+  out Target:      TTargetDesc;
   out SearchPaths: TStringList): Boolean;
 var
   I: Integer;
@@ -194,6 +200,8 @@ begin
   EmitIR      := False;
   OPDFEnabled := False;
   DebugMode   := False;
+  UseNative   := False;
+  Target      := HostTarget;
   SearchPaths := TStringList.Create;
 
   I := 1;
@@ -221,8 +229,30 @@ begin
       DebugMode := True
     else if Arg = '--debug-opdf' then
       OPDFEnabled := True
-    else if Arg = '--target' then
-      Inc(I)  { consume next arg — target is not used in Phase 1 }
+    else if (Arg = '--backend') and (I < ParamCount) then
+    begin
+      Inc(I);
+      if ParamStr(I) = 'qbe' then
+        UseNative := False
+      else if ParamStr(I) = 'native' then
+        UseNative := True
+      else
+      begin
+        WriteLn(StdErr, 'Error: --backend must be ''qbe'' or ''native''');
+        SearchPaths.Free;
+        Exit;
+      end;
+    end
+    else if (Arg = '--target') and (I < ParamCount) then
+    begin
+      Inc(I);
+      if not ParseTargetName(ParamStr(I), Target) then
+      begin
+        WriteLn(StdErr, 'Error: unknown --target ''', ParamStr(I), '''');
+        SearchPaths.Free;
+        Exit;
+      end;
+    end
     else if (Arg = '--help') or (Arg = '-h') then
     begin
       PrintUsage;
@@ -355,6 +385,46 @@ begin
   DeleteFile(AsmFile);
 end;
 
+{ Link a native-backend assembly file (.s) into the final binary.  The native
+  backend has already produced the assembly (no qbe step); this only drives the
+  cc link, reusing the same link line as CompileToNative.  Tool + RTL paths are
+  resolved through uToolchain so env-var overrides and target awareness apply. }
+procedure CompileToNativeDirect(const AAsmFile, AOutputFile: string;
+  const ATarget: TTargetDesc; const AOPDFAsmFile: string);
+var
+  TC:       TToolchain;
+  Msg:      string;
+  ExitCode: Integer;
+  Args:     TStringList;
+begin
+  TC := ResolveToolchain(ATarget);
+
+  Args := TStringList.Create;
+  try
+    Args.Add('-o');
+    Args.Add(AOutputFile);
+    if AOPDFAsmFile <> '' then
+      Args.Add('-no-pie');  { OPDF addresses are absolute; PIE relocation breaks them }
+    Args.Add(AAsmFile);
+    if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
+      Args.Add(AOPDFAsmFile);
+    if TC.RTLPath <> '' then
+      Args.Add(TC.RTLPath);
+    Args.Add('-lm');       { math functions (sqrt, sin, cos, etc.) }
+    Args.Add('-lpthread'); { POSIX threads (blaise_thread unit) }
+    ExitCode := RunProcess(TC.Linker.Path, Args, Msg);
+  finally
+    Args.Free;
+  end;
+
+  if ExitCode <> 0 then
+  begin
+    WriteLn(StdErr, 'link error (exit ', ExitCode, '):');
+    Write(StdErr, Msg);
+    Halt(1);
+  end;
+end;
+
 var
   SourceFile, OutputFile: string;
   SearchPaths: TStringList;
@@ -362,12 +432,15 @@ var
   EmitIR:      Boolean;
   OPDFEnabled: Boolean;
   DebugMode:   Boolean;
+  UseNative:   Boolean;
+  Target:      TTargetDesc;
   OPDFAsmFile: string;
   Source:   TStringList;
   Lexer:    TLexer;
   Parser:   TParser;
   Prog:     TProgram;
   Semantic: TSemanticAnalyser;
+  NativeCG: TCodeGenNative;
   CG:       ICodeGen;
   OE:       TOPDFEmitter;
   Loader:   TUnitLoader;
@@ -375,6 +448,7 @@ var
   I:        Integer;
   IR:       string;
   IRFile:   string;
+  AsmFile:  string;
 
 begin
   SearchPaths := nil;
@@ -392,7 +466,7 @@ begin
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, DebugMode, SearchPaths) then
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, DebugMode, UseNative, Target, SearchPaths) then
     begin
       PrintUsage;
       Halt(1);
@@ -480,10 +554,19 @@ begin
     end;
 
     try
-      { CG is an ICodeGen (ARC-managed) — no manual Free; assigning nil at
-        the end releases it.  Backend selection happens here: TCodeGenQBE
-        today, TCodeGenNative once --backend native is wired in. }
-      CG := TCodeGenQBE.Create;
+      { CG is an ICodeGen (ARC-managed) — no manual Free.  Backend selection:
+        --emit-ir ALWAYS uses the QBE backend (fixpoint + RTL Makefile depend
+        on byte-identical QBE IR), so the native backend is engaged only for
+        actual native output.  Otherwise --backend native selects
+        TCodeGenNative for the configured target. }
+      if UseNative and not EmitIR then
+      begin
+        NativeCG := TCodeGenNative.Create;
+        NativeCG.SetTarget(Target);
+        CG := NativeCG;
+      end
+      else
+        CG := TCodeGenQBE.Create;
       CG.SetDebugMode(DebugMode);
       if (Units <> nil) and (Units.Count > 0) then
       begin
@@ -538,6 +621,32 @@ begin
     anything not freed in the finally block above. }
   if EmitIR then
     Write(IR)
+  else if UseNative then
+  begin
+    { Native backend: IR holds target assembly text.  Write it to a .s file
+      and link via the same cc driver the QBE path uses. }
+    AsmFile := ChangeFileExt(OutputFile, '.s');
+    try
+      Source := TStringList.Create();
+      try
+        Source.Text := IR;
+        Source.SaveToFile(AsmFile);
+      finally
+        Source.Free();
+      end;
+    except
+      on E: Exception do
+      begin
+        WriteLn(StdErr, 'Error writing assembly: ', Exception(E).Message);
+        Halt(1);
+      end;
+    end;
+
+    CompileToNativeDirect(AsmFile, OutputFile, Target, OPDFAsmFile);
+    DeleteFile(AsmFile);
+    if OPDFAsmFile <> '' then
+      DeleteFile(OPDFAsmFile);
+  end
   else
   begin
     IRFile := ChangeFileExt(OutputFile, '.ssa');

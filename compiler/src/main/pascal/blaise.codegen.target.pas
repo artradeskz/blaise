@@ -1,0 +1,139 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: Apache-2.0 WITH Swift-exception
+  Licensed under the Apache License v2.0 with Runtime Library Exception.
+  See LICENSE file in the project root for full license terms.
+}
+
+unit blaise.codegen.target;
+
+{ Target description for the native code-generation backend.
+
+  A target is an (OS, CPU) pair plus the derived facts the backend and the
+  toolchain driver need: pointer size, canonical name, and (later) register
+  sets / ABI descriptors.  Kept in its own unit so both the toolchain
+  resolver (uToolchain) and the native codegen (blaise.codegen.native) can
+  depend on it without a cycle.
+
+  Only x86_64-linux is implemented for codegen today; the other (OS, CPU)
+  combinations are accepted by ParseTargetName so --target can name them and
+  the driver can fail with a clear "backend not yet implemented for <target>"
+  message rather than an opaque error.  Adding a real backend for one of them
+  is a new TNativeBackend subclass keyed on these enums.
+
+  FreeBSD/x86_64 shares the System V AMD64 ABI with Linux, so the x86_64
+  instruction selection will be reused; the OS differences are confined to the
+  link line (CRT objects, dynamic linker) handled by the toolchain driver. }
+
+interface
+
+type
+  TTargetOS  = (osLinux, osFreeBSD, osWindows, osMacOS);
+  TTargetCPU = (cpuX86_64, cpuI386, cpuArm64);
+
+  { Pointer-size and other per-target facts live here so nothing in the
+    backend hard-codes 8.  PtrSize flips to 4 for i386 by this record alone. }
+  TTargetDesc = record
+    OS:  TTargetOS;
+    CPU: TTargetCPU;
+  end;
+
+{ Build a target record. }
+procedure MakeTarget(AOS: TTargetOS; ACPU: TTargetCPU; out ATarget: TTargetDesc);
+
+{ The host target this compiler binary runs on (the default when --target is
+  omitted).  Today the only build host is linux-x86_64. }
+function HostTarget: TTargetDesc;
+
+{ Pointer size in bytes for the target (8 for 64-bit, 4 for 32-bit). }
+function PtrSize(const ATarget: TTargetDesc): Integer;
+
+{ Parse a CLI target identifier of the form "<os>-<cpu>", e.g.
+  "linux-x86_64".  Returns False on an unknown/unsupported identifier;
+  ATarget is left unchanged in that case. }
+function ParseTargetName(const AName: string; out ATarget: TTargetDesc): Boolean;
+
+{ Canonical "<os>-<cpu>" name — inverse of ParseTargetName, for messages. }
+function TargetName(const ATarget: TTargetDesc): string;
+
+{ True when the native backend can actually generate code for this target. }
+function TargetHasNativeBackend(const ATarget: TTargetDesc): Boolean;
+
+implementation
+
+uses
+  SysUtils;
+
+procedure MakeTarget(AOS: TTargetOS; ACPU: TTargetCPU; out ATarget: TTargetDesc);
+begin
+  ATarget.OS  := AOS;
+  ATarget.CPU := ACPU;
+end;
+
+function HostTarget: TTargetDesc;
+begin
+  MakeTarget(osLinux, cpuX86_64, Result);
+end;
+
+function PtrSize(const ATarget: TTargetDesc): Integer;
+begin
+  if ATarget.CPU = cpuI386 then
+    Result := 4
+  else
+    Result := 8;
+end;
+
+function ParseTargetName(const AName: string; out ATarget: TTargetDesc): Boolean;
+var
+  Lower: string;
+begin
+  Result := True;
+  Lower  := LowerCase(AName);
+  if Lower = 'linux-x86_64' then
+    MakeTarget(osLinux, cpuX86_64, ATarget)
+  else if Lower = 'linux-i386' then
+    MakeTarget(osLinux, cpuI386, ATarget)
+  else if Lower = 'linux-arm64' then
+    MakeTarget(osLinux, cpuArm64, ATarget)
+  else if Lower = 'freebsd-x86_64' then
+    MakeTarget(osFreeBSD, cpuX86_64, ATarget)
+  else if Lower = 'freebsd-arm64' then
+    MakeTarget(osFreeBSD, cpuArm64, ATarget)
+  else if Lower = 'windows-x86_64' then
+    MakeTarget(osWindows, cpuX86_64, ATarget)
+  else if Lower = 'macos-arm64' then
+    MakeTarget(osMacOS, cpuArm64, ATarget)
+  else
+    Result := False;
+end;
+
+function TargetName(const ATarget: TTargetDesc): string;
+var
+  OSPart, CPUPart: string;
+begin
+  case ATarget.OS of
+    osLinux:   OSPart := 'linux';
+    osFreeBSD: OSPart := 'freebsd';
+    osWindows: OSPart := 'windows';
+    osMacOS:   OSPart := 'macos';
+  else
+    OSPart := 'unknown';
+  end;
+  case ATarget.CPU of
+    cpuX86_64: CPUPart := 'x86_64';
+    cpuI386:   CPUPart := 'i386';
+    cpuArm64:  CPUPart := 'arm64';
+  else
+    CPUPart := 'unknown';
+  end;
+  Result := OSPart + '-' + CPUPart;
+end;
+
+function TargetHasNativeBackend(const ATarget: TTargetDesc): Boolean;
+begin
+  { Only x86_64-linux is implemented so far. }
+  Result := (ATarget.OS = osLinux) and (ATarget.CPU = cpuX86_64);
+end;
+
+end.

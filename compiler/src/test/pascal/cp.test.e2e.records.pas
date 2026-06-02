@@ -25,6 +25,7 @@ type
     procedure TestRun_Record_FieldReadWrite;
     procedure TestRun_Record_PassByValue;
     procedure TestRun_Record_PassByVar;
+    procedure TestRun_Record_AssignToVarParam;
     procedure TestRun_Record_StringField_ARC;
     procedure TestRun_Record_NestedRecord;
     procedure TestRun_Record_FourByteFields_PackedAndRoundTrip;
@@ -84,6 +85,41 @@ const
       Scale(P1);
       WriteLn(P1.X);
       WriteLn(P1.Y)
+    end.
+    ''';
+
+  { Regression: whole-record assignment to a var/out record parameter.
+    Previously the IsVarParam path had no tyRecord case, so `Dst := L` (or
+    `Dst := Func`) fell through to a single-word store and wrote garbage back
+    to the caller.  Covers both a local-record RHS (var) and a record-returning
+    function RHS (out). }
+  SrcRecordAssignToVarParam = '''
+    program P;
+    type TPoint = record X, Y: Integer; end;
+    function Make(AX, AY: Integer): TPoint;
+    begin
+      Result.X := AX;
+      Result.Y := AY
+    end;
+    procedure FillFromLocal(var Dst: TPoint);
+    var L: TPoint;
+    begin
+      L.X := 11;
+      L.Y := 22;
+      Dst := L
+    end;
+    procedure FillFromCall(out Dst: TPoint);
+    begin
+      Dst := Make(33, 44)
+    end;
+    var A, B: TPoint;
+    begin
+      FillFromLocal(A);
+      FillFromCall(B);
+      WriteLn(A.X);
+      WriteLn(A.Y);
+      WriteLn(B.X);
+      WriteLn(B.Y)
     end.
     ''';
 
@@ -176,6 +212,16 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcRecordPassByVar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('6 then 8', '6' + LE + '8' + LE, Output);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_AssignToVarParam;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRecordAssignToVarParam, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('11 22 33 44',
+    '11' + LE + '22' + LE + '33' + LE + '44' + LE, Output);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_StringField_ARC;
