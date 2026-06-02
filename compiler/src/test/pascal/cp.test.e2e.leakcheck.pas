@@ -25,6 +25,7 @@ type
     procedure SetUp; override;
   published
     procedure TestDebug_NoLeak_NoReport;
+    procedure TestDebug_ExceptionHandlerVar_NoLeakNoOverRelease;
     procedure TestDebug_ConstructorWithArgs_NoDoubleAddRef;
     procedure TestDebug_LeakedObject_ReportedOnExit;
     procedure TestDebug_MultipleLeaks_AllReported;
@@ -57,6 +58,34 @@ const
       B := TBox.Create;
       B.Value := 99;
       WriteLn(B.Value)
+    end.
+    ''';
+
+  { Exception handler variable: `on E: T do` binds the caught exception to E.
+    E is a class local that scope-exit ARC releases, so the handler must retain
+    the exception on bind.  Without that AddRef the exception (created at rc=0
+    by `raise EFoo.Create`) is over-released to a negative refcount — a
+    use-after-free.  With the fix it is freed exactly once: no leak, no crash. }
+  SrcExceptionHandlerVar = '''
+    program P;
+    uses blaise_arc;
+    type
+      Exception = class
+        FMessage: string;
+      end;
+      EFoo = class(Exception) end;
+    procedure DoIt;
+    begin
+      try
+        raise EFoo.Create
+      except
+        on E: EFoo do
+          WriteLn('caught')
+      end
+    end;
+    begin
+      DoIt;
+      WriteLn('done')
     end.
     ''';
 
@@ -161,6 +190,21 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcNoLeak, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '99' + LE, Output);
+  AssertTrue('no leak report', Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_ExceptionHandlerVar_NoLeakNoOverRelease;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebug(SrcExceptionHandlerVar, Output, ExitCode, True));
+  { Clean exit (no abort from a negative-refcount free), expected stdout, and
+    no leak report (the exception is freed exactly once). }
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertEquals('stdout', 'caught' + LE + 'done' + LE, Output);
   AssertTrue('no leak report', Pos('leak', Output) < 0);
 end;
 

@@ -2279,7 +2279,16 @@ begin
 
       EmitLine('@' + LblBody);
       if H.VarName <> '' then
+      begin
+        { Bind the caught exception to the handler variable.  The handler var
+          is a regular class-typed local that EmitArcCleanup releases at scope
+          exit, so retain the exception here to balance that release — without
+          this AddRef the scope-exit release drives the exception's refcount
+          negative (it is created at rc=0 by `raise EFoo.Create` and never
+          otherwise retained). }
+        EmitLine(Format('  call $_ClassAddRef(l %s)', [ExcTemp]));
         EmitLine(Format('  storel %s, %%_var_%s', [ExcTemp, H.VarName]));
+      end;
       for J := 0 to H.Body.Stmts.Count - 1 do
         EmitStmt(TASTStmt(H.Body.Stmts.Items[J]));
       EmitLine(Format('  jmp @%s', [LblEnd]));
