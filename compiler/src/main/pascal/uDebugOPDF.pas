@@ -223,8 +223,7 @@ var
 begin
   if AType = nil then
   begin
-    Result := 'Pointer';
-    Exit;
+    Exit('Pointer');
   end;
   case AType.Kind of
     tyString:

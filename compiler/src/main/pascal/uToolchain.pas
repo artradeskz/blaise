@@ -100,8 +100,7 @@ begin
   Candidate := IncludeTrailingPathDelimiter(ADir) + ABaseName;
   if FileExists(Candidate) then
   begin
-    Result := Candidate;
-    Exit;
+    Exit(Candidate);
   end;
   { Blaise Pos: -1 = not found.  `< 0` is the "not present" test. }
   if IsWindowsHost and (Pos('.exe', LowerCase(ABaseName)) < 0) then
@@ -109,8 +108,7 @@ begin
     Candidate := IncludeTrailingPathDelimiter(ADir) + ABaseName + '.exe';
     if FileExists(Candidate) then
     begin
-      Result := Candidate;
-      Exit;
+      Exit(Candidate);
     end;
   end;
   Result := '';
@@ -144,8 +142,7 @@ begin
     Hit := TrySingleName(Entry, ABaseName);
     if Hit <> '' then
     begin
-      Result := Hit;
-      Exit;
+      Exit(Hit);
     end;
   end;
 end;
@@ -181,8 +178,7 @@ begin
     EnvPath := GetEnvironmentVariable(AEnvVar);
     if (EnvPath <> '') and FileExists(EnvPath) then
     begin
-      Result := EnvPath;
-      Exit;
+      Exit(EnvPath);
     end;
   end;
   Hit := TryCandidate(ACandA);

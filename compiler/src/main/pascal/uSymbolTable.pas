@@ -731,8 +731,7 @@ begin
     E := TVTableEntry(FVTable.Items[I]);
     if SameText(E.MethName, AMethodName) then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
   end;
 end;
@@ -812,8 +811,7 @@ begin
     for I := 0 to Walk.FProperties.Count - 1 do
       if SameText(TPropertyInfo(Walk.FProperties.Items[I]).Name, AName) then
       begin
-        Result := TPropertyInfo(Walk.FProperties.Items[I]);
-        Exit;
+        Exit(TPropertyInfo(Walk.FProperties.Items[I]));
       end;
     Walk := Walk.Parent;
   end;
@@ -834,8 +832,7 @@ begin
       P := TPropertyInfo(Walk.FProperties.Items[I]);
       if (P.IndexParamName <> '') and (P.ReadMethod <> '') then
       begin
-        Result := P;
-        Exit;
+        Exit(P);
       end;
     end;
     Walk := Walk.Parent;
@@ -931,8 +928,7 @@ begin
       CurPar := CurPar + 1
     else if CurPar = AParamIndex then
     begin
-      Result := Flags[Idx] = '1';
-      Exit;
+      Exit(Flags[Idx] = '1');
     end;
     Idx := Idx + 1;
   end;
@@ -1010,11 +1006,9 @@ begin
         Tail := Tail.NextOverload;
       Tail.NextOverload := ASymbol;
       FSymbols.Add(ASymbol);  { take ownership; lookup walks the chain via Existing }
-      Result := True;
-      Exit;
+      Exit(True);
     end;
-    Result := False;
-    Exit;
+    Exit(False);
   end;
   FSymbols.Add(ASymbol);
   { Store the TSymbol pointer directly in the string list's Objects slot. }
@@ -1072,8 +1066,7 @@ begin
   for I := 0 to Members.Count - 1 do
     if SameText(Members.Strings[I], AMember) then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
   Result := -1;
 end;

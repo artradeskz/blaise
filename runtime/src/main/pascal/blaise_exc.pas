@@ -72,8 +72,7 @@ begin
   Base := _BlaiseGetMem(13);
   if Base = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   RC := Base;
   RC^ := 0;
@@ -140,8 +139,7 @@ begin
   Exc := g_current_exception;
   if Exc = nil then
   begin
-    Result := ExcStrEmpty;
-    Exit;
+    Exit(ExcStrEmpty);
   end;
   MsgSlot := Exc + 8;
   Msg := MsgSlot^;
@@ -174,8 +172,7 @@ begin
   begin
     if TI = Target then
     begin
-      Result := 1;
-      Exit;
+      Exit(1);
     end;
     ParentSlot := TI;
     TI := ParentSlot^;
@@ -202,8 +199,7 @@ begin
     begin
       if Impl^ = IntfTI then
       begin
-        Result := 1;
-        Exit;
+        Exit(1);
       end;
       Impl := Pointer(Impl) + 16;
     end;
@@ -234,8 +230,7 @@ begin
       if Impl^ = IntfTI then
       begin
         ItabSlot := Pointer(Impl) + 8;
-        Result := ItabSlot^;
-        Exit;
+        Exit(ItabSlot^);
       end;
       Impl := Pointer(Impl) + 16;
     end;

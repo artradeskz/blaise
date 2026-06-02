@@ -172,8 +172,7 @@ begin
   Base := MmapAlloc(Int64(ARENA_SIZE));
   if Base = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   A := PArena(Base);
   A^.Base := Base;
@@ -200,15 +199,13 @@ begin
     Hdr^.AllocSize := Size;
     Hdr^.Flags := FLAG_SMALL;
     A^.Offset := A^.Offset + Needed;
-    Result := Pointer(PtrUInt(Hdr) + HEADER_SIZE);
-    Exit;
+    Exit(Pointer(PtrUInt(Hdr) + HEADER_SIZE));
   end;
 
   A := AllocArena;
   if A = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   Hdr := Pointer(PtrUInt(A^.Base) + PtrUInt(A^.Offset));
   Hdr^.AllocSize := Size;
@@ -231,8 +228,7 @@ begin
     FreeLists[Idx] := Node^.Next;
     Hdr := PBlockHeader(Pointer(PtrUInt(Node) - HEADER_SIZE));
     Hdr^.AllocSize := Size;
-    Result := Pointer(Node);
-    Exit;
+    Exit(Pointer(Node));
   end;
 
   Result := ArenaAlloc(Size);
@@ -273,8 +269,7 @@ begin
       Hdr^.TotalMapped := CachedSize;
       Hdr^.AllocSize := Size;
       Hdr^.Flags := FLAG_LARGE;
-      Result := Pointer(PtrUInt(Hdr) + LARGE_HEADER);
-      Exit;
+      Exit(Pointer(PtrUInt(Hdr) + LARGE_HEADER));
     end;
     Base := _libc_mremap(Pointer(Node), CachedSize, Needed, MREMAP_MAYMOVE);
     if not MapFailed(Base) then
@@ -283,8 +278,7 @@ begin
       Hdr^.TotalMapped := Needed;
       Hdr^.AllocSize := Size;
       Hdr^.Flags := FLAG_LARGE;
-      Result := Pointer(PtrUInt(Base) + LARGE_HEADER);
-      Exit;
+      Exit(Pointer(PtrUInt(Base) + LARGE_HEADER));
     end;
     _libc_munmap(Pointer(Node), CachedSize);
   end;
@@ -293,8 +287,7 @@ begin
   Base := MmapAlloc(Total);
   if Base = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   Hdr := PLargeHeader(Base);
   Hdr^.TotalMapped := Total;
@@ -352,8 +345,7 @@ function _BlaiseGetMem(Size: Integer): Pointer;
 begin
   if Size <= 0 then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   if Size > LARGE_THRESHOLD then
     Result := LargeGetMem(Size)
@@ -380,14 +372,12 @@ var
 begin
   if Ptr = nil then
   begin
-    Result := _BlaiseGetMem(NewSize);
-    Exit;
+    Exit(_BlaiseGetMem(NewSize));
   end;
   if NewSize <= 0 then
   begin
     _BlaiseFreeMem(Ptr);
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   OldSize := GetAllocSize(Ptr);
   if (not IsLarge(Ptr)) and (NewSize <= LARGE_THRESHOLD) then
@@ -396,8 +386,7 @@ begin
     begin
       Hdr := PBlockHeader(Pointer(PtrUInt(Ptr) - HEADER_SIZE));
       Hdr^.AllocSize := NewSize;
-      Result := Ptr;
-      Exit;
+      Exit(Ptr);
     end;
   end;
   if IsLarge(Ptr) and (NewSize > LARGE_THRESHOLD) then
@@ -408,8 +397,7 @@ begin
     if NewMapped = OldMapped then
     begin
       LHdr^.AllocSize := NewSize;
-      Result := Ptr;
-      Exit;
+      Exit(Ptr);
     end;
     Base := Pointer(LHdr);
     NewBase := _libc_mremap(Base, OldMapped, NewMapped, MREMAP_MAYMOVE);
@@ -419,8 +407,7 @@ begin
       LHdr^.TotalMapped := NewMapped;
       LHdr^.AllocSize := NewSize;
       LHdr^.Flags := FLAG_LARGE;
-      Result := Pointer(PtrUInt(NewBase) + LARGE_HEADER);
-      Exit;
+      Exit(Pointer(PtrUInt(NewBase) + LARGE_HEADER));
     end;
   end;
   Result := _BlaiseGetMem(NewSize);

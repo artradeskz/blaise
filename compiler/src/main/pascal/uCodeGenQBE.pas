@@ -500,8 +500,7 @@ begin
   begin
     ExtTemp := AllocTemp;
     EmitLine(Format('  %s =l extsw %s', [ExtTemp, AArgTemp]));
-    Result := ExtTemp;
-    Exit;
+    Exit(ExtTemp);
   end;
   { Integer/Single → Double. }
   if AParamQType = 'd' then
@@ -515,8 +514,7 @@ begin
       EmitLine(Format('  %s =d exts %s', [ExtTemp, AArgTemp]))
     else
       Exit;  { unsupported conversion — leave as-is; QBE will reject if invalid }
-    Result := ExtTemp;
-    Exit;
+    Exit(ExtTemp);
   end;
   { Integer → Single, or Double → Single via truncd.  Without the d→s
     narrowing, a double-typed literal or sub-expression passed to a
@@ -563,8 +561,7 @@ begin
     FC := TFuncCallExpr(AExpr);
     if SameText(FC.Name, 'Chr') and (FC.Args.Count = 1) then
     begin
-      Result := EmitExpr(TASTExpr(FC.Args.Items[0]));
-      Exit;
+      Exit(EmitExpr(TASTExpr(FC.Args.Items[0])));
     end;
   end;
   if AExpr is TStringLiteral then
@@ -574,8 +571,7 @@ begin
     begin
       T := AllocTemp;
       EmitLine(Format('  %s =w copy %d', [T, StrAt(SL.Value, 0)]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
   end;
   Result := EmitExpr(AExpr);
@@ -893,26 +889,22 @@ begin
   if AStmt is TIfStmt then
   begin
     IfS := TIfStmt(AStmt);
-    Result := CountTryStmts(IfS.ThenStmt) + CountTryStmts(IfS.ElseStmt);
-    Exit;
+    Exit(CountTryStmts(IfS.ThenStmt) + CountTryStmts(IfS.ElseStmt));
   end;
   if AStmt is TWhileStmt then
   begin
     WhS := TWhileStmt(AStmt);
-    Result := CountTryStmts(WhS.Body);
-    Exit;
+    Exit(CountTryStmts(WhS.Body));
   end;
   if AStmt is TForStmt then
   begin
     ForS := TForStmt(AStmt);
-    Result := CountTryStmts(ForS.Body);
-    Exit;
+    Exit(CountTryStmts(ForS.Body));
   end;
   if AStmt is TForInStmt then
   begin
     FiS := TForInStmt(AStmt);
-    Result := CountTryStmts(FiS.Body);
-    Exit;
+    Exit(CountTryStmts(FiS.Body));
   end;
   if AStmt is TRepeatStmt then
   begin
@@ -929,8 +921,7 @@ begin
       Br := TCaseBranch(CsS.Branches.Items[I]);
       Result := Result + CountTryStmts(Br.Stmt);
     end;
-    Result := Result + CountTryStmts(CsS.ElseStmt);
-    Exit;
+    Exit(Result + CountTryStmts(CsS.ElseStmt));
   end;
 end;
 
@@ -1521,22 +1512,19 @@ begin
   if AStmt = nil then Exit;
   if (AStmt is TTryFinallyStmt) or (AStmt is TTryExceptStmt) then
   begin
-    Result := True;
-    Exit;
+    Exit(True);
   end;
   if AStmt is TCompoundStmt then
     for I := 0 to TCompoundStmt(AStmt).Stmts.Count - 1 do
       if StmtHasTry(TASTStmt(TCompoundStmt(AStmt).Stmts.Items[I])) then
       begin
-        Result := True;
-        Exit;
+        Exit(True);
       end;
   if AStmt is TIfStmt then
   begin
     if StmtHasTry(TIfStmt(AStmt).ThenStmt) or StmtHasTry(TIfStmt(AStmt).ElseStmt) then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   end;
   if AStmt is TWhileStmt then
@@ -1551,8 +1539,7 @@ begin
     for I := 0 to TCaseStmt(AStmt).Branches.Count - 1 do
       if StmtHasTry(TCaseBranch(TCaseStmt(AStmt).Branches.Items[I]).Stmt) then
       begin
-        Result := True;
-        Exit;
+        Exit(True);
       end;
 end;
 
@@ -1565,8 +1552,7 @@ begin
   for I := 0 to ABlock.Stmts.Count - 1 do
     if StmtHasTry(TASTStmt(ABlock.Stmts.Items[I])) then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
 end;
 
@@ -3320,8 +3306,7 @@ begin
     IE := TIdentExpr(AExpr);
     if IE.IsNoArgFuncCall or IE.IsImplicitSelfMethod then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   end;
   { Constructor calls via TFieldAccessExpr (TFoo.Create) — do NOT own }
@@ -3334,8 +3319,7 @@ begin
       Field-backed reads (read FX) emit a plain load and do NOT own. }
     if (FA.PropRead <> nil) and (FA.PropRead.ReadMethod <> '') then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   end;
   { TMethodCallExpr: constructor calls do NOT own; all other method calls DO }
@@ -3914,8 +3898,7 @@ begin
       end;
       Loaded := AllocTemp;
       EmitLine(Format('  %s =l loadl %s', [Loaded, SelfT]));
-      Result := Loaded;
-      Exit;
+      Exit(Loaded);
     end;
     if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
     begin
@@ -3942,8 +3925,7 @@ begin
     { Property-backed access: the result is already a pointer — delegate to EmitExpr }
     if Fld.PropRead <> nil then
     begin
-      Result := EmitExpr(Fld);
-      Exit;
+      Exit(EmitExpr(Fld));
     end;
     if Fld.Base <> nil then
       Base := EmitInstancePtr(Fld.Base)
@@ -4012,8 +3994,7 @@ begin
   if (AExpr.ResolvedType <> nil) and
      (AExpr.ResolvedType.Kind in [tyClass, tyInterface, tyPointer, tyRecord]) then
   begin
-    Result := EmitExpr(AExpr);
-    Exit;
+    Exit(EmitExpr(AExpr));
   end;
   raise ECodeGenError.Create('EmitInstancePtr: unsupported base expression');
 end;
@@ -4083,15 +4064,13 @@ var
 begin
   if AExpr is TIdentExpr then
   begin
-    Result := EmitVarArgAddr(TIdentExpr(AExpr));
-    Exit;
+    Exit(EmitVarArgAddr(TIdentExpr(AExpr)));
   end;
   if AExpr is TDerefExpr then
   begin
     { P^ as L-value: the pointer's value IS the address. }
     Deref := TDerefExpr(AExpr);
-    Result := EmitExpr(Deref.Expr);
-    Exit;
+    Exit(EmitExpr(Deref.Expr));
   end;
   if AExpr is TFieldAccessExpr then
   begin
@@ -6765,8 +6744,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =w copy %d',
           [T, TASTExpr(FC.Args.Items[0]).ResolvedType.ByteSize]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { GetMem(N) → _BlaiseGetMem(N) → pointer.  _BlaiseGetMem takes
@@ -6776,8 +6754,7 @@ begin
         ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_BlaiseGetMem(w %s)', [T, ArgTemp]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { ReallocMem(P, N) → _BlaiseReallocMem(P, N) → pointer.  Size arg
@@ -6788,8 +6765,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_BlaiseReallocMem(l %s, w %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Open-array intrinsics }
@@ -6839,8 +6815,7 @@ begin
             EmitLine(Format('  %s =w copy %s', [T, R]));
           end;
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Low') then
@@ -6861,8 +6836,7 @@ begin
         else
           EmitLine(Format('  %s =w copy 0', [T]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'PChar') then
@@ -6883,8 +6857,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StringFromPChar(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Built-in string/array length }
@@ -6920,8 +6893,7 @@ begin
           L := EmitExpr(TASTExpr(FC.Args.Items[0]));
           EmitLine(Format('  %s =w call $_StringLength(l %s)', [T, L]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Pos') then
@@ -6930,8 +6902,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StringPos(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'PosEx') then
@@ -6942,8 +6913,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StringPosEx(l %s, l %s, w %s)',
           [T, L, R, ArgTemp]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Copy') then
@@ -6954,8 +6924,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StringCopy(l %s, w %s, w %s)',
           [T, L, R, ArgTemp]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'UpperCase') then
@@ -6963,8 +6932,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StringUpperCase(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'LowerCase') then
@@ -6972,8 +6940,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StringLowerCase(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Trim') then
@@ -6981,8 +6948,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StringTrim(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'SameText') then
@@ -6991,8 +6957,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StringSameText(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Assigned') then
@@ -7001,8 +6966,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w cnel %s, 0', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'IntToStr') then
@@ -7030,8 +6994,7 @@ begin
           T := AllocTemp;
           EmitLine(Format('  %s =l call $_IntToStr(w %s)', [T, L]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Int64ToStr') then
@@ -7039,8 +7002,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_Int64ToStr(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'UInt64ToStr') then
@@ -7048,8 +7010,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_UInt64ToStr(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'DoubleToStr') then
@@ -7057,8 +7018,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_DoubleToStr(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'SingleToStr') then
@@ -7066,8 +7026,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_SingleToStr(s %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'StrToDouble') then
@@ -7075,8 +7034,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =d call $_StrToDouble(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Abs') then
@@ -7091,8 +7049,7 @@ begin
           's': EmitLine(Format('  %s =s call $fabsf(s %s)',     [T, L]));
         else   EmitLine(Format('  %s =w call $_AbsInt(w %s)',   [T, L]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Math builtins — Sqrt, Ceil, Floor, Round, Trunc, Ln, Log2, Log10,
@@ -7111,8 +7068,7 @@ begin
           EmitLine(Format('  %s =s call $sqrtf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $sqrt(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Ceil') then
@@ -7131,8 +7087,7 @@ begin
           EmitLine(Format('  %s =d call $ceil(d %s)', [T, L]));
           EmitLine(Format('  %s =w dtosi %s', [R, T]));
         end;
-        Result := R;
-        Exit;
+        Exit(R);
       end;
 
       if SameText(FC.Name, 'Floor') then
@@ -7151,8 +7106,7 @@ begin
           EmitLine(Format('  %s =d call $floor(d %s)', [T, L]));
           EmitLine(Format('  %s =w dtosi %s', [R, T]));
         end;
-        Result := R;
-        Exit;
+        Exit(R);
       end;
 
       if SameText(FC.Name, 'Trunc') then
@@ -7164,8 +7118,7 @@ begin
           EmitLine(Format('  %s =w stosi %s', [T, L]))
         else
           EmitLine(Format('  %s =w dtosi %s', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Round') then
@@ -7186,8 +7139,7 @@ begin
           EmitLine(Format('  %s =d call $round(d %s)', [T, L]));
           EmitLine(Format('  %s =w dtosi %s', [R, T]));
         end;
-        Result := R;
-        Exit;
+        Exit(R);
       end;
 
       if SameText(FC.Name, 'Ln') then
@@ -7199,8 +7151,7 @@ begin
           EmitLine(Format('  %s =s call $logf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $log(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Log2') then
@@ -7212,8 +7163,7 @@ begin
           EmitLine(Format('  %s =s call $log2f(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $log2(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Log10') then
@@ -7225,8 +7175,7 @@ begin
           EmitLine(Format('  %s =s call $log10f(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $log10(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Power') then
@@ -7235,8 +7184,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =d call $pow(d %s, d %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Sin') then
@@ -7248,8 +7196,7 @@ begin
           EmitLine(Format('  %s =s call $sinf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $sin(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Cos') then
@@ -7261,8 +7208,7 @@ begin
           EmitLine(Format('  %s =s call $cosf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $cos(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Tan') then
@@ -7274,8 +7220,7 @@ begin
           EmitLine(Format('  %s =s call $tanf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $tan(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'ArcTan') then
@@ -7287,8 +7232,7 @@ begin
           EmitLine(Format('  %s =s call $atanf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $atan(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'ArcTan2') then
@@ -7301,8 +7245,7 @@ begin
           EmitLine(Format('  %s =s call $atan2f(s %s, s %s)', [T, L, R]))
         else
           EmitLine(Format('  %s =d call $atan2(d %s, d %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'ArcSin') then
@@ -7314,8 +7257,7 @@ begin
           EmitLine(Format('  %s =s call $asinf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $asin(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'ArcCos') then
@@ -7327,8 +7269,7 @@ begin
           EmitLine(Format('  %s =s call $acosf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $acos(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Sinh') then
@@ -7340,8 +7281,7 @@ begin
           EmitLine(Format('  %s =s call $sinhf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $sinh(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Cosh') then
@@ -7353,8 +7293,7 @@ begin
           EmitLine(Format('  %s =s call $coshf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $cosh(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'Tanh') then
@@ -7366,8 +7305,7 @@ begin
           EmitLine(Format('  %s =s call $tanhf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =d call $tanh(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'IsNaN') then
@@ -7379,8 +7317,7 @@ begin
           EmitLine(Format('  %s =w call $__isnanf(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =w call $__isnan(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name, 'IsInfinite') then
@@ -7392,8 +7329,7 @@ begin
           EmitLine(Format('  %s =w call $__isinff(s %s)', [T, L]))
         else
           EmitLine(Format('  %s =w call $__isinf(d %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'StrToInt') then
@@ -7401,8 +7337,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StrToInt(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'MethodAddress') then
@@ -7411,8 +7346,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_MethodAddress(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { HasClassAttribute(AClass, AAttrClass): Boolean — query attribute RTTI.
@@ -7424,8 +7358,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_HasClassAttribute(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { ClassCreate(Cls, ...args): runtime equivalent of TFoo.Create(args).
@@ -7453,8 +7386,7 @@ begin
           EmitLine(Format('  call $%s(%s)',
             [MethodEmitName(MDecl, MDecl.OwnerTypeName, 'Create'), ArgLine]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'StrToInt64') then
@@ -7462,8 +7394,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StrToInt64(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Format(fmt, arg0, arg1, ...) → stack array of (tag, value) pairs
@@ -7530,8 +7461,7 @@ begin
         end;
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_StringFormatN(l %s, l %s, w %d)', [T, L, FmtArrTemp, FmtArgCount]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'OrdAt') then
@@ -7540,8 +7470,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_OrdAt(l %s, w %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Ord') then
@@ -7554,8 +7483,7 @@ begin
           EmitLine(Format('  %s =w call $_OrdAt(l %s, w 0)', [T, L]))
         else
           EmitLine(Format('  %s =w copy %s', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Chr') then
@@ -7563,8 +7491,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_Chr(w %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'UpCase') then
@@ -7579,8 +7506,7 @@ begin
         end;
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_UpCase(w %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'CompareStr') then
@@ -7589,8 +7515,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StringCompare(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'CompareText') then
@@ -7599,8 +7524,7 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StringCompareText(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { CLI arguments }
@@ -7608,32 +7532,28 @@ begin
       begin
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_ParamCount()', [T]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'GetProcessID') then
       begin
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_GetProcessID()', [T]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'GetTempDir') then
       begin
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_GetTempDir()', [T]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'GetCurrentDir') then
       begin
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_GetCurrentDir()', [T]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'GetTempFileName') then
@@ -7642,8 +7562,7 @@ begin
         R       := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_GetTempFileName(l %s, l %s)', [T, L, R]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ParamStr') then
@@ -7651,8 +7570,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ParamStr(w %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { File I/O functions }
@@ -7661,8 +7579,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ReadFile(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'FileExists') then
@@ -7670,8 +7587,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_FileExists(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'DirectoryExists') then
@@ -7679,8 +7595,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_DirectoryExists(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ForceDirectories') then
@@ -7688,8 +7603,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_ForceDirectories(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Environment and process }
@@ -7698,16 +7612,14 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_GetEnvVar(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'CurrentExceptionMessage') then
       begin
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_CurrentExceptionMessage()', [T]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'Exec') then
@@ -7715,8 +7627,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_Exec(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { File path manipulation }
@@ -7726,8 +7637,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ChangeFileExt(l %s, l %s)',
           [T, L, EmitExpr(TASTExpr(FC.Args.Items[1]))]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ExtractFileName') then
@@ -7735,8 +7645,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ExtractFileName(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ExtractFilePath') then
@@ -7744,8 +7653,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ExtractFilePath(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ExtractFileDir') then
@@ -7753,8 +7661,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ExtractFileDir(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ExtractFileExt') then
@@ -7762,8 +7669,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ExtractFileExt(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ExcludeTrailingPathDelimiter') then
@@ -7771,8 +7677,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ExcludeTrailingPathDelimiter(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'IncludeTrailingPathDelimiter') then
@@ -7780,8 +7685,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_IncludeTrailingPathDelimiter(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'RenameFile') then
@@ -7790,8 +7694,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_RenameFile(l %s, l %s)',
           [T, L, EmitExpr(TASTExpr(FC.Args.Items[1]))]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'SetCurrentDir') then
@@ -7799,8 +7702,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_SetCurrentDir(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Process management built-ins }
@@ -7808,8 +7710,7 @@ begin
       begin
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ProcessCreate()', [T]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ProcessRunning') then
@@ -7817,8 +7718,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_ProcessRunning(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ProcessReadOutput') then
@@ -7826,8 +7726,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ProcessReadOutput(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       if SameText(FC.Name,'ProcessExitCode') then
@@ -7835,8 +7734,7 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_ProcessExitCode(l %s)', [T, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       { Indirect call through a procedural-typed variable: F() / F(args)
@@ -7924,8 +7822,7 @@ begin
           else
             EmitLine(Format('  %s =l copy %s', [T, ArgTemp]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
 
       MDecl    := TMethodDecl(FC.ResolvedDecl);
@@ -7942,8 +7839,7 @@ begin
       begin
         if TryEmitInlineCall(FC, T) then
         begin
-          Result := T;
-          Exit;
+          Exit(T);
         end;
       end;
 
@@ -7960,8 +7856,7 @@ begin
         if RT.TotalSize > 0 then
           EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
         EmitRecordCallSret(AExpr, SretBuf);
-        Result := SretBuf;
-        Exit;
+        Exit(SretBuf);
       end;
       if FC.IsImplicitSelfMethod then
       begin
@@ -8017,8 +7912,7 @@ begin
         end;
         T := AllocTemp;
         EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
-        Result := MaybeNormalizeExtReturn(T, MDecl);
-        Exit;
+        Exit(MaybeNormalizeExtReturn(T, MDecl));
       end;
       if MDecl.IsExternal and (MDecl.ExternalName <> '') then
         FuncName := '$' + MDecl.ExternalName
@@ -8139,8 +8033,7 @@ begin
       if QType = '' then QType := 'w';
       T := AllocTemp;
       EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FPtrTemp, ArgLine]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     RT := TRecordTypeDesc(MCallExpr.ResolvedClassType);
@@ -8193,8 +8086,7 @@ begin
           ArgTemps.Free();
         end;
       end;
-      Result := SelfTemp;
-      Exit;
+      Exit(SelfTemp);
     end;
 
     { Built-in InheritsFrom: calls $_InheritsFrom(child_ti, parent_ti).
@@ -8233,8 +8125,7 @@ begin
       T := AllocTemp;
       EmitLine(Format('  %s =w call $_InheritsFrom(l %s, l %s)',
         [T, SelfTemp, ArgTemp]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     { Built-in TObject.ToString: virtual dispatch through vtable slot 1.
@@ -8265,8 +8156,7 @@ begin
       EmitLine(Format('  %s =l add %s, 16', [ArgTemp, VTblTemp]));
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       EmitLine(Format('  %s =l call %s(l %s)', [T, FPtrTemp, SelfTemp]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     MDecl     := TMethodDecl(MCallExpr.ResolvedMethod);
@@ -8287,8 +8177,7 @@ begin
       if RT.TotalSize > 0 then
         EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
       EmitRecordCallSret(AExpr, SretBuf);
-      Result := SretBuf;
-      Exit;
+      Exit(SretBuf);
     end;
 
     { Load the object pointer (Self): either from a named variable or from
@@ -8362,16 +8251,14 @@ begin
       method's return value (T) is independent and already owns its own ref. }
     if (MCallExpr.ObjExpr <> nil) and ExprOwnsRef(MCallExpr.ObjExpr) then
       EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
-    Result := T;
-    Exit;
+    Exit(T);
   end;
 
   if AExpr is TNilLiteral then
   begin
     T := AllocTemp;
     EmitLine(Format('  %s =l copy 0', [T]));
-    Result := T;
-    Exit;
+    Exit(T);
   end;
 
   if AExpr is TIndirectFuncCallExpr then
@@ -8480,8 +8367,7 @@ begin
       EmitLine(Format('  %s =l add %s, 16', [T, Ptr]));
       Ptr := AllocTemp;
       EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
-      Result := Ptr;
-      Exit;
+      Exit(Ptr);
     end;
 
     { Built-in: Obj.ClassType — returns the typeinfo pointer (the value
@@ -8503,8 +8389,7 @@ begin
       { typeinfo pointer at vtable[0] }
       Ptr := AllocTemp;
       EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
-      Result := Ptr;
-      Exit;
+      Exit(Ptr);
     end;
 
     { Built-in: Obj.ToString — virtual dispatch via vtable slot 1.
@@ -8528,8 +8413,7 @@ begin
       EmitLine(Format('  %s =l add %s, 16', [ArgTemp, VTblTemp]));
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       EmitLine(Format('  %s =l call %s(l %s)', [T, FPtrTemp, L]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     { Chained access: compute base storage pointer, then load the field from
@@ -8596,8 +8480,7 @@ begin
         else
           EmitLine(Format('  %s =%s call $%s_%s(l %s)',
             [T, QType, FldAccess.PropOwnerType, FldAccess.PropRead.ReadMethod, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
       if FldAccess.FieldInfo = nil then
         raise ECodeGenError.Create(Format(
@@ -8614,8 +8497,7 @@ begin
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
       T         := AllocTemp;
       EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, Ptr]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
     if FldAccess.IsImplicitSelf then
     begin
@@ -8682,8 +8564,7 @@ begin
           EmitLine(Format('  %s =%s call $%s_%s(l %s)',
             [T, QType, QBEMangle(FldAccess.PropOwnerType),
              FldAccess.PropRead.ReadMethod, L]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
       if FldAccess.FieldInfo.Offset > 0 then
       begin
@@ -8698,8 +8579,7 @@ begin
       if (FldAccess.FieldInfo.TypeDesc.Kind = tyProcedural) and
          TProceduralTypeDesc(FldAccess.FieldInfo.TypeDesc).IsMethodPtr then
       begin
-        Result := Ptr;
-        Exit;
+        Exit(Ptr);
       end;
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -8815,11 +8695,9 @@ begin
           T     := AllocTemp;
           LoadInstr := LoadInstrFor(SAT.ElementType);
           EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, L]));
-          Result := T;
-          Exit;
+          Exit(T);
         end;
-        Result := '$' + FldAccess.ConstArraySymbol;
-        Exit;
+        Exit('$' + FldAccess.ConstArraySymbol);
       end
       else if FldAccess.ResolvedType.Kind = tyString then
       begin
@@ -8950,8 +8828,7 @@ begin
       if (FldAccess.FieldInfo.TypeDesc.Kind = tyProcedural) and
          TProceduralTypeDesc(FldAccess.FieldInfo.TypeDesc).IsMethodPtr then
       begin
-        Result := Ptr;
-        Exit;
+        Exit(Ptr);
       end;
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -8988,8 +8865,7 @@ begin
       if (FldAccess.FieldInfo.TypeDesc.Kind = tyProcedural) and
          TProceduralTypeDesc(FldAccess.FieldInfo.TypeDesc).IsMethodPtr then
       begin
-        Result := Ptr;
-        Exit;
+        Exit(Ptr);
       end;
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -9012,8 +8888,7 @@ begin
       begin
         QType := QbeTypeOf(AExpr.ResolvedType);
         EmitLine(Format('  %s =%s copy %s', [T, QType, ArgTemp]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
       if SameText(TIdentExpr(AExpr).Name, 'Result') then
       begin
@@ -9026,8 +8901,7 @@ begin
         else
           EmitLine(Format('  %s =l loadl %s', [T, InlineResultTemp]));
         end;
-        Result := T;
-        Exit;
+        Exit(T);
       end;
     end;
 
@@ -9068,8 +8942,7 @@ begin
         else
           EmitLine(Format('  %s =l loadl %s', [T, SelfT]));
       end;
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     if TIdentExpr(AExpr).IsImplicitSelfMethod then
@@ -9146,8 +9019,7 @@ begin
       begin
         { Aggregate: %_cap_Name is the storage address — return directly. }
         EmitLine(Format('  %s =l copy %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
-        Result := T;
-        Exit;
+        Exit(T);
       end;
       case QType of
         'l': EmitLine(Format('  %s =l loadl %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
@@ -9164,8 +9036,7 @@ begin
       { Var param of aggregate type: the param slot already holds the address
         of the caller's storage — load and return that as the storage address. }
       EmitLine(Format('  %s =l loadl %%_var_%s', [T, TIdentExpr(AExpr).Name]));
-      Result := T;
-      Exit;
+      Exit(T);
     end
     else if TIdentExpr(AExpr).IsVarParam then
     begin
@@ -9182,8 +9053,7 @@ begin
             (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
     begin
       { Aggregate variable — return its storage address directly (no load). }
-      Result := VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal);
-      Exit;
+      Exit(VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal));
     end
     else if not TIdentExpr(AExpr).IsGlobal and
             IsPromoted(TIdentExpr(AExpr).Name) then
@@ -9255,8 +9125,7 @@ begin
         else
           EmitLine(Format('  %s =w or %s, %s', [T, L, R]));
       end;
-      Result := T;
-      Exit;
+      Exit(T);
     end;
     { Short-circuit boolean and/or: evaluate LHS, then skip RHS when the
       result is already determined.  FPC and Delphi use short-circuit by
@@ -9287,8 +9156,7 @@ begin
       T := AllocTemp;
       EmitLine(Format('  %s =w phi @%s %s, @%s %s',
         [T, ArgTemp, L, SelfTemp, R]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
     L := EmitExpr(BinExpr.Left);
     R := EmitExpr(BinExpr.Right);
@@ -9313,8 +9181,7 @@ begin
          (BinExpr.Right is TFuncCallExpr) or
          (BinExpr.Right is TMethodCallExpr) then
         EmitLine(Format('  call $_StringRelease(l %s)', [R]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
     { Pointer arithmetic: Pointer/PChar +/- Integer — result is same pointer type }
     if (BinExpr.Op in [boAdd, boSub]) and
@@ -9327,8 +9194,7 @@ begin
         EmitLine(Format('  %s =l add %s, %s', [T, L, ArgTemp]))
       else
         EmitLine(Format('  %s =l sub %s, %s', [T, L, ArgTemp]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
     { String equality/inequality: content comparison via RTL helper }
     if (BinExpr.Left.ResolvedType <> nil) and
@@ -9342,8 +9208,7 @@ begin
         EmitLine(Format('  %s =w ceqw %s, 0', [ArgTemp, T]));
         T := ArgTemp;
       end;
-      Result := T;
-      Exit;
+      Exit(T);
     end;
     { Set membership: elem in SetVar — (set >> ord(elem)) & 1 }
     if BinExpr.Op = boIn then
@@ -9351,8 +9216,7 @@ begin
       ArgTemp := AllocTemp;
       EmitLine(Format('  %s =w shr %s, %s', [ArgTemp, R, L]));
       EmitLine(Format('  %s =w and %s, 1', [T, ArgTemp]));
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     { Set arithmetic: union, difference, intersection }
@@ -9378,8 +9242,7 @@ begin
         raise ECodeGenError.Create(Format(
           'Operator not supported for set types at line %d', [BinExpr.Line]));
       end;
-      Result := T;
-      Exit;
+      Exit(T);
     end;
 
     { Use long (pointer) comparison instructions when either operand is
@@ -9833,8 +9696,7 @@ begin
   if AExpr.OutVarName = '' then
   begin
     { 2-arg form — just return the Boolean result }
-    Result := OkTemp;
-    Exit;
+    Exit(OkTemp);
   end;
 
   { 3-arg form — on success populate the out-var's fat pointer }
@@ -10561,8 +10423,7 @@ begin
   if (AExpr.StrExpr is TFieldAccessExpr) and
      (TFieldAccessExpr(AExpr.StrExpr).PropRead <> nil) then
   begin
-    Result := EmitExpr(AExpr.StrExpr);
-    Exit;
+    Exit(EmitExpr(AExpr.StrExpr));
   end;
   { Static array element read: A[I] where A: array[L..H] of T }
   if AExpr.StrExpr.ResolvedType.Kind = tyStaticArray then
@@ -10588,15 +10449,13 @@ begin
     { Record elements: return address directly — records are by-value via pointer }
     if SAT.ElementType.Kind = tyRecord then
     begin
-      Result := ElemPtr;
-      Exit;
+      Exit(ElemPtr);
     end;
     QLoad := LoadInstrFor(SAT.ElementType);
     QType := QbeTypeOf(SAT.ElementType);
     ByteVal := AllocTemp;
     EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
-    Result := ByteVal;
-    Exit;
+    Exit(ByteVal);
   end;
 
   { Open-array element access: A[I] where A: array of T }
@@ -10616,8 +10475,7 @@ begin
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
     EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
     EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
-    Result := ByteVal;
-    Exit;
+    Exit(ByteVal);
   end;
 
   { Dynamic array element read: A[I] — data_ptr + I * ElemSize }
@@ -10636,8 +10494,7 @@ begin
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
     EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
     EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
-    Result := ByteVal;
-    Exit;
+    Exit(ByteVal);
   end;
 
   { PChar byte access: P[I] (0-based) — loadub at ptr + I }
@@ -10651,8 +10508,7 @@ begin
     EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
     EmitLine(Format('  %s =l add %s, %s', [BytePtr, StrPtr, IdxL]));
     EmitLine(Format('  %s =w loadub %s', [ByteVal, BytePtr]));
-    Result := ByteVal;
-    Exit;
+    Exit(ByteVal);
   end;
 
   { String byte access: S[N] (0-based).
@@ -10711,8 +10567,7 @@ begin
       else
         EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
       EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
-      Result := ElemPtr;
-      Exit;
+      Exit(ElemPtr);
     end;
     if Sub.StrExpr.ResolvedType.Kind = tyOpenArray then
     begin
@@ -10726,8 +10581,7 @@ begin
       EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
       EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
       EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
-      Result := ElemPtr;
-      Exit;
+      Exit(ElemPtr);
     end;
     { Dynamic-array element address: @A[I] — EmitExpr on a dyn-array var
       already returns the heap data pointer, so the address computation
@@ -10743,8 +10597,7 @@ begin
       EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
       EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
       EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
-      Result := ElemPtr;
-      Exit;
+      Exit(ElemPtr);
     end;
   end;
   if AExpr.Expr is TIdentExpr then
@@ -10755,8 +10608,7 @@ begin
     if (TIdentExpr(AExpr.Expr).ResolvedType <> nil) and
        (TIdentExpr(AExpr.Expr).ResolvedType.Kind = tyProcedural) then
     begin
-      Result := '$' + TIdentExpr(AExpr.Expr).Name;
-      Exit;
+      Exit('$' + TIdentExpr(AExpr.Expr).Name);
     end;
     { @VarParam: the address is the dereferenced param slot value, not the
       local slot itself.  Without this, @ARun on a var-record param yields
@@ -10767,8 +10619,7 @@ begin
       EmitLine(Format('  %s =l loadl %s',
         [StrPtr, VarRef(TIdentExpr(AExpr.Expr).Name,
                         TIdentExpr(AExpr.Expr).IsGlobal)]));
-      Result := StrPtr;
-      Exit;
+      Exit(StrPtr);
     end;
     Result := VarRef(TIdentExpr(AExpr.Expr).Name,
                      TIdentExpr(AExpr.Expr).IsGlobal);
@@ -10803,8 +10654,7 @@ begin
       EmitLine(Format('  %s =l loadl %s', [ObjPtr, VarRef(FldExpr.RecordName, FldExpr.IsGlobal)]));
     end;
     EmitLine(Format('  storel %s, %s', [ObjPtr, DataSlot]));
-    Result := MBlock;
-    Exit;
+    Exit(MBlock);
   end;
   { Fallthrough: field access, pointer deref, etc. — delegate to EmitLValueAddr
     which already handles TFieldAccessExpr, TDerefExpr, and TIdentExpr. }
@@ -11014,8 +10864,7 @@ begin
   { Set literal: emit as bitmask constant rather than a memory buffer }
   if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tySet) then
   begin
-    Result := EmitSetLiteralExpr(AExpr);
-    Exit;
+    Exit(EmitSetLiteralExpr(AExpr));
   end;
 
   OAType   := TOpenArrayTypeDesc(AExpr.ResolvedType);

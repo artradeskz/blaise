@@ -411,8 +411,7 @@ var
 begin
   if S1 = S2 then
   begin
-    Result := 1;
-    Exit;
+    Exit(1);
   end;
   if S1 = nil then
     Len1 := 0
@@ -430,13 +429,11 @@ begin
   end;
   if Len1 <> Len2 then
   begin
-    Result := 0;
-    Exit;
+    Exit(0);
   end;
   if Len1 = 0 then
   begin
-    Result := 1;
-    Exit;
+    Exit(1);
   end;
   C1 := PChar(S1);    { data IS the pointer }
   C2 := PChar(S2);
@@ -506,8 +503,7 @@ var
 begin
   if Self = nil then
     begin
-    Result := nil;
-    Exit;
+    Exit(nil);
     end;
   Slot   := Self;         { instance: first 8 bytes = vptr }
   VTable := Slot^;        { VTable points to vtable data }
@@ -561,8 +557,7 @@ begin
         Entry   := Pointer(Entry) + 8;
         if _StringEquals(EntName, Name) <> 0 then
         begin
-          Result := EntAddr;
-          Exit;
+          Exit(EntAddr);
         end;
       end;
     end;
@@ -588,8 +583,7 @@ begin
   begin
     if Current = AParent then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
     TI      := Current;   { typeinfo[0] = parent pointer }
     Current := TI^;
@@ -690,8 +684,7 @@ begin
       begin
         if Entry^ = AAttrTI then
         begin
-          Result := True;
-          Exit;
+          Exit(True);
         end;
         Entry := Pointer(Entry) + 8;
       end;

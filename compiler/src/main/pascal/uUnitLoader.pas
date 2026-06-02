@@ -68,15 +68,13 @@ begin
     Path := Base + LowerCase(AName) + '.pas';
     if FileExists(Path) then
     begin
-      Result := Path;
-      Exit;
+      Exit(Path);
     end;
     { Fallback: exact case as written in the uses clause }
     Path := Base + AName + '.pas';
     if FileExists(Path) then
     begin
-      Result := Path;
-      Exit;
+      Exit(Path);
     end;
   end;
   Result := '';

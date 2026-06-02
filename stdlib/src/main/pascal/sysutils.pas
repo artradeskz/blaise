@@ -81,8 +81,7 @@ var
 begin
   if APath = '' then
   begin
-    Result := GetCurrentDir;
-    Exit;
+    Exit(GetCurrentDir);
   end;
 
   { Determine base: absolute or relative }

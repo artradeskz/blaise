@@ -1050,8 +1050,7 @@ begin
   begin
     libc_close(P^.PipeFd);
     P^.PipeFd := -1;
-    Result := StrAlloc(0);
-    Exit;
+    Exit(StrAlloc(0));
   end;
   R := StrAlloc(Integer(N));
   if R <> nil then

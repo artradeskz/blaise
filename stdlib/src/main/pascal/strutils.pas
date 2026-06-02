@@ -310,8 +310,7 @@ begin
   for I := 0 to High(Arr) do
     if Arr[I] = Str then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
   Result := -1;
 end;
@@ -328,8 +327,7 @@ begin
     EL := LowerCase(Arr[I]);
     if EL = SL then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
   end;
   Result := -1;
@@ -354,8 +352,7 @@ begin
   NewLen := Length(NewP);
   if (SLen = 0) or (OldLen = 0) then
   begin
-    Result := S;
-    Exit;
+    Exit(S);
   end;
   SP := PChar(S);
   OP := PChar(OldP);
@@ -421,8 +418,7 @@ var
 begin
   if (Count <= 0) or (Length(S) = 0) then
   begin
-    Result := '';
-    Exit;
+    Exit('');
   end;
   SB := TStringBuilder.Create;
   for I := 1 to Count do
@@ -501,8 +497,7 @@ begin
   Len := Length(S);
   if Len >= Width then
   begin
-    Result := S;
-    Exit;
+    Exit(S);
   end;
   PadCount := Width - Len;
   SB := TStringBuilder.Create;
@@ -521,8 +516,7 @@ begin
   Len := Length(S);
   if Len >= Width then
   begin
-    Result := S;
-    Exit;
+    Exit(S);
   end;
   PadCount := Width - Len;
   SB := TStringBuilder.Create;
@@ -604,8 +598,7 @@ var
 begin
   if High(Parts) < 0 then
   begin
-    Result := '';
-    Exit;
+    Exit('');
   end;
   SB := TStringBuilder.Create;
   for I := 0 to High(Parts) do

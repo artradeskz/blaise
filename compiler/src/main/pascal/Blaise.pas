@@ -175,8 +175,7 @@ begin
     Arg := ParamStr(I);
     if (Length(Arg) >= 2) and (StrAt(Arg, 0) = Ord('-')) and (StrAt(Arg, 1) <> Ord('-')) then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   end;
 end;

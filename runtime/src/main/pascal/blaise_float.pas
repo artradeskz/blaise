@@ -54,8 +54,7 @@ begin
   Base := _BlaiseGetMem(BLAISE_STR_HDR + Cap);
   if Base = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   RC := Base;        RC^ := 1;
   LN := Base + 4;    LN^ := Len;
@@ -123,8 +122,7 @@ var
 begin
   if X = 0 then
   begin
-    Result := 64;
-    Exit;
+    Exit(64);
   end;
   N := 0;
   if (X shr 32) = 0 then begin N := N + 32; X := X shl 32; end;
@@ -645,8 +643,7 @@ var
 begin
   if E = 0 then
   begin
-    Result := 1.0;
-    Exit;
+    Exit(1.0);
   end;
   if E < 0 then
     N := -E
@@ -682,8 +679,7 @@ var
 begin
   if S = nil then
   begin
-    Result := 0.0;
-    Exit;
+    Exit(0.0);
   end;
   P := PChar(S);
   I := 0;
@@ -710,14 +706,12 @@ begin
       Bits := Int64($FFF0000000000000)
     else
       Bits := Int64($7FF0000000000000);
-    Result := BitsToDouble(Bits);
-    Exit;
+    Exit(BitsToDouble(Bits));
   end;
   if (C = 110) or (C = 78) then
   begin
     Bits := Int64($7FF8000000000000);
-    Result := BitsToDouble(Bits);
-    Exit;
+    Exit(BitsToDouble(Bits));
   end;
 
   { Parse mantissa digits }

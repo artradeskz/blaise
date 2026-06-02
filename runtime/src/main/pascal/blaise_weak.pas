@@ -85,16 +85,14 @@ begin
   begin
     if E^.Target = ATarget then
     begin
-      Result := E;
-      Exit;
+      Exit(E);
     end;
     E := E^.Next;
   end;
   E := PWeakEntry(_BlaiseGetMem(24));
   if E = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   E^.Target := ATarget;
   E^.Slots := nil;

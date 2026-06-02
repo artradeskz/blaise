@@ -248,8 +248,7 @@ var
 begin
   if SameText(AAttrName, ACanonical) then
   begin
-    Result := True;
-    Exit;
+    Exit(True);
   end;
   Suffix := ACanonical + 'Attribute';
   Result := SameText(AAttrName, Suffix);
@@ -261,14 +260,12 @@ var
 begin
   if AAttrs = nil then
   begin
-    Result := False;
-    Exit;
+    Exit(False);
   end;
   for I := 0 to AAttrs.Count - 1 do
     if AttrMatches(AAttrs.Strings[I], 'Weak') then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   Result := False;
 end;
@@ -279,14 +276,12 @@ var
 begin
   if AAttrs = nil then
   begin
-    Result := False;
-    Exit;
+    Exit(False);
   end;
   for I := 0 to AAttrs.Count - 1 do
     if AttrMatches(AAttrs.Strings[I], 'Unretained') then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   Result := False;
 end;
@@ -307,8 +302,7 @@ begin
   begin
     if SameText(Walk.Name, 'TCustomAttribute') then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
     Walk := Walk.Parent;
   end;
@@ -325,8 +319,7 @@ begin
   if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) and
      IsCustomAttributeClass(ARawName) then
   begin
-    Result := ARawName;
-    Exit;
+    Exit(ARawName);
   end;
   Sym := FTable.Lookup(ARawName + 'Attribute');
   if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) and
@@ -424,8 +417,7 @@ begin
   begin
     if Walk = AExpected then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
     Walk := Walk.Parent;
   end;
@@ -1414,14 +1406,12 @@ begin
   for I := 0 to AParamNames.Count - 1 do
     if SameText(Result, AParamNames.Strings[I]) then
     begin
-      Result := AArgs.Strings[I];
-      Exit;
+      Exit(AArgs.Strings[I]);
     end;
   { Prefix caret: ^T → ^Integer, ^^T → ^^Integer, etc. }
   if (Length(Result) > 0) and (StrAt(Result, 0) = Ord('^')) then
   begin
-    Result := '^' + Self.SubstTypeParam(StrCopyTail(Result, 1), AParamNames, AArgs);
-    Exit;
+    Exit('^' + Self.SubstTypeParam(StrCopyTail(Result, 1), AParamNames, AArgs));
   end;
   { Generic instantiation: SomeName<T,...> — substitute each type argument }
   BrOpen := StrPos('<', Result);
@@ -1856,8 +1846,7 @@ begin
     Sym := FTable.Lookup(ATypeName);
     if (Sym <> nil) and (Sym.TypeDesc is TInterfaceTypeDesc) then
     begin
-      Result := TInterfaceTypeDesc(Sym.TypeDesc);
-      Exit;
+      Exit(TInterfaceTypeDesc(Sym.TypeDesc));
     end;
 
     { Build mangled name: IEqualityComparer<Integer> → IEqualityComparer_Integer }
@@ -3255,8 +3244,7 @@ begin
     Idx := FMethodIndex.IndexOf(Key);
     if Idx >= 0 then
     begin
-      Result := TMethodDecl(FMethodIndex.Objects[Idx]);
-      Exit;
+      Exit(TMethodDecl(FMethodIndex.Objects[Idx]));
     end;
     { Walk to parent }
     Sym := FTable.Lookup(CurrName);
@@ -3344,8 +3332,7 @@ begin
     begin
       if ArityMatch.Count = 1 then
       begin
-        Result := TMethodDecl(ArityMatch.Items[0]);
-        Exit;
+        Exit(TMethodDecl(ArityMatch.Items[0]));
       end;
       Exit;  { ambiguous-by-arity-only — caller must score with args }
     end;
@@ -3758,8 +3745,7 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
     if SameText(TMethodParam(ADecl.Params.Items[I]).ParamName, AName) then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
 end;
 
@@ -3792,8 +3778,7 @@ begin
   end;
   if AExpr is TNotExpr then
   begin
-    Result := ExprRejectsInline(TNotExpr(AExpr).Expr, ASelfDecl);
-    Exit;
+    Exit(ExprRejectsInline(TNotExpr(AExpr).Expr, ASelfDecl));
   end;
 end;
 
@@ -3834,15 +3819,13 @@ begin
     for I := 0 to Cmp.Stmts.Count - 1 do
       if StmtRejectsInline(TASTStmt(Cmp.Stmts.Items[I]), ASelfDecl, AStmtCount) then
         Exit;
-    Result := False;
-    Exit;
+    Exit(False);
   end;
 
   if AStmt is TExitStmt then
   begin
     Inc(AStmtCount);
-    Result := False;
-    Exit;
+    Exit(False);
   end;
 
   if AStmt is TIfStmt then
@@ -3853,8 +3836,7 @@ begin
     if StmtRejectsInline(Ifs.ThenStmt, ASelfDecl, AStmtCount) then Exit;
     if (Ifs.ElseStmt <> nil) and
        StmtRejectsInline(Ifs.ElseStmt, ASelfDecl, AStmtCount) then Exit;
-    Result := False;
-    Exit;
+    Exit(False);
   end;
 
   if AStmt is TAssignment then
@@ -3865,8 +3847,7 @@ begin
     { Assignment to a parameter requires updating the caller-side temp,
       which the simple inliner does not support.  Reject. }
     if AssignmentTargetsParameter(Asg.Name, ASelfDecl) then Exit;
-    Result := False;
-    Exit;
+    Exit(False);
   end;
 
   if AStmt is TProcCall then
@@ -3879,8 +3860,7 @@ begin
     for I := 0 to TProcCall(AStmt).Args.Count - 1 do
       if ExprRejectsInline(TASTExpr(TProcCall(AStmt).Args.Items[I]), ASelfDecl) then
         Exit;
-    Result := False;
-    Exit;
+    Exit(False);
   end;
 
   if AStmt is TCaseStmt then
@@ -3897,8 +3877,7 @@ begin
     end;
     if (Cs.ElseStmt <> nil) and
        StmtRejectsInline(Cs.ElseStmt, ASelfDecl, AStmtCount) then Exit;
-    Result := False;
-    Exit;
+    Exit(False);
   end;
 
   { Unknown statement form: reject conservatively. }
@@ -5037,8 +5016,7 @@ var
 begin
   if AType = nil then
   begin
-    Result := '?';
-    Exit;
+    Exit('?');
   end;
   case AType.Kind of
     tyInteger:  Base := 'i';
@@ -5098,8 +5076,7 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
     if TMethodParam(ADecl.Params.Items[I]).DefaultValue <> nil then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
   Result := ADecl.Params.Count;
 end;
@@ -5282,15 +5259,13 @@ begin
     Elem := TASTExpr(AExpr.Elements.Items[I]);
     if not (Elem is TIdentExpr) then
     begin
-      Result := nil;
-      Exit;
+      Exit(nil);
     end;
     Sym := FTable.Lookup(TIdentExpr(Elem).Name);
     if (Sym = nil) or (Sym.Kind <> skConstant) or (Sym.TypeDesc = nil) or
        (Sym.TypeDesc.Kind <> tyEnum) then
     begin
-      Result := nil;
-      Exit;
+      Exit(nil);
     end;
     if Result = nil then
       Result := Sym.TypeDesc
@@ -5346,30 +5321,26 @@ begin
      (TOpenArrayTypeDesc(AParam).ElementType =
       TOpenArrayTypeDesc(AArg).ElementType) then
   begin
-    Result := 2;
-    Exit;
+    Exit(2);
   end;
   { Static array coerced to open-array: widening match (score 1) }
   if (AParam.Kind = tyOpenArray) and (AArg.Kind = tyStaticArray) and
      (TOpenArrayTypeDesc(AParam).ElementType =
       TStaticArrayTypeDesc(AArg).ElementType) then
   begin
-    Result := 1;
-    Exit;
+    Exit(1);
   end;
   { Same numeric kind = exact match (same kind, just possibly different
     descriptor instance). }
   if AParam.IsNumeric and AArg.IsNumeric and (AParam.Kind = AArg.Kind) then
   begin
-    Result := 2;
-    Exit;
+    Exit(2);
   end;
   { Numeric widening: both numerics, kinds differ.  Captures
     Integer→Int64, Integer→Double, Single→Double, Byte→Integer, etc. }
   if AParam.IsNumeric and AArg.IsNumeric then
   begin
-    Result := 1;
-    Exit;
+    Exit(1);
   end;
   { Fall-through: probe full assignability via CheckTypesMatch.  This
     covers nil-literal, class subtypes, untyped-Pointer compatibility,
@@ -5430,8 +5401,7 @@ begin
     begin
       if ArityMatch.Count = 1 then
       begin
-        Result := TMethodDecl(ArityMatch.Items[0]);
-        Exit;
+        Exit(TMethodDecl(ArityMatch.Items[0]));
       end;
       { zero-arg ambiguity is impossible — same name + zero params would
         have been rejected by the symbol-table chain, but be defensive. }
@@ -5817,8 +5787,7 @@ begin
         AExpr.Line, AExpr.Col);
     AExpr.IsBuiltinHasClassAttr := True;
     AExpr.ResolvedType := FTable.TypeBoolean;
-    Result := AExpr.ResolvedType;
-    Exit;
+    Exit(AExpr.ResolvedType);
   end;
 
   { SizeOf(TypeName) or SizeOf(expression) — compile-time byte size,
@@ -6906,8 +6875,7 @@ begin
     AExpr.ResolvedMethod    := MDecl;
     AExpr.ResolvedClassType := ObjSym.TypeDesc;
     AExpr.IsConstructorCall := True;
-    Result := ObjSym.TypeDesc;
-    Exit;
+    Exit(ObjSym.TypeDesc);
   end;
 
   if not (ObjSym.Kind in [skVariable, skParameter, skVarParameter]) then
@@ -7202,15 +7170,13 @@ begin
     begin
       AAccess.IsClassNameAccess := True;
       AAccess.ResolvedType := FTable.TypeString;
-      Result := FTable.TypeString;
-      Exit;
+      Exit(FTable.TypeString);
     end;
     if SameText(AAccess.FieldName, 'ClassType') and (BaseType.Kind = tyClass) then
     begin
       AAccess.IsClassTypeAccess := True;
       AAccess.ResolvedType := FTable.TypePointer;  { TClass = Pointer for now }
-      Result := FTable.TypePointer;
-      Exit;
+      Exit(FTable.TypePointer);
     end;
     RT      := TRecordTypeDesc(BaseType);
     FldInfo := RT.FindField(AAccess.FieldName);
@@ -7221,8 +7187,7 @@ begin
       begin
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
-        Result := PropInfo.TypeDesc;
-        Exit;
+        Exit(PropInfo.TypeDesc);
       end;
       { Method-backed property (including indexed: the parser attaches the
         '[idx]' to AAccess.PropIndexExpr when it parses 'Base.Prop[idx]'). }
@@ -7248,8 +7213,7 @@ begin
       if AAccess.ResolvedMethod <> nil then
       begin
         AAccess.IsMethodCall := True;
-        Result := TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType;
-        Exit;
+        Exit(TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType);
       end;
       { Built-in TObject.ToString: virtual dispatch yielding string.
         Every class inherits this via vtable slot 1. }
@@ -7275,8 +7239,7 @@ begin
           AAccess.ConstArrayType := Sym.TypeDesc;
         end;
         AAccess.ResolvedType := Sym.TypeDesc;
-        Result := Sym.TypeDesc;
-        Exit;
+        Exit(Sym.TypeDesc);
       end;
       SemanticError(
         Format('Type ''%s'' has no field ''%s''',
@@ -7441,13 +7404,11 @@ begin
           begin
             AnalyseExpr(AAccess.PropIndexExpr);
             AAccess.ResolvedType := TStaticArrayTypeDesc(Sym.TypeDesc).ElementType;
-            Result := AAccess.ResolvedType;
-            Exit;
+            Exit(AAccess.ResolvedType);
           end;
         end;
         AAccess.ResolvedType := Sym.TypeDesc;
-        Result := Sym.TypeDesc;
-        Exit;
+        Exit(Sym.TypeDesc);
       end;
       SemanticError(
         Format('Unknown class method ''%s'' on type ''%s''',
@@ -7460,8 +7421,7 @@ begin
         AAccess.Line, AAccess.Col);
     AAccess.IsConstructorCall := True;
     AAccess.ResolvedMethod    := FindMethodDecl(TRecordTypeDesc(RecSym.TypeDesc).Name, 'Create');
-    Result := RecSym.TypeDesc;
-    Exit;
+    Exit(RecSym.TypeDesc);
   end;
 
   { Field access on variable or parameter }
@@ -7511,15 +7471,13 @@ begin
   begin
     AAccess.IsClassNameAccess := True;
     AAccess.ResolvedType := FTable.TypeString;
-    Result := FTable.TypeString;
-    Exit;
+    Exit(FTable.TypeString);
   end;
   if SameText(AAccess.FieldName, 'ClassType') and (RecSym.TypeDesc.Kind = tyClass) then
   begin
     AAccess.IsClassTypeAccess := True;
     AAccess.ResolvedType := FTable.TypePointer;
-    Result := FTable.TypePointer;
-    Exit;
+    Exit(FTable.TypePointer);
   end;
 
   RT      := TRecordTypeDesc(RecSym.TypeDesc);
@@ -7592,13 +7550,11 @@ begin
         begin
           AnalyseExpr(AAccess.PropIndexExpr);
           AAccess.ResolvedType := TStaticArrayTypeDesc(Sym.TypeDesc).ElementType;
-          Result := AAccess.ResolvedType;
-          Exit;
+          Exit(AAccess.ResolvedType);
         end;
       end;
       AAccess.ResolvedType := Sym.TypeDesc;
-      Result := Sym.TypeDesc;
-      Exit;
+      Exit(Sym.TypeDesc);
     end;
     SemanticError(
       Format('Type ''%s'' has no field ''%s''',
@@ -7724,8 +7680,7 @@ begin
         Format('Right operand of ''%s'' must be Boolean, got ''%s''',
           [BinaryOpName(ABin.Op), RType.Name]),
         ABin.Line, ABin.Col);
-    Result := FTable.TypeBoolean;
-    Exit;
+    Exit(FTable.TypeBoolean);
   end;
 
   if IsComparisonOp(ABin.Op) then
@@ -7774,20 +7729,17 @@ begin
     { String concatenation: s1 + s2 → string }
     if (ABin.Op = boAdd) and LType.IsString and RType.IsString then
     begin
-      Result := FTable.TypeString;
-      Exit;
+      Exit(FTable.TypeString);
     end;
 
     { Pointer arithmetic: Pointer/PChar + Integer or Integer + Pointer → same type }
     if (ABin.Op in [boAdd, boSub]) and (LType.Kind in [tyPointer, tyPChar]) and RType.IsNumeric then
     begin
-      Result := LType;
-      Exit;
+      Exit(LType);
     end;
     if (ABin.Op = boAdd) and LType.IsNumeric and (RType.Kind in [tyPointer, tyPChar]) then
     begin
-      Result := RType;
-      Exit;
+      Exit(RType);
     end;
 
     { Shift operators: result has the left operand's type; right is the shift amount }
@@ -8068,8 +8020,7 @@ begin
         ProcDesc.ReturnType := MD.ResolvedReturnType;
         FldExpr.ResolvedType := ProcDesc;
         AExpr.ResolvedType   := ProcDesc;
-        Result               := ProcDesc;
-        Exit;
+        Exit(ProcDesc);
       end;
     end;
   end;
@@ -8223,8 +8174,7 @@ begin
     SemanticError(
       'Expression is not callable — expected procedural type',
       AExpr.Line, AExpr.Col);
-    Result := FTable.TypeInteger;
-    Exit;
+    Exit(FTable.TypeInteger);
   end;
   ProcDesc := TProceduralTypeDesc(CalleeType);
   AExpr.ResolvedProcType := ProcDesc;
@@ -8364,8 +8314,7 @@ begin
   if AExpr.Elements.Count = 0 then
   begin
     AExpr.ResolvedType := nil;
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   ElemType := AnalyseExpr(TASTExpr(AExpr.Elements.Items[0]));
   for I := 1 to AExpr.Elements.Count - 1 do

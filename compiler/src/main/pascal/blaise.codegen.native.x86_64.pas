@@ -145,8 +145,7 @@ function IntByteSize(AType: TTypeDesc): Integer;
 begin
   if AType = nil then
   begin
-    Result := 4;
-    Exit;
+    Exit(4);
   end;
   case AType.Kind of
     tyByte, tyBoolean:           Result := 1;
@@ -165,8 +164,7 @@ function IsUnsignedInt(AType: TTypeDesc): Boolean;
 begin
   if AType = nil then
   begin
-    Result := False;
-    Exit;
+    Exit(False);
   end;
   Result := AType.Kind in [tyByte, tyBoolean, tyWord, tyUInt32, tyUInt64, tyEnum];
 end;
@@ -404,8 +402,7 @@ begin
       T := Self.GlobalType(TIdentExpr(AExpr).Name);
     if T <> nil then
     begin
-      Result := T;
-      Exit;
+      Exit(T);
     end;
   end;
   Result := AExpr.ResolvedType;

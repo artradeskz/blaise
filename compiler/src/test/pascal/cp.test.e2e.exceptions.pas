@@ -37,6 +37,7 @@ type
 
     { Non-local exit (Exit/Break) must run intervening finally bodies. }
     procedure TestRun_ExitThroughFinally;
+    procedure TestRun_ExitValueThroughFinally;
     procedure TestRun_ExitThroughNestedFinally;
     procedure TestRun_BreakThroughFinally;
 
@@ -121,6 +122,29 @@ const
     begin
       Run;
       WriteLn('after')
+    end.
+    ''';
+
+  { Exit(X) from inside a try/finally must assign the result, run the finally
+    body, then return the value to the caller.  Guards the refactor that
+    replaces the 'Result := X; Exit;' workaround with 'Exit(X)' in source
+    that sits inside try/finally. }
+  SrcExitValueThroughFinally = '''
+    program P;
+    function Pick(b: Boolean): Integer;
+    begin
+      Result := -1;
+      try
+        if b then Exit(42);
+        WriteLn('unreached')
+      finally
+        WriteLn('in_finally')
+      end;
+      Result := 7
+    end;
+    begin
+      WriteLn(Pick(True));
+      WriteLn(Pick(False))
     end.
     ''';
 
@@ -348,6 +372,19 @@ begin
   { Exit runs the finally body, then control returns to the caller. }
   AssertEquals('stdout',
     'in_try' + LE + 'in_finally' + LE + 'after' + LE, Output);
+end;
+
+procedure TE2EExceptionTests.TestRun_ExitValueThroughFinally;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcExitValueThroughFinally, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  { True: Exit(42) sets Result, runs finally, returns 42.
+    False: falls through, runs finally, then Result := 7. }
+  AssertEquals('stdout',
+    'in_finally' + LE + '42' + LE +
+    'unreached' + LE + 'in_finally' + LE + '7' + LE, Output);
 end;
 
 procedure TE2EExceptionTests.TestRun_ExitThroughNestedFinally;

@@ -153,8 +153,7 @@ begin
   Base   := _BlaiseGetMem(Integer(TotalL));
   if Base = nil then
   begin
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   RC  := Base;        { RefCount at base+0 }
   RC^ := 0;
@@ -191,13 +190,11 @@ begin
   SubLen := StrLen(Sub);
   if SubLen = 0 then
   begin
-    Result := 0;
-    Exit;
+    Exit(0);
   end;
   if SubLen > SLen then
   begin
-    Result := -1;
-    Exit;
+    Exit(-1);
   end;
   SData   := StrData(S);
   SubData := StrData(Sub);
@@ -217,8 +214,7 @@ begin
     end;
     if Match then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
     Inc(I);
   end;
@@ -241,13 +237,11 @@ begin
   SubLen := StrLen(Sub);
   if SubLen = 0 then
   begin
-    Result := 0;
-    Exit;
+    Exit(0);
   end;
   if (SubLen > SLen) or (StartPos >= SLen) then
   begin
-    Result := -1;
-    Exit;
+    Exit(-1);
   end;
   SData   := StrData(S);
   SubData := StrData(Sub);
@@ -268,8 +262,7 @@ begin
     end;
     if Match then
     begin
-      Result := I;
-      Exit;
+      Exit(I);
     end;
     Inc(I);
   end;
@@ -289,8 +282,7 @@ begin
   if From < 0 then From := 0;
   if From >= SLen then
   begin
-    Result := StrAlloc(0);
-    Exit;
+    Exit(StrAlloc(0));
   end;
   { Avoid signed overflow when Count is large (Copy(S, N, MaxInt) idiom) —
     compare Count against (SLen - From) instead of (From + Count) > SLen. }
@@ -468,8 +460,7 @@ begin
   Len2 := StrLen(S2);
   if Len1 <> Len2 then
   begin
-    Result := 0;
-    Exit;
+    Exit(0);
   end;
   D1 := StrData(S1);
   D2 := StrData(S2);
@@ -481,8 +472,7 @@ begin
     if (C2 >= 65) and (C2 <= 90) then C2 := C2 + 32;
     if C1 <> C2 then
     begin
-      Result := 0;
-      Exit;
+      Exit(0);
     end;
   end;
   Result := 1;
@@ -755,8 +745,7 @@ begin
   Len  := StrLen(S);
   if (I < 0) or (I >= Len) then
   begin
-    Result := 0;
-    Exit;
+    Exit(0);
   end;
   Data   := StrData(S);
   Result := Data[I];
@@ -811,8 +800,7 @@ begin
     C2 := D2[I];
     if C1 <> C2 then
     begin
-      Result := C1 - C2;
-      Exit;
+      Exit(C1 - C2);
     end;
   end;
   Result := Len1 - Len2;
@@ -841,8 +829,7 @@ begin
     if (C2 >= 65) and (C2 <= 90) then C2 := C2 + 32;
     if C1 <> C2 then
     begin
-      Result := C1 - C2;
-      Exit;
+      Exit(C1 - C2);
     end;
   end;
   Result := Len1 - Len2;
@@ -858,8 +845,7 @@ var
 begin
   if P = nil then
   begin
-    Result := StrAlloc(0);
-    Exit;
+    Exit(StrAlloc(0));
   end;
   Len := 0;
   while P[Len] <> 0 do
@@ -1115,8 +1101,7 @@ begin
     if P[I] = 47 then SlashPos := I;
   if SlashPos < 0 then
   begin
-    Result := StrAlloc(0);
-    Exit;
+    Exit(StrAlloc(0));
   end;
   Result := StrAlloc(SlashPos + 1);
   if Result <> nil then MemCopy(Result, P, SlashPos + 1);
@@ -1134,8 +1119,7 @@ begin
     if P[I] = 47 then SlashPos := I;
   if (SlashPos < 0) or (SlashPos = 0) then
   begin
-    Result := StrAlloc(0);
-    Exit;
+    Exit(StrAlloc(0));
   end;
   Result := StrAlloc(SlashPos);
   if Result <> nil then MemCopy(Result, P, SlashPos);
@@ -1158,8 +1142,7 @@ begin
   end;
   if (LastDot < 0) or ((LastSep >= 0) and (LastDot < LastSep)) then
   begin
-    Result := StrAlloc(0);
-    Exit;
+    Exit(StrAlloc(0));
   end;
   ExtLen := PLen - LastDot;
   Result := StrAlloc(ExtLen);
@@ -1213,8 +1196,7 @@ var
 begin
   if Ptr = nil then
   begin
-    Result := 0;
-    Exit;
+    Exit(0);
   end;
   { length is stored at offset −4 from data pointer }
   LenPtr := Ptr - 4;
@@ -1240,8 +1222,7 @@ begin
   begin
     if Ptr <> nil then
       _BlaiseFreeMem(Ptr - DA_HDR);
-    Result := nil;
-    Exit;
+    Exit(nil);
   end;
   DataSz  := DA_HDR + NewLen * ElemSize;
   NewBase := _BlaiseGetMem(DataSz);

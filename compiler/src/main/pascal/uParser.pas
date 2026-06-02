@@ -194,8 +194,7 @@ begin
   begin
     Advance;  { consume 'class' }
     Expect(tkOf);
-    Result := 'class of ' + Self.ParseTypeName;
-    Exit;
+    Exit('class of ' + Self.ParseTypeName);
   end;
   if not Check(tkIdent) then
     raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
@@ -1860,38 +1859,32 @@ begin
 
   if Check(tkIf) then
   begin
-    Result := ParseIfStmt;
-    Exit;
+    Exit(ParseIfStmt);
   end;
 
   if Check(tkWhile) then
   begin
-    Result := ParseWhileStmt;
-    Exit;
+    Exit(ParseWhileStmt);
   end;
 
   if Check(tkRepeat) then
   begin
-    Result := ParseRepeatStmt;
-    Exit;
+    Exit(ParseRepeatStmt);
   end;
 
   if Check(tkFor) then
   begin
-    Result := ParseForStmt;
-    Exit;
+    Exit(ParseForStmt);
   end;
 
   if Check(tkTry) then
   begin
-    Result := ParseTryStmt;
-    Exit;
+    Exit(ParseTryStmt);
   end;
 
   if Check(tkRaise) then
   begin
-    Result := ParseRaiseStmt;
-    Exit;
+    Exit(ParseRaiseStmt);
   end;
 
   if Check(tkExit) then
@@ -1909,8 +1902,7 @@ begin
       ExitS.Value := Self.ParseExpr;
       Expect(tkRParen);
     end;
-    Result := ExitS;
-    Exit;
+    Exit(ExitS);
   end;
 
   if Check(tkBreak) then
@@ -1933,20 +1925,17 @@ begin
 
   if Check(tkInherited) then
   begin
-    Result := ParseInheritedStmt;
-    Exit;
+    Exit(ParseInheritedStmt);
   end;
 
   if Check(tkCase) then
   begin
-    Result := ParseCaseStmt;
-    Exit;
+    Exit(ParseCaseStmt);
   end;
 
   if Check(tkBegin) then
   begin
-    Result := ParseCompoundStmt;
-    Exit;
+    Exit(ParseCompoundStmt);
   end;
 
   if not Check(tkIdent) then
@@ -1976,8 +1965,7 @@ begin
       SubAssign.Free;
       raise;
     end;
-    Result := SubAssign;
-    Exit;
+    Exit(SubAssign);
   end;
 
   if Check(tkCaret) then
@@ -2148,8 +2136,7 @@ begin
           MCall.Free;
           MCall := nil;
           FldAssign.Expr := ParseExpr;
-          Result := FldAssign;
-          Exit;
+          Exit(FldAssign);
         end;
         Result := MCall;
       end
@@ -2201,8 +2188,7 @@ begin
               if not Check(tkRParen) then
                 ParseMethodCallArgList(MCall);
               Expect(tkRParen);
-              Result := MCall;
-              Exit;
+              Exit(MCall);
             end;
             FldNode           := TFieldAccessExpr.Create;
             FldNode.Line      := Line;
@@ -2222,8 +2208,7 @@ begin
             TFieldAccessExpr(CastRcv).Base := nil;
             CastRcv.Free;
             FldAssign.Expr := ParseExpr;
-            Result := FldAssign;
-            Exit;
+            Exit(FldAssign);
           end;
           raise EParseError.Create(Format(
             'Expected method call or assignment after chain at line %d col %d in %s',
@@ -2291,8 +2276,7 @@ begin
             if not Check(tkRParen) then
               ParseMethodCallArgList(MCall);
             Expect(tkRParen);
-            Result := MCall;
-            Exit;
+            Exit(MCall);
           end;
           FldNode            := TFieldAccessExpr.Create;
           FldNode.Line       := Line;
@@ -2313,8 +2297,7 @@ begin
           TFieldAccessExpr(CastRcv).Base := nil; { transfer ownership }
           CastRcv.Free;
           FldAssign.Expr := ParseExpr;
-          Result := FldAssign;
-          Exit;
+          Exit(FldAssign);
         end;
         { No-arg method call: Func(...).Field treated as Func(...).Method }
         if CastRcv is TFieldAccessExpr then
@@ -2327,8 +2310,7 @@ begin
           MCall.ObjExpr    := TFieldAccessExpr(CastRcv).Base;
           TFieldAccessExpr(CastRcv).Base := nil;
           CastRcv.Free;
-          Result := MCall;
-          Exit;
+          Exit(MCall);
         end;
         raise EParseError.Create(Format(
           'Expected method call after typecast at line %d col %d in %s',
@@ -2343,8 +2325,7 @@ begin
       while FCallNode.Args.Count > 0 do
         Call.Args.Add(FCallNode.Args.Extract(FCallNode.Args.Items[0]));
       FCallNode.Free;
-      Result := Call;
-      Exit;
+      Exit(Call);
     end;
     Call      := TProcCall.Create;
     Call.Line := Line;

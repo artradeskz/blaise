@@ -143,8 +143,7 @@ begin
         for I := 0 to (AIndex - Seen) - 1 do
           Entry := Pointer(Entry) + 16;     { skip name + addr pair }
         EntName := Entry^;
-        Result  := string(PChar(EntName));
-        Exit;
+        Exit(string(PChar(EntName)));
       end;
       Seen := Seen + Local;
     end;
@@ -238,8 +237,7 @@ var
 begin
   if (AFilters = nil) or (AFilters.Count = 0) then
   begin
-    Result := True;
-    Exit;
+    Exit(True);
   end;
   for I := 0 to AFilters.Count - 1 do
   begin
@@ -248,8 +246,7 @@ begin
       Continue;
     if (FMethod = '') or (FMethod = AMethod) then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   end;
   Result := False;
@@ -267,16 +264,14 @@ var
 begin
   if (AFilters = nil) or (AFilters.Count = 0) then
   begin
-    Result := True;
-    Exit;
+    Exit(True);
   end;
   for I := 0 to AFilters.Count - 1 do
   begin
     SplitSuiteSpec(AFilters.Strings[I], FSuite, FMethod);
     if FSuite = ASuite then
     begin
-      Result := True;
-      Exit;
+      Exit(True);
     end;
   end;
   Result := False;
