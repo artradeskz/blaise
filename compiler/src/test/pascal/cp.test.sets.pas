@@ -68,6 +68,19 @@ type
     procedure TestCodegen_Set_IntersectionEmitsAnd;
     procedure TestCodegen_Set_EqualityEmitsCeqw;
     procedure TestCodegen_Set_InequalityEmitsCnew;
+
+    { ------------------------------------------------------------------ }
+    { set-valued constants  (const X = [a, b])                            }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_SetConst_InferredType;
+    procedure TestSemantic_SetConst_Inferred_OK;
+    procedure TestSemantic_SetConst_Annotated_OK;
+    procedure TestSemantic_SetConst_EmptyAnnotated_OK;
+    procedure TestSemantic_SetConst_EmptyUnannotated_Fails;
+    procedure TestSemantic_SetConst_MixedEnums_Fails;
+    procedure TestSemantic_SetConst_NonEnumMember_Fails;
+    procedure TestCodegen_SetConst_FoldsToBitmask;
+    procedure TestCodegen_SetConst_AssignableToNamedSetType;
   end;
 
 implementation
@@ -110,6 +123,70 @@ const
     'begin' + #10 +
     '  S := [dNorth, dEast]' + #10 +   { mask = 1 + 4 = 5 }
     'end.';
+
+  { Set-valued constant whose set type is inferred from the members'
+    enum (no annotation): mask = dNorth(0)|dEast(2) = 5. }
+  SrcSetConstInferred =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        const Both = [dNorth, dEast];
+        var S: TDirSet;
+        begin
+          S := Both
+        end.
+        ''';
+
+  { Annotated set const: const X: TDirSet = [...]. }
+  SrcSetConstAnnotated =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        const Both: TDirSet = [dNorth, dEast];
+        var S: TDirSet;
+        begin
+          S := Both
+        end.
+        ''';
+
+  SrcSetConstEmptyAnnotated =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        const None: TDirSet = [];
+        var S: TDirSet;
+        begin
+          S := None
+        end.
+        ''';
+
+  SrcSetConstEmptyUnannotated =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        const Bad = [];
+        begin
+        end.
+        ''';
+
+  SrcSetConstMixedEnums =
+    '''
+    program P;
+    type
+      TA = (a1, a2);
+      TB = (b1, b2);
+    const Mixed = [a1, b1];
+    begin
+    end.
+    ''';
+
+  SrcSetConstNonEnumMember =
+    '''
+    program P;
+    const X = 5; Bad = [X];
+    begin
+    end.
+    ''';
 
   SrcSetInOperator =
     'program P;' + #10 +
@@ -563,6 +640,62 @@ var
 begin
   IR := GenIR(SrcSetInequality);
   AssertTrue('set inequality emits cnew', Pos('cnew', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ set-valued constants                                                 }
+{ ------------------------------------------------------------------ }
+
+procedure TSetTests.TestParse_SetConst_InferredType;
+begin
+  ParseOK(SrcSetConstInferred);
+end;
+
+procedure TSetTests.TestSemantic_SetConst_Inferred_OK;
+begin
+  SemanticOK(SrcSetConstInferred);
+end;
+
+procedure TSetTests.TestSemantic_SetConst_Annotated_OK;
+begin
+  SemanticOK(SrcSetConstAnnotated);
+end;
+
+procedure TSetTests.TestSemantic_SetConst_EmptyAnnotated_OK;
+begin
+  SemanticOK(SrcSetConstEmptyAnnotated);
+end;
+
+procedure TSetTests.TestSemantic_SetConst_EmptyUnannotated_Fails;
+begin
+  { An empty set with no annotation has no enum to infer from. }
+  SemanticFail(SrcSetConstEmptyUnannotated);
+end;
+
+procedure TSetTests.TestSemantic_SetConst_MixedEnums_Fails;
+begin
+  SemanticFail(SrcSetConstMixedEnums);
+end;
+
+procedure TSetTests.TestSemantic_SetConst_NonEnumMember_Fails;
+begin
+  SemanticFail(SrcSetConstNonEnumMember);
+end;
+
+procedure TSetTests.TestCodegen_SetConst_FoldsToBitmask;
+var
+  IR: string;
+begin
+  { Both = [dNorth, dEast] folds to mask 5; referencing it emits "copy 5". }
+  IR := GenIR(SrcSetConstInferred);
+  AssertTrue('set const folds to mask 5', Pos('copy 5', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_SetConst_AssignableToNamedSetType;
+begin
+  { An inferred 'set of TDir' const assigns to a TDirSet variable — the two
+    set types are structurally the same.  Just assert it analyses + emits. }
+  SemanticOK(SrcSetConstInferred);
 end;
 
 initialization

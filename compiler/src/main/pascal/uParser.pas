@@ -955,6 +955,30 @@ begin
       CD.IntExprTokens := CollectConstBitOpExpr(FirstOperand, True);
       CD.IsString := False;
     end
+    else if Check(tkLBracket) then
+    begin
+      { Set-valued constant: const Name [: SetType] = [member, member, ...]
+        or the empty set [].  Members are enum-constant identifiers; semantic
+        resolves their ordinals and folds the bitmask. }
+      CD.IsSet       := True;
+      CD.SetElements := TStringList.Create;
+      Advance;   { consume '[' }
+      if not Check(tkRBracket) then
+        while True do
+        begin
+          if not Check(tkIdent) then
+            raise EParseError.Create(Format(
+              'Expected set member identifier at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          CD.SetElements.Add(FCurrent.Value);
+          Advance;
+          if Check(tkComma) then
+            Advance
+          else
+            Break;
+        end;
+      Expect(tkRBracket);
+    end
     else if Check(tkStringLit) or Check(tkIdent) then
     begin
       CD.IsString := True;

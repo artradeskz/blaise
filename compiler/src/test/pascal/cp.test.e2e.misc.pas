@@ -58,6 +58,7 @@ type
     procedure TestRun_Set_Include_Exclude;
     procedure TestRun_Set_InOperator;
     procedure TestRun_Set_UnionIntersect;
+    procedure TestRun_Set_ValuedConstant;
 
     { for..in }
     procedure TestRun_ForIn_String_ByteVar_PrintsBytes;
@@ -359,6 +360,26 @@ const
       if B3 in C then WriteLn('3');
       C := A * B;
       if B1 in C then WriteLn('inter1')
+    end.
+    ''';
+
+  { Set-valued constants: an inferred-type const and an annotated empty const,
+    both used as set values at runtime. }
+  SrcSetConst = '''
+    program P;
+    type TDir = (North, South, East, West);
+         TDirs = set of TDir;
+    const
+      Horizontal = [East, West];
+      Empty: TDirs = [];
+    var S: TDirs;
+    begin
+      S := Horizontal;
+      if North in S then WriteLn('N') else WriteLn('no-N');
+      if East  in S then WriteLn('E');
+      if West  in S then WriteLn('W');
+      S := Empty;
+      if East in S then WriteLn('still-E') else WriteLn('cleared')
     end.
     ''';
 
@@ -667,6 +688,17 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('union 0 1 2, intersect 1',
     '0' + LE + '1' + LE + '2' + LE + 'inter1' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_Set_ValuedConstant;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSetConst, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  { Horizontal = [East, West]: no-N, E, W; Empty cleared the set. }
+  AssertEquals('set const',
+    'no-N' + LE + 'E' + LE + 'W' + LE + 'cleared' + LE, Output);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_ByteVar_PrintsBytes;

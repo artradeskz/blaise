@@ -1244,6 +1244,41 @@ inferred without type-context propagation).
 language keywords) that modify a set variable in-place using bitwise OR and
 AND-NOT respectively.  This matches FPC's implementation model.
 
+==== Set-valued constants
+
+A `const` may take a set literal on its right-hand side:
+
+[source,pascal]
+----
+type
+  TDir    = (dNorth, dSouth, dEast, dWest);
+  TDirSet = set of TDir;
+const
+  Both       = [dNorth, dEast];        // type inferred: set of TDir
+  Horizontal : TDirSet = [dEast, dWest]; // type annotated
+  None       : TDirSet = [];            // empty set
+----
+
+The members must all belong to a single enumeration.  The constant's type is
+that enum's set type: when the declaration is annotated (`: TDirSet`) that
+declared set type is used (and the members are checked against its base enum);
+otherwise the type is the inferred `set of <Enum>`.  The bitmask is folded at
+compile time into the constant's value, so a set const is emitted exactly like
+any other integer set value — referencing it costs nothing at runtime.
+
+Because set values are structural (not nominal), an inferred `set of TDir`
+constant is assignment-compatible with a variable declared as the named alias
+`TDirSet`; `CheckTypesMatch` treats two `tySet` types over the same base enum
+as the same type.
+
+The empty set `[]` is only allowed with a type annotation: with no members and
+no declared type there is nothing to infer the base enum from, so
+`const Bad = [];` is a semantic error.
+
+Set-const resolution runs in the second constant-analysis pass (alongside
+array constants), after enum types and their members have been registered —
+the member identifiers are not in scope during the first pass.
+
 ==== Rejected alternatives
 
 - *Heap-allocated bitsets* — rejected.  All current set uses are flag sets over

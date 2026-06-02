@@ -66,6 +66,9 @@ type
 
     procedure AnalyseBlock(ABlock: TBlock);
     procedure AnalyseConstDecls(ABlock: TBlock);
+    { Resolve a set-valued const decl (IsSet): fold the member bitmask into
+      CD.IntVal and register the const symbol with its tySet type. }
+    procedure AnalyseSetConstDecl(ACD: TConstDecl);
     procedure AnalyseArrayConstDecls(ABlock: TBlock);
     function  FoldConstBitOpExpr(ATokens: TStringList;
                                  ALine, ACol: Integer): Int64;
@@ -465,6 +468,12 @@ begin
     enum ↔ integer: allow assignment between enum and integer types }
   if (AExpected.Kind = tyEnum) and AActual.IsNumeric then Exit;
   if (AActual.Kind  = tyEnum) and AExpected.IsNumeric then Exit;
+  { set ↔ set: two set types over the same base enum are the same type, even
+    when one is a named alias (TBackendSet) and the other anonymous
+    (set of TBackend) — set values are structural, not nominal. }
+  if (AExpected.Kind = tySet) and (AActual.Kind = tySet) and
+     (TSetTypeDesc(AExpected).BaseType = TSetTypeDesc(AActual).BaseType) then
+    Exit;
   { Numeric widening: allow within the integer family, within the float family
     (Single ↔ Double), and integer → float (implicit widening, same as
     Delphi/FPC).  Float → integer still requires explicit Trunc/Round.
@@ -2108,6 +2117,100 @@ begin
   end;
 end;
 
+procedure TSemanticAnalyser.AnalyseSetConstDecl(ACD: TConstDecl);
+var
+  I:         Integer;
+  Mask:      Int64;
+  MemName:   string;
+  MemSym:    TSymbol;
+  EnumDesc:  TEnumTypeDesc;
+  SetDesc:   TSetTypeDesc;
+  DeclTD:    TTypeDesc;
+  CanonName: string;
+  ExistTD:   TTypeDesc;
+  Sym:       TSymbol;
+begin
+  Mask     := 0;
+  EnumDesc := nil;
+
+  { Resolve each member to an enum constant; OR its bit into the mask and
+    pin down the shared base enum. }
+  for I := 0 to ACD.SetElements.Count - 1 do
+  begin
+    MemName := ACD.SetElements.Strings[I];
+    MemSym  := FTable.Lookup(MemName);
+    if (MemSym = nil) or (MemSym.Kind <> skConstant) or
+       (MemSym.TypeDesc = nil) or (MemSym.TypeDesc.Kind <> tyEnum) then
+    begin
+      SemanticError(Format(
+        'Set constant ''%s'' member ''%s'' is not an enum constant',
+        [ACD.Name, MemName]), ACD.Line, ACD.Col);
+      Exit;
+    end;
+    if EnumDesc = nil then
+      EnumDesc := TEnumTypeDesc(MemSym.TypeDesc)
+    else if MemSym.TypeDesc <> EnumDesc then
+    begin
+      SemanticError(Format(
+        'Set constant ''%s'' mixes members of ''%s'' and ''%s''',
+        [ACD.Name, EnumDesc.Name, MemSym.TypeDesc.Name]), ACD.Line, ACD.Col);
+      Exit;
+    end;
+    Mask := Mask or (Int64(1) shl MemSym.ConstValue);
+  end;
+
+  { Determine the set type descriptor. }
+  if ACD.TypeName <> '' then
+  begin
+    { Declared set type: const X: TSomeSet = [...].  Must be a set, and its
+      base enum must match the members. }
+    DeclTD := FTable.FindType(ACD.TypeName);
+    if (DeclTD = nil) or (DeclTD.Kind <> tySet) then
+    begin
+      SemanticError(Format(
+        'Type ''%s'' in set constant ''%s'' is not a set type',
+        [ACD.TypeName, ACD.Name]), ACD.Line, ACD.Col);
+      Exit;
+    end;
+    SetDesc := TSetTypeDesc(DeclTD);
+    if (EnumDesc <> nil) and (SetDesc.BaseType <> EnumDesc) then
+    begin
+      SemanticError(Format(
+        'Set constant ''%s'' members are ''%s'' but type ''%s'' is set of ''%s''',
+        [ACD.Name, EnumDesc.Name, ACD.TypeName, SetDesc.BaseType.Name]),
+        ACD.Line, ACD.Col);
+      Exit;
+    end;
+  end
+  else if EnumDesc <> nil then
+  begin
+    { Inferred set type: find or create the canonical 'set of <Enum>'. }
+    CanonName := 'set of ' + EnumDesc.Name;
+    ExistTD   := FTable.FindType(CanonName);
+    if (ExistTD <> nil) and (ExistTD.Kind = tySet) then
+      SetDesc := TSetTypeDesc(ExistTD)
+    else
+    begin
+      SetDesc := FTable.NewSetType(CanonName, EnumDesc);
+      FTable.DefineGlobal(TSymbol.Create(CanonName, skType, SetDesc));
+    end;
+  end
+  else
+  begin
+    { Empty set with no type annotation: nothing to infer the base enum from. }
+    SemanticError(Format(
+      'Empty set constant ''%s'' needs an explicit set type (const %s: TSet = [])',
+      [ACD.Name, ACD.Name]), ACD.Line, ACD.Col);
+    Exit;
+  end;
+
+  ACD.IntVal     := Mask;
+  Sym            := TSymbol.Create(ACD.Name, skConstant, SetDesc);
+  Sym.ConstValue := Mask;
+  if not FTable.Define(Sym) then
+    Sym.Free;   { duplicate — cross-unit shadowing tolerated, like scalar consts }
+end;
+
 procedure TSemanticAnalyser.AnalyseConstDecls(ABlock: TBlock);
 var
   I, J:   Integer;
@@ -2146,6 +2249,10 @@ begin
       named-constant values in scope. }
     if CD.IntExprTokens <> nil then
       CD.IntVal := FoldConstBitOpExpr(CD.IntExprTokens, CD.Line, CD.Col);
+    { Set-valued constants reference enum members, which are not registered
+      until AnalyseTypeDecls runs — so they are resolved in the second pass
+      (AnalyseArrayConstDecls), like array consts. }
+    if CD.IsSet then Continue;
     if CD.TypeName <> '' then
     begin
       { Typed constant: use the declared type.  The value kind (IsFloat,
@@ -2201,6 +2308,13 @@ begin
   for I := 0 to ABlock.ConstDecls.Count - 1 do
   begin
     CD := TConstDecl(ABlock.ConstDecls.Items[I]);
+    { Set-valued constants are resolved here too — enum members are now in
+      scope (AnalyseTypeDecls ran before this pass). }
+    if CD.IsSet then
+    begin
+      AnalyseSetConstDecl(CD);
+      Continue;
+    end;
     if not CD.IsArrayConst then Continue;
     ElemTD := FTable.FindType(CD.ArrayElemType);
     if ElemTD = nil then

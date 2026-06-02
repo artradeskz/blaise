@@ -445,6 +445,7 @@ ConstTypeAnnotation
 ConstRhs
     = ConstExpr                                           (* scalar value *)
     | LPAREN ConstExpr { COMMA ConstExpr } RPAREN         (* array value list *)
+    | LBRACKET [ IDENT { COMMA IDENT } ] RBRACKET         (* set value: [a, b] or [] *)
     ;
 
 ConstExpr
@@ -454,11 +455,21 @@ ConstExpr
     | IDENT                    (* named constant reference, e.g. True / False *)
     ;
 
-(* ConstDecl supports untyped, scalar-typed, and array-typed forms:
+(* ConstDecl supports untyped, scalar-typed, array-typed, and set-typed forms:
  *   Untyped:      const MaxItems = 100;
  *   Scalar-typed: const Pi: Double = 3.14159;
  *   Array-typed:  const Names: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
  *                 const Days: array[0..6] of string = ('Sun', 'Mon', ...);
+ *   Set-typed:    const Primary = [cRed, cBlue];          (* type inferred *)
+ *                 const Both: TDirSet = [dNorth, dEast];  (* type annotated *)
+ *                 const None: TDirSet = [];               (* empty set *)
+ *
+ * A set-valued const lists enum-constant members between brackets.  Members
+ * must all belong to one enum; the const's type is that enum's set type —
+ * either the annotated set type or the inferred 'set of <Enum>'.  The empty
+ * set [] requires a set-type annotation (there is no member to infer from).
+ * The bitmask is folded at compile time and the const is emitted like any
+ * integer set value.
  *
  * Array-typed constants accept either an enum type name or an integer
  * range as the index.  The element count in the value list must exactly

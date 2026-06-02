@@ -774,6 +774,13 @@ type
       the resolved integer.  Nil indicates the matching ArrayElements[i]
       is already a final scalar (literal, typecast, or ident). }
     ArrayElementParts: TObjectList;
+    { Set-valued constant — set when the RHS is a set literal '[a, b, ...]'.
+      SetElements holds the member identifier names (empty for '[]').
+      Semantic resolves each to its enum ordinal, ORs (1 shl ord) into IntVal
+      (the bitmask), and gives the symbol a tySet type — either CD.TypeName's
+      declared set type or the set type inferred from the members' enum. }
+    IsSet:       Boolean;
+    SetElements: TStringList;   { non-nil when IsSet; member ident names }
     destructor Destroy; override;
   end;
 
