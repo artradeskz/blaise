@@ -367,7 +367,16 @@ type
   private
     FScopeStack: TObjectList;   { owned TScope, index 0 = global }
     FAllTypes:   TObjectList;   { owned TTypeDesc }
-    FGenerics:   TStringList;   { non-owning: base name → TGenericTypeDef* (void ptr) }
+    FGenerics:   TStringList;   { base name → template object (in FGenericTemplates) }
+    { Owns a strong reference to every registered generic template.  The
+      template AST nodes are originally owned by their unit's TypeDecls list,
+      but FGenerics must outlive any single instantiation; retaining them here
+      keeps FGenerics' pointers valid for the symbol table's whole lifetime.
+      Without this an early instantiation could see the slot reused (the node
+      freed, its memory becoming an unrelated object), so a later lookup of
+      the same generic returns a wrong-class object and silently mis-wires the
+      instance (no parent, no vtable). }
+    FGenericTemplates: TObjectList;
 
     FTypeInteger:  TTypeDesc;
     FTypeInt64:    TTypeDesc;
@@ -1125,6 +1134,9 @@ begin
   FAllTypes   := TObjectList.Create(True);
   FGenerics   := TStringList.Create;
   FGenerics.CaseSensitive := True;
+  { Owns (retains) registered generic templates so FGenerics' references stay
+    valid even after the originating AST is torn down. }
+  FGenericTemplates := TObjectList.Create(True);
   { Global scope — parent = nil }
   FScopeStack.Add(TScope.Create(nil));
   RegisterBuiltins;
@@ -1236,6 +1248,8 @@ end;
 procedure TSymbolTable.RegisterGeneric(const AName: string; ATempl: TObject);
 begin
   FGenerics.AddObject(AName, ATempl);
+  { Retain a strong reference so the template outlives its originating AST. }
+  FGenericTemplates.Add(ATempl);
 end;
 
 function TSymbolTable.FindGeneric(const AName: string): TObject;

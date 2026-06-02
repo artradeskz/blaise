@@ -24,6 +24,7 @@ type
     procedure TestRun_TObjectList_AddGetCount;
     procedure TestRun_TObjectList_Delete;
     procedure TestRun_Collections_Valgrind;
+    procedure TestRun_TwoDictInstancesInUnit_BothLink;
   end;
 
 implementation
@@ -259,6 +260,63 @@ begin
     if Log = '' then Log := '(valgrind produced no output)';
     Fail('Collections Valgrind check failed:' + #10 + Log);
   end;
+end;
+
+{ Regression: a unit that holds two distinct instantiations of the same
+  generic whose template inherits from a generic interface (TDictionary<K,V>
+  derives from IMap<K,V>).  The first instantiation used to free the generic-
+  template AST node it shares; the second lookup then saw a wrong-class object
+  and silently mis-wired the instance — no TObject parent, no vtable — so the
+  second instance's $vtable_... symbol was referenced but never emitted and the
+  link failed.  Retaining templates in the symbol table fixes it.  Both
+  instances must now compile, link and run. }
+procedure TE2ECollections2Tests.TestRun_TwoDictInstancesInUnit_BothLink;
+const
+  UnitSrc = '''
+    unit twodicts;
+    interface
+    uses Generics.Collections;
+    type
+      THolder = class
+      public
+        Ints:  TDictionary<string, Integer>;
+        Bools: TDictionary<string, Boolean>;
+        procedure Fill;
+        function Total: Integer;
+      end;
+    implementation
+    procedure THolder.Fill;
+    begin
+      Self.Ints  := TDictionary<string, Integer>.Create;
+      Self.Bools := TDictionary<string, Boolean>.Create;
+      Self.Ints.Add('a', 10);
+      Self.Ints.Add('b', 20);
+      Self.Bools.Add('x', True)
+    end;
+    function THolder.Total: Integer;
+    begin
+      Result := Self.Ints.Count + Self.Bools.Count
+    end;
+    end.
+    ''';
+  DrvSrc = '''
+    program P;
+    uses twodicts;
+    var h: THolder;
+    begin
+      h := THolder.Create;
+      h.Fill;
+      WriteLn(h.Total);
+      h.Free
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+link+run',
+    CompileAndRunWithUnit('twodicts', UnitSrc, DrvSrc, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Ints(2) + Bools(1) = 3', '3' + #10, Output);
 end;
 
 initialization
