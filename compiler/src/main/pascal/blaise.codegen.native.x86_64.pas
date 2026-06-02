@@ -26,7 +26,7 @@ unit blaise.codegen.native.x86_64;
 interface
 
 uses
-  SysUtils, contnrs, uAST, uSymbolTable,
+  SysUtils, contnrs, Generics.Collections, uAST, uSymbolTable,
   blaise.codegen.native.backend, blaise.codegen.target;
 
 type
@@ -40,24 +40,13 @@ type
       gives free dedup via IndexOf. }
     FDataGlobals: TStringList;
 
-    { Current function's stack frame: maps a local name (param, var, or
-      Result) to its negative %rbp-relative byte offset, held in Objects[] as a
-      small integer.  nil while emitting program $main (whose top-level vars are
-      globals, not frame slots).
-
-      NOTE on container choice: this is a key->value map, so TDictionary<string,
-      Integer> from generics.collections is the semantically correct structure.
-      It cannot be used here yet because of an open compiler bug (see bugs.txt):
-      a generic class that implements a generic interface (TDictionary ->
-      IMap<K,V>) fails to link when instantiated inside a UNIT — the
-      impllist references typeinfo_IMap_string_Integer but the def is never
-      emitted in the multi-unit path.  Since this unit is part of the
-      multi-unit compiler build, it would hit exactly that.  Until the bug is
-      fixed, a TStringList keyed by name (Objects[] = offset) is used; N is tiny
-      (locals per function) so IndexOf lookup is fine.
-      TODO: switch to TDictionary<string, Integer> once the multi-unit
-      generic-interface-typeinfo bug is resolved. }
-    FFrame:     TStringList;
+    { Current function's stack frame: maps a local name (param, var, or Result)
+      to its negative %rbp-relative byte offset.  nil while emitting program
+      $main (whose top-level vars are globals, not frame slots).  Built once per
+      function then looked up by name on every ident read and assignment — a
+      key->value map, so TDictionary is the right container for the access
+      pattern. }
+    FFrame:     TDictionary<string, Integer>;
     FFrameSize: Integer;        { bytes to reserve for locals (16-aligned) }
 
     { Allocate a fresh local assembly label (".L<prefix><N>"). }
@@ -179,24 +168,17 @@ end;
 
 function TX86_64Backend.IsLocal(const AName: string): Boolean;
 begin
-  Result := (FFrame <> nil) and (FFrame.IndexOf(AName) >= 0);
+  Result := (FFrame <> nil) and FFrame.ContainsKey(AName);
 end;
 
 function TX86_64Backend.VarOperand(const AName: string): string;
 var
-  Idx: Integer;
+  Off: Integer;
 begin
-  if FFrame <> nil then
-  begin
-    Idx := FFrame.IndexOf(AName);
-    if Idx >= 0 then
-    begin
-      { Objects[] holds the negative offset magnitude. }
-      Result := Format('-%d(%%rbp)', [Integer(PtrUInt(FFrame.Objects[Idx]))]);
-      Exit;
-    end;
-  end;
-  Result := AName + '(%rip)';
+  if (FFrame <> nil) and FFrame.TryGetValue(AName, Off) then
+    Result := Format('-%d(%%rbp)', [Off])
+  else
+    Result := AName + '(%rip)';
 end;
 
 procedure TX86_64Backend.BuildFrame(ADecl: TMethodDecl);
@@ -206,7 +188,7 @@ var
   VD:   TVarDecl;
 begin
   Self.ClearFrame;
-  FFrame := TStringList.Create;
+  FFrame := TDictionary<string, Integer>.Create;
   Offset := 0;
   { Params first (spilled from arg registers in the prologue).  Each name gets
     a 4-byte slot; the running Offset is the negative %rbp displacement. }
@@ -214,13 +196,13 @@ begin
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
     Inc(Offset, 4);
-    FFrame.AddObject(P.ParamName, TObject(PtrUInt(Offset)));
+    FFrame.Add(P.ParamName, Offset);
   end;
   { Result slot for a function (not a procedure). }
   if ADecl.ResolvedReturnType <> nil then
   begin
     Inc(Offset, 4);
-    FFrame.AddObject('Result', TObject(PtrUInt(Offset)));
+    FFrame.Add('Result', Offset);
   end;
   { Local var declarations. }
   if ADecl.Body <> nil then
@@ -230,7 +212,7 @@ begin
       for J := 0 to VD.Names.Count - 1 do
       begin
         Inc(Offset, 4);
-        FFrame.AddObject(VD.Names.Strings[J], TObject(PtrUInt(Offset)));
+        FFrame.Add(VD.Names.Strings[J], Offset);
       end;
     end;
   { Round the reserved size up to a 16-byte multiple (SysV alignment).
