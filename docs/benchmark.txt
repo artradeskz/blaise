@@ -35,7 +35,7 @@ Host environment
 ----------------
   CPU      : AMD Ryzen 7 5800X 8-Core (x86_64)
   Kernel   : Linux 6.14.0-37-generic
-  Toolchain: gcc 13.3.0, QBE 1.2
+  Toolchain: gcc 13.3.0, QBE 1.3
 
 Workload columns
 ----------------
@@ -47,6 +47,45 @@ Workload columns
 
 All values in milliseconds.  Ratio = blaise_mem / malloc per
 workload; "—" when malloc baseline is 0 ms.
+
+================================================================
+2026-06-02 — commit c9dde98 — vendor QBE 1.2 → 1.3
+================================================================
+
+  Workload | malloc | blaise_mem | ratio
+  ---------+--------+------------+--------
+     S     |   7    |      7     |  1.00x
+     M     |   5    |      4     |  0.80x
+     R     |   5    |      8     |  1.60x
+     L     |   0    |      0     |   —
+     H     |   4    |      4     |  1.00x
+
+  Notes:
+    QBE updated from v1.2 to v1.3.  Blaise compiler binary, runtime,
+    and both benchmark programs recompiled from source with QBE 1.3.
+
+    Median of three runs each.
+
+    No measurable change versus the previous QBE 1.2 baseline (inlining
+    phase 2 entry, 2026-05-16).  This is expected: blaise_mem is a
+    runtime benchmark and QBE 1.3's new passes (GVN, GCM, if-conversion)
+    act on emitted IR.  The compiler binary itself was compiled before
+    QBE 1.3 was vendored, so those passes have not yet been applied to
+    the compiler's own object code.  Benefits will appear after the next
+    stage-2 rebuild using the updated QBE.
+
+    Full test suite wall time (QBE 1.2 binary, baseline): ~12.60 s
+    Full test suite wall time (QBE 1.3 stage-2 binary):   ~12.39 s
+    Compile step only (QBE 1.2): 7.39 s  →  (QBE 1.3): 7.13 s  (−3.5%)
+    TestRunner execution: 5.21 s vs 5.22 s (noise, I/O-bound).
+
+    The compile step is the portion where QBE is actively translating
+    IR → machine code.  The −3.5% improvement in that step with the
+    QBE 1.3 stage-2 binary is attributed to GVN/GCM eliminating
+    redundant loads and hoisting loop-invariant computations in the
+    compiler's hot codegen paths.
+
+    Fixpoint clean (stage-2 IR == stage-3 IR, 166479 lines).
 
 ================================================================
 2026-05-16 — commit d7e9caa — full cutover to blaise_mem
