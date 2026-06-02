@@ -35,6 +35,13 @@ type
     procedure TestCodegen_Break_InFor_EmitsJmpToLoopEnd;
     procedure TestCodegen_Break_InWhile_EmitsJmpToLoopEnd;
     procedure TestCodegen_Exit_FromFunction_JumpsToFuncExit;
+
+    { Exit(Value) function-result shorthand }
+    procedure TestParse_ExitValue_AttachesValue;
+    procedure TestSemantic_ExitValue_InFunction_OK;
+    procedure TestSemantic_ExitValue_InProcedure_RaisesError;
+    procedure TestSemantic_ExitValue_TypeMismatch_RaisesError;
+    procedure TestCodegen_ExitValue_StoresResultThenJumps;
   end;
 
 implementation
@@ -140,6 +147,48 @@ const
         end.
         ''';
 
+  { Exit(X) inside a function — assigns X to Result, then returns. }
+  SrcExitValueFunc =
+    '''
+        program P;
+        function Classify(N: Integer): Integer;
+        begin
+          if N < 0 then Exit(-1);
+          Result := 1
+        end;
+        var R: Integer;
+        begin
+          R := Classify(-3)
+        end.
+        ''';
+
+  { Exit(X) in a procedure — illegal (no Result). }
+  SrcExitValueProc =
+    '''
+        program P;
+        procedure DoIt;
+        begin
+          Exit(5)
+        end;
+        begin
+          DoIt
+        end.
+        ''';
+
+  { Exit(X) where X is not assignment-compatible with the return type. }
+  SrcExitValueMismatch =
+    '''
+        program P;
+        function F: Integer;
+        begin
+          Exit('text')
+        end;
+        var R: Integer;
+        begin
+          R := F
+        end.
+        ''';
+
 procedure TFlowJumpsTests.TestLexer_Exit_Keyword;
 var L: TLexer; T: TToken;
 begin
@@ -226,6 +275,60 @@ var IR: string;
 begin
   IR := GenIR(SrcExitFromFunc);
   AssertTrue('emits func_exit label', Pos('@func_exit', IR) > 0);
+end;
+
+{ -------------------------------------------------------------------- }
+{ Exit(Value) function-result shorthand                                  }
+{ -------------------------------------------------------------------- }
+
+procedure TFlowJumpsTests.TestParse_ExitValue_AttachesValue;
+var Prog: TProgram; MDecl: TMethodDecl; IfS: TIfStmt; ExitS: TExitStmt;
+begin
+  { function Classify: first body statement is the 'if N < 0 then Exit(-1)'. }
+  Prog := ParseSrc(SrcExitValueFunc);
+  try
+    MDecl := TMethodDecl(Prog.Block.ProcDecls[0]);
+    IfS   := TIfStmt(MDecl.Body.Stmts[0]);
+    AssertTrue('then body is TExitStmt', IfS.ThenStmt is TExitStmt);
+    ExitS := TExitStmt(IfS.ThenStmt);
+    AssertNotNull('Exit value attached', ExitS.Value);
+  finally Prog.Free; end;
+end;
+
+procedure TFlowJumpsTests.TestSemantic_ExitValue_InFunction_OK;
+var Prog: TProgram;
+begin
+  { Analyses cleanly and rewrites into a synthesised Result assignment. }
+  Prog := AnalyseSrc(SrcExitValueFunc);
+  try
+    { After analysis, the parsed Value moved into ResultAssign. }
+    { (Navigation kept light — TestParse covers the shape; here we just
+      confirm analysis does not raise.) }
+  finally Prog.Free; end;
+end;
+
+procedure TFlowJumpsTests.TestSemantic_ExitValue_InProcedure_RaisesError;
+begin
+  AnalyseExpectError(SrcExitValueProc);
+end;
+
+procedure TFlowJumpsTests.TestSemantic_ExitValue_TypeMismatch_RaisesError;
+begin
+  AnalyseExpectError(SrcExitValueMismatch);
+end;
+
+procedure TFlowJumpsTests.TestCodegen_ExitValue_StoresResultThenJumps;
+var IR: string; StorePos, JmpPos: Integer;
+begin
+  { Exit(-1) lowers to 'Result := -1' (a store into %_var_Result) followed by
+    the exit jump to @func_exit. }
+  IR := GenIR(SrcExitValueFunc);
+  AssertTrue('stores into Result slot', Pos('%_var_Result', IR) > 0);
+  AssertTrue('jumps to func_exit', Pos('@func_exit', IR) > 0);
+  { The Result store must precede the exit jump in the first Exit path. }
+  StorePos := Pos('storew', IR);
+  JmpPos   := Pos('jmp @func_exit', IR);
+  AssertTrue('store precedes exit jump', (StorePos > 0) and (StorePos < JmpPos));
 end;
 
 initialization

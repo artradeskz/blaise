@@ -293,8 +293,17 @@ type
     destructor Destroy; override;
   end;
 
-  { 'exit' statement — returns from the current procedure/function. }
-  TExitStmt = class(TASTStmt);
+  { 'exit' statement — returns from the current procedure/function.
+    Value is the Exit(X) function-result shorthand: the parser stores the raw
+    X here.  The semantic pass validates it and builds ResultAssign (a
+    synthesised 'Result := X'); codegen emits ResultAssign before the exit
+    jump.  Both nil = bare Exit. }
+  TExitStmt = class(TASTStmt)
+  public
+    Value:        TASTExpr;     { owned; nil = bare exit; raw parsed expr }
+    ResultAssign: TASTStmt;     { owned; synthesised 'Result := Value' (TAssignment) }
+    destructor Destroy; override;
+  end;
 
   { 'break' statement — exits the innermost loop. }
   TBreakStmt = class(TASTStmt);
@@ -953,6 +962,12 @@ end;
 { TRaiseStmt }
 
 destructor TRaiseStmt.Destroy;
+begin
+  { Owned class fields released by ARC field cleanup. }
+  inherited Destroy;
+end;
+
+destructor TExitStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
   inherited Destroy;
@@ -1705,6 +1720,7 @@ var
   TFS_: TTryFinallyStmt;
   TES_: TTryExceptStmt;
   RaS_: TRaiseStmt;
+  ExS_: TExitStmt;
   CSS_: TCaseStmt;
   FAS_: TFieldAssignment;
   SSA_: TStaticSubscriptAssign;
@@ -1797,7 +1813,11 @@ begin
     Result := RaS_;
   end
   else if AStmt is TExitStmt then
-    Result := TExitStmt.Create
+  begin
+    ExS_       := TExitStmt.Create;
+    ExS_.Value := CloneExpr(TExitStmt(AStmt).Value);
+    Result     := ExS_;
+  end
   else if AStmt is TBreakStmt then
     Result := TBreakStmt.Create
   else if AStmt is TContinueStmt then

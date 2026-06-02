@@ -28,6 +28,7 @@ type
     procedure TestRun_For_BreakExitsEarly;
     procedure TestRun_For_ContinueSkipsIteration;
     procedure TestRun_Nested_For_Loops;
+    procedure TestRun_ExitValue_ReturnsEarly;
   end;
 
 implementation
@@ -47,6 +48,31 @@ const
     begin
       for I := 1 to 3 do
         WriteLn(I)
+    end.
+    ''';
+
+  { Exit(X) function-result shorthand — early returns with a value, including
+    a string return (exercises ARC on the returned value), and a fall-through
+    case where no Exit(X) fires. }
+  SrcExitValue = '''
+    program P;
+    function Classify(n: Integer): Integer;
+    begin
+      if n < 0 then Exit(-1);
+      if n = 0 then Exit(0);
+      Exit(1)
+    end;
+    function Pick(b: Boolean): string;
+    begin
+      if b then Exit('yes');
+      Result := 'no'
+    end;
+    begin
+      WriteLn(Classify(-9));
+      WriteLn(Classify(0));
+      WriteLn(Classify(42));
+      WriteLn(Pick(True));
+      WriteLn(Pick(False))
     end.
     ''';
 
@@ -179,6 +205,17 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcNestedFor, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nested 2x2', '11' + LE + '12' + LE + '21' + LE + '22' + LE, Output);
+end;
+
+procedure TE2EControlFlowTests.TestRun_ExitValue_ReturnsEarly;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcExitValue, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  { Classify: -1, 0, 1; Pick: yes (Exit), no (fall-through). }
+  AssertEquals('exit-value returns',
+    '-1' + LE + '0' + LE + '1' + LE + 'yes' + LE + 'no' + LE, Output);
 end;
 
 initialization

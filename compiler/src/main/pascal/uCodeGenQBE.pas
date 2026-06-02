@@ -1506,8 +1506,11 @@ begin
     SSubA := TStaticSubscriptAssign(AStmt);
     CollectAddressTakenExpr(SSubA.IndexExpr, ASet);
     CollectAddressTakenExpr(SSubA.ValueExpr, ASet);
-  end;
-  { TExitStmt, TBreakStmt, TContinueStmt — no expressions to walk }
+  end
+  else if (AStmt is TExitStmt) and (TExitStmt(AStmt).ResultAssign <> nil) then
+    { Exit(X) carries a synthesised 'Result := X' — walk it. }
+    CollectAddressTakenStmt(TExitStmt(AStmt).ResultAssign, ASet);
+  { TBreakStmt, TContinueStmt, bare TExitStmt — no expressions to walk }
 end;
 
 function TCodeGenQBE.StmtHasTry(AStmt: TASTStmt): Boolean;
@@ -2235,6 +2238,11 @@ begin
     EmitProcCall(TProcCall(AStmt))
   else if AStmt is TExitStmt then
   begin
+    { Exit(X) shorthand: emit the synthesised 'Result := X' (built by the
+      semantic pass) before the return, so the value flows through the normal
+      assignment path (widening, ARC for string/class returns, etc.). }
+    if TExitStmt(AStmt).ResultAssign <> nil then
+      EmitAssignment(TAssignment(TExitStmt(AStmt).ResultAssign));
     { Inline frame: Exit jumps to the per-call-site end label, not the
       caller's exit.  No exception unwinding needed because the analyser
       rejects bodies that contain try frames. }

@@ -103,6 +103,7 @@ TRY            = "try"            ;
 EXCEPT         = "except"         ;
 FINALLY        = "finally"        ;
 RAISE          = "raise"          ;
+EXIT           = "exit"           ;
 NIL            = "nil"            ;
 IS             = "is"             ;
 AS             = "as"             ;
@@ -599,6 +600,7 @@ Stmt
     | TryFinallyStmt
     | TryExceptStmt
     | RaiseStmt
+    | ExitStmt
     | CompoundStmt
     | PointerWriteStmt
     | StaticSubscriptAssign
@@ -657,6 +659,14 @@ OnClause
 
 RaiseStmt
     = RAISE [ Expr ]
+    ;
+
+(* Exit returns from the current routine.  The optional Exit(X) form is the
+ * function-result shorthand: it assigns X to Result, then returns.  X must be
+ * assignment-compatible with the return type; Exit(X) is only valid inside a
+ * function (a procedure has no Result). *)
+ExitStmt
+    = EXIT [ LPAREN Expr RPAREN ]
     ;
 
 CompoundStmt

@@ -1851,6 +1851,7 @@ var
   CastRcv:     TASTExpr;
   FCallNode:   TFuncCallExpr;
   SubAssign:   TStaticSubscriptAssign;
+  ExitS:       TExitStmt;
 begin
   Result := nil;
 
@@ -1895,10 +1896,20 @@ begin
 
   if Check(tkExit) then
   begin
-    Result      := TExitStmt.Create;
-    Result.Line := FCurrent.Line;
-    Result.Col  := FCurrent.Col;
+    ExitS      := TExitStmt.Create;
+    ExitS.Line := FCurrent.Line;
+    ExitS.Col  := FCurrent.Col;
     Advance;
+    { Exit(X) shorthand: assign X to Result before returning.  Semantic checks
+      X is assignment-compatible with the return type and that the enclosing
+      routine is a function (not a procedure). }
+    if Check(tkLParen) then
+    begin
+      Advance;
+      ExitS.Value := Self.ParseExpr;
+      Expect(tkRParen);
+    end;
+    Result := ExitS;
     Exit;
   end;
 

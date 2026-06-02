@@ -4077,6 +4077,8 @@ var
   VarSym:    TSymbol;
   StartType: TTypeDesc;
   EndType:   TTypeDesc;
+  ResultSym:  TSymbol;
+  ExitAssign: TAssignment;
   CollType:     TTypeDesc;
   CollRT:       TRecordTypeDesc;
   GetEnumDecl:  TMethodDecl;
@@ -4416,8 +4418,28 @@ begin
   end
   else if AStmt is TExitStmt then
   begin
-    { No semantic checks needed — a bare 'exit' is valid in any method or
-      the main program block. }
+    { A bare 'exit' is valid in any method or the main program block.  The
+      Exit(X) shorthand assigns X to Result, so it is only valid inside a
+      function (where Result is in scope).  Rewrite it into a synthesised
+      'Result := X' (analysed like any assignment, so it inherits all the
+      type-check / widening / ARC handling) that codegen emits before the
+      exit jump. }
+    if TExitStmt(AStmt).Value <> nil then
+    begin
+      ResultSym := FTable.Lookup('Result');
+      if (ResultSym = nil) or (ResultSym.Kind <> skVariable) then
+        SemanticError(
+          '''Exit(Value)'' is only valid inside a function',
+          AStmt.Line, AStmt.Col);
+      ExitAssign      := TAssignment.Create;
+      ExitAssign.Line := AStmt.Line;
+      ExitAssign.Col  := AStmt.Col;
+      ExitAssign.Name := 'Result';
+      ExitAssign.Expr := TExitStmt(AStmt).Value;
+      TExitStmt(AStmt).Value := nil;   { ownership moves into the assignment }
+      AnalyseStmt(ExitAssign);          { fills ResolvedLhsType + checks types }
+      TExitStmt(AStmt).ResultAssign := ExitAssign;
+    end;
   end
   else if AStmt is TBreakStmt then
   begin

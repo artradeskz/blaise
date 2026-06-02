@@ -2582,6 +2582,32 @@ for simplicity and ABI predictability.  Set types also use `w` for sets with
 Blaise currently follows FPC's `Result` convention inside functions.
 No change is planned, but this should be formally documented.
 
+==== `Exit(Value)` function-result shorthand
+
+Inside a function, `Exit(X)` is shorthand for `Result := X; Exit;` — it assigns
+`X` to `Result` and returns immediately.  This matches Delphi/FPC and makes
+early returns with a value concise:
+
+[source,pascal]
+----
+function Classify(N: Integer): Integer;
+begin
+  if N < 0 then Exit(-1);
+  if N = 0 then Exit(0);
+  Result := 1
+end;
+----
+
+`Exit(X)` is only valid inside a function (a procedure has no `Result`); using
+it in a procedure is a semantic error.  `X` must be assignment-compatible with
+the return type — the same check (and the same widening / ARC handling for
+string and class returns) as a direct `Result := X`.
+
+Implementation: the parser attaches the parsed `X` to the `TExitStmt`; the
+semantic pass rewrites it into a synthesised `Result := X` assignment (so it
+reuses the full assignment-analysis path) which codegen emits immediately
+before the normal exit jump.  A bare `Exit` is unchanged.
+
 == Typed Constants
 
 === Decision
