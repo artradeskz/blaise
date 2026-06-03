@@ -82,6 +82,9 @@ type
     procedure TestRun_Native_Record_GlobalReadWrite;
     procedure TestRun_Native_Record_LocalReadWrite;
     procedure TestRun_Native_Record_AsParam;
+    procedure TestRun_Native_StaticArray_GlobalReadWrite;
+    procedure TestRun_Native_StaticArray_LocalReadWrite;
+    procedure TestRun_Native_StaticArray_NonZeroLow;
   end;
 
 implementation
@@ -688,6 +691,50 @@ const
     end.
     ''';
 
+  { Static array global: declare at program level, write elements, read back. }
+  SrcStaticArrayGlobal = '''
+    program P;
+    var A: array[0..4] of Integer;
+    begin
+      A[0] := 10;
+      A[2] := 30;
+      A[4] := 50;
+      WriteLn(A[0]);
+      WriteLn(A[2]);
+      WriteLn(A[4]);
+      WriteLn(A[0] + A[2] + A[4])
+    end.
+    ''';
+
+  { Static array local inside a function. }
+  SrcStaticArrayLocal = '''
+    program P;
+    function SumArray: Integer;
+    var
+      B: array[0..2] of Integer;
+    begin
+      B[0] := 1;
+      B[1] := 2;
+      B[2] := 3;
+      Result := B[0] + B[1] + B[2]
+    end;
+    begin
+      WriteLn(SumArray())
+    end.
+    ''';
+
+  { Static array with non-zero lower bound: A[1..3]. }
+  SrcStaticArrayNonZeroLow = '''
+    program P;
+    var C: array[1..3] of Integer;
+    begin
+      C[1] := 100;
+      C[2] := 200;
+      C[3] := 300;
+      WriteLn(C[1] + C[2] + C[3])
+    end.
+    ''';
+
 { Every test below runs its source through BOTH backends (beQBE, beNative)
   and asserts identical stdout/exit on each — the native backend's whole
   correctness model is parity with QBE on the same source, so this exercises
@@ -926,6 +973,25 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   { |4-1| + |6-2| = 3 + 4 = 7 }
   AssertRunsOnBoth(SrcRecordParam, '7' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticArray_GlobalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcStaticArrayGlobal, '10' + LE + '30' + LE + '50' + LE + '90' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticArray_LocalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcStaticArrayLocal, '6' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticArray_NonZeroLow;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { 100 + 200 + 300 = 600 }
+  AssertRunsOnBoth(SrcStaticArrayNonZeroLow, '600' + LE, 0);
 end;
 
 initialization

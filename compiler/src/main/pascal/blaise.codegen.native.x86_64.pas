@@ -259,12 +259,11 @@ begin
   for I := 0 to FDataGlobals.Count - 1 do
   begin
     Name := FDataGlobals.Keys[I];
-    { Records: emit a zeroed block of TotalSize bytes aligned to the record's
-      natural alignment (at least 4, up to 8). }
+    { Records and static arrays: emit a zeroed block of RawSize bytes. }
     if (Self.GlobalType(Name) <> nil) and
-       (Self.GlobalType(Name).Kind = tyRecord) then
+       (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray]) then
     begin
-      Sz := TRecordTypeDesc(Self.GlobalType(Name)).TotalSize;
+      Sz := Self.GlobalType(Name).RawSize;
       Self.Emit('.balign 8');
       if Copy(Name, 1, 2) <> '.L' then
         Self.Emit('.globl ' + Name);
@@ -373,8 +372,8 @@ procedure TX86_64Backend.AddSlot(const AName: string; AType: TTypeDesc;
 var
   Sz: Integer;
 begin
-  if (AType <> nil) and (AType.Kind = tyRecord) then
-    Sz := (TRecordTypeDesc(AType).TotalSize + 7) and (-8)
+  if (AType <> nil) and (AType.Kind in [tyRecord, tyStaticArray]) then
+    Sz := (AType.RawSize + 7) and (-8)
   else
     Sz := 8;
   Inc(AOffset, Sz);
@@ -498,6 +497,7 @@ var
   BE:  TBinaryExpr;
   FC:  TFuncCallExpr;
   FAE: TFieldAccessExpr;
+  SAE: TStringSubscriptExpr;
   Unsigned: Boolean;
 begin
   if AExpr is TIntLiteral then
@@ -510,6 +510,16 @@ begin
 
   if AExpr is TIdentExpr then
   begin
+    { Static array identifier: return its base address for subscript use. }
+    if (TIdentExpr(AExpr).ResolvedType <> nil) and
+       (TIdentExpr(AExpr).ResolvedType.Kind = tyStaticArray) then
+    begin
+      if Self.IsLocal(TIdentExpr(AExpr).Name) then
+        Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(AExpr).Name)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(AExpr).Name]));
+      Exit;
+    end;
     if TIdentExpr(AExpr).IsConstant then
       Self.Emit(Format(#9'movabsq $%s, %%rax',
         [IntToStr(TIdentExpr(AExpr).ConstValue)]))
@@ -611,6 +621,29 @@ begin
       raise ENativeCodeGenError.Create(
         'native backend: unsupported binary operator in integer expression');
     end;
+    Exit;
+  end;
+
+  { Static array element read: A[I] where A: array[L..H] of T.
+    Uses TStringSubscriptExpr (the parser's postfix-bracket node). }
+  if (AExpr is TStringSubscriptExpr) and
+     (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType <> nil) and
+     (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind = tyStaticArray) then
+  begin
+    SAE := TStringSubscriptExpr(AExpr);
+    { Base address of array into %rcx. }
+    Self.EmitExprToEax(SAE.StrExpr);  { returns base address for tyStaticArray }
+    Self.Emit(#9'movq %rax, %rcx');
+    { Index into %rax, subtract LowBound, multiply by element size. }
+    Self.EmitExprToEax(SAE.IndexExpr);
+    if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound <> 0 then
+      Self.Emit(Format(#9'subq $%d, %%rax',
+        [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
+    Self.Emit(Format(#9'imulq $%d, %%rax',
+      [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+    Self.Emit(#9'addq %rcx, %rax');   { %rax = element address }
+    Self.EmitLoadVar('(%rax)',
+      TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
   end;
 
@@ -808,6 +841,7 @@ var
   RepS:  TRepeatStmt;
   Asgn:  TAssignment;
   FA:    TFieldAssignment;
+  SSA:   TStaticSubscriptAssign;
   I:     Integer;
   LThen, LElse, LEnd:    string;
   LCond, LBody:          string;
@@ -1000,6 +1034,37 @@ begin
           FA.FieldInfo.TypeDesc);
       end;
     end;
+    Exit;
+  end;
+
+  if AStmt is TStaticSubscriptAssign then
+  begin
+    SSA := TStaticSubscriptAssign(AStmt);
+    { Only integer-family element types handled for now. }
+    if (SSA.ResolvedArrayType = nil) or
+       (SSA.ResolvedArrayType.Kind <> tyStaticArray) then
+      raise ENativeCodeGenError.Create(
+        'native backend: static subscript assign on non-static-array');
+    { Compute element address: base + (Index - LowBound) * ElemSize }
+    { Evaluate value first, push to preserve across address computation. }
+    Self.EmitExprToEax(SSA.ValueExpr);
+    Self.Emit(#9'pushq %rax');
+    { Compute index offset into %rax. }
+    Self.EmitExprToEax(SSA.IndexExpr);
+    if TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound <> 0 then
+      Self.Emit(Format(#9'subq $%d, %%rax',
+        [TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound]));
+    Self.Emit(Format(#9'imulq $%d, %%rax',
+      [TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize]));
+    { Base address into %rcx. }
+    if Self.IsLocal(SSA.ArrayName) then
+      Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [SSA.ArrayName]));
+    Self.Emit(#9'addq %rcx, %rax');   { %rax = element address }
+    Self.Emit(#9'movq %rax, %rcx');   { save element address to %rcx }
+    Self.Emit(#9'popq %rax');          { restore value }
+    Self.EmitStoreVar('(%rcx)', TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType);
     Exit;
   end;
 
@@ -1260,7 +1325,8 @@ begin
   begin
     VD := TVarDecl(AProg.Block.Decls.Items[I]);
     if IsIntFamily(VD.ResolvedType) or
-       ((VD.ResolvedType <> nil) and (VD.ResolvedType.Kind = tyRecord)) then
+       ((VD.ResolvedType <> nil) and
+        (VD.ResolvedType.Kind in [tyRecord, tyStaticArray])) then
       for J := 0 to VD.Names.Count - 1 do
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
   end;

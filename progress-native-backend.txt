@@ -54,7 +54,16 @@ Branch: native-codegen
         Field address = base + FieldInfo.Offset: offset=0 uses VarOperand/RIP
         directly; non-zero offsets leaq the base into %rcx then use N(%rcx).
         3 new e2e tests (RecordGlobal, RecordLocal, RecordParam) on both backends.
-        STILL TODO for full M4: arrays.
+        Static arrays DONE 2026-06-03 — TStaticSubscriptAssign (write A[I]:=V)
+        and TStringSubscriptExpr/tyStaticArray (read A[I]) for integer-family
+        elements; zero and non-zero LowBound; local and global arrays.
+        AddSlot uses AType.RawSize for tyStaticArray (rounds to 8).
+        EmitDataSection emits .skip N for array globals.
+        EmitProgram registers array-typed globals.
+        TIdentExpr/tyStaticArray returns leaq base address (not a load).
+        Element address = base + (I − LowBnd) × ElemSize via imulq/addq.
+        3 new e2e tests (GlobalReadWrite, LocalReadWrite, NonZeroLow).
+        M4 COMPLETE.
 [~] M5  function calls — direct calls to user procs/functions. DONE 2026-06-02.
         Stack-frame model (params+Result+locals as -N(%rbp) slots; FFrame maps
         name->offset); EmitFunctionDef (prologue, spill arg regs to param slots,
