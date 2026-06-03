@@ -120,6 +120,18 @@ type
     procedure TestRun_Native_String_Format_StrArg;
     procedure TestRun_Native_String_Format_MixedArgs;
     procedure TestRun_Native_String_ConcatWithInt;
+
+    { M7d — exception handling }
+    procedure TestRun_Native_TryFinally_Normal;
+    procedure TestRun_Native_TryFinally_NestedNormal;
+    procedure TestRun_Native_TryFinally_ExitUnwind;
+    procedure TestRun_Native_TryFinally_BreakUnwind;
+    procedure TestRun_Native_TryExcept_Bare;
+    procedure TestRun_Native_TryExcept_TypedHandler;
+    procedure TestRun_Native_TryExcept_SubclassMatch;
+    procedure TestRun_Native_TryExcept_BareRaisePropagate;
+    procedure TestRun_Native_TryExcept_ElseBody;
+    procedure TestRun_Native_ExitThroughNestedFinally;
   end;
 
 implementation
@@ -1515,6 +1527,247 @@ procedure TE2ENativeTests.TestRun_Native_String_ConcatWithInt;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcConcatWithInt, 'x=7' + LE, 0);
+end;
+
+{ M7d — exception handling source programs }
+const
+  SrcExcBase =
+    '''
+        program P;
+        type
+          Exception = class
+            FMessage: string;
+            property Message: string read FMessage;
+          end;
+          EFoo = class(Exception) end;
+          EBar = class(EFoo) end;
+    ''';
+
+  SrcTryFinallyNormal = '''
+    program P;
+    begin
+      try
+        WriteLn('in_try')
+      finally
+        WriteLn('in_finally')
+      end
+    end.
+    ''';
+
+  SrcTryFinallyNested = '''
+    program P;
+    begin
+      try
+        try
+          WriteLn('inner_try')
+        finally
+          WriteLn('inner_fin')
+        end
+      finally
+        WriteLn('outer_fin')
+      end
+    end.
+    ''';
+
+  SrcExitThroughFinally = '''
+    program P;
+    procedure Run;
+    begin
+      try
+        WriteLn('in_try');
+        Exit;
+        WriteLn('unreached')
+      finally
+        WriteLn('in_finally')
+      end
+    end;
+    begin
+      Run;
+      WriteLn('after')
+    end.
+    ''';
+
+  SrcBreakThroughFinally = '''
+    program P;
+    var I: Integer;
+    begin
+      for I := 0 to 3 do
+      begin
+        try
+          if I = 2 then Break;
+          WriteLn('iter')
+        finally
+          WriteLn('fin')
+        end
+      end;
+      WriteLn('done')
+    end.
+    ''';
+
+  SrcTryExceptBare = '''
+    program P;
+    var X: Integer;
+    begin
+      X := 0;
+      try
+        X := 1
+      except
+        X := 99
+      end;
+      WriteLn(X)
+    end.
+    ''';
+
+  SrcTypedExcept =
+    SrcExcBase +
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            raise EFoo.Create
+          except
+            on E: EFoo do X := 42;
+            on E: Exception do X := 1
+          end;
+          WriteLn(X)
+        end.
+    ''';
+
+  SrcSubclassMatch =
+    SrcExcBase +
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            raise EBar.Create
+          except
+            on E: EFoo do X := 7
+          end;
+          WriteLn(X)
+        end.
+    ''';
+
+  SrcBareRaisePropagate =
+    SrcExcBase +
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            try
+              raise EFoo.Create
+            except
+              on E: EFoo do begin X := 1; raise end
+            end
+          except
+            on E: EFoo do X := 2
+          end;
+          WriteLn(X)
+        end.
+    ''';
+
+  SrcElseBody =
+    SrcExcBase +
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            raise EFoo.Create
+          except
+            on E: EBar do X := 9
+            else X := 5
+          end;
+          WriteLn(X)
+        end.
+    ''';
+
+  SrcExitNestedFinally = '''
+    program P;
+    procedure Run;
+    begin
+      try
+        try
+          Exit
+        finally
+          WriteLn('inner_fin')
+        end
+      finally
+        WriteLn('outer_fin')
+      end
+    end;
+    begin
+      Run;
+      WriteLn('after')
+    end.
+    ''';
+
+procedure TE2ENativeTests.TestRun_Native_TryFinally_Normal;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcTryFinallyNormal, 'in_try' + LE + 'in_finally' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryFinally_NestedNormal;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcTryFinallyNested,
+    'inner_try' + LE + 'inner_fin' + LE + 'outer_fin' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryFinally_ExitUnwind;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcExitThroughFinally,
+    'in_try' + LE + 'in_finally' + LE + 'after' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryFinally_BreakUnwind;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcBreakThroughFinally,
+    'iter' + LE + 'fin' + LE +
+    'iter' + LE + 'fin' + LE +
+    'fin' + LE + 'done' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryExcept_Bare;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcTryExceptBare, '1' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryExcept_TypedHandler;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcTypedExcept, '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryExcept_SubclassMatch;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcSubclassMatch, '7' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryExcept_BareRaisePropagate;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcBareRaisePropagate, '2' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TryExcept_ElseBody;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcElseBody, '5' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ExitThroughNestedFinally;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcExitNestedFinally,
+    'inner_fin' + LE + 'outer_fin' + LE + 'after' + LE, 0);
 end;
 
 initialization
