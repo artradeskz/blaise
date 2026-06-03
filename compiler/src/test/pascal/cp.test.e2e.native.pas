@@ -89,6 +89,16 @@ type
     procedure TestRun_Native_IndirectCall_MethodPtr;
     { TODO M7: record-returning function — deferred until sret/aggregate support }
     procedure TestRun_Native_RecordReturnFunction;
+
+    { M6 — floats }
+    procedure TestRun_Native_Double_GlobalReadWrite;
+    procedure TestRun_Native_Double_LocalReadWrite;
+    procedure TestRun_Native_Double_Arithmetic;
+    procedure TestRun_Native_Double_Comparison;
+    procedure TestRun_Native_Double_WriteLn;
+    procedure TestRun_Native_Single_GlobalReadWrite;
+    procedure TestRun_Native_Double_FuncParam;
+    procedure TestRun_Native_Double_FuncReturn;
   end;
 
 implementation
@@ -760,6 +770,103 @@ const
     end.
     ''';
 
+  { M6 — float source programs }
+
+  SrcDoubleGlobal = '''
+    program P;
+    var D: Double;
+    begin
+      D := 3.14;
+      WriteLn(D)
+    end.
+    ''';
+
+  SrcDoubleLocal = '''
+    program P;
+    procedure ShowDouble;
+    var D: Double;
+    begin
+      D := 2.5;
+      WriteLn(D)
+    end;
+    begin
+      ShowDouble
+    end.
+    ''';
+
+  SrcDoubleArith = '''
+    program P;
+    var A, B: Double;
+    begin
+      A := 10.0;
+      B := 3.0;
+      WriteLn(A + B);
+      WriteLn(A - B);
+      WriteLn(A * B);
+      WriteLn(A / B)
+    end.
+    ''';
+
+  SrcDoubleCompare = '''
+    program P;
+    var A, B: Double;
+    begin
+      A := 1.5;
+      B := 2.5;
+      if A < B then
+        WriteLn(1)
+      else
+        WriteLn(0);
+      if A = B then
+        WriteLn(1)
+      else
+        WriteLn(0)
+    end.
+    ''';
+
+  SrcDoubleWriteLn = '''
+    program P;
+    var D: Double;
+    begin
+      D := 1.5;
+      WriteLn(D);
+      WriteLn(D + 1.0)
+    end.
+    ''';
+
+  SrcSingleGlobal = '''
+    program P;
+    var S: Single;
+    begin
+      S := 1.5;
+      WriteLn(S)
+    end.
+    ''';
+
+  SrcDoubleFuncParam = '''
+    program P;
+    function Scale(V: Double; Factor: Double): Double;
+    begin
+      Result := V * Factor
+    end;
+    begin
+      WriteLn(Scale(3.0, 2.0))
+    end.
+    ''';
+
+  SrcDoubleFuncReturn = '''
+    program P;
+    function Half(V: Double): Double;
+    begin
+      Result := V / 2.0
+    end;
+    var D: Double;
+    begin
+      D := Half(7.0);
+      WriteLn(D)
+    end.
+    ''';
+
 { Every test below runs its source through BOTH backends (beQBE, beNative)
   and asserts identical stdout/exit on each — the native backend's whole
   correctness model is parity with QBE on the same source, so this exercises
@@ -1044,6 +1151,60 @@ begin
   AssertEquals('[qbe] output', '3' + LE + '7' + LE, Output);
   { Native path deferred to M7 (sret / aggregate return not yet implemented). }
   Ignore('TODO M7: record-returning function not yet supported on native backend');
+end;
+
+{ ------------------------------------------------------------------ }
+{ M6 — float parity                                                    }
+{ ------------------------------------------------------------------ }
+
+procedure TE2ENativeTests.TestRun_Native_Double_GlobalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDoubleGlobal, '3.14' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Double_LocalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDoubleLocal, '2.5' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Double_Arithmetic;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDoubleArith, '13' + LE + '7' + LE + '30' + LE + '3.33333333333333' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Double_Comparison;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDoubleCompare, '1' + LE + '0' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Double_WriteLn;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDoubleWriteLn, '1.5' + LE + '2.5' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Single_GlobalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcSingleGlobal, '1.5' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Double_FuncParam;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { Scale(3.0, 2.0) = 6.0 }
+  AssertRunsOnBoth(SrcDoubleFuncParam, '6' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Double_FuncReturn;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { Half(7.0) = 3.5 }
+  AssertRunsOnBoth(SrcDoubleFuncReturn, '3.5' + LE, 0);
 end;
 
 initialization

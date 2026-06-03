@@ -118,6 +118,14 @@ type
                                AArgs: TObjectList);
     { Evaluate an integer expression; result left in %rax (64-bit-extended). }
     procedure EmitExprToEax(AExpr: TASTExpr);
+    { Evaluate a float expression (tyDouble or tySingle); result left in %xmm0.
+      Binary ops: left → push onto int stack via subq/movsd, right → %xmm0,
+      pop left → %xmm1, then addsd/subsd/mulsd/divsd. }
+    procedure EmitExprToXmm0(AExpr: TASTExpr);
+    { Load a float (Double or Single) from AOperand into %xmm0. }
+    procedure EmitLoadFloat(const AOperand: string; AType: TTypeDesc);
+    { Store %xmm0 into AOperand at the float type's width. }
+    procedure EmitStoreFloat(const AOperand: string; AType: TTypeDesc);
     { The integer-family type to use when loading the value of AExpr: the
       recorded slot type for a known local/global (authoritative), otherwise
       the node's ResolvedType. }
@@ -169,10 +177,23 @@ begin
     tyInt64, tyUInt64,
     tyProcedural, tyPointer, tyPChar, tyClass,
     tyString, tyMetaClass:                      Result := 8;
+    tyDouble:                                   Result := 8;
+    tySingle:                                   Result := 4;
   else
     Result := 4;
   end;
 end;
+
+{ True for floating-point types supported in %xmm registers. }
+function IsFloatFamily(AType: TTypeDesc): Boolean;
+begin
+  Result := (AType <> nil) and (AType.Kind in [tyDouble, tySingle]);
+end;
+
+{ SysV AMD64 XMM argument registers, in order. }
+const
+  SysVXmmArgRegs: array[0..5] of string =
+    ('%xmm0', '%xmm1', '%xmm2', '%xmm3', '%xmm4', '%xmm5');
 
 { True for unsigned integer-family types. Byte/Word/UInt32/UInt64 are
   unsigned; Boolean and Enum hold non-negative ordinals and so are read
@@ -269,6 +290,27 @@ begin
         Self.Emit('.globl ' + Name);
       Self.Emit(Name + ':');
       Self.Emit(Format(#9'.skip %d', [Sz]));
+      Continue;
+    end;
+    { Float globals need float-specific zero initialisers. }
+    if (Self.GlobalType(Name) <> nil) and
+       (Self.GlobalType(Name).Kind = tyDouble) then
+    begin
+      Self.Emit('.balign 8');
+      if Copy(Name, 1, 2) <> '.L' then
+        Self.Emit('.globl ' + Name);
+      Self.Emit(Name + ':');
+      Self.Emit(#9'.double 0.0');
+      Continue;
+    end;
+    if (Self.GlobalType(Name) <> nil) and
+       (Self.GlobalType(Name).Kind = tySingle) then
+    begin
+      Self.Emit('.balign 4');
+      if Copy(Name, 1, 2) <> '.L' then
+        Self.Emit('.globl ' + Name);
+      Self.Emit(Name + ':');
+      Self.Emit(#9'.float 0.0');
       Continue;
     end;
     Sz := IntByteSize(Self.GlobalType(Name));
@@ -484,6 +526,181 @@ begin
     else
       Self.Emit(#9'movslq %eax, %rax');
   end;
+end;
+
+{ Load a float value from memory into %xmm0. }
+procedure TX86_64Backend.EmitLoadFloat(const AOperand: string; AType: TTypeDesc);
+begin
+  if (AType <> nil) and (AType.Kind = tySingle) then
+    Self.Emit(Format(#9'movss %s, %%xmm0', [AOperand]))
+  else
+    Self.Emit(Format(#9'movsd %s, %%xmm0', [AOperand]));
+end;
+
+{ Store %xmm0 into memory. }
+procedure TX86_64Backend.EmitStoreFloat(const AOperand: string; AType: TTypeDesc);
+begin
+  if (AType <> nil) and (AType.Kind = tySingle) then
+    Self.Emit(Format(#9'movss %%xmm0, %s', [AOperand]))
+  else
+    Self.Emit(Format(#9'movsd %%xmm0, %s', [AOperand]));
+end;
+
+{ Evaluate a floating-point expression, leaving the result in %xmm0.
+  Binary operators: push %xmm0 onto the stack via subq/movsd, evaluate the
+  right operand into %xmm0, then pop the left into %xmm1 and combine.
+  This mirrors the integer strategy (push %rax) without requiring movaps/movups
+  shuffles. }
+procedure TX86_64Backend.EmitExprToXmm0(AExpr: TASTExpr);
+var
+  FL:  TFloatLiteral;
+  BE:  TBinaryExpr;
+  Ty:  TTypeDesc;
+  IsS: Boolean;
+begin
+  if AExpr is TFloatLiteral then
+  begin
+    FL  := TFloatLiteral(AExpr);
+    Ty  := AExpr.ResolvedType;
+    IsS := (Ty <> nil) and (Ty.Kind = tySingle);
+    { Use a .rodata constant for the immediate float — x86 has no mov-imm
+      for xmm registers.  Emit a file-local label that holds the 8-byte
+      (Double) or 4-byte (Single) encoding of the literal. }
+    if IsS then
+    begin
+      Self.Emit(Format(#9'movss .LF%s(%%rip), %%xmm0',
+        [IntToStr(FLabelCount)]));
+      { Defer the .rodata entry to the data section by registering a synthetic
+        global with a special FP-literal tag.  We emit it directly since our
+        data section is collected: just write it now in a .section .rodata block. }
+      Self.Emit('.section .rodata');
+      Self.Emit('.balign 4');
+      Self.Emit(Format('.LF%s:', [IntToStr(FLabelCount)]));
+      Self.Emit(Format(#9'.float %s', [FL.Value]));
+      Self.Emit('.text');
+      Inc(FLabelCount);
+    end
+    else
+    begin
+      Self.Emit(Format(#9'movsd .LF%s(%%rip), %%xmm0',
+        [IntToStr(FLabelCount)]));
+      Self.Emit('.section .rodata');
+      Self.Emit('.balign 8');
+      Self.Emit(Format('.LF%s:', [IntToStr(FLabelCount)]));
+      Self.Emit(Format(#9'.double %s', [FL.Value]));
+      Self.Emit('.text');
+      Inc(FLabelCount);
+    end;
+    Exit;
+  end;
+
+  if AExpr is TIdentExpr then
+  begin
+    Ty := AExpr.ResolvedType;
+    if (Ty = nil) and Self.IsLocal(TIdentExpr(AExpr).Name) then
+      Ty := Self.LocalType(TIdentExpr(AExpr).Name);
+    if (Ty = nil) then
+      Ty := Self.GlobalType(TIdentExpr(AExpr).Name);
+    Self.EmitLoadFloat(Self.VarOperand(TIdentExpr(AExpr).Name), Ty);
+    Exit;
+  end;
+
+  if AExpr is TBinaryExpr then
+  begin
+    BE  := TBinaryExpr(AExpr);
+    IsS := (BE.ResolvedType <> nil) and (BE.ResolvedType.Kind = tySingle);
+    { left → %xmm0, push to stack via subq/movsd; right → %xmm0;
+      pop left into %xmm1 via movsd/addq. }
+    Self.EmitExprToXmm0(BE.Left);
+    Self.Emit(#9'subq $8, %rsp');
+    if IsS then
+      Self.Emit(#9'movss %xmm0, (%rsp)')
+    else
+      Self.Emit(#9'movsd %xmm0, (%rsp)');
+    Self.EmitExprToXmm0(BE.Right);
+    if IsS then
+    begin
+      Self.Emit(#9'movss (%rsp), %xmm1');
+      Self.Emit(#9'addq $8, %rsp');
+      case BE.Op of
+        boAdd:   Self.Emit(#9'addss %xmm0, %xmm1');
+        boSub:   Self.Emit(#9'subss %xmm0, %xmm1');  { left - right }
+        boMul:   Self.Emit(#9'mulss %xmm0, %xmm1');
+        boSlash: Self.Emit(#9'divss %xmm0, %xmm1');
+        boEQ, boNE, boLT, boGT, boLE, boGE:
+          begin
+            Self.Emit(#9'ucomiss %xmm0, %xmm1');  { %xmm1 - %xmm0 }
+            case BE.Op of
+              boEQ: Self.Emit(#9'sete %al');
+              boNE: Self.Emit(#9'setne %al');
+              boLT: Self.Emit(#9'setb %al');   { below (CF set) }
+              boGT: Self.Emit(#9'seta %al');   { above }
+              boLE: Self.Emit(#9'setbe %al');
+              boGE: Self.Emit(#9'setae %al');
+            end;
+            Self.Emit(#9'movzbl %al, %eax');
+            Self.Emit(#9'movq %rax, %xmm0');  { comparison result as int in %rax then convert? }
+            { Actually we need int result for condition tests — put result in %rax,
+              then caller decides if it needs to be in %xmm0.  But EmitExprToXmm0
+              is for float expressions; comparisons of floats return int (Boolean).
+              Fall through: return the 0/1 in %rax.  The caller (EmitCondBranch)
+              actually calls EmitExprToEax and tests %rax.  So we shouldn't reach
+              here for comparisons — they go through EmitCondBranch → EmitExprToEax
+              which will handle float comparisons. }
+          end;
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: unsupported float binary operator');
+      end;
+      { Result is in %xmm1, copy to %xmm0 if not a comparison. }
+      if BE.Op in [boAdd, boSub, boMul, boSlash] then
+        Self.Emit(#9'movaps %xmm1, %xmm0');
+    end
+    else
+    begin
+      Self.Emit(#9'movsd (%rsp), %xmm1');
+      Self.Emit(#9'addq $8, %rsp');
+      case BE.Op of
+        boAdd:   Self.Emit(#9'addsd %xmm0, %xmm1');
+        boSub:   Self.Emit(#9'subsd %xmm0, %xmm1');  { left - right }
+        boMul:   Self.Emit(#9'mulsd %xmm0, %xmm1');
+        boSlash: Self.Emit(#9'divsd %xmm0, %xmm1');
+        boEQ, boNE, boLT, boGT, boLE, boGE:
+          begin
+            Self.Emit(#9'ucomisd %xmm0, %xmm1');
+            case BE.Op of
+              boEQ: Self.Emit(#9'sete %al');
+              boNE: Self.Emit(#9'setne %al');
+              boLT: Self.Emit(#9'setb %al');
+              boGT: Self.Emit(#9'seta %al');
+              boLE: Self.Emit(#9'setbe %al');
+              boGE: Self.Emit(#9'setae %al');
+            end;
+            Self.Emit(#9'movzbl %al, %eax');
+            { Float comparisons result in integer 0/1 — return via %rax, not %xmm0. }
+            Exit;
+          end;
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: unsupported float binary operator');
+      end;
+      Self.Emit(#9'movapd %xmm1, %xmm0');
+    end;
+    Exit;
+  end;
+
+  if AExpr is TFuncCallExpr then
+  begin
+    { User function call whose return type is float. }
+    Self.EmitCall(FuncSymbolOf(TFuncCallExpr(AExpr)),
+      TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl),
+      TFuncCallExpr(AExpr).Args);
+    { Return value is in %xmm0 per SysV ABI. }
+    Exit;
+  end;
+
+  raise ENativeCodeGenError.Create(
+    'native backend: unsupported float expression form ' + AExpr.ClassName);
 end;
 
 { Evaluate an integer-family expression, leaving a 64-bit-extended value in
@@ -702,9 +919,55 @@ end;
 
 procedure TX86_64Backend.EmitCondBranch(AExpr: TASTExpr;
                                         const ATrueLabel, AFalseLabel: string);
+var
+  BE: TBinaryExpr;
+  IsS: Boolean;
 begin
-  { Evaluate the condition to a 0/1 (or any nonzero=true) value in %eax, then
-    branch.  testl sets ZF when %eax is zero. }
+  { Float comparison: ucomisd/ucomiss sets CF/ZF directly; use conditional
+    jumps that map CF/ZF to the comparison operator.  The result is a direct
+    branch without materialising a 0/1 in %rax. }
+  if (AExpr is TBinaryExpr) then
+  begin
+    BE  := TBinaryExpr(AExpr);
+    if IsFloatFamily(BE.Left.ResolvedType) or IsFloatFamily(BE.Right.ResolvedType) then
+    begin
+      IsS := (BE.Left.ResolvedType <> nil) and (BE.Left.ResolvedType.Kind = tySingle);
+      Self.EmitExprToXmm0(BE.Left);
+      Self.Emit(#9'subq $8, %rsp');
+      if IsS then Self.Emit(#9'movss %xmm0, (%rsp)')
+      else        Self.Emit(#9'movsd %xmm0, (%rsp)');
+      Self.EmitExprToXmm0(BE.Right);
+      if IsS then
+      begin
+        Self.Emit(#9'movss (%rsp), %xmm1');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'ucomiss %xmm0, %xmm1');  { compare left(%xmm1) vs right(%xmm0) }
+      end
+      else
+      begin
+        Self.Emit(#9'movsd (%rsp), %xmm1');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'ucomisd %xmm0, %xmm1');
+      end;
+      { ucomisd %xmm0, %xmm1 computes xmm1 - xmm0 conceptually for flags.
+        CF=1 means xmm1 < xmm0.  ZF=1 means equal. }
+      case BE.Op of
+        boEQ: begin Self.Emit(#9'je '  + ATrueLabel); end;
+        boNE: begin Self.Emit(#9'jne ' + ATrueLabel); end;
+        boLT: begin Self.Emit(#9'jb '  + ATrueLabel); end;  { below: CF }
+        boGT: begin Self.Emit(#9'ja '  + ATrueLabel); end;  { above: ~CF & ~ZF }
+        boLE: begin Self.Emit(#9'jbe ' + ATrueLabel); end;
+        boGE: begin Self.Emit(#9'jae ' + ATrueLabel); end;
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: unsupported float comparison operator');
+      end;
+      Self.Emit(#9'jmp ' + AFalseLabel);
+      Exit;
+    end;
+  end;
+
+  { Integer condition: evaluate to a 0/1 (or any nonzero=true) value in %eax. }
   Self.EmitExprToEax(AExpr);
   Self.Emit(#9'testq %rax, %rax');
   Self.Emit(#9'jne ' + ATrueLabel);
@@ -738,34 +1001,49 @@ begin
   for I := 0 to ACall.Args.Count - 1 do
   begin
     ArgExpr := TASTExpr(ACall.Args.Items[I]);
-    Self.EmitExprToEax(ArgExpr);     { value -> %rax (64-bit-extended) }
     if ArgExpr.ResolvedType <> nil then
       K := ArgExpr.ResolvedType.Kind
     else
       K := tyInteger;
-    if K = tyUInt64 then
+    if K = tyDouble then
     begin
-      Self.Emit(#9'movq %rax, %rsi');  { arg2 = value (64-bit) }
-      Self.Emit(#9'movl $1, %edi');    { arg1 = fd (stdout) }
-      Self.Emit(#9'callq _SysWriteUInt64');
-    end
-    else if K = tyInt64 then
-    begin
-      Self.Emit(#9'movq %rax, %rsi');
+      Self.EmitExprToXmm0(ArgExpr);
       Self.Emit(#9'movl $1, %edi');
-      Self.Emit(#9'callq _SysWriteInt64');
+      Self.Emit(#9'callq _SysWriteDouble');
     end
-    else if K in [tyUInt32, tyWord] then
+    else if K = tySingle then
     begin
-      Self.Emit(#9'movq %rax, %rsi');  { zero-extended 32-bit value }
+      Self.EmitExprToXmm0(ArgExpr);
       Self.Emit(#9'movl $1, %edi');
-      Self.Emit(#9'callq _SysWriteUInt64');
+      Self.Emit(#9'callq _SysWriteSingle');
     end
     else
     begin
-      Self.Emit(#9'movl %eax, %esi');  { arg2 = value (low 32 bits) }
-      Self.Emit(#9'movl $1, %edi');    { arg1 = fd (stdout) }
-      Self.Emit(#9'callq _SysWriteInt');
+      Self.EmitExprToEax(ArgExpr);     { value -> %rax (64-bit-extended) }
+      if K = tyUInt64 then
+      begin
+        Self.Emit(#9'movq %rax, %rsi');  { arg2 = value (64-bit) }
+        Self.Emit(#9'movl $1, %edi');    { arg1 = fd (stdout) }
+        Self.Emit(#9'callq _SysWriteUInt64');
+      end
+      else if K = tyInt64 then
+      begin
+        Self.Emit(#9'movq %rax, %rsi');
+        Self.Emit(#9'movl $1, %edi');
+        Self.Emit(#9'callq _SysWriteInt64');
+      end
+      else if K in [tyUInt32, tyWord] then
+      begin
+        Self.Emit(#9'movq %rax, %rsi');  { zero-extended 32-bit value }
+        Self.Emit(#9'movl $1, %edi');
+        Self.Emit(#9'callq _SysWriteUInt64');
+      end
+      else
+      begin
+        Self.Emit(#9'movl %eax, %esi');  { arg2 = value (low 32 bits) }
+        Self.Emit(#9'movl $1, %edi');    { arg1 = fd (stdout) }
+        Self.Emit(#9'callq _SysWriteInt');
+      end;
     end;
   end;
   if ANewline then
@@ -849,19 +1127,40 @@ begin
   if AStmt is TAssignment then
   begin
     Asgn := TAssignment(AStmt);
-    Self.EmitExprToEax(Asgn.Expr);     { value -> %rax (64-bit-extended) }
-    if Asgn.IsVarParam then
+    if IsFloatFamily(Asgn.ResolvedLhsType) then
     begin
-      Self.Emit(Format(#9'movq %s, %%rcx',
-        [Self.VarOperand(Asgn.Name)]));
-      Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
+      { Float assignment: value → %xmm0, then store. }
+      Self.EmitExprToXmm0(Asgn.Expr);
+      { If LHS is Single and RHS is Double (e.g. a float literal which defaults
+        to Double), convert via cvtsd2ss so we store the correct 4-byte value. }
+      if (Asgn.ResolvedLhsType.Kind = tySingle) and
+         (Asgn.Expr.ResolvedType <> nil) and
+         (Asgn.Expr.ResolvedType.Kind = tyDouble) then
+        Self.Emit(#9'cvtsd2ss %xmm0, %xmm0');
+      if Self.IsLocal(Asgn.Name) then
+        Self.EmitStoreFloat(Self.VarOperand(Asgn.Name), Self.LocalType(Asgn.Name))
+      else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        Self.EmitStoreFloat(Asgn.Name + '(%rip)', Asgn.ResolvedLhsType);
+      end;
     end
-    else if Self.IsLocal(Asgn.Name) then
-      Self.EmitStoreVar(Self.VarOperand(Asgn.Name), Self.LocalType(Asgn.Name))
     else
     begin
-      Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
-      Self.EmitStoreVar(Asgn.Name + '(%rip)', Asgn.ResolvedLhsType);
+      Self.EmitExprToEax(Asgn.Expr);   { value -> %rax (64-bit-extended) }
+      if Asgn.IsVarParam then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx',
+          [Self.VarOperand(Asgn.Name)]));
+        Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
+      end
+      else if Self.IsLocal(Asgn.Name) then
+        Self.EmitStoreVar(Self.VarOperand(Asgn.Name), Self.LocalType(Asgn.Name))
+      else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        Self.EmitStoreVar(Asgn.Name + '(%rip)', Asgn.ResolvedLhsType);
+      end;
     end;
     Exit;
   end;
@@ -1076,79 +1375,185 @@ end;
 { Calls and function definitions                                       }
 { ------------------------------------------------------------------ }
 
-{ Emit a direct call.  SysV AMD64: args 0-5 in rdi/rsi/rdx/rcx/r8/r9; args 6-7
-  on the stack (right-to-left, so +16(%rbp)=arg6, +24(%rbp)=arg7 in callee).
-  All args are evaluated left-to-right and pushed; a two-pass pop/re-push then
-  routes them to the right place.  %r10/%r11 are caller-saved scratch for the
-  stack-arg reversal.  Up to 8 total args supported; more raises a clear error. }
+{ Emit a direct call.  SysV AMD64: integer args in rdi/rsi/rdx/rcx/r8/r9;
+  float args in xmm0..xmm5 (independent counters).  Stack args (args 7+ in
+  total, after registers are exhausted) go right-to-left.  For M6 the common
+  cases are:
+    - all-integer params: existing push/pop strategy (up to 8 args).
+    - all-float params: evaluate left-to-right into %xmm0..%xmmN directly.
+    - mixed int+float params (e.g. _SysWriteDouble): evaluate left-to-right;
+      integer args push to stack then pop to int regs; float args evaluated
+      directly into xmm regs.  All args must fit in registers (≤6 each). }
 procedure TX86_64Backend.EmitCall(const AFuncSym: string; ADecl: TMethodDecl;
                                   AArgs: TObjectList);
 var
-  I:     Integer;
-  Arg:   TASTExpr;
-  IsVar: Boolean;
+  I:         Integer;
+  Arg:       TASTExpr;
+  IsVar:     Boolean;
+  ParamType: TTypeDesc;
+  HasFloat:  Boolean;
+  IntIdx, XmmIdx: Integer;
+  AllocSz, SlotOff: Integer;
 begin
+  { Detect whether any arg is float-typed. }
+  HasFloat := False;
   for I := 0 to AArgs.Count - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
-    IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
-             TMethodParam(ADecl.Params.Items[I]).IsVarParam;
-    if IsVar then
+    ParamType := nil;
+    if (ADecl <> nil) and (I < ADecl.Params.Count) then
+      ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+    if ParamType = nil then
+      ParamType := Arg.ResolvedType;
+    if IsFloatFamily(ParamType) then begin HasFloat := True; Break; end;
+  end;
+
+  if not HasFloat then
+  begin
+    { Pure integer (or var-param) call: original push/pop strategy. }
+    for I := 0 to AArgs.Count - 1 do
     begin
-      if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
-        Self.Emit(Format(#9'movq %s, %%rax',
-          [Self.VarOperand(TIdentExpr(Arg).Name)]))
-      else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-        Self.Emit(Format(#9'leaq %s, %%rax',
-          [Self.VarOperand(TIdentExpr(Arg).Name)]))
-      else if Arg is TIdentExpr then
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-          [TIdentExpr(Arg).Name]));
-      Self.Emit(#9'pushq %rax');
+      Arg := TASTExpr(AArgs.Items[I]);
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
+      if IsVar then
+      begin
+        if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if Arg is TIdentExpr then
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [TIdentExpr(Arg).Name]));
+        Self.Emit(#9'pushq %rax');
+      end
+      else
+      begin
+        Self.EmitExprToEax(Arg);
+        Self.Emit(#9'pushq %rax');
+      end;
+    end;
+
+    if AArgs.Count <= 6 then
+    begin
+      for I := AArgs.Count - 1 downto 0 do
+        Self.Emit(#9'popq ' + SysVArgRegs64[I]);
     end
     else
     begin
-      Self.EmitExprToEax(Arg);
-      Self.Emit(#9'pushq %rax');
+      if AArgs.Count > 8 then
+        raise ENativeCodeGenError.Create(
+          'native backend: more than 8 arguments not yet supported');
+      for I := AArgs.Count - 1 downto 6 do
+      begin
+        if (I - 6) = 0 then Self.Emit(#9'popq %r10')
+        else               Self.Emit(#9'popq %r11');
+      end;
+      for I := 5 downto 0 do
+        Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+      for I := AArgs.Count - 1 downto 6 do
+      begin
+        if (I - 6) = 0 then Self.Emit(#9'pushq %r10')
+        else               Self.Emit(#9'pushq %r11');
+      end;
     end;
-  end;
-
-  if AArgs.Count <= 6 then
-  begin
-    { All args go in registers: pop in reverse so reg[i] ← arg[i]. }
-    for I := AArgs.Count - 1 downto 0 do
-      Self.Emit(#9'popq ' + SysVArgRegs64[I]);
   end
   else
   begin
-    { Stack (top→bottom): argN-1 ... arg6 arg5 ... arg0.
-      Pop stack args (argN-1 first) into %r10/%r11 (caller-saved scratch),
-      then pop reg args into their registers, then re-push stack args so
-      arg6 lands on top at callq (+16(%rbp) in callee). }
-    if AArgs.Count > 8 then
-      raise ENativeCodeGenError.Create(
-        'native backend: more than 8 arguments not yet supported');
-    { Pop stack args (highest index first) into scratch: %r10=argN-1, %r11=argN-2. }
-    for I := AArgs.Count - 1 downto 6 do
+    { Mixed or pure-float call.  Strategy:
+      1. Pre-allocate N×8 bytes on the stack (N = total args, 16-byte aligned).
+      2. Evaluate each arg left-to-right into its fixed slot I×8(%rsp).
+         Integer args use %rax → movq; float args use %xmm0 → movsd.
+      3. After all evaluations, load into the right registers, tracking
+         separate IntIdx / XmmIdx counters for the two register files.
+      4. Reclaim the pre-allocated block. }
+    AllocSz := ((AArgs.Count * 8 + 15) and (-16));
+    if AllocSz > 0 then
+      Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+
+    { Pass 1: evaluate args left-to-right into fixed stack slots. }
+    for I := 0 to AArgs.Count - 1 do
     begin
-      if (I - 6) = 0 then Self.Emit(#9'popq %r10')
-      else               Self.Emit(#9'popq %r11');
+      Arg := TASTExpr(AArgs.Items[I]);
+      ParamType := nil;
+      if (ADecl <> nil) and (I < ADecl.Params.Count) then
+        ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := Arg.ResolvedType;
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
+      SlotOff := I * 8;
+
+      if IsFloatFamily(ParamType) then
+      begin
+        Self.EmitExprToXmm0(Arg);
+        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %%xmm0, %d(%%rsp)', [SlotOff]))
+        else
+          Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [SlotOff]));
+      end
+      else if IsVar then
+      begin
+        if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if Arg is TIdentExpr then
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [TIdentExpr(Arg).Name]));
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+      end
+      else
+      begin
+        Self.EmitExprToEax(Arg);
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+      end;
     end;
-    { Pop register args (deepest = arg0) in reverse → reg[i] ← arg[i]. }
-    for I := 5 downto 0 do
-      Self.Emit(#9'popq ' + SysVArgRegs64[I]);
-    { Re-push stack args: argN-1 first (deepest), arg6 last (top at callq).
-      SysV: +16(%rbp)=arg6 (top of stack at call), +24(%rbp)=arg7 if present. }
-    for I := AArgs.Count - 1 downto 6 do
+
+    { Pass 2: load from slots into registers using separate int/xmm counters. }
+    IntIdx := 0;
+    XmmIdx := 0;
+    for I := 0 to AArgs.Count - 1 do
     begin
-      if (I - 6) = 0 then Self.Emit(#9'pushq %r10')
-      else               Self.Emit(#9'pushq %r11');
+      Arg := TASTExpr(AArgs.Items[I]);
+      ParamType := nil;
+      if (ADecl <> nil) and (I < ADecl.Params.Count) then
+        ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := Arg.ResolvedType;
+      SlotOff := I * 8;
+
+      if IsFloatFamily(ParamType) then
+      begin
+        if XmmIdx >= 6 then
+          raise ENativeCodeGenError.Create('native backend: too many float args');
+        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]))
+        else
+          Self.Emit(Format(#9'movsd %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]));
+        Inc(XmmIdx);
+      end
+      else
+      begin
+        if IntIdx >= 6 then
+          raise ENativeCodeGenError.Create('native backend: too many int args');
+        Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+        Inc(IntIdx);
+      end;
     end;
+
+    { Reclaim pre-allocated area before the call. }
+    if AllocSz > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [AllocSz]));
   end;
 
   Self.Emit(#9'callq ' + AFuncSym);
   { Caller cleans up stack args (SysV caller-cleans-up convention). }
-  if AArgs.Count > 6 then
+  if (not HasFloat) and (AArgs.Count > 6) then
     Self.Emit(Format(#9'addq $%d, %%rsp', [(AArgs.Count - 6) * 8]));
 end;
 
@@ -1237,22 +1642,25 @@ end;
   parameters and integer-family/void return. }
 procedure TX86_64Backend.EmitFunctionDef(ADecl: TMethodDecl);
 var
-  I:   Integer;
-  P:   TMethodParam;
-  Sym: string;
+  I:           Integer;
+  P:           TMethodParam;
+  Sym:         string;
+  IntIdx:      Integer;
+  XmmIdx:      Integer;
 begin
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    if not IsIntFamily(P.ResolvedType) then
+    if not IsIntFamily(P.ResolvedType) and not IsFloatFamily(P.ResolvedType) then
       raise ENativeCodeGenError.Create(
-        'native backend: only integer-family parameters supported (param ' +
+        'native backend: only integer-family or float parameters supported (param ' +
         P.ParamName + ')');
   end;
   if (ADecl.ResolvedReturnType <> nil) and
-     not IsIntFamily(ADecl.ResolvedReturnType) then
+     not IsIntFamily(ADecl.ResolvedReturnType) and
+     not IsFloatFamily(ADecl.ResolvedReturnType) then
     raise ENativeCodeGenError.Create(
-      'native backend: only integer-family or void return supported (function ' +
+      'native backend: only integer-family, float, or void return supported (function ' +
       ADecl.Name + ')');
 
   Sym := FuncSymbolFromDecl(ADecl);
@@ -1265,34 +1673,77 @@ begin
   Self.Emit(#9'movq %rsp, %rbp');
   if FFrameSize > 0 then
     Self.Emit(Format(#9'subq $%d, %%rsp', [FFrameSize]));
-  { Spill the first 6 incoming argument registers into their param slots.
-    Params 7+ are already on the stack at positive %rbp offsets — no spill. }
+  { Spill incoming argument registers into param slots.  SysV AMD64 passes
+    integer args in %rdi/%rsi/... and float args in %xmm0/%xmm1/... independently.
+    Track separate counters: IntIdx for integer params, XmmIdx for float params. }
+  IntIdx := 0;
+  XmmIdx := 0;
   for I := 0 to ADecl.Params.Count - 1 do
   begin
-    if I >= 6 then Break;
     P := TMethodParam(ADecl.Params.Items[I]);
-    if P.IsVarParam then
-      Self.Emit(Format(#9'movq %s, %s',
-        [SysVArgRegs64[I], Self.VarOperand(P.ParamName)]))
+    if IsFloatFamily(P.ResolvedType) then
+    begin
+      if XmmIdx < 6 then
+      begin
+        if (P.ResolvedType <> nil) and (P.ResolvedType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %s, %s',
+            [SysVXmmArgRegs[XmmIdx], Self.VarOperand(P.ParamName)]))
+        else
+          Self.Emit(Format(#9'movsd %s, %s',
+            [SysVXmmArgRegs[XmmIdx], Self.VarOperand(P.ParamName)]));
+        Inc(XmmIdx);
+      end;
+    end
+    else if P.IsVarParam then
+    begin
+      if IntIdx < 6 then
+      begin
+        Self.Emit(Format(#9'movq %s, %s',
+          [SysVArgRegs64[IntIdx], Self.VarOperand(P.ParamName)]));
+        Inc(IntIdx);
+      end;
+    end
     else
-      Self.EmitSpillArg(I, Self.VarOperand(P.ParamName), P.ResolvedType);
+    begin
+      if IntIdx < 6 then
+      begin
+        Self.EmitSpillArg(IntIdx, Self.VarOperand(P.ParamName), P.ResolvedType);
+        Inc(IntIdx);
+      end;
+    end;
   end;
-  { Initialise Result to 0 (defined default), like the QBE backend.  Zero in
-    %rax then store at the slot's width. }
+  { Initialise Result to 0 (defined default), like the QBE backend. }
   if ADecl.ResolvedReturnType <> nil then
   begin
-    Self.Emit(#9'xorl %eax, %eax');
-    Self.EmitStoreVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
+    if IsFloatFamily(ADecl.ResolvedReturnType) then
+    begin
+      { Zero %xmm0 by xorpd/xorps. }
+      if ADecl.ResolvedReturnType.Kind = tySingle then
+        Self.Emit(#9'xorps %xmm0, %xmm0')
+      else
+        Self.Emit(#9'xorpd %xmm0, %xmm0');
+      Self.EmitStoreFloat(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
+    end
+    else
+    begin
+      Self.Emit(#9'xorl %eax, %eax');
+      Self.EmitStoreVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
+    end;
   end;
   { Body.  FExitLabel directs Exit statements to the epilogue. }
   FExitLabel := Self.NewLabel('exit');
   if ADecl.Body <> nil then
     for I := 0 to ADecl.Body.Stmts.Count - 1 do
       Self.EmitStmt(TASTStmt(ADecl.Body.Stmts.Items[I]));
-  { Epilogue: Exit lands here; load Result into %rax, restore frame, return. }
+  { Epilogue: Exit lands here; load Result into %rax (int) or %xmm0 (float). }
   Self.Emit(FExitLabel + ':');
   if ADecl.ResolvedReturnType <> nil then
-    Self.EmitLoadVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
+  begin
+    if IsFloatFamily(ADecl.ResolvedReturnType) then
+      Self.EmitLoadFloat(Self.VarOperand('Result'), ADecl.ResolvedReturnType)
+    else
+      Self.EmitLoadVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
+  end;
   Self.Emit(#9'movq %rbp, %rsp');
   Self.Emit(#9'popq %rbp');
   Self.Emit(#9'ret');
@@ -1319,12 +1770,12 @@ var
   VD:    TVarDecl;
   Decl:  TMethodDecl;
 begin
-  { Register declared program-level variables as global slots.  Integer-family
-    and record types are supported; others are skipped (fail loudly on use). }
+  { Register declared program-level variables as global slots.  Integer-family,
+    float, and record types are supported; others are skipped (fail loudly on use). }
   for I := 0 to AProg.Block.Decls.Count - 1 do
   begin
     VD := TVarDecl(AProg.Block.Decls.Items[I]);
-    if IsIntFamily(VD.ResolvedType) or
+    if IsIntFamily(VD.ResolvedType) or IsFloatFamily(VD.ResolvedType) or
        ((VD.ResolvedType <> nil) and
         (VD.ResolvedType.Kind in [tyRecord, tyStaticArray])) then
       for J := 0 to VD.Names.Count - 1 do
