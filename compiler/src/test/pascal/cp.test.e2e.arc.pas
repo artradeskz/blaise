@@ -27,6 +27,9 @@ type
     procedure TestRun_WeakRef_BreaksCycle_Valgrind;
     procedure TestRun_ClassDestroy_FreesBuffer_Valgrind;
     procedure TestRun_TListARC_Valgrind;
+    { Three instantiations of the same generic class: verifies the Pointer→class
+      ARC coercion bug is fixed (the 3rd instantiation no longer uses freed memory). }
+    procedure TestRun_ThreeGenericInstances_AllWork;
   end;
 
 implementation
@@ -265,6 +268,60 @@ begin
     if Log = '' then Log := '(valgrind produced no output)';
     Fail('TList FData leaked — valgrind reports:' + LE + Log);
   end;
+end;
+
+const
+  { Three instantiations of the same generic class implementing a generic
+    interface.  The 3rd instantiation previously failed at link time because
+    the Pointer→class coercion in FindGeneric emitted no _ClassAddRef, causing
+    the template TObject to be prematurely destroyed on the 2nd call.  This
+    test verifies all three compile, link, and produce correct output. }
+  SrcThreeGenericInstances = '''
+    program P;
+    type
+      IBox<T> = interface
+        function  GetValue: T;
+        procedure SetValue(V: T);
+      end;
+      TBox<T> = class(IBox<T>)
+        FValue: T;
+        function  GetValue: T;
+        procedure SetValue(V: T);
+        property Value: T read GetValue write SetValue;
+      end;
+    function TBox<T>.GetValue: T;
+    begin
+      Result := Self.FValue
+    end;
+    procedure TBox<T>.SetValue(V: T);
+    begin
+      Self.FValue := V
+    end;
+    var
+      A: TBox<Integer>;
+      B: TBox<Boolean>;
+      C: TBox<Integer>;
+    begin
+      A := TBox<Integer>.Create;
+      A.Value := 10;
+      B := TBox<Boolean>.Create;
+      B.Value := True;
+      C := TBox<Integer>.Create;
+      C.Value := 30;
+      WriteLn(A.Value);
+      if B.Value then WriteLn(1) else WriteLn(0);
+      WriteLn(C.Value)
+    end.
+    ''';
+
+procedure TE2EArcTests.TestRun_ThreeGenericInstances_AllWork;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcThreeGenericInstances, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('all three instances produce correct output',
+    '10' + LE + '1' + LE + '30' + LE, Output);
 end;
 
 initialization

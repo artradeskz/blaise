@@ -3777,6 +3777,44 @@ begin
       MarkArcSlotWritten(AAssign.Name);
     end;
   end
+  else if (AAssign.ResolvedLhsType <> nil) and
+          (AAssign.ResolvedLhsType.Kind = tyClass) and
+          (AAssign.Expr.ResolvedType.Kind = tyPointer) then
+  begin
+    { Pointer-to-class coercion: the RHS is Pointer-typed (e.g. from
+      TStringList.Objects[]) but the LHS is a class-typed ARC-managed
+      variable.  Without this branch the code falls through to the scalar
+      store and no _ClassAddRef is emitted — the variable then receives a
+      spurious _ClassRelease at scope exit, corrupting the refcount of the
+      object that the Pointer holds.
+      Treat as a normal class assignment: retain the incoming pointer value
+      and release the old slot contents. }
+    if not AAssign.IsGlobal and not IsPromoted(AAssign.Name) and
+       ArcSlotIsNil(AAssign.Name) then
+    begin
+      ValTemp := EmitExpr(AAssign.Expr);
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+      EmitLine(Format('  storel %s, %s',
+        [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+      MarkArcSlotWritten(AAssign.Name);
+    end
+    else
+    begin
+      OldTemp := AllocTemp;
+      if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+        EmitLine(Format('  %s =l copy %%_var_%s', [OldTemp, AAssign.Name]))
+      else
+        EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+      ValTemp := EmitExpr(AAssign.Expr);
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+        EmitLine(Format('  %%_var_%s =l copy %s', [AAssign.Name, ValTemp]))
+      else
+        EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+      MarkArcSlotWritten(AAssign.Name);
+    end;
+  end
   else
   begin
     { Use LHS type (if known) for the store instruction, so that assigning a

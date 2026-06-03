@@ -1347,7 +1347,6 @@ end;
 
 destructor TGenericInterfaceDef.Destroy;
 begin
-  { Owned class fields released by ARC field cleanup. }
   inherited Destroy;
 end;
 

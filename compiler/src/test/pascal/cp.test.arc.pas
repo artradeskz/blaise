@@ -63,6 +63,10 @@ type
     procedure TestARC_FirstClassAssign_ElidesRelease;
     procedure TestARC_SecondClassAssign_StillReleases;
     procedure TestARC_ClassAssign_AfterBranch_StillReleases;
+
+    { Pointer-to-class coercion: assigning a Pointer-typed expression to a
+      class-typed variable must emit _ClassAddRef (the LHS is ARC-managed). }
+    procedure TestARC_PointerToClass_AssignEmitsAddRef;
   end;
 
 implementation
@@ -542,6 +546,45 @@ begin
     branch that started before the slot was written. }
   AssertTrue('at least two _ClassRelease (post-branch + block exit)',
     CountSubstring(FnBody, 'call $_ClassRelease') >= 2);
+end;
+
+procedure TARCTests.TestARC_PointerToClass_AssignEmitsAddRef;
+var
+  IR:     string;
+  FnPos:  Integer;
+  FnBody: string;
+begin
+  { A function returning TObject is declared as returning Pointer externally,
+    then stored into a TObject local.  The assignment codegen must see the
+    LHS type (tyClass) and emit _ClassAddRef even though the RHS resolved
+    type is tyPointer.  Without the fix the Pointer→class coercion path
+    falls through to a plain storel, causing an imbalanced _ClassRelease at
+    scope exit. }
+  IR := GenIR(
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        function GetPtr: Pointer; external name 'GetPtr';
+        procedure DoIt;
+        var
+          F: TFoo;
+          P: Pointer;
+        begin
+          P := GetPtr();
+          F := TFoo(P)
+        end;
+        begin
+          DoIt
+        end.
+        ''');
+  FnPos  := Pos('function $DoIt', IR);
+  AssertTrue('DoIt function emitted', FnPos > 0);
+  FnBody := Copy(IR, FnPos, Length(IR) - FnPos + 1);
+  AssertTrue('Pointer-to-class assign emits _ClassAddRef',
+    Pos('call $_ClassAddRef', FnBody) > 0);
 end;
 
 initialization

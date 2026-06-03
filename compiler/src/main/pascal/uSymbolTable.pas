@@ -1243,7 +1243,6 @@ end;
 procedure TSymbolTable.RegisterGeneric(const AName: string; ATempl: TObject);
 begin
   FGenerics.AddObject(AName, ATempl);
-  { Retain a strong reference so the template outlives its originating AST. }
   FGenericTemplates.Add(ATempl);
 end;
 
@@ -1253,7 +1252,7 @@ var
 begin
   Idx := FGenerics.IndexOf(AName);
   if Idx >= 0 then
-    Result := FGenerics.Objects[Idx]
+    Result := TObject(FGenerics.Objects[Idx])
   else
     Result := nil;
 end;
