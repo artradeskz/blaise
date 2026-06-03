@@ -8193,7 +8193,8 @@ begin
       if FDebugMode then
       begin
         L := AllocTemp;
-        EmitLine(Format('  %s =l add $typeinfo_%s, 16', [L, QBEMangle(RT.Name)]));
+        EmitLine(Format('  %s =l add $typeinfo_%s, 16',
+          [L, ClassSymName(QBEMangle(RT.Name))]));
         R := AllocTemp;
         EmitLine(Format('  %s =l loadl %s', [R, L]));
         EmitLine(Format('  call $_LeakTrackerRegister(l %s, l %s)', [SelfTemp, R]));
@@ -8882,7 +8883,8 @@ begin
       begin
         { Load classname ptr from typeinfo[2] (offset +16) and register with leak tracker }
         L := AllocTemp;
-        EmitLine(Format('  %s =l add $typeinfo_%s, 16', [L, QBEMangle(FldAccess.ResolvedType.Name)]));
+        EmitLine(Format('  %s =l add $typeinfo_%s, 16',
+          [L, ClassSymName(QBEMangle(FldAccess.ResolvedType.Name))]));
         R := AllocTemp;
         EmitLine(Format('  %s =l loadl %s', [R, L]));
         EmitLine(Format('  call $_LeakTrackerRegister(l %s, l %s)', [T, R]));
