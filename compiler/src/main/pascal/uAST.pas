@@ -594,8 +594,9 @@ type
   public
     ParamName:    string;
     TypeName:     string;      { element type name when IsOpenArray = True }
-    IsVarParam:   Boolean;    { True = passed by reference (var keyword) }
+    IsVarParam:   Boolean;    { True = passed by reference ('var' or 'out' keyword) }
     IsConstParam: Boolean;    { True = 'const' keyword present }
+    IsOutParam:   Boolean;    { True = 'out' keyword (write-only by-reference); IsVarParam is also True }
     IsOpenArray:  Boolean;    { True = 'array of T'; TypeName is the element type }
     [Unretained] ResolvedType: TTypeDesc;  { set by uSemantic — TOpenArrayTypeDesc when IsOpenArray }
     DefaultValue: TASTExpr;   { owned — non-nil when the param has a default value
@@ -2010,6 +2011,7 @@ begin
   Result.TypeName     := ASrc.TypeName;
   Result.IsVarParam   := ASrc.IsVarParam;
   Result.IsConstParam := ASrc.IsConstParam;
+  Result.IsOutParam   := ASrc.IsOutParam;
   Result.IsOpenArray  := ASrc.IsOpenArray;
   Result.DefaultValue := CloneExpr(ASrc.DefaultValue);
 end;

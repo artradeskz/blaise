@@ -1560,6 +1560,7 @@ var
   Names:       TStringList;
   TypeN:       string;
   IsVarGrp:    Boolean;
+  IsOutGrp:    Boolean;
   IsConstGrp:  Boolean;
   IsOpenArr:   Boolean;
   Default:     TASTExpr;
@@ -1567,7 +1568,8 @@ var
   DefCol:      Integer;
 begin
   repeat
-    IsVarGrp   := Check(tkVar) or Check(tkOut);
+    IsOutGrp   := Check(tkOut);
+    IsVarGrp   := Check(tkVar) or IsOutGrp;
     IsConstGrp := Check(tkConst);
     if IsVarGrp then Advance
     else if IsConstGrp then Advance;
@@ -1628,6 +1630,7 @@ begin
         Par.TypeName     := TypeN;
         Par.IsVarParam   := IsVarGrp;
         Par.IsConstParam := IsConstGrp;
+        Par.IsOutParam   := IsOutGrp;
         Par.IsOpenArray  := IsOpenArr;
         if (I = Names.Count - 1) and (Default <> nil) then
         begin

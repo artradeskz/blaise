@@ -1546,11 +1546,34 @@ begin
 end;
 
 procedure TRoutineSigTests.TestParam_ModeOut_Preserved;
+const
+  SRC =
+    'unit TestU;'                                       + #10 +
+    'interface'                                         + #10 +
+    'procedure Fetch(out X: Integer);'                  + #10 +
+    'implementation'                                    + #10 +
+    'procedure Fetch(out X: Integer); begin X := 0; end;' + #10 +
+    'end.'                                              + #10;
+var
+  Iface: TUnitInterface;
+  Sig:   TRoutineSig;
+  P:     TMethodParam;
 begin
-  { 'out' parameter mode is not yet tracked in TMethodParam.
-    Pending until uAST grows an IsOutParam flag (out-of-scope for
-    the loader work). }
-  Fail('Pending uAST IsOutParam support');
+  Iface := ParseAndExport(SRC);
+  try
+    Sig := Iface.FindRoutine('Fetch');
+    AssertEquals('found', True, Sig <> nil);
+    AssertEquals('param count', 1, Sig.Params.Count);
+    P := TMethodParam(Sig.Params.Items[0]);
+    AssertEquals('name',  'X',       P.ParamName);
+    AssertEquals('type',  'Integer', P.TypeName);
+    { 'out' is a by-reference mode, so IsVarParam is also set. }
+    AssertEquals('out',       True,  P.IsOutParam);
+    AssertEquals('var',       True,  P.IsVarParam);
+    AssertEquals('not const', False, P.IsConstParam);
+  finally
+    Iface.Free;
+  end;
 end;
 
 procedure TRoutineSigTests.TestReturnType_FunctionVsProcedure;

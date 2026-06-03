@@ -89,6 +89,7 @@ RECORD         = "record"         ;
 PACKED         = "packed"         ;
 CLASS          = "class"          ;
 VAR            = "var"            ;
+OUT            = "out"            ;
 BEGIN          = "begin"          ;
 END            = "end"            ;
 IF             = "if"             ;
@@ -392,7 +393,7 @@ ParamList
     ;
 
 ParamGroup
-    = [ VAR | CONST ] IdentList COLON ParamType [ EQUALS DefaultValue ]
+    = [ VAR | OUT | CONST ] IdentList COLON ParamType [ EQUALS DefaultValue ]
     ;
 
 ParamType
@@ -408,7 +409,9 @@ DefaultValue
     | IDENT                                  (* must resolve to a named constant *)
     ;
 
-(* VAR marks a by-reference parameter; CONST marks a read-only parameter.
+(* VAR marks a by-reference parameter; OUT marks a write-only by-reference
+ * parameter (passed by reference exactly like VAR, but flagged as OUT for
+ * tooling/interface metadata); CONST marks a read-only parameter.
  * ARRAY OF TypeName denotes an open-array parameter using the two-register
  * ABI: a data pointer and a high-index value passed as separate arguments.
  *

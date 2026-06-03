@@ -873,6 +873,13 @@ unnecessary and misleading in new code.
 at the code-generation level: both are passed by pointer (the caller
 passes the address of the variable; the callee writes through it).
 
+The `out` mode is, however, recorded distinctly from `var` on the AST:
+`TMethodParam.IsOutParam` is set in addition to `IsVarParam`. The flag is
+carried through unit-interface export/import (bit 3 of the param-flags pack
+in the `.bif` format) so that tooling — the loader's `TRoutineSig`, the
+debugger, and any future static-analysis pass — can recover the original
+declared mode rather than seeing every by-reference parameter as `var`.
+
 ==== Rationale
 
 In FPC/Delphi, the semantic distinction between `var` and `out` is:
@@ -881,15 +888,17 @@ In FPC/Delphi, the semantic distinction between `var` and `out` is:
 * `out` — the initial value is undefined; the callee must write before
   reading. Some compilers zero-initialise `out` parameters on entry.
 
-At the machine level both are pointer parameters. The distinction is
-purely a static-analysis / documentation concern. For the current
-implementation phase the distinction is not enforced; both produce
-identical QBE IR.
+At the machine level both are pointer parameters, so they produce
+identical QBE IR. The distinction is purely a static-analysis /
+documentation concern and is not yet enforced — but it is now *preserved*
+in the AST and interface metadata (`IsOutParam`), which is the prerequisite
+for enforcing it later.
 
 ==== Future work
 
 A future lint pass could warn when an `out` parameter is read before it
-has been assigned within the callee.
+has been assigned within the callee, and could zero-initialise `out`
+parameters on entry. Both are now unblocked by the `IsOutParam` flag.
 
 ---
 

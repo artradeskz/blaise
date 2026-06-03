@@ -526,9 +526,9 @@ begin
   end;
 end;
 
-{ Param flags pack: bit 0 = IsVar, bit 1 = IsConst, bit 2 = IsOpenArray.
-  Render as a single decimal-digit lpstr for symmetry with the rest
-  of the format. }
+{ Param flags pack: bit 0 = IsVar, bit 1 = IsConst, bit 2 = IsOpenArray,
+  bit 3 = IsOut.  Render as a single decimal lpstr for symmetry with the
+  rest of the format. }
 function EncodeParamFlags(AParam: TMethodParam): string;
 var
   B: Integer;
@@ -537,6 +537,7 @@ begin
   if AParam.IsVarParam   then B := B or 1;
   if AParam.IsConstParam then B := B or 2;
   if AParam.IsOpenArray  then B := B or 4;
+  if AParam.IsOutParam   then B := B or 8;
   Result := EncodeLpstr(IntToStr(B));
 end;
 
@@ -1995,6 +1996,7 @@ begin
   AParam.IsVarParam   := (AFlags and 1) <> 0;
   AParam.IsConstParam := (AFlags and 2) <> 0;
   AParam.IsOpenArray  := (AFlags and 4) <> 0;
+  AParam.IsOutParam   := (AFlags and 8) <> 0;
 end;
 
 procedure ReadRoutines(const AText: string; var APos: Integer;
