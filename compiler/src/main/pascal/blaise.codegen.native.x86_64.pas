@@ -33,16 +33,12 @@ type
   TX86_64Backend = class(TNativeBackend)
   protected
     FLabelCount: Integer;       { monotonic source of unique local labels }
-    { Names of global integer slots to define in the .data section: program-
-      level variables plus hidden for-loop end-value slots.  Collected during
-      code emission and written once at the end.  The TStringList preserves
-      insertion order and gives free dedup via IndexOf; the parallel size map
-      records each slot's byte width (1/2/4/8) so EmitDataSection picks the
-      right .byte/.word/.long/.quad directive. }
-    FDataGlobals: TStringList;
-    { Parallel to FDataGlobals: the static type of each global slot, so loads,
-      stores and the .data directive pick the right width and signedness. }
-    FGlobalTypes: TDictionary<string, TTypeDesc>;
+    { Global slots to define in the .data section: program-level variables plus
+      hidden for-loop end-value slots.  Insertion-ordered so EmitDataSection
+      emits them in declaration order; ContainsKey gives O(1) dedup.  The value
+      is the slot's static type so loads, stores, and the .data directive all
+      pick the right width and signedness. }
+    FDataGlobals: TOrderedDictionary<string, TTypeDesc>;
 
     { Current function's stack frame: maps a local name (param, var, or Result)
       to its negative %rbp-relative byte offset.  nil while emitting program
@@ -58,8 +54,8 @@ type
 
     { Loop label stacks for break/continue: the top entry is the innermost
       loop's end-label (break) or condition-label (continue). }
-    FBreakLabels:    TStringList;
-    FContinueLabels: TStringList;
+    FBreakLabels:    TStack<string>;
+    FContinueLabels: TStack<string>;
     { Exit label: when non-empty, Exit jumps here (function epilogue).  Empty
       in program $main where Exit maps to a bare return. }
     FExitLabel: string;
@@ -206,10 +202,9 @@ constructor TX86_64Backend.Create(const ATarget: TTargetDesc);
 begin
   inherited Create(ATarget);
   FLabelCount     := 0;
-  FDataGlobals    := TStringList.Create;
-  FGlobalTypes    := TDictionary<string, TTypeDesc>.Create;
-  FBreakLabels    := TStringList.Create;
-  FContinueLabels := TStringList.Create;
+  FDataGlobals    := TOrderedDictionary<string, TTypeDesc>.Create;
+  FBreakLabels    := TStack<string>.Create;
+  FContinueLabels := TStack<string>.Create;
   FFrame          := nil;
   FFrameTypes     := nil;
   FFrameSize      := 0;
@@ -221,7 +216,6 @@ begin
   Self.ClearFrame;
   FContinueLabels.Free;
   FBreakLabels.Free;
-  FGlobalTypes.Free;
   FDataGlobals.Free;
   inherited Destroy;
 end;
@@ -234,16 +228,13 @@ end;
 
 procedure TX86_64Backend.AddGlobal(const AName: string; AType: TTypeDesc);
 begin
-  if FDataGlobals.IndexOf(AName) < 0 then
-  begin
-    FDataGlobals.Add(AName);
-    FGlobalTypes.Add(AName, AType);
-  end;
+  if not FDataGlobals.ContainsKey(AName) then
+    FDataGlobals.Add(AName, AType);
 end;
 
 function TX86_64Backend.GlobalType(const AName: string): TTypeDesc;
 begin
-  if not FGlobalTypes.TryGetValue(AName, Result) then
+  if not FDataGlobals.TryGetValue(AName, Result) then
     Result := nil;
 end;
 
@@ -258,7 +249,7 @@ begin
   Self.Emit('.data');
   for I := 0 to FDataGlobals.Count - 1 do
   begin
-    Name := FDataGlobals.Strings[I];
+    Name := FDataGlobals.Keys[I];
     Sz := IntByteSize(Self.GlobalType(Name));
     { Align each slot to its own size; pick a zero-initialiser directive of
       matching width so the linker reserves the correct number of bytes. }
@@ -686,11 +677,11 @@ begin
   Self.Emit(#9'jmp ' + LEnd);
 
   Self.Emit(LBody + ':');
-  FBreakLabels.Add(LEnd);
-  FContinueLabels.Add(LNext);
+  FBreakLabels.Push(LEnd);
+  FContinueLabels.Push(LNext);
   Self.EmitStmt(AFor.Body);
-  FBreakLabels.Delete(FBreakLabels.Count - 1);
-  FContinueLabels.Delete(FContinueLabels.Count - 1);
+  FBreakLabels.Pop;
+  FContinueLabels.Pop;
 
   Self.Emit(LNext + ':');
   Self.EmitLoadVar(VarOp, VarType);
@@ -803,11 +794,11 @@ begin
     Self.Emit(LCond + ':');
     Self.EmitCondBranch(WhileS.Condition, LBody, LEnd);
     Self.Emit(LBody + ':');
-    FBreakLabels.Add(LEnd);
-    FContinueLabels.Add(LCond);
+    FBreakLabels.Push(LEnd);
+    FContinueLabels.Push(LCond);
     Self.EmitStmt(WhileS.Body);
-    FBreakLabels.Delete(FBreakLabels.Count - 1);
-    FContinueLabels.Delete(FContinueLabels.Count - 1);
+    FBreakLabels.Pop;
+    FContinueLabels.Pop;
     Self.Emit(#9'jmp ' + LCond);
     Self.Emit(LEnd + ':');
     Exit;
@@ -820,12 +811,12 @@ begin
     LCond := Self.NewLabel('rcond');
     LEnd  := Self.NewLabel('rend');
     Self.Emit(LBody + ':');
-    FBreakLabels.Add(LEnd);
-    FContinueLabels.Add(LCond);
+    FBreakLabels.Push(LEnd);
+    FContinueLabels.Push(LCond);
     for I := 0 to RepS.Body.Stmts.Count - 1 do
       Self.EmitStmt(TASTStmt(RepS.Body.Stmts.Items[I]));
-    FBreakLabels.Delete(FBreakLabels.Count - 1);
-    FContinueLabels.Delete(FContinueLabels.Count - 1);
+    FBreakLabels.Pop;
+    FContinueLabels.Pop;
     Self.Emit(LCond + ':');
     Self.EmitCondBranch(RepS.Condition, LEnd, LBody);
     Self.Emit(LEnd + ':');
@@ -836,7 +827,7 @@ begin
   begin
     if FBreakLabels.Count = 0 then
       raise ENativeCodeGenError.Create('break outside loop');
-    Self.Emit(#9'jmp ' + FBreakLabels.Strings[FBreakLabels.Count - 1]);
+    Self.Emit(#9'jmp ' + FBreakLabels.Peek);
     Exit;
   end;
 
@@ -844,7 +835,7 @@ begin
   begin
     if FContinueLabels.Count = 0 then
       raise ENativeCodeGenError.Create('continue outside loop');
-    Self.Emit(#9'jmp ' + FContinueLabels.Strings[FContinueLabels.Count - 1]);
+    Self.Emit(#9'jmp ' + FContinueLabels.Peek);
     Exit;
   end;
 
