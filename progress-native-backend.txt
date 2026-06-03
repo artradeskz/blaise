@@ -64,7 +64,7 @@ Branch: native-codegen
         Element address = base + (I − LowBnd) × ElemSize via imulq/addq.
         3 new e2e tests (GlobalReadWrite, LocalReadWrite, NonZeroLow).
         M4 COMPLETE.
-[~] M5  function calls — direct calls to user procs/functions. DONE 2026-06-02.
+[x] M5  function calls — direct calls to user procs/functions. DONE 2026-06-02.
         Stack-frame model (params+Result+locals as -N(%rbp) slots; FFrame maps
         name->offset); EmitFunctionDef (prologue, spill arg regs to param slots,
         body, Result in %eax, epilogue); EmitCall (args in edi/esi/edx/ecx/r8d/
@@ -143,7 +143,22 @@ Branch: native-codegen
         instantiations of one generic in a single unit drop a vtable;
         TDictionary<string, Boolean> instantiation fails to link (vtable
         not emitted).
-[ ] M6  floats (s/d) parity
+[x] M6  floats (s/d) parity. DONE 2026-06-03.
+        Double/Single literals, globals, locals, arithmetic (+,-,*,/), comparisons
+        (< > = <> <= >=), WriteLn(D), value params, and function return.
+        EmitExprToXmm0 for float expressions; EmitLoadFloat/EmitStoreFloat;
+        float globals in .data (.double/.float directives); float literals in
+        .rodata (RIP-relative movsd/movss); cvtsd2ss for Double-literal → Single
+        assignment; EmitCondBranch dispatches ucomisd/ucomiss + CF/ZF jumps for
+        float comparisons; EmitFunctionDef prologue uses XmmIdx counter for
+        %xmm0/%xmm1/... spill (independent of IntIdx for int regs); epilogue
+        loads Result into %xmm0 for float return; EmitCall detects mixed/float
+        params and uses pre-allocated stack slots + two-pass register loading.
+        8 new e2e tests (all AssertRunsOnBoth). 2383 tests; FIXPOINT_OK.
+        Bugs fixed en route: WriteLn(Double/Single) crashed QBE (wrong arg type
+        in _SysWriteInt call); boSlash (not boDiv) is the `/` operator for
+        floats; float literals default to tyDouble so Single assignments need
+        cvtsd2ss.
 [ ] M7  aggregates/sret + full data section (vtables/typeinfo/strings/itabs)
         parity
 [ ] M8  full cp.test.e2e suite parity (stdout+exit), QBE vs native
