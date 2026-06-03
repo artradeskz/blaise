@@ -79,6 +79,9 @@ type
     procedure TestRun_Native_EightArgs;
     procedure TestRun_Native_IndirectCall_BareProc;
     procedure TestRun_Native_IndirectCall_BareFunc;
+    procedure TestRun_Native_Record_GlobalReadWrite;
+    procedure TestRun_Native_Record_LocalReadWrite;
+    procedure TestRun_Native_Record_AsParam;
   end;
 
 implementation
@@ -621,6 +624,70 @@ const
     end.
     ''';
 
+  { Record global: declare a record type, write fields from main, read back. }
+  SrcRecordGlobal = '''
+    program P;
+    type
+      TPoint = record
+        X: Integer;
+        Y: Integer;
+      end;
+    var Pt: TPoint;
+    begin
+      Pt.X := 3;
+      Pt.Y := 7;
+      WriteLn(Pt.X);
+      WriteLn(Pt.Y);
+      WriteLn(Pt.X + Pt.Y)
+    end.
+    ''';
+
+  { Record local inside a function. }
+  SrcRecordLocal = '''
+    program P;
+    type
+      TRect = record
+        W: Integer;
+        H: Integer;
+      end;
+    function Area(W, H: Integer): Integer;
+    var R: TRect;
+    begin
+      R.W := W;
+      R.H := H;
+      Result := R.W * R.H
+    end;
+    begin
+      WriteLn(Area(4, 5));
+      WriteLn(Area(6, 7))
+    end.
+    ''';
+
+  { Record fields passed as scalar parameters and result. }
+  SrcRecordParam = '''
+    program P;
+    type
+      TPoint = record
+        X: Integer;
+        Y: Integer;
+      end;
+    function ManhattanDist(X1, Y1, X2, Y2: Integer): Integer;
+    var DX, DY: Integer;
+    begin
+      DX := X2 - X1;
+      DY := Y2 - Y1;
+      if DX < 0 then DX := 0 - DX;
+      if DY < 0 then DY := 0 - DY;
+      Result := DX + DY
+    end;
+    var P1, P2: TPoint;
+    begin
+      P1.X := 1; P1.Y := 2;
+      P2.X := 4; P2.Y := 6;
+      WriteLn(ManhattanDist(P1.X, P1.Y, P2.X, P2.Y))
+    end.
+    ''';
+
 { Every test below runs its source through BOTH backends (beQBE, beNative)
   and asserts identical stdout/exit on each — the native backend's whole
   correctness model is parity with QBE on the same source, so this exercises
@@ -840,6 +907,25 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   { F = Add: 3+4 = 7; F = Mul: 3*4 = 12 }
   AssertRunsOnBoth(SrcIndirectBareFunc, '7' + LE + '12' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Record_GlobalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordGlobal, '3' + LE + '7' + LE + '10' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Record_LocalReadWrite;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordLocal, '20' + LE + '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Record_AsParam;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { |4-1| + |6-2| = 3 + 4 = 7 }
+  AssertRunsOnBoth(SrcRecordParam, '7' + LE, 0);
 end;
 
 initialization

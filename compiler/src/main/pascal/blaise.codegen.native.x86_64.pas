@@ -259,6 +259,19 @@ begin
   for I := 0 to FDataGlobals.Count - 1 do
   begin
     Name := FDataGlobals.Keys[I];
+    { Records: emit a zeroed block of TotalSize bytes aligned to the record's
+      natural alignment (at least 4, up to 8). }
+    if (Self.GlobalType(Name) <> nil) and
+       (Self.GlobalType(Name).Kind = tyRecord) then
+    begin
+      Sz := TRecordTypeDesc(Self.GlobalType(Name)).TotalSize;
+      Self.Emit('.balign 8');
+      if Copy(Name, 1, 2) <> '.L' then
+        Self.Emit('.globl ' + Name);
+      Self.Emit(Name + ':');
+      Self.Emit(Format(#9'.skip %d', [Sz]));
+      Continue;
+    end;
     Sz := IntByteSize(Self.GlobalType(Name));
     { Align each slot to its own size; pick a zero-initialiser directive of
       matching width so the linker reserves the correct number of bytes. }
@@ -351,12 +364,20 @@ begin
   end;
 end;
 
-{ Reserve an 8-byte-aligned slot for AName of type AType, advancing AOffset.
-  Stores the offset as a negative integer so VarOperand emits -N(%rbp). }
+{ Reserve a slot for AName of type AType in the current frame, advancing
+  AOffset by the slot size (8 bytes for scalars/pointers; TotalSize rounded
+  up to the next 8-byte boundary for records).  Stores the offset as a
+  negative integer so VarOperand emits -N(%rbp). }
 procedure TX86_64Backend.AddSlot(const AName: string; AType: TTypeDesc;
                                  var AOffset: Integer);
+var
+  Sz: Integer;
 begin
-  Inc(AOffset, 8);
+  if (AType <> nil) and (AType.Kind = tyRecord) then
+    Sz := (TRecordTypeDesc(AType).TotalSize + 7) and (-8)
+  else
+    Sz := 8;
+  Inc(AOffset, Sz);
   FFrame.Add(AName, -AOffset);
   FFrameTypes.Add(AName, AType);
 end;
@@ -476,6 +497,7 @@ procedure TX86_64Backend.EmitExprToEax(AExpr: TASTExpr);
 var
   BE:  TBinaryExpr;
   FC:  TFuncCallExpr;
+  FAE: TFieldAccessExpr;
   Unsigned: Boolean;
 begin
   if AExpr is TIntLiteral then
@@ -588,6 +610,42 @@ begin
     else
       raise ENativeCodeGenError.Create(
         'native backend: unsupported binary operator in integer expression');
+    end;
+    Exit;
+  end;
+
+  { Record field read: Rec.Field.  Handles local and global record bases;
+    defers class fields, chained access, implicit-Self, and var-param bases. }
+  if (AExpr is TFieldAccessExpr) and
+     (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
+     not TFieldAccessExpr(AExpr).IsClassAccess and
+     not TFieldAccessExpr(AExpr).IsImplicitSelf and
+     not TFieldAccessExpr(AExpr).IsMethodCall and
+     not TFieldAccessExpr(AExpr).IsConstructorCall and
+     (TFieldAccessExpr(AExpr).Base = nil) then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if Self.IsLocal(FAE.RecordName) then
+    begin
+      if FAE.FieldInfo.Offset = 0 then
+        Self.EmitLoadVar(Self.VarOperand(FAE.RecordName), FAE.FieldInfo.TypeDesc)
+      else
+      begin
+        Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]));
+        Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+          FAE.FieldInfo.TypeDesc);
+      end;
+    end
+    else
+    begin
+      if FAE.FieldInfo.Offset = 0 then
+        Self.EmitLoadVar(FAE.RecordName + '(%rip)', FAE.FieldInfo.TypeDesc)
+      else
+      begin
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+        Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+          FAE.FieldInfo.TypeDesc);
+      end;
     end;
     Exit;
   end;
@@ -749,6 +807,7 @@ var
   WhileS: TWhileStmt;
   RepS:  TRepeatStmt;
   Asgn:  TAssignment;
+  FA:    TFieldAssignment;
   I:     Integer;
   LThen, LElse, LEnd:    string;
   LCond, LBody:          string;
@@ -902,6 +961,44 @@ begin
       Self.Emit(#9'movl $0, %eax');
       Self.Emit(#9'leave');
       Self.Emit(#9'ret');
+    end;
+    Exit;
+  end;
+
+  if AStmt is TFieldAssignment then
+  begin
+    FA := TFieldAssignment(AStmt);
+    { Only plain record-variable.field := expr is handled; class fields,
+      implicit-Self, and var-param bases are deferred. }
+    if FA.IsClassAccess or FA.IsImplicitSelf or FA.IsVarParam or
+       (FA.FieldInfo = nil) then
+      raise ENativeCodeGenError.Create(
+        'native backend: unsupported field assignment form');
+    Self.EmitExprToEax(FA.Expr);
+    { Compute destination address: base address + field byte offset. }
+    if Self.IsLocal(FA.RecordName) then
+    begin
+      { Local record: VarOperand gives the base address of the record block. }
+      if FA.FieldInfo.Offset = 0 then
+        Self.EmitStoreVar(Self.VarOperand(FA.RecordName), FA.FieldInfo.TypeDesc)
+      else
+      begin
+        Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FA.RecordName)]));
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+          FA.FieldInfo.TypeDesc);
+      end;
+    end
+    else
+    begin
+      { Global record: name(%rip) is the base. }
+      if FA.FieldInfo.Offset = 0 then
+        Self.EmitStoreVar(FA.RecordName + '(%rip)', FA.FieldInfo.TypeDesc)
+      else
+      begin
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+          FA.FieldInfo.TypeDesc);
+      end;
     end;
     Exit;
   end;
@@ -1157,12 +1254,13 @@ var
   VD:    TVarDecl;
   Decl:  TMethodDecl;
 begin
-  { Register declared program-level integer-family variables as global slots,
-    so even unused declarations get a definition (matching the QBE backend). }
+  { Register declared program-level variables as global slots.  Integer-family
+    and record types are supported; others are skipped (fail loudly on use). }
   for I := 0 to AProg.Block.Decls.Count - 1 do
   begin
     VD := TVarDecl(AProg.Block.Decls.Items[I]);
-    if IsIntFamily(VD.ResolvedType) then
+    if IsIntFamily(VD.ResolvedType) or
+       ((VD.ResolvedType <> nil) and (VD.ResolvedType.Kind = tyRecord)) then
       for J := 0 to VD.Names.Count - 1 do
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
   end;

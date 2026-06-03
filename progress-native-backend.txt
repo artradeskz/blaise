@@ -45,9 +45,16 @@ Branch: native-codegen
         hidden .L for-end slots file-local). for to/downto with end evaluated
         once (hidden slot), nesting, counter-driven while/repeat. Matches QBE
         oracle. 2306 tests pass; FIXPOINT_OK.
-        STILL TODO for full M4: narrow loads/stores (byte/word types), records,
-        arrays, and true stack-frame locals inside procedures (arrives with M5
-        functions). Tracked as scope for later milestones.
+        Narrow loads/stores already done in M5 (wider integer family).
+        Records DONE 2026-06-03 — TFieldAssignment (write) and TFieldAccessExpr
+        (read) for integer-family record fields; local and global record vars.
+        AddSlot allocates TotalSize (rounded to 8) bytes for record locals.
+        EmitDataSection emits .skip N / .balign 8 for global records.
+        EmitProgram registers record-typed globals alongside integer globals.
+        Field address = base + FieldInfo.Offset: offset=0 uses VarOperand/RIP
+        directly; non-zero offsets leaq the base into %rcx then use N(%rcx).
+        3 new e2e tests (RecordGlobal, RecordLocal, RecordParam) on both backends.
+        STILL TODO for full M4: arrays.
 [~] M5  function calls — direct calls to user procs/functions. DONE 2026-06-02.
         Stack-frame model (params+Result+locals as -N(%rbp) slots; FFrame maps
         name->offset); EmitFunctionDef (prologue, spill arg regs to param slots,
