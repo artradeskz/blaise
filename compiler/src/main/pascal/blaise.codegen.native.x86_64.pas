@@ -109,6 +109,13 @@ type
       nil for type-cast calls. }
     procedure EmitCall(const AFuncSym: string; ADecl: TMethodDecl;
                        AArgs: TObjectList);
+    { Indirect call: load a bare function pointer from APtrOperand (an AT&T
+      memory operand, e.g. "-8(%rbp)"), set up args as for EmitCall, then
+      dispatch via callq *%r10.  AProcType supplies the param list for
+      var-param detection; result (if any) is left in %rax. }
+    procedure EmitCallIndirect(const APtrOperand: string;
+                               AProcType: TProceduralTypeDesc;
+                               AArgs: TObjectList);
     { Evaluate an integer expression; result left in %rax (64-bit-extended). }
     procedure EmitExprToEax(AExpr: TASTExpr);
     { The integer-family type to use when loading the value of AExpr: the
@@ -156,10 +163,12 @@ begin
     Exit(4);
   end;
   case AType.Kind of
-    tyByte, tyBoolean:           Result := 1;
-    tySmallInt, tyWord:          Result := 2;
-    tyInteger, tyUInt32, tyEnum: Result := 4;
-    tyInt64, tyUInt64:           Result := 8;
+    tyByte, tyBoolean:                          Result := 1;
+    tySmallInt, tyWord:                         Result := 2;
+    tyInteger, tyUInt32, tyEnum:                Result := 4;
+    tyInt64, tyUInt64,
+    tyProcedural, tyPointer, tyPChar, tyClass,
+    tyString, tyMetaClass:                      Result := 8;
   else
     Result := 4;
   end;
@@ -498,8 +507,18 @@ begin
   begin
     FC := TFuncCallExpr(AExpr);
     if FC.IsIndirectCall then
-      raise ENativeCodeGenError.Create(
-        'native backend: indirect (procedural-type) calls not yet supported');
+    begin
+      { Bare function-pointer call: load the pointer from the variable slot
+        and dispatch via callq *%r10. }
+      Self.EmitCallIndirect(
+        Self.VarOperand(FC.Name),   { local slot or global RIP-relative }
+        TProceduralTypeDesc(FC.ResolvedProcType),
+        FC.Args);
+      { Normalise the return value width. }
+      if FC.ResolvedType <> nil then
+        Self.EmitNarrowToType(FC.ResolvedType);
+      Exit;
+    end;
     { Type cast TypeName(Expr): ResolvedDecl is nil.  Evaluate the operand,
       then truncate/extend to the target integer-family type.  Mirrors the QBE
       backend's cast lowering. }
@@ -570,6 +589,19 @@ begin
       raise ENativeCodeGenError.Create(
         'native backend: unsupported binary operator in integer expression');
     end;
+    Exit;
+  end;
+
+  { @FuncName — load the function's code address into %rax.
+    The semantic pass sets ResolvedType.Kind = tyProcedural on the inner
+    TIdentExpr when it names a standalone procedure or function. }
+  if (AExpr is TAddrOfExpr) and
+     (TAddrOfExpr(AExpr).Expr is TIdentExpr) and
+     (TIdentExpr(TAddrOfExpr(AExpr).Expr).ResolvedType <> nil) and
+     (TIdentExpr(TAddrOfExpr(AExpr).Expr).ResolvedType.Kind = tyProcedural) then
+  begin
+    Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+      [TIdentExpr(TAddrOfExpr(AExpr).Expr).Name]));
     Exit;
   end;
 
@@ -761,8 +793,13 @@ begin
       Exit;
     end;
     if PC.IsIndirectCall then
-      raise ENativeCodeGenError.Create(
-        'native backend: indirect (procedural-type) calls not yet supported');
+    begin
+      Self.EmitCallIndirect(
+        Self.VarOperand(PC.Name),
+        TProceduralTypeDesc(PC.ResolvedProcType),
+        PC.Args);
+      Exit;
+    end;
     { User procedure call (result, if any, ignored in statement position). }
     Self.EmitCall(FuncSymbolFromDecl(TMethodDecl(PC.ResolvedDecl)),
       TMethodDecl(PC.ResolvedDecl), PC.Args);
@@ -965,6 +1002,58 @@ begin
   else
     Self.Emit(Format(#9'movl %s, %s', [SysVArgRegs[AIdx], AOperand]));
   end;
+end;
+
+{ Emit a call through a bare function pointer held in APtrOperand (an AT&T
+  memory operand).  Loads the pointer into %r10 (caller-saved scratch, not
+  clobbered by arg evaluation in %rax), sets up args exactly as EmitCall does,
+  then dispatches via `callq *%r10`.  AProcType supplies the param signature
+  for var/out param detection; nil means all value params. }
+procedure TX86_64Backend.EmitCallIndirect(const APtrOperand: string;
+                                          AProcType: TProceduralTypeDesc;
+                                          AArgs: TObjectList);
+var
+  I:     Integer;
+  Arg:   TASTExpr;
+  IsVar: Boolean;
+begin
+  { Load the function pointer before pushing args — %r10 is caller-saved and
+    not touched by EmitExprToEax, so it survives the arg-evaluation loop. }
+  Self.Emit(Format(#9'movq %s, %%r10', [APtrOperand]));
+
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    IsVar := (AProcType <> nil) and (I < AProcType.Params.Count) and
+             TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
+    if IsVar then
+    begin
+      if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
+        Self.Emit(Format(#9'movq %s, %%rax',
+          [Self.VarOperand(TIdentExpr(Arg).Name)]))
+      else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+        Self.Emit(Format(#9'leaq %s, %%rax',
+          [Self.VarOperand(TIdentExpr(Arg).Name)]))
+      else if Arg is TIdentExpr then
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+          [TIdentExpr(Arg).Name]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else
+    begin
+      Self.EmitExprToEax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end;
+  end;
+
+  { Pop args into registers (same as EmitCall; ≤6 args assumed for now). }
+  if AArgs.Count > 6 then
+    raise ENativeCodeGenError.Create(
+      'native backend: indirect call with more than 6 arguments not yet supported');
+  for I := AArgs.Count - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+
+  Self.Emit(#9'callq *%r10');
 end;
 
 { True when AType is an integer-family type the backend can place in a

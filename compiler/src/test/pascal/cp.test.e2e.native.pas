@@ -77,6 +77,8 @@ type
     procedure TestRun_Native_ExitValueShorthand;
     procedure TestRun_Native_SevenArgs;
     procedure TestRun_Native_EightArgs;
+    procedure TestRun_Native_IndirectCall_BareProc;
+    procedure TestRun_Native_IndirectCall_BareFunc;
   end;
 
 implementation
@@ -541,6 +543,84 @@ const
     end.
     ''';
 
+  { Bare procedural-type (no 'of object'): assign a procedure to a variable
+    and call through it.  WriteLn is not callable via a proc var in the test
+    harness, so we use a user-defined Print procedure. }
+  SrcIndirectBareProc = '''
+    program P;
+    type
+      TProc = procedure(X: Integer);
+    procedure PrintIt(X: Integer);
+    begin
+      WriteLn(X)
+    end;
+    var F: TProc;
+    begin
+      F := @PrintIt;
+      F(42);
+      F(99)
+    end.
+    ''';
+
+  { Bare function pointer: assign a function to a variable and call it in
+    an expression. }
+  SrcIndirectBareFunc = '''
+    program P;
+    type
+      TFunc = function(A, B: Integer): Integer;
+    function Add(A, B: Integer): Integer;
+    begin
+      Result := A + B
+    end;
+    function Mul(A, B: Integer): Integer;
+    begin
+      Result := A * B
+    end;
+    var F: TFunc;
+    begin
+      F := @Add;
+      WriteLn(F(3, 4));
+      F := @Mul;
+      WriteLn(F(3, 4))
+    end.
+    ''';
+
+  { Method pointer ('of object'): the variable holds a (Code, Data) pair;
+    calling it must pass Data as Self.  Uses TMethod + MethodAddress + a cast
+    to bind the method pointer, matching the established e2e pattern. }
+  SrcIndirectMethodPtr = '''
+    program P;
+    type
+      TCounter = class
+        FVal: Integer;
+      published
+        procedure Add(N: Integer);
+        function  Get: Integer;
+      end;
+      TAddProc = procedure(N: Integer) of object;
+    procedure TCounter.Add(N: Integer);
+    begin
+      Self.FVal := Self.FVal + N
+    end;
+    function TCounter.Get: Integer;
+    begin
+      Result := Self.FVal
+    end;
+    var
+      C:  TCounter;
+      M:  TMethod;
+      P:  TAddProc;
+    begin
+      C      := TCounter.Create;
+      M.Code := MethodAddress(C, 'Add');
+      M.Data := C;
+      P      := TAddProc(M);
+      P(10);
+      P(5);
+      WriteLn(C.Get())
+    end.
+    ''';
+
 { Every test below runs its source through BOTH backends (beQBE, beNative)
   and asserts identical stdout/exit on each — the native backend's whole
   correctness model is parity with QBE on the same source, so this exercises
@@ -747,6 +827,19 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   { 1+2+3+4+5+6+7+8 = 36; 100-1-2-3-4-5-6-7 = 72 }
   AssertRunsOnBoth(SrcEightArgs, '36' + LE + '72' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IndirectCall_BareProc;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIndirectBareProc, '42' + LE + '99' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IndirectCall_BareFunc;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { F = Add: 3+4 = 7; F = Mul: 3*4 = 12 }
+  AssertRunsOnBoth(SrcIndirectBareFunc, '7' + LE + '12' + LE, 0);
 end;
 
 initialization

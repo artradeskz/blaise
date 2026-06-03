@@ -106,7 +106,17 @@ Branch: native-codegen
         AddSlot now stores offsets as negatives for local slots; VarOperand checks
         sign to emit -N(%rbp) vs +N(%rbp).  2 new e2e tests (SevenArgs, EightArgs)
         run on both backends.  2363 tests pass; FIXPOINT_OK.
-        STILL TODO for full M5: indirect (procedural-type) calls,
+        Indirect (bare proc/func pointer) calls DONE 2026-06-03 — EmitCallIndirect
+        loads the function pointer from the variable slot into %r10 (caller-saved
+        scratch that survives arg evaluation in %rax), pushes/pops args into
+        registers as for EmitCall, then dispatches via callq *%r10.  @FuncName in
+        expression context emits leaq funcname(%rip), %rax.  IntByteSize extended
+        to return 8 for tyProcedural/tyPointer/tyClass/etc. so proc-pointer globals
+        get a .quad/.balign 8 slot and are stored/loaded with movq (was movl/long,
+        truncating the 64-bit address).  2 new e2e tests: BareProc, BareFunc.
+        Method pointers (of object, 16-byte Code+Data block) deferred — requires
+        TFieldAssignment support for M.Code/M.Data record fields.
+        STILL TODO for full M5: method-pointer calls (of object),
         float/record/string params+return — all fail loudly.
         Bugs found en route (bugs.txt): Exit(Value) shorthand unsupported;
         nested (local) procedures emit an undefined external; two distinct
