@@ -3144,7 +3144,7 @@ begin
   { --- Call GetEnumerator on the collection --- }
   SelfT := EmitExpr(AStmt.CollExpr);
   EnumT := AllocTemp;
-  FuncName := '$' + QBEMangle(GetEDecl.OwnerTypeName + '_' + GetEDecl.Name);
+  FuncName := '$' + MethodEmitName(GetEDecl, GetEDecl.OwnerTypeName, GetEDecl.Name);
   if GetEDecl.VTableSlot >= 0 then
   begin
     VTblT   := AllocTemp;
@@ -3178,7 +3178,7 @@ begin
   SelfT    := AllocTemp;
   EmitLine(Format('  %s =l loadl %s', [SelfT, EnumSlot]));
   OkT      := AllocTemp;
-  FuncName := '$' + QBEMangle(MNDecl.OwnerTypeName + '_' + MNDecl.Name);
+  FuncName := '$' + MethodEmitName(MNDecl, MNDecl.OwnerTypeName, MNDecl.Name);
   if MNDecl.VTableSlot >= 0 then
   begin
     VTblT   := AllocTemp;
@@ -3207,7 +3207,7 @@ begin
     SelfT    := AllocTemp;
     EmitLine(Format('  %s =l loadl %s', [SelfT, EnumSlot]));
     QType    := QbeTypeOf(CurDecl.ResolvedReturnType);
-    FuncName := '$' + QBEMangle(CurDecl.OwnerTypeName + '_' + CurDecl.Name);
+    FuncName := '$' + MethodEmitName(CurDecl, CurDecl.OwnerTypeName, CurDecl.Name);
     CurT     := AllocTemp;
     if CurDecl.VTableSlot >= 0 then
     begin
