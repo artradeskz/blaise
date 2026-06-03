@@ -38,7 +38,7 @@ Branch: native-codegen
         Comparison ops (= <> < > <= >=) via cmpl+setcc; EmitCondBranch
         (testl + jne/jmp); NewLabel for .L-locals; if/while/repeat lowering.
         (`for` landed in M4 with locals.) Matches QBE oracle.
-[~] M4  memory/locals — integer program-globals + for loop. DONE 2026-06-02.
+[x] M4  memory/locals — integer program-globals + for loop. DONE 2026-06-02.
         Program-level int vars emitted as RIP-relative .data globals (matching
         the QBE backend's model for a program's top-level var block); declare/
         assign/read; EmitDataSection collects slots (named globals exported,
@@ -132,8 +132,12 @@ Branch: native-codegen
         truncating the 64-bit address).  2 new e2e tests: BareProc, BareFunc.
         Method pointers (of object, 16-byte Code+Data block) deferred — requires
         TFieldAssignment support for M.Code/M.Data record fields.
-        STILL TODO for full M5: method-pointer calls (of object),
-        float/record/string params+return — all fail loudly.
+        Method-pointer calls (of object) deferred to M7 — requires class
+        allocation, TFieldAssignment for class/pointer fields, and call dispatch
+        (Code→%r10, Data→%rdi, shift remaining args).  Placeholder test
+        TestRun_Native_IndirectCall_MethodPtr added: QBE path verified,
+        native path Ignored with TODO M7.
+        M5 COMPLETE (float/record/string params+return deferred to M6/M7).
         Bugs found en route (bugs.txt): Exit(Value) shorthand unsupported;
         nested (local) procedures emit an undefined external; two distinct
         instantiations of one generic in a single unit drop a vtable;

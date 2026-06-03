@@ -85,6 +85,8 @@ type
     procedure TestRun_Native_StaticArray_GlobalReadWrite;
     procedure TestRun_Native_StaticArray_LocalReadWrite;
     procedure TestRun_Native_StaticArray_NonZeroLow;
+    { TODO M7: method-pointer calls require class support }
+    procedure TestRun_Native_IndirectCall_MethodPtr;
     { TODO M7: record-returning function — deferred until sret/aggregate support }
     procedure TestRun_Native_RecordReturnFunction;
   end;
@@ -1015,6 +1017,21 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   { 100 + 200 + 300 = 600 }
   AssertRunsOnBoth(SrcStaticArrayNonZeroLow, '600' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IndirectCall_MethodPtr;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { QBE path must work (SrcIndirectMethodPtr uses TMethod/TCounter which
+    require the RTL, so use CompileAndRunWithRTL). }
+  AssertTrue('[qbe] compile+run',
+    CompileAndRunWithRTL(SrcIndirectMethodPtr, Output, RCode));
+  AssertEquals('[qbe] exit 0', 0, RCode);
+  AssertEquals('[qbe] output', '15' + LE, Output);
+  { Native path deferred to M7: requires class allocation, field access, and
+    method-pointer call dispatch (load Code→%r10, Data→%rdi, shift args). }
+  Ignore('TODO M7: method-pointer calls require class support not yet in native backend');
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordReturnFunction;
