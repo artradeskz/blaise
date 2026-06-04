@@ -1082,3 +1082,52 @@ to distinguish this from simple enums so existing code is unaffected.
   distinct `enum class` type form.  Breaking from simple enum semantics
   is acceptable provided it is a new keyword.
 
+
+== ARC: elide retain/release for const value parameters
+
+A `const` parameter promises the caller keeps the argument alive for the
+duration of the call, so the callee-side `_StringAddRef`/`_StringRelease`
+(and `_ClassAddRef`/`_ClassRelease`) pair on entry/exit is, in principle,
+redundant.  Eliding it removes two RTL calls per const string/class/interface
+parameter — a measurable saving on hot paths that thread strings through many
+`const` parameters (the parser and semantic analyser do this heavily).
+
+This optimisation was implemented (commit `5a5b5d4`) and reverted after it
+introduced a use-after-free.  The reason it is unsound as stated:
+
+* The "caller keeps it alive" premise holds for a *named* argument the caller
+  owns for the whole call, but *not* for a *temporary* bound to the const
+  parameter — e.g. `Use(A + ' ' + B)`, where the concatenation result is a
+  freshly-allocated string whose only reference is the argument slot itself.
+  With the callee-side retain elided, that temporary's refcount reaches zero
+  at the call boundary and the string is freed *before* the callee reads it.
+
+* This bites the RTL especially hard: routines such as `_StringCopy` and
+  `StrHead` take `const string` parameters and are frequently called with
+  built-at-runtime temporaries.  A miscompiled RTL is self-reproducing under
+  self-hosting — the defect only manifests at the *second* generation (the
+  compiler that emits the broken RTL is itself fine), so a single fixpoint
+  step (stage-2 == stage-3) does not necessarily expose it, and the compiler's
+  own sources may not trigger the exact aliasing case.  The original change
+  passed its valgrind test only because that test passed a string *literal*
+  (immortal), not a temporary.
+
+To re-attempt the optimisation safely, the elision must be conditioned on the
+*argument*, not merely the parameter:
+
+* Elide the callee-side retain/release only when the caller can prove the
+  argument outlives the call without the callee's reference — i.e. a named
+  local/global/parameter the caller already retains — and *keep* the
+  retain/release when the argument is a temporary (function/property result,
+  concatenation, cast, or any `ExprOwnsRef` expression).
+
+* Equivalently, move the responsibility to the *call site*: for a const
+  parameter bound to a temporary, the caller retains the temporary across the
+  call and releases it afterwards (caller-side balancing), leaving the callee
+  free of ARC traffic.  This keeps the optimisation's benefit for the common
+  named-argument case while remaining correct for temporaries.
+
+* Mandatory regression coverage: a valgrind e2e test that passes a
+  *concatenation result* (not a literal) as a `const string` parameter and
+  reads it in the callee — see `TestRun_ConstStringTemp_StaysAlive_Valgrind`
+  in `cp.test.e2e.arc.pas`.  Add the class- and interface-typed analogues.

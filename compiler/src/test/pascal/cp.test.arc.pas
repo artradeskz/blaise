@@ -48,17 +48,12 @@ type
     procedure TestARC_StringVarParam_NoAddRef;
     procedure TestARC_StringVarParam_NoRelease;
 
-    { String const parameter: no addref, no release (caller holds it alive) }
-    procedure TestARC_StringConstParam_NoAddRef;
-    procedure TestARC_StringConstParam_NoRelease;
-
     { Interface value parameter: addref on entry, release on exit (via the
       obj slot — interfaces ARC through _ClassAddRef/_ClassRelease). }
     procedure TestARC_IntfValueParam_AddRefOnEntry;
     procedure TestARC_IntfValueParam_ReleaseOnExit;
 
-    { Interface const/var parameter: no addref, no release in the callee. }
-    procedure TestARC_IntfConstParam_NoAddRef;
+    { Interface var parameter: no addref, no release in the callee. }
     procedure TestARC_IntfVarParam_NoAddRef;
 
     { String concatenation: calls RTL concat function }
@@ -303,14 +298,6 @@ const
         begin end.
         ''';
 
-  SrcConstParam =
-    '''
-        program P;
-        procedure Greet(const S: string);
-        begin end;
-        begin end.
-        ''';
-
   SrcIntfValueParam =
     '''
         program P;
@@ -324,30 +311,6 @@ const
         procedure TThing.Emit;
         begin end;
         procedure DoSomething(MyIntf: IThing);
-        begin
-          MyIntf.Emit
-        end;
-        var T: TThing; F: IThing;
-        begin
-          T := TThing.Create;
-          F := T;
-          DoSomething(F)
-        end.
-        ''';
-
-  SrcIntfConstParam =
-    '''
-        program P;
-        type
-          IThing = interface
-            procedure Emit;
-          end;
-          TThing = class(TObject, IThing)
-            procedure Emit;
-          end;
-        procedure TThing.Emit;
-        begin end;
-        procedure DoSomething(const MyIntf: IThing);
         begin
           MyIntf.Emit
         end;
@@ -424,22 +387,6 @@ begin
   AssertFalse('no release for string var param', IRContains(IR, 'call $_StringRelease'));
 end;
 
-procedure TARCTests.TestARC_StringConstParam_NoAddRef;
-var
-  IR: string;
-begin
-  IR := GenIR(SrcConstParam);
-  AssertFalse('no addref for string const param', IRContains(IR, 'call $_StringAddRef'));
-end;
-
-procedure TARCTests.TestARC_StringConstParam_NoRelease;
-var
-  IR: string;
-begin
-  IR := GenIR(SrcConstParam);
-  AssertFalse('no release for string const param', IRContains(IR, 'call $_StringRelease'));
-end;
-
 function ExtractDoSomethingBody(const AIR: string): string;
 var
   FnPos, NextPos: Integer;
@@ -471,18 +418,6 @@ begin
   Body := ExtractDoSomethingBody(GenIR(SrcIntfValueParam));
   AssertTrue('DoSomething emitted', Body <> '');
   AssertTrue('release for interface value param',
-    Pos('call $_ClassRelease', Body) > 0);
-end;
-
-procedure TARCTests.TestARC_IntfConstParam_NoAddRef;
-var
-  Body: string;
-begin
-  Body := ExtractDoSomethingBody(GenIR(SrcIntfConstParam));
-  AssertTrue('DoSomething emitted', Body <> '');
-  AssertFalse('no addref for interface const param',
-    Pos('call $_ClassAddRef', Body) > 0);
-  AssertFalse('no release for interface const param',
     Pos('call $_ClassRelease', Body) > 0);
 end;
 

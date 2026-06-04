@@ -27,8 +27,14 @@ type
     procedure TestRun_WeakRef_BreaksCycle_Valgrind;
     procedure TestRun_ClassDestroy_FreesBuffer_Valgrind;
     procedure TestRun_TListARC_Valgrind;
-    procedure TestRun_ConstParam_NoRetainRelease_Valgrind;
     procedure TestRun_IntfValueParam_Retained_Valgrind;
+    { Regression: a const string param bound to a freshly-built TEMPORARY must
+      stay alive for the whole call.  An over-eager "elide retain/release for
+      const params" optimisation (reverted) dropped the callee-side retain, so
+      the temporary was freed mid-call -> use-after-free in the RTL string
+      routines.  A string LITERAL hides this (it is immortal); a concatenation
+      result does not. }
+    procedure TestRun_ConstStringTemp_StaysAlive_Valgrind;
     { Three instantiations of the same generic class: verifies the Pointer→class
       ARC coercion bug is fixed (the 3rd instantiation no longer uses freed memory). }
     procedure TestRun_ThreeGenericInstances_AllWork;
@@ -317,49 +323,6 @@ const
     ''';
 
 const
-  { const class/string params: the codegen elides the callee-side
-    _ClassAddRef/_ClassRelease and _StringAddRef/_StringRelease pair because
-    the caller keeps the argument alive for the whole call.  This program
-    passes both a class instance and a string as const and uses them inside
-    the callee; valgrind must report no leak and no use-after-free, proving
-    the elision is balanced (no over-release, no missing retain). }
-  SrcConstParamNoRetain = '''
-    program P;
-    type
-      TThing = class
-        FValue: Integer;
-      end;
-    procedure Show(const T: TThing; const S: string);
-    begin
-      WriteLn(S);
-      WriteLn(T.FValue)
-    end;
-    var
-      A: TThing;
-    begin
-      A := TThing.Create;
-      A.FValue := 99;
-      Show(A, 'hello')
-    end.
-    ''';
-
-procedure TE2EArcTests.TestRun_ConstParam_NoRetainRelease_Valgrind;
-var Output: string; RCode: Integer; Log: string; OK: Boolean;
-begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcConstParamNoRetain, Output, RCode));
-  AssertEquals('exit 0', 0, RCode);
-  AssertEquals('stdout', 'hello' + LE + '99' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
-  OK := RunUnderValgrind(SrcConstParamNoRetain, Log);
-  if not OK then
-  begin
-    if Log = '' then Log := '(valgrind produced no output)';
-    Fail('const-param ARC elision unbalanced — valgrind reports:' + LE + Log);
-  end;
-end;
-
-const
   { By-value interface param: the callee must retain it on entry, because the
     caller's reference can be dropped during the call.  Here DoSomething nils
     the global F (the caller's sole owner) *before* using MyIntf again.  With
@@ -411,6 +374,44 @@ begin
   begin
     if Log = '' then Log := '(valgrind produced no output)';
     Fail('interface value param not retained — valgrind reports:' + LE + Log);
+  end;
+end;
+
+const
+  { Pass a freshly-concatenated temporary as a const string param, then read
+    it inside the callee.  Without the callee-side retain the temporary's
+    refcount hits zero at the call site and the string is freed before Use
+    reads it — a use-after-free valgrind catches.  A literal would not expose
+    this (it is immortal), so the argument must be a built-at-runtime value. }
+  SrcConstStringTemp = '''
+    program P;
+    procedure Use(const S: string);
+    begin
+      WriteLn(S);
+      WriteLn(Length(S))
+    end;
+    var
+      A, B: string;
+    begin
+      A := 'hello';
+      B := 'world';
+      Use(A + ' ' + B)
+    end.
+    ''';
+
+procedure TE2EArcTests.TestRun_ConstStringTemp_StaysAlive_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstStringTemp, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('stdout', 'hello world' + LE + '11' + LE, Output);
+  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  OK := RunUnderValgrind(SrcConstStringTemp, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output)';
+    Fail('const string temp freed mid-call — valgrind reports:' + LE + Log);
   end;
 end;
 
