@@ -131,6 +131,30 @@ type
     { The AT&T operand addressing AName: "-N(%rbp)" for a frame local,
       "name(%rip)" for a global. }
     function VarOperand(const AName: string): string;
+    { Operands for the two halves of an interface fat pointer.  Locals occupy
+      a contiguous 16-byte slot (obj at the slot base, itab 8 bytes above);
+      globals are two separate .data labels, AName + '_obj'/'_itab'. }
+    function IntfObjOperand(const AName: string; AIsGlobal: Boolean): string;
+    function IntfItabOperand(const AName: string; AIsGlobal: Boolean): string;
+    { Lower one interface method call (TFieldAccessExpr.IsInterfaceCall or a
+      TMethodCallExpr/Stmt whose ResolvedClassType is tyInterface): load obj +
+      itab, index the itab by method slot, call the loaded pointer with obj as
+      Self and AArgs after it.  Result (if any) left in %rax/%xmm0. }
+    procedure EmitInterfaceCall(const AObjName: string; AIsGlobal: Boolean;
+                                AIntf: TInterfaceTypeDesc;
+                                const AMethName: string; AArgs: TObjectList);
+    { Emit typeinfo / itab / impllist blocks for interfaces and the classes
+      that implement them.  Mirrors the QBE backend's EmitInterfaceDefs. }
+    procedure EmitInterfaceDefs(AProg: TProgram);
+    { Lower an assignment whose LHS is interface-typed.  Handles the four RHS
+      forms: as-cast (T as IFoo via _GetItab), direct class->interface (static
+      itab), interface->interface copy, and := nil.  Strong references only;
+      weak interface refs are deferred. }
+    procedure EmitInterfaceAssign(AAsgn: TAssignment);
+    { True when AMethName resolves to an abstract slot on ARec (the itab entry
+      must then point at _AbstractMethodError). }
+    function IsAbstractClassMethod(ARec: TRecordTypeDesc;
+                                   const AMethName: string): Boolean;
     { Load an integer-family value from AOperand into %rax, extended to 64
       bits per AType (sign/zero-extend by width and signedness). }
     procedure EmitLoadVar(const AOperand: string; AType: TTypeDesc);
@@ -397,6 +421,25 @@ begin
         Self.Emit('.globl ' + Name);
       Self.Emit(Name + ':');
       Self.Emit(#9'.quad 0');
+      Self.Emit(#9'.quad 0');
+      Continue;
+    end;
+    { Interface globals: a fat pointer split into two separate labels,
+      Name_obj and Name_itab, each an 8-byte zero-initialised slot.  The two
+      labels match IntfObjOperand / IntfItabOperand and the QBE backend's
+      $Name_obj / $Name_itab convention. }
+    if (Self.GlobalType(Name) <> nil) and
+       (Self.GlobalType(Name).Kind = tyInterface) then
+    begin
+      Self.Emit('.balign 8');
+      if Copy(Name, 1, 2) <> '.L' then
+      begin
+        Self.Emit('.globl ' + Name + '_obj');
+        Self.Emit('.globl ' + Name + '_itab');
+      end;
+      Self.Emit(Name + '_obj:');
+      Self.Emit(#9'.quad 0');
+      Self.Emit(Name + '_itab:');
       Self.Emit(#9'.quad 0');
       Continue;
     end;
@@ -800,6 +843,252 @@ begin
   end;
 end;
 
+{ Lower an interface method call.  The receiver is an interface fat pointer
+  (obj + itab) named AObjName; AIntf supplies the method's slot index.  The
+  itab is a flat array of method-code pointers (no leading typeinfo slot, in
+  contrast to a vtable), so the slot offset is MethodIndex * PtrSize.
+
+  Calling sequence mirrors EmitMethodCallExpr: evaluate args left-to-right onto
+  the stack, load the obj (Self) and the resolved code pointer into caller-saved
+  scratch (%r10/%r11) that survive the pop loop, pop args into %rsi.. (shifted
+  by one for Self in %rdi), set %rdi := obj, then `callq *%r11`. }
+procedure TX86_64Backend.EmitInterfaceCall(const AObjName: string;
+                                           AIsGlobal: Boolean;
+                                           AIntf: TInterfaceTypeDesc;
+                                           const AMethName: string;
+                                           AArgs: TObjectList);
+var
+  I, SlotOff, Ps, ArgN: Integer;
+  Arg: TASTExpr;
+begin
+  { x86_64: pointers are 8 bytes (this backend's invariant, like the rest of the
+    file).  i386/arm64 backends will be separate TNativeBackend subclasses. }
+  Ps := 8;
+  ArgN := 0;
+  if AArgs <> nil then ArgN := AArgs.Count;
+  { Evaluate args left-to-right and push them. }
+  for I := 0 to ArgN - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    Self.EmitExprToEax(Arg);
+    Self.Emit(#9'pushq %rax');
+  end;
+  { Load obj (Self) into %r10 and the itab into %rax, then index the itab. }
+  Self.Emit(Format(#9'movq %s, %%r10', [Self.IntfObjOperand(AObjName, AIsGlobal)]));
+  Self.Emit(Format(#9'movq %s, %%rax', [Self.IntfItabOperand(AObjName, AIsGlobal)]));
+  SlotOff := AIntf.MethodIndex(AMethName) * Ps;
+  if SlotOff = 0 then
+    Self.Emit(#9'movq (%rax), %r11')
+  else
+    Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
+  { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self). }
+  for I := ArgN - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+  Self.Emit(#9'movq %r10, %rdi');
+  Self.Emit(#9'callq *%r11');
+end;
+
+{ An interface method maps to one of ARec's vtable slots.  When that slot is
+  abstract, the itab entry must point at _AbstractMethodError (the concrete
+  symbol does not exist on an abstract base). }
+function TX86_64Backend.IsAbstractClassMethod(ARec: TRecordTypeDesc;
+                                              const AMethName: string): Boolean;
+var
+  Slot: Integer;
+begin
+  Slot := ARec.FindVTableSlot(AMethName);
+  if Slot < 0 then
+    Result := False
+  else
+    Result := ARec.VTableEntryAt(Slot).IsAbstract;
+end;
+
+{ Emit typeinfo / itab / impllist blocks for interfaces and implementing
+  classes.  Mirrors the QBE backend's EmitInterfaceDefs:
+
+    typeinfo_IFoo:        .quad 0            (address IS the identity token)
+    itab_TFoo_IFoo:       .quad TFoo_DoIt, .quad TFoo_GetVal   (decl order)
+    impllist_TFoo:        .quad typeinfo_IFoo, .quad itab_TFoo_IFoo, .quad 0
+
+  impllist is a NULL-terminated array of (typeinfo, itab) pairs, walked by the
+  _GetItab runtime helper for `as`-casts.  Generic interface/class instances
+  are deferred until the native backend compiles generic-using programs. }
+procedure TX86_64Backend.EmitInterfaceDefs(AProg: TProgram);
+var
+  I, J, K:    Integer;
+  TD:         TTypeDecl;
+  TDesc:      TTypeDesc;
+  IntfDesc:   TInterfaceTypeDesc;
+  ClassRT:    TRecordTypeDesc;
+  MethName:   string;
+  MethRef:    string;
+begin
+  { Typeinfo blocks for every plain interface. }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TInterfaceTypeDef) then Continue;
+    Self.Emit('.balign 8');
+    Self.Emit('.globl typeinfo_' + NativeMangle(TD.Name));
+    Self.Emit('typeinfo_' + NativeMangle(TD.Name) + ':');
+    Self.Emit(#9'.quad 0');
+  end;
+
+  { Itab and impllist blocks for each implementing class. }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    ClassRT := TRecordTypeDesc(TDesc);
+    if ClassRT.ImplementsCount = 0 then Continue;
+
+    { One itab per implemented interface — a flat array of method-code ptrs in
+      interface declaration order. }
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc := ClassRT.ImplementsIntfAt(J);
+      Self.Emit('.balign 8');
+      Self.Emit('.globl itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name));
+      Self.Emit('itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name) + ':');
+      for K := 0 to IntfDesc.MethodCount - 1 do
+      begin
+        MethName := IntfDesc.MethodName(K);
+        if Self.IsAbstractClassMethod(ClassRT, MethName) then
+          MethRef := '_AbstractMethodError'
+        else
+          MethRef := NativeMangle(TD.Name) + '_' + MethName;
+        Self.Emit(#9'.quad ' + MethRef);
+      end;
+    end;
+
+    { One impllist per class: NULL-terminated (typeinfo, itab) pairs. }
+    Self.Emit('.balign 8');
+    Self.Emit('.globl impllist_' + NativeMangle(TD.Name));
+    Self.Emit('impllist_' + NativeMangle(TD.Name) + ':');
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc := ClassRT.ImplementsIntfAt(J);
+      Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
+      Self.Emit(#9'.quad itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name));
+    end;
+    Self.Emit(#9'.quad 0');
+  end;
+end;
+
+procedure TX86_64Backend.EmitInterfaceAssign(AAsgn: TAssignment);
+{ Strong-reference interface assignment.  The LHS fat pointer is (obj, itab).
+  In every form the obj slot co-owns the backing class instance: the new obj is
+  retained and the prior obj released before the store.  The itab slot points at
+  static rodata and is not refcounted. }
+var
+  Intf:    TInterfaceTypeDesc;
+  ClassRT: TRecordTypeDesc;
+  AE:      TAsExpr;
+  ItabSym: string;
+  ObjOp:   string;
+  ItabOp:  string;
+  LFail:   string;
+  LEnd:    string;
+begin
+  Intf := TInterfaceTypeDesc(AAsgn.ResolvedLhsType);
+  { Register a global LHS so EmitDataSection emits its _obj/_itab labels. }
+  if not Self.IsLocal(AAsgn.Name) then
+    Self.AddGlobal(AAsgn.Name, AAsgn.ResolvedLhsType);
+  ObjOp  := Self.IntfObjOperand(AAsgn.Name, AAsgn.IsGlobal);
+  ItabOp := Self.IntfItabOperand(AAsgn.Name, AAsgn.IsGlobal);
+
+  { F := nil — release old obj, zero both slots. }
+  if AAsgn.Expr is TNilLiteral then
+  begin
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(Format(#9'movq $0, %s', [ObjOp]));
+    Self.Emit(Format(#9'movq $0, %s', [ItabOp]));
+    Exit;
+  end;
+
+  { F := T as IFoo — runtime itab lookup via _GetItab(obj, typeinfo_IFoo).
+    A nil result means the cast failed; raise EInvalidCast. }
+  if (AAsgn.Expr is TAsExpr) and
+     (AAsgn.Expr.ResolvedType <> nil) and
+     (AAsgn.Expr.ResolvedType.Kind = tyInterface) then
+  begin
+    AE := TAsExpr(AAsgn.Expr);
+    Self.EmitExprToEax(AE.Obj);          { obj -> %rax }
+    Self.Emit(#9'pushq %rax');            { keep obj on the stack across calls }
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi', [NativeMangle(AE.TypeName)]));
+    Self.Emit(#9'callq _GetItab');         { itab -> %rax }
+    Self.Emit(#9'pushq %rax');            { keep itab; stack now (itab, obj) }
+    LFail := Self.NewLabel('as_fail');
+    LEnd  := Self.NewLabel('as_end');
+    Self.Emit(#9'testq %rax, %rax');
+    Self.Emit(#9'jz ' + LFail);
+    { Cast OK: addref new obj, release old, store obj + itab. }
+    Self.Emit(#9'movq 8(%rsp), %rdi');     { obj }
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');              { itab }
+    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    Self.Emit(#9'popq %rax');              { obj }
+    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+    Self.Emit(#9'jmp ' + LEnd);
+    Self.Emit(LFail + ':');
+    Self.Emit(#9'addq $16, %rsp');         { discard pushed obj+itab }
+    Self.Emit(#9'callq _Raise_InvalidCast');
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  { F := T where T is a class implementing the interface — static itab. }
+  if (AAsgn.Expr.ResolvedType <> nil) and
+     (AAsgn.Expr.ResolvedType.Kind = tyClass) then
+  begin
+    ClassRT := TRecordTypeDesc(AAsgn.Expr.ResolvedType);
+    ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(Intf.Name);
+    Self.EmitExprToEax(AAsgn.Expr);       { new obj -> %rax }
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');              { new obj }
+    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+    Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ItabSym]));
+    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    Exit;
+  end;
+
+  { F := G where both sides are interface-typed — copy obj+itab. }
+  if (AAsgn.Expr.ResolvedType <> nil) and
+     (AAsgn.Expr.ResolvedType.Kind = tyInterface) and
+     (AAsgn.Expr is TIdentExpr) then
+  begin
+    { Load src obj+itab; addref new obj; release old obj; store both. }
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+    Self.Emit(#9'pushq %rax');             { itab }
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+    Self.Emit(#9'pushq %rax');             { obj; stack now (obj, itab) }
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');              { new obj }
+    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+    Self.Emit(#9'popq %rax');              { itab }
+    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    Exit;
+  end;
+
+  raise ENativeCodeGenError.Create(
+    'native backend: unsupported interface assignment RHS');
+end;
+
 procedure TX86_64Backend.EmitClassMethods(AProg: TProgram);
 var
   I, J: Integer;
@@ -857,6 +1146,34 @@ begin
     Result := nil;
 end;
 
+{ The obj half of an interface fat pointer.  Locals: the 16-byte slot base
+  (VarOperand returns the low address = obj).  Globals: a dedicated label
+  AName + '_obj', registered for emission in EmitDataSection. }
+function TX86_64Backend.IntfObjOperand(const AName: string; AIsGlobal: Boolean): string;
+begin
+  if (not AIsGlobal) and Self.IsLocal(AName) then
+    Result := Self.VarOperand(AName)
+  else
+    Result := AName + '_obj(%rip)';
+end;
+
+{ The itab half of an interface fat pointer.  Locals: 8 bytes above the obj
+  slot (the slot base address is the obj operand, so add 8 to its rbp offset).
+  Globals: a dedicated label AName + '_itab'. }
+function TX86_64Backend.IntfItabOperand(const AName: string; AIsGlobal: Boolean): string;
+var
+  Off: Integer;
+begin
+  if (not AIsGlobal) and Self.IsLocal(AName) then
+  begin
+    FFrame.TryGetValue(AName, Off);
+    { Off is negative (slot base = obj). itab is 8 bytes higher in memory. }
+    Result := Format('%d(%%rbp)', [Off + 8]);
+  end
+  else
+    Result := AName + '_itab(%rip)';
+end;
+
 { Load an integer-family value from memory into %rax, extended to the full
   64-bit register according to AType's width and signedness.  Narrower-than-
   32-bit loads use a sign/zero-extending move; 32-bit signed widens with
@@ -908,6 +1225,8 @@ var
 begin
   if (AType <> nil) and (AType.Kind in [tyRecord, tyStaticArray]) then
     Sz := (AType.RawSize + 7) and (-8)
+  else if (AType <> nil) and (AType.Kind = tyInterface) then
+    Sz := 16   { fat pointer: obj slot (+0) then itab slot (+8) }
   else
     Sz := 8;
   Inc(AOffset, Sz);
@@ -1741,6 +2060,21 @@ begin
     Exit;
   end;
 
+  { Zero-arg interface method call: G.GetVal where G: IFoo.  Dispatched through
+    the itab; result (if any) in %rax. }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsInterfaceCall then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    Self.EmitInterfaceCall(FAE.RecordName, FAE.IsGlobal,
+      TInterfaceTypeDesc(FAE.ResolvedClassType), FAE.FieldName, nil);
+    if (FAE.ResolvedType <> nil) and
+       not (FAE.ResolvedType.Kind in [tyInt64, tyUInt64, tyPointer, tyClass,
+                                      tyString, tyPChar, tyInterface]) then
+      Self.EmitNarrowToType(FAE.ResolvedType);
+    Exit;
+  end;
+
   { Record/class field read: Rec.Field or Class.Field.
     Handles local/global record bases and class (pointer-deref) bases. }
   if (AExpr is TFieldAccessExpr) and
@@ -1861,6 +2195,16 @@ var
   Sym:     string;
   Arg:     TASTExpr;
 begin
+  { Interface method dispatch: receiver is an interface fat pointer; route
+    through the itab rather than a static method symbol. }
+  if (ACall.ResolvedClassType <> nil) and
+     (ACall.ResolvedClassType.Kind = tyInterface) then
+  begin
+    Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal,
+      TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args);
+    Exit;
+  end;
+
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then
     raise ENativeCodeGenError.Create(
@@ -1913,6 +2257,15 @@ var
   Sym: string;
   Arg: TASTExpr;
 begin
+  { Interface method dispatch (statement position): route through the itab. }
+  if (ACall.ResolvedClassType <> nil) and
+     (ACall.ResolvedClassType.Kind = tyInterface) then
+  begin
+    Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal,
+      TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args);
+    Exit;
+  end;
+
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then
     raise ENativeCodeGenError.Create(
@@ -2554,6 +2907,11 @@ begin
         Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
         Self.Emit(Format(#9'movq %%rax, %s(%%rip)', [Asgn.Name]));
       end;
+    end
+    else if (Asgn.ResolvedLhsType <> nil) and
+            (Asgn.ResolvedLhsType.Kind = tyInterface) then
+    begin
+      Self.EmitInterfaceAssign(Asgn);
     end
     else if (Asgn.ResolvedLhsType <> nil) and
             (Asgn.ResolvedLhsType.Kind = tyClass) then
@@ -3647,6 +4005,27 @@ begin
       Self.EmitStoreVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
     end;
   end;
+  { Zero-initialise ARC-managed local slots (string / interface) so the first
+    assignment's release-old step sees nil, not stack garbage, and so an unused
+    local releases nil at the epilogue.  Interface locals zero both halves of
+    the fat pointer. }
+  if ADecl.Body <> nil then
+    for I := 0 to ADecl.Body.Decls.Count - 1 do
+    begin
+      if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType = nil then Continue;
+      if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyString then
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+          Self.Emit(Format(#9'movq $0, %s',
+            [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]))
+      else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyInterface then
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+        begin
+          Self.Emit(Format(#9'movq $0, %s',
+            [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
+          Self.Emit(Format(#9'movq $0, %s',
+            [Self.IntfItabOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
+        end;
+    end;
   { Body.  FExitLabel directs Exit statements to the epilogue. }
   FExitLabel := Self.NewLabel('exit');
   if ADecl.Body <> nil then
@@ -3678,17 +4057,23 @@ begin
     for I := 0 to ADecl.Body.Decls.Count - 1 do
     begin
       if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType = nil then Continue;
-      if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind <> tyString then Continue;
-      { for each name in the VarDecl's name list }
-      begin
-        { Use the loop variable directly to iterate names in this VarDecl. }
+      { String locals: release the string. }
+      if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyString then
         for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
         begin
           Self.Emit(Format(#9'movq %s, %%rdi',
             [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
           Self.Emit(#9'callq _StringRelease');
+        end
+      { Interface locals: release the obj half of the fat pointer; the itab is
+        static rodata and is not refcounted. }
+      else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyInterface then
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+        begin
+          Self.Emit(Format(#9'movq %s, %%rdi',
+            [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
+          Self.Emit(#9'callq _ClassRelease');
         end;
-      end;
     end;
   end;
   Self.Emit(#9'movq %rbp, %rsp');
@@ -3782,6 +4167,10 @@ begin
   Self.EmitDataSection;
   { Class data section: typeinfo, vtables, field-cleanup functions. }
   Self.EmitClassSection(AProg);
+  { Interface data: typeinfo tokens, itabs, impllists.  Emitted after the class
+    section so the class-name strings and method symbols it references exist. }
+  Self.Emit('.data');
+  Self.EmitInterfaceDefs(AProg);
 end;
 
 end.

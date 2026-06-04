@@ -142,6 +142,14 @@ type
     procedure TestRun_Native_StaticToOpen_PassToNested;
     procedure TestRun_Native_DynArray_SetLengthAndAccess;
     procedure TestRun_Native_DynArray_LengthAndHigh;
+
+    { M7f — interface dispatch through itab }
+    procedure TestRun_Native_Interface_ZeroArgDispatch;
+    procedure TestRun_Native_Interface_ArgDispatch;
+    procedure TestRun_Native_Interface_ProcDispatch;
+    procedure TestRun_Native_Interface_IntfToIntfCopy;
+    procedure TestRun_Native_Interface_AsCast;
+    procedure TestRun_Native_Interface_NilClear;
   end;
 
 implementation
@@ -1904,6 +1912,154 @@ const
     end.
     ''';
 
+  { M7f — interface dispatch.  Each program assigns a class instance to an
+    interface variable (class->interface, via the static itab) and dispatches a
+    method through the fat pointer; the native backend must match the QBE
+    oracle. }
+  SrcIntfZeroArg =
+    '''
+    program P;
+    type
+      IGreeter = interface
+        function Greet: Integer;
+      end;
+      TGreeter = class(TObject, IGreeter)
+        function Greet: Integer;
+      end;
+    function TGreeter.Greet: Integer;
+    begin Result := 42 end;
+    var
+      G: IGreeter;
+      T: TGreeter;
+    begin
+      T := TGreeter.Create;
+      G := T;
+      WriteLn(G.Greet)
+    end.
+    ''';
+
+  SrcIntfArg =
+    '''
+    program P;
+    type
+      IShape = interface
+        function Area(Scale: Integer): Integer;
+      end;
+      TBox = class(TObject, IShape)
+        function Area(Scale: Integer): Integer;
+      end;
+    function TBox.Area(Scale: Integer): Integer;
+    begin Result := 10 * Scale end;
+    var
+      S: IShape;
+      B: TBox;
+    begin
+      B := TBox.Create;
+      S := B;
+      WriteLn(S.Area(3))
+    end.
+    ''';
+
+  SrcIntfProc =
+    '''
+    program P;
+    type
+      IShape = interface
+        procedure Describe;
+      end;
+      TBox = class(TObject, IShape)
+        procedure Describe;
+      end;
+    procedure TBox.Describe;
+    begin WriteLn('box') end;
+    var
+      S: IShape;
+      B: TBox;
+    begin
+      B := TBox.Create;
+      S := B;
+      S.Describe
+    end.
+    ''';
+
+  SrcIntfCopy =
+    '''
+    program P;
+    type
+      IShape = interface
+        function Area: Integer;
+      end;
+      TBox = class(TObject, IShape)
+        function Area: Integer;
+      end;
+    function TBox.Area: Integer;
+    begin Result := 21 end;
+    var
+      S, S2: IShape;
+      B: TBox;
+    begin
+      B := TBox.Create;
+      S := B;
+      S2 := S;
+      WriteLn(S2.Area)
+    end.
+    ''';
+
+  SrcIntfAsCast =
+    '''
+    program P;
+    type
+      IShape = interface
+        function Area: Integer;
+      end;
+      IColor = interface
+        function Code: Integer;
+      end;
+      TBox = class(TObject, IShape, IColor)
+        function Area: Integer;
+        function Code: Integer;
+      end;
+    function TBox.Area: Integer;
+    begin Result := 7 end;
+    function TBox.Code: Integer;
+    begin Result := 99 end;
+    var
+      S: IShape;
+      C: IColor;
+      B: TBox;
+    begin
+      B := TBox.Create;
+      S := B;
+      C := B as IColor;
+      WriteLn(S.Area);
+      WriteLn(C.Code)
+    end.
+    ''';
+
+  SrcIntfNilClear =
+    '''
+    program P;
+    type
+      IGreeter = interface
+        function Greet: Integer;
+      end;
+      TGreeter = class(TObject, IGreeter)
+        function Greet: Integer;
+      end;
+    function TGreeter.Greet: Integer;
+    begin Result := 5 end;
+    var
+      G: IGreeter;
+      T: TGreeter;
+    begin
+      T := TGreeter.Create;
+      G := T;
+      WriteLn(G.Greet);
+      G := nil;
+      WriteLn(13)
+    end.
+    ''';
+
 procedure TE2ENativeTests.TestRun_Native_OpenArray_Sum;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
@@ -1950,6 +2106,42 @@ procedure TE2ENativeTests.TestRun_Native_DynArray_LengthAndHigh;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDynArrayLenHigh, '5' + LE + '4' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Interface_ZeroArgDispatch;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfZeroArg, '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Interface_ArgDispatch;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfArg, '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Interface_ProcDispatch;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfProc, 'box' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Interface_IntfToIntfCopy;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfCopy, '21' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Interface_AsCast;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfAsCast, '7' + LE + '99' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Interface_NilClear;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfNilClear, '5' + LE + '13' + LE, 0);
 end;
 
 initialization
