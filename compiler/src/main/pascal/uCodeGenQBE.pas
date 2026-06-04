@@ -5276,6 +5276,14 @@ begin
       ValTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+    end
+    else if Par.ResolvedType.Kind = tyInterface then
+    begin
+      { Interfaces ARC through the object slot of their fat pointer; the
+        itab is static and needs no refcounting. }
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     end;
   end;
 
@@ -5331,6 +5339,12 @@ begin
     begin
       ValTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
+    end
+    else if Par.ResolvedType.Kind = tyInterface then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
     end;
   end;
@@ -6109,6 +6123,14 @@ begin
       ValTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+    end
+    else if Par.ResolvedType.Kind = tyInterface then
+    begin
+      { Interfaces ARC through the object slot of their fat pointer; the
+        itab is static and needs no refcounting. }
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     end;
   end;
 
@@ -6170,6 +6192,12 @@ begin
     begin
       ValTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
+    end
+    else if Par.ResolvedType.Kind = tyInterface then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
     end;
   end;

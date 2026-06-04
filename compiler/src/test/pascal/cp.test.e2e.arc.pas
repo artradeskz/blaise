@@ -28,6 +28,7 @@ type
     procedure TestRun_ClassDestroy_FreesBuffer_Valgrind;
     procedure TestRun_TListARC_Valgrind;
     procedure TestRun_ConstParam_NoRetainRelease_Valgrind;
+    procedure TestRun_IntfValueParam_Retained_Valgrind;
     { Three instantiations of the same generic class: verifies the Pointer→class
       ARC coercion bug is fixed (the 3rd instantiation no longer uses freed memory). }
     procedure TestRun_ThreeGenericInstances_AllWork;
@@ -355,6 +356,61 @@ begin
   begin
     if Log = '' then Log := '(valgrind produced no output)';
     Fail('const-param ARC elision unbalanced — valgrind reports:' + LE + Log);
+  end;
+end;
+
+const
+  { By-value interface param: the callee must retain it on entry, because the
+    caller's reference can be dropped during the call.  Here DoSomething nils
+    the global F (the caller's sole owner) *before* using MyIntf again.  With
+    the entry retain the object survives until DoSomething returns; without it
+    the second MyIntf.Get would be a use-after-free.  Valgrind must report no
+    error and no leak (the entry retain is balanced by the exit release). }
+  SrcIntfValueParamRetained = '''
+    program P;
+    type
+      IThing = interface
+        function Get: Integer;
+      end;
+      TThing = class(TObject, IThing)
+        FValue: Integer;
+        function Get: Integer;
+      end;
+    function TThing.Get: Integer;
+    begin
+      Result := Self.FValue
+    end;
+    var
+      F: IThing;
+    procedure DoSomething(MyIntf: IThing);
+    begin
+      WriteLn(MyIntf.Get);
+      F := nil;            { drop the caller's only other reference }
+      WriteLn(MyIntf.Get)  { still valid: callee retained it on entry }
+    end;
+    var
+      T: TThing;
+    begin
+      T := TThing.Create;
+      T.FValue := 55;
+      F := T;
+      DoSomething(F)
+    end.
+    ''';
+
+procedure TE2EArcTests.TestRun_IntfValueParam_Retained_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIntfValueParamRetained, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('stdout', '55' + LE + '55' + LE, Output);
+  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  OK := RunUnderValgrind(SrcIntfValueParamRetained, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output)';
+    Fail('interface value param not retained — valgrind reports:' + LE + Log);
   end;
 end;
 
