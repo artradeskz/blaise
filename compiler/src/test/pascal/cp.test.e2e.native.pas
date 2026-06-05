@@ -167,6 +167,9 @@ type
     procedure TestRun_Native_MethodVarParam_Mutates;
     procedure TestRun_Native_MethodVarParam_Swap;
 
+    { Array field access }
+    procedure TestRun_Native_RecordArrayField_StaticRead;
+
     { Generics }
     procedure TestRun_Native_GenericRecord_Method;
     procedure TestRun_Native_GenericClass_Method;
@@ -2353,6 +2356,30 @@ const
     end.
     ''';
 
+  SrcRecordStaticArrayField = '''
+    program P;
+    type
+      TRec = record
+        X: Integer;
+        Arr: array[0..1] of Integer;
+      end;
+    function MakeRec: TRec;
+    begin
+      Result.X := 99
+    end;
+    function ReadAt(var R: TRec; I: Integer): Integer;
+    begin
+      Result := R.Arr[I]
+    end;
+    var R: TRec;
+    begin
+      R := MakeRec();
+      WriteLn(R.X);
+      WriteLn(ReadAt(R, 0));
+      WriteLn(ReadAt(R, 1))
+    end.
+    ''';
+
   SrcGenericRecordMethod = '''
     program P;
     type
@@ -2576,6 +2603,12 @@ procedure TE2ENativeTests.TestRun_Native_IntfParam_ClassExpr;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamClassExpr, 'class-expr' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_RecordArrayField_StaticRead;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordStaticArrayField, '99' + LE + '0' + LE + '0' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericRecord_Method;

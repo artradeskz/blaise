@@ -2432,9 +2432,70 @@ begin
     Exit;
   end;
 
+  { Array field subscript read: R.Arr[I] where Arr is an array-typed field.
+    Compute the record base address, add FieldInfo.Offset to reach the array
+    field, then index into the array (static, dynamic, or open). }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsArrayAccess and
+     (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
+     (TFieldAccessExpr(AExpr).Base = nil) then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if FAE.IsVarParam then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]));
+    end
+    else if Self.IsLocal(FAE.RecordName) then
+      Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+    if FAE.FieldInfo.Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.FieldInfo.Offset]));
+    if FAE.FieldInfo.TypeDesc.Kind = tyDynArray then
+    begin
+      Self.Emit(#9'movq (%rcx), %rcx');
+      Self.EmitExprToEax(FAE.PropIndexExpr);
+      Self.Emit(Format(#9'imulq $%d, %%rax',
+        [TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+      Self.Emit(#9'addq %rcx, %rax');
+      if TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+        Exit;
+      Self.EmitLoadVar('(%rax)',
+        TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType);
+    end
+    else if FAE.FieldInfo.TypeDesc.Kind = tyStaticArray then
+    begin
+      Self.Emit(#9'pushq %rcx');
+      Self.EmitExprToEax(FAE.PropIndexExpr);
+      if TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound <> 0 then
+        Self.Emit(Format(#9'subq $%d, %%rax',
+          [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound]));
+      Self.Emit(Format(#9'imulq $%d, %%rax',
+        [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+      Self.Emit(#9'popq %rcx');
+      Self.Emit(#9'addq %rcx, %rax');
+      if TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+        Exit;
+      Self.EmitLoadVar('(%rax)',
+        TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType);
+    end
+    else if FAE.FieldInfo.TypeDesc.Kind = tyOpenArray then
+    begin
+      Self.Emit(#9'movq (%rcx), %rcx');
+      Self.EmitExprToEax(FAE.PropIndexExpr);
+      Self.Emit(Format(#9'imulq $%d, %%rax',
+        [TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+      Self.Emit(#9'addq %rcx, %rax');
+      if TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+        Exit;
+      Self.EmitLoadVar('(%rax)',
+        TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType);
+    end;
+    Exit;
+  end;
+
   { Record/class field read: Rec.Field or Class.Field.
     Handles local/global record bases and class (pointer-deref) bases. }
-  { TODO: IsArrayAccess on TFieldAccessExpr (R.Arr[I]) — not yet lowered in native backend }
   if (AExpr is TFieldAccessExpr) and
      (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
      not TFieldAccessExpr(AExpr).IsMethodCall and
@@ -4539,6 +4600,7 @@ begin
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
     if P.IsOpenArray then Continue;  { open array: (ptr, high) pair — always ok }
+    if P.IsVarParam then Continue;  { var/out: always a pointer — ok }
     if not IsIntFamily(P.ResolvedType) and not IsFloatFamily(P.ResolvedType) and
        ((P.ResolvedType = nil) or
         not (P.ResolvedType.Kind in [tyString, tyPChar, tyPointer,
