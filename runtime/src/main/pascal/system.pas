@@ -87,17 +87,14 @@ type
 { ------------------------------------------------------------------ }
 
 const
-  { Line ending for the current platform. POSIX = #10, Windows = #13#10.
-    Blaise currently targets POSIX only. }
+  { Line ending for the current platform.  POSIX = #10, Windows = #13#10.
+    Set at compile time based on the target platform. }
   LineEnding = #10;
 
-  { Delphi compatibility alias for LineEnding. }
-  sLineBreak = LineEnding;
-
-  { Directory separator character. }
+  { Directory separator character.  POSIX = '/', Windows = '\'. }
   DirectorySeparator = '/';
 
-  { PATH environment variable separator. }
+  { PATH environment variable separator.  POSIX = ':', Windows = ';'. }
   PathSeparator = ':';
 
 { ------------------------------------------------------------------ }

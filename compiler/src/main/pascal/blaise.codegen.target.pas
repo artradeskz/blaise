@@ -60,6 +60,14 @@ function TargetName(const ATarget: TTargetDesc): string;
 { True when the native backend can actually generate code for this target. }
 function TargetHasNativeBackend(const ATarget: TTargetDesc): Boolean;
 
+{ Platform constants derived from the target OS. }
+function TargetLineEnding(const ATarget: TTargetDesc): string;
+function TargetDirectorySeparator(const ATarget: TTargetDesc): string;
+function TargetPathSeparator(const ATarget: TTargetDesc): string;
+
+var
+  GTarget: TTargetDesc;
+
 implementation
 
 uses
@@ -135,5 +143,35 @@ begin
   { Only x86_64-linux is implemented so far. }
   Result := (ATarget.OS = osLinux) and (ATarget.CPU = cpuX86_64);
 end;
+
+function TargetLineEnding(const ATarget: TTargetDesc): string;
+begin
+  case ATarget.OS of
+    osWindows: Result := #13#10;
+  else
+    Result := #10;
+  end;
+end;
+
+function TargetDirectorySeparator(const ATarget: TTargetDesc): string;
+begin
+  case ATarget.OS of
+    osWindows: Result := '\';
+  else
+    Result := '/';
+  end;
+end;
+
+function TargetPathSeparator(const ATarget: TTargetDesc): string;
+begin
+  case ATarget.OS of
+    osWindows: Result := ';';
+  else
+    Result := ':';
+  end;
+end;
+
+initialization
+  GTarget := HostTarget;
 
 end.

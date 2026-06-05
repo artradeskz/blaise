@@ -10,11 +10,12 @@ unit SysUtils;
 
 // Blaise RTL — SysUtils unit.
 //
-// Provides the Exception base class, PathDelim (Delphi compat alias for
-// DirectorySeparator), and the BoolToStr helper.
+// Provides the Exception base class and the BoolToStr helper.
 //
-// LineEnding, sLineBreak, DirectorySeparator, and PathSeparator are defined
-// in system.pas — they are platform fundamentals, not SysUtils concerns.
+// Platform constants (LineEnding, DirectorySeparator, PathSeparator) are
+// defined in system.pas — they are platform fundamentals, not SysUtils
+// concerns.  Blaise does not carry the Delphi/FPC legacy aliases
+// (sLineBreak, PathDelim).
 //
 // Functions that are already compiler built-ins (FileExists, DeleteFile,
 // RenameFile, SetCurrentDir, ExtractFileExt, IntToStr, StrToInt, Format,
@@ -23,10 +24,6 @@ unit SysUtils;
 // shadow the built-ins and produce a duplicate-identifier error at compile time.
 
 interface
-
-const
-  { Delphi compatibility alias for system.DirectorySeparator. }
-  PathDelim = '/';
 
 type
   Exception = class

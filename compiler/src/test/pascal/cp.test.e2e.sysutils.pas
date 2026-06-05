@@ -45,7 +45,7 @@ type
     procedure TestRun_SetCurrentDir_ChangesDir;
     procedure TestRun_ExtractFileExt_ReturnsExt;
     procedure TestRun_BoolToStr_TrueAndFalse;
-    procedure TestRun_SysUtils_LineEndingConst;
+    procedure TestRun_PlatformConstants;
     procedure TestRun_GetCurrentDir_ReturnsNonEmpty;
   end;
 
@@ -533,13 +533,13 @@ const
         end.
         ''';
 
-  SrcLineEndingConst =
+  SrcPlatformConstants =
     '''
         program P;
-        uses SysUtils;
         begin
-          WriteLn(sLineBreak = #10);
-          WriteLn(LineEnding = #10)
+          WriteLn(LineEnding = #10);
+          WriteLn(DirectorySeparator = '/');
+          WriteLn(PathSeparator = ':')
         end.
         ''';
 
@@ -647,20 +647,21 @@ begin
   end;
 end;
 
-procedure TE2ESysUtilsTests.TestRun_SysUtils_LineEndingConst;
+procedure TE2ESysUtilsTests.TestRun_PlatformConstants;
 var
   Output: string;
   RCode: Integer;
   Lines: TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRunWithRTL(SrcLineEndingConst, Output, RCode));
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcPlatformConstants, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('sLineBreak = #10', '1', Lines.Strings[0]);
-    AssertEquals('LineEnding = #10', '1', Lines.Strings[1]);
+    AssertEquals('LineEnding = #10', '1', Lines.Strings[0]);
+    AssertEquals('DirectorySeparator = /', '1', Lines.Strings[1]);
+    AssertEquals('PathSeparator = :', '1', Lines.Strings[2]);
   finally
     Lines.Free;
   end;

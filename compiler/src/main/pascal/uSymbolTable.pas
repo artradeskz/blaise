@@ -560,6 +560,9 @@ function MangleUnitPrefix(const AUnitName: string): string;
 
 implementation
 
+uses
+  blaise.codegen.target;
+
 { ------------------------------------------------------------------ }
 { TUsesChainProvider                                                  }
 { ------------------------------------------------------------------ }
@@ -1479,19 +1482,17 @@ begin
   Sym.ConstValue := 2147483647;
   Define(Sym);
 
-  { System string/path constants — defined in system.pas; pre-seeded here
-    so they resolve even before system.pas is loaded as a unit. }
+  { Platform constants — values derived from the compilation target (GTarget).
+    Defined in system.pas; pre-seeded here so they resolve even before
+    system.pas is loaded as a unit. }
   Sym := TSymbol.Create('LineEnding', skConstant, FTypeString);
-  Sym.ConstString := #10;
-  Define(Sym);
-  Sym := TSymbol.Create('sLineBreak', skConstant, FTypeString);
-  Sym.ConstString := #10;
+  Sym.ConstString := TargetLineEnding(GTarget);
   Define(Sym);
   Sym := TSymbol.Create('DirectorySeparator', skConstant, FTypeString);
-  Sym.ConstString := '/';
+  Sym.ConstString := TargetDirectorySeparator(GTarget);
   Define(Sym);
   Sym := TSymbol.Create('PathSeparator', skConstant, FTypeString);
-  Sym.ConstString := ':';
+  Sym.ConstString := TargetPathSeparator(GTarget);
   Define(Sym);
 
   { Built-in I/O procedures }

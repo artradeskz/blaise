@@ -3135,3 +3135,40 @@ string `TFoo<>` in `TFieldAccessExpr.RecordName`.  The semantic pass — in
 which replaces the sentinel with the full concrete type name taken from
 `ResolvedLhsType.Name`.  Subsequent semantic analysis proceeds identically to
 an explicit constructor call.
+
+
+== Platform constants — one name per concept
+
+Delphi and FPC carry multiple aliases for the same platform constant:
+
+* `LineEnding` (FPC), `sLineBreak` (Delphi), and sometimes `LineBreak`
+* `DirectorySeparator` (both), `PathDelim` (Delphi SysUtils alias)
+* `PathSeparator` (both) — no alias, the one exception
+
+Blaise retains exactly three names, one per concept:
+
+[cols="1,1,1"]
+|===
+| Constant | POSIX value | Windows value
+
+| `LineEnding`
+| `#10`
+| `#13#10`
+
+| `DirectorySeparator`
+| `/`
+| `\`
+
+| `PathSeparator`
+| `:`
+| `;`
+|===
+
+*Dropped:* `sLineBreak`, `PathDelim`.  They were Delphi compatibility aliases
+that added no meaning — two names for the same value is a maintenance trap, not
+backwards compatibility.
+
+All three constants are defined in `system.pas` and pre-seeded as compiler
+built-ins in `RegisterBuiltins`.  Their values are derived from the compilation
+target (`GTarget` in `blaise.codegen.target`), so cross-compilation to a
+different OS produces the correct constants without conditional compilation.

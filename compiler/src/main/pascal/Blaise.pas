@@ -294,6 +294,7 @@ begin
         SearchPaths.Free;
         Exit;
       end;
+      GTarget := Target;
     end
     else if (Arg = '--help') or (Arg = '-h') then
     begin
