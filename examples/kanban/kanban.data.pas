@@ -54,6 +54,8 @@ type
     property FilePath: string read FFilePath;
   end;
 
+function CreatedToLocalDate(const AUtcStr: string): string;
+
 implementation
 
 constructor TBoard.Create(const AFilePath: string);
@@ -261,15 +263,15 @@ end;
 function TBoard.AddTask(const ATitle: string; AStatus: TTaskStatus): TTask;
 var
   Now: TInstant;
-  Local: TDateTime;
+  UtcDT: TDateTime;
 begin
   Now := InstantNow;
-  Local := Now.ToLocalDateTime(SystemOffset);
+  UtcDT := Now.ToUtcDateTime;
   Result := TTask.Create;
   Result.FId := FNextId;
   Result.FTitle := ATitle;
   Result.FStatus := AStatus;
-  Result.FCreated := Local.Date.ToString;
+  Result.FCreated := UtcDT.ToString;
   Result.FPriority := '';
   FNextId := FNextId + 1;
   FTasks.Add(Result)
@@ -391,6 +393,20 @@ begin
   if not DirectoryExists(DirPath) then
     ForceDirectories(DirPath);
   WriteFile(Self.GetDetailPath(AId), AContent)
+end;
+
+function CreatedToLocalDate(const AUtcStr: string): string;
+var
+  UtcDT: TDateTime;
+  Inst: TInstant;
+  LocalDT: TDateTime;
+begin
+  if Length(AUtcStr) = 0 then
+    Exit('');
+  UtcDT := ParseDateTime(AUtcStr);
+  Inst := MakeInstantUtc(UtcDT.Date, UtcDT.Time);
+  LocalDT := Inst.ToLocalDateTime(SystemOffset);
+  Result := LocalDT.Date.ToString
 end;
 
 end.

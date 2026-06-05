@@ -258,7 +258,7 @@ begin
   if Length(FDetailTask.Priority) > 0 then
     FTerm.BufWrite('  Priority: ' + FDetailTask.Priority);
   if Length(FDetailTask.Created) > 0 then
-    FTerm.BufWrite('  Created: ' + FDetailTask.Created);
+    FTerm.BufWrite('  Created: ' + CreatedToLocalDate(FDetailTask.Created));
   FTerm.ResetAttr;
 
   FTerm.DrawHLine(3, 1, FTerm.Cols);
