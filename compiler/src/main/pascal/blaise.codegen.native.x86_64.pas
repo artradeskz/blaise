@@ -2019,9 +2019,8 @@ begin
 
   if AExpr is TIdentExpr then
   begin
-    { Static array identifier: return its base address for subscript use. }
     if (TIdentExpr(AExpr).ResolvedType <> nil) and
-       (TIdentExpr(AExpr).ResolvedType.Kind = tyStaticArray) then
+       (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray]) then
     begin
       if Self.IsLocal(TIdentExpr(AExpr).Name) then
         Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(AExpr).Name)]))
@@ -2357,6 +2356,11 @@ begin
         end;
       { Signed integer comparisons -> boolean 0/1 in %rax.  AT&T `cmpq B, A`
         computes A - B; setcc yields 0/1, then movzbl clears the rest. }
+      boAnd: Self.Emit(#9'andq %rcx, %rax');
+      boOr:  Self.Emit(#9'orq %rcx, %rax');
+      boXor: Self.Emit(#9'xorq %rcx, %rax');
+      boShl: Self.Emit(#9'shlq %cl, %rax');
+      boShr: Self.Emit(#9'shrq %cl, %rax');
       boEQ, boNE, boLT, boGT, boLE, boGE:
         begin
           Self.Emit(#9'cmpq %rcx, %rax');
@@ -2534,6 +2538,26 @@ begin
     Exit;
   end;
 
+  { Chained field access: Base.Field where Base is another expression.
+    Recursively emit the base (returns address for records), then add offset. }
+  if (AExpr is TFieldAccessExpr) and
+     (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
+     not TFieldAccessExpr(AExpr).IsMethodCall and
+     not TFieldAccessExpr(AExpr).IsConstructorCall and
+     (TFieldAccessExpr(AExpr).Base <> nil) then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    Self.EmitExprToEax(FAE.Base);
+    Self.Emit(#9'movq %rax, %rcx');
+    if FAE.FieldInfo.Offset > 0 then
+      Self.Emit(Format(#9'leaq %d(%%rcx), %%rcx', [FAE.FieldInfo.Offset]));
+    if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      Self.Emit(#9'movq %rcx, %rax')
+    else
+      Self.EmitLoadVar('(%rcx)', FAE.FieldInfo.TypeDesc);
+    Exit;
+  end;
+
   { Record/class field read: Rec.Field or Class.Field.
     Handles local/global record bases and class (pointer-deref) bases. }
   if (AExpr is TFieldAccessExpr) and
@@ -2545,37 +2569,48 @@ begin
     FAE := TFieldAccessExpr(AExpr);
     if FAE.IsClassAccess then
     begin
-      { Class field: FAE.RecordName is a class variable (holds a pointer).
-        Load the pointer (always 8 bytes = movq), then dereference at FieldInfo.Offset. }
       if Self.IsLocal(FAE.RecordName) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
-      Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
-        FAE.FieldInfo.TypeDesc);
+      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
+      else
+        Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+          FAE.FieldInfo.TypeDesc);
     end
     else if FAE.IsImplicitSelf then
     begin
-      { Bare field name inside a class method: RecordName is empty/irrelevant;
-        load Self from its frame slot, then dereference at FieldInfo.Offset. }
       Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
-      Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
-        FAE.FieldInfo.TypeDesc);
+      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
+      else
+        Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+          FAE.FieldInfo.TypeDesc);
     end
     else if FAE.IsVarParam then
     begin
-      { Var-param or record-Self: the slot holds a pointer to the record storage.
-        Load the pointer, then dereference at FieldInfo.Offset. }
       if Self.IsLocal(FAE.RecordName) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
-      Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
-        FAE.FieldInfo.TypeDesc);
+      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
+      else
+        Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+          FAE.FieldInfo.TypeDesc);
     end
     else if Self.IsLocal(FAE.RecordName) then
     begin
-      if FAE.FieldInfo.Offset = 0 then
+      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      begin
+        Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]));
+        if FAE.FieldInfo.Offset = 0 then
+          Self.Emit(#9'movq %rcx, %rax')
+        else
+          Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]));
+      end
+      else if FAE.FieldInfo.Offset = 0 then
         Self.EmitLoadVar(Self.VarOperand(FAE.RecordName), FAE.FieldInfo.TypeDesc)
       else
       begin
@@ -2586,7 +2621,15 @@ begin
     end
     else
     begin
-      if FAE.FieldInfo.Offset = 0 then
+      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      begin
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+        if FAE.FieldInfo.Offset = 0 then
+          Self.Emit(#9'movq %rcx, %rax')
+        else
+          Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]));
+      end
+      else if FAE.FieldInfo.Offset = 0 then
         Self.EmitLoadVar(FAE.RecordName + '(%rip)', FAE.FieldInfo.TypeDesc)
       else
       begin
@@ -2609,7 +2652,12 @@ begin
       raise ENativeCodeGenError.Create(
         'native backend: zero-arg method call has no ResolvedMethod');
     MD := TMethodDecl(FAE.ResolvedMethod);
-    if MD.IsRecordMethod then
+    if FAE.Base <> nil then
+    begin
+      Self.EmitExprToEax(FAE.Base);
+      Self.Emit(#9'movq %rax, %rdi');
+    end
+    else if MD.IsRecordMethod then
     begin
       if Self.IsLocal(FAE.RecordName) then
         Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FAE.RecordName)]))
@@ -2849,6 +2897,21 @@ begin
     Self.EmitExprToEax(TDerefExpr(AExpr).Expr);
     Self.Emit(#9'movq %rax, %rcx');
     Self.EmitLoadVar('(%rcx)', AExpr.ResolvedType);
+    Exit;
+  end;
+
+  { not Expr — logical or bitwise NOT. }
+  if AExpr is TNotExpr then
+  begin
+    Self.EmitExprToEax(TNotExpr(AExpr).Expr);
+    if (AExpr.ResolvedType <> nil) and
+       (AExpr.ResolvedType.Kind = tyBoolean) then
+      Self.Emit(#9'xorl $1, %eax')
+    else if (AExpr.ResolvedType <> nil) and
+            (AExpr.ResolvedType.Kind in [tyInt64, tyUInt64]) then
+      Self.Emit(#9'notq %rax')
+    else
+      Self.Emit(#9'notl %eax');
     Exit;
   end;
 
@@ -3889,6 +3952,26 @@ begin
         Self.Emit(Format(#9'movq %%rax, %s(%%rip)', [Asgn.Name]));
       end;
     end
+    else if (Asgn.ResolvedLhsType <> nil) and
+            (Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) then
+    begin
+      Self.EmitExprToEax(Asgn.Expr);
+      Self.Emit(#9'movq %rax, %rsi');
+      if Asgn.IsVarParam then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rdi',
+          [Self.VarOperand(Asgn.Name)]));
+      end
+      else if Self.IsLocal(Asgn.Name) then
+        Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(Asgn.Name)]))
+      else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rdi', [Asgn.Name]));
+      end;
+      Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize]));
+      Self.Emit(#9'callq memcpy');
+    end
     else
     begin
       Self.EmitExprToEax(Asgn.Expr);   { value -> %rax (64-bit-extended) }
@@ -4194,8 +4277,18 @@ begin
       raise ENativeCodeGenError.Create(
         'native backend: field assignment has no resolved field info');
     Self.EmitExprToEax(FA.Expr);
-    { Compute destination address: base address + field byte offset. }
-    if FSretFunc and (FA.RecordName = 'Result') then
+    { Chained field assignment: ObjExpr is the receiver expression (e.g. DT.Date).
+      Emit the receiver to get the base address, then store at offset. }
+    if FA.ObjExpr <> nil then
+    begin
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(FA.ObjExpr);
+      Self.Emit(#9'movq %rax, %rcx');
+      Self.Emit(#9'popq %rax');
+      Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+        FA.FieldInfo.TypeDesc);
+    end
+    else if FSretFunc and (FA.RecordName = 'Result') then
     begin
       { In a sret function, Result holds a pointer to the caller's buffer.
         Load the pointer, then write through it. }

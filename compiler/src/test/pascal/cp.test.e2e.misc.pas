@@ -85,6 +85,10 @@ type
     procedure TestRun_GenericRecord_WithMethod_Prints;
     procedure TestRun_GenericRecord_TwoParams_Prints;
     procedure TestRun_GenericRecord_StringField_Prints;
+    procedure TestRun_BitwiseNot_Integer;
+    procedure TestRun_BitwiseNot_Byte;
+    procedure TestRun_BitwiseNot_Int64;
+    procedure TestRun_BitwiseNot_Bitmask;
   end;
 
 implementation
@@ -1005,6 +1009,76 @@ begin
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('output', 'hello' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_BitwiseNot_Integer;
+const Src = '''
+    program P;
+    var I: Integer;
+    begin
+      I := 0;
+      WriteLn(not I)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '-1' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_BitwiseNot_Byte;
+const Src = '''
+    program P;
+    var B: Byte;
+    begin
+      B := 0;
+      WriteLn(not B)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '-1' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_BitwiseNot_Int64;
+const Src = '''
+    program P;
+    var I: Int64;
+    begin
+      I := 0;
+      WriteLn(not I)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '-1' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_BitwiseNot_Bitmask;
+const Src = '''
+    program P;
+    const MASK = 3;
+    var Flags: Integer;
+    begin
+      Flags := 7;
+      Flags := Flags and (not MASK);
+      WriteLn(Flags)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '4' + LE, Output);
 end;
 
 initialization

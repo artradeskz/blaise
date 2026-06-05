@@ -763,6 +763,7 @@ Factor
     | NIL
     | ArrayLiteral
     | AddrOf
+    | NOT Factor                                       (* Boolean or bitwise NOT *)
     | "Supports" LPAREN Expr COMMA IDENT [ COMMA IDENT ] RPAREN  (* compiler intrinsic *)
     | IDENT DOT IDENT [ LBRACKET Expr RBRACKET ]      (* indexed property read *)
                [ LPAREN [ ArgList ] RPAREN ]           (* field/constructor/method *)

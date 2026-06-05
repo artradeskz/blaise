@@ -8979,6 +8979,8 @@ begin
       end
       else
         Ptr := L;
+      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
       T         := AllocTemp;
@@ -9071,6 +9073,8 @@ begin
       begin
         Exit(Ptr);
       end;
+      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
       T         := AllocTemp;
@@ -9446,6 +9450,8 @@ begin
       begin
         Exit(Ptr);
       end;
+      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
       T         := AllocTemp;
@@ -10109,10 +10115,16 @@ begin
   end
   else if AExpr is TNotExpr then
   begin
-    { Logical not on Boolean (0/1): xor with 1 flips the low bit. }
     L := EmitExpr(TNotExpr(AExpr).Expr);
     T := AllocTemp;
-    EmitLine(Format('  %s =w xor %s, 1', [T, L]));
+    if (AExpr.ResolvedType <> nil) and
+       (AExpr.ResolvedType.Kind in [tyInt64, tyUInt64]) then
+      EmitLine(Format('  %s =l xor %s, -1', [T, L]))
+    else if (AExpr.ResolvedType <> nil) and
+            (AExpr.ResolvedType.Kind = tyBoolean) then
+      EmitLine(Format('  %s =w xor %s, 1', [T, L]))
+    else
+      EmitLine(Format('  %s =w xor %s, -1', [T, L]));
     Result := T;
   end
   else if AExpr is TDerefExpr then

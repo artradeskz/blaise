@@ -3233,6 +3233,48 @@ built-ins in `RegisterBuiltins`.  Their values are derived from the compilation
 target (`GTarget` in `blaise.codegen.target`), so cross-compilation to a
 different OS produces the correct constants without conditional compilation.
 
+== `not` — Boolean and Bitwise NOT
+
+=== Decision
+
+The `not` operator accepts both Boolean and integer operands:
+
+* On a Boolean operand, `not` performs logical negation.  The result type
+  is `Boolean`.
+* On an integer operand (`Byte`, `SmallInt`, `Word`, `Integer`, `Int64`,
+  `UInt64`), `not` performs bitwise complement — every bit is inverted.
+  The result type is `Integer` for operands narrower than 64 bits, or
+  `Int64` / `UInt64` for 64-bit operands.
+* On a floating-point operand (`Single`, `Double`), `not` is a semantic
+  error.
+
+This matches Delphi and Free Pascal, where `not` is overloaded on the
+operand type.
+
+=== Rationale
+
+Bitwise complement is essential for bitmask patterns such as
+`Flags := Flags and (not MASK)` (clear specific bits).  Without `not` on
+integers, the programmer must use `xor` with a hand-computed all-ones
+constant — error-prone and width-dependent.
+
+Narrower-than-32-bit operands widen to `Integer` because the complement
+of a `Byte` value is meaningful as a 32-bit mask, not as a byte that
+wraps modulo 256.  This follows the same integer-promotion rule that
+Blaise applies to other arithmetic on narrow types.
+
+=== Alternatives Rejected
+
+*Require a separate `bitnot` keyword* — adds a keyword that no Pascal
+dialect uses.  The overloaded `not` is unambiguous because the operand
+type determines the operation, and both Delphi and FPC programmers
+expect this behaviour.
+
+*Return the same type as the operand for narrow types* — a `Byte` result
+of `not B` where `B = 3` would be `252`, which is surprising when the
+value is used as a bitmask in a wider expression.  Promoting to `Integer`
+is consistent with how other arithmetic operators handle narrow operands.
+
 == Boolean formatting — `WriteLn` prints `True` / `False`
 
 Both Delphi and FPC print `TRUE` / `FALSE` (case varies by RTL version) when a

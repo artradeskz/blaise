@@ -89,7 +89,6 @@ type
     procedure TestRun_Native_IndirectCall_MethodPtr;
     { TODO M7: record-returning function — deferred until sret/aggregate support }
     procedure TestRun_Native_RecordReturnFunction;
-
     { M6 — floats }
     procedure TestRun_Native_Double_GlobalReadWrite;
     procedure TestRun_Native_Double_LocalReadWrite;
@@ -184,6 +183,10 @@ type
     procedure TestRun_Native_AddrOf_DynArrayElement;
     procedure TestRun_Native_AddrOf_RecordFieldArrayElem;
     procedure TestRun_Native_AddrOf_MethodPointer;
+
+    { Bitwise NOT }
+    procedure TestRun_Native_BitwiseNot_Integer;
+    procedure TestRun_Native_BitwiseNot_Bitmask;
 
     { Generics }
     procedure TestRun_Native_GenericRecord_Method;
@@ -2548,6 +2551,26 @@ const
     end.
     ''';
 
+  SrcBitwiseNotInt = '''
+    program P;
+    var I: Integer;
+    begin
+      I := 0;
+      WriteLn(not I)
+    end.
+    ''';
+
+  SrcBitwiseNotBitmask = '''
+    program P;
+    const MASK = 3;
+    var Flags: Integer;
+    begin
+      Flags := 7;
+      Flags := Flags and (not MASK);
+      WriteLn(Flags)
+    end.
+    ''';
+
   SrcGenericRecordMethod = '''
     program P;
     type
@@ -2831,6 +2854,18 @@ procedure TE2ENativeTests.TestRun_Native_AddrOf_MethodPointer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcAddrOfMethodPtr, '7' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_BitwiseNot_Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcBitwiseNotInt, '-1' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_BitwiseNot_Bitmask;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcBitwiseNotBitmask, '4' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericRecord_Method;

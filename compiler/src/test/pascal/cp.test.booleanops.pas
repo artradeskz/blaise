@@ -34,10 +34,14 @@ type
     procedure TestSemantic_Or_TypeIsBoolean;
     procedure TestSemantic_Not_TypeIsBoolean;
     procedure TestSemantic_And_IntOperand_RaisesError;
-    procedure TestSemantic_Not_IntOperand_RaisesError;
+    procedure TestSemantic_Not_IntOperand_TypeIsInteger;
+    procedure TestSemantic_Not_Int64Operand_TypeIsInt64;
+    procedure TestSemantic_Not_ByteOperand_TypeIsInteger;
+    procedure TestSemantic_Not_FloatOperand_RaisesError;
     procedure TestCodegen_And_EmitsAnd;
     procedure TestCodegen_Or_EmitsOr;
     procedure TestCodegen_Not_EmitsXor;
+    procedure TestCodegen_Not_IntEmitsXorNeg1;
   end;
 
 implementation
@@ -209,15 +213,64 @@ begin
         ''');
 end;
 
-procedure TBooleanOpsTests.TestSemantic_Not_IntOperand_RaisesError;
+procedure TBooleanOpsTests.TestSemantic_Not_IntOperand_TypeIsInteger;
+var Prog: TProgram; Assn: TAssignment;
+begin
+  Prog := AnalyseSrc('''
+      program P;
+      var I, R: Integer;
+      begin
+        I := 1;
+        R := not I
+      end.
+      ''');
+  Assn := TAssignment(Prog.Block.Stmts[1]);
+  AssertTrue('RHS is TNotExpr', Assn.Expr is TNotExpr);
+  AssertEquals('type is Integer', 'Integer',
+    TNotExpr(Assn.Expr).ResolvedType.Name);
+end;
+
+procedure TBooleanOpsTests.TestSemantic_Not_Int64Operand_TypeIsInt64;
+var Prog: TProgram; Assn: TAssignment;
+begin
+  Prog := AnalyseSrc('''
+      program P;
+      var I, R: Int64;
+      begin
+        I := 1;
+        R := not I
+      end.
+      ''');
+  Assn := TAssignment(Prog.Block.Stmts[1]);
+  AssertEquals('type is Int64', 'Int64',
+    TNotExpr(Assn.Expr).ResolvedType.Name);
+end;
+
+procedure TBooleanOpsTests.TestSemantic_Not_ByteOperand_TypeIsInteger;
+var Prog: TProgram; Assn: TAssignment;
+begin
+  Prog := AnalyseSrc('''
+      program P;
+      var B: Byte; R: Integer;
+      begin
+        B := 1;
+        R := not B
+      end.
+      ''');
+  Assn := TAssignment(Prog.Block.Stmts[1]);
+  AssertEquals('type is Integer', 'Integer',
+    TNotExpr(Assn.Expr).ResolvedType.Name);
+end;
+
+procedure TBooleanOpsTests.TestSemantic_Not_FloatOperand_RaisesError;
 begin
   AnalyseExpectError(
     '''
         program P;
-        var I: Integer; C: Boolean;
+        var D: Double; R: Double;
         begin
-          I := 1;
-          C := not I
+          D := 1.0;
+          R := not D
         end.
         ''');
 end;
@@ -244,6 +297,21 @@ var IR: string;
 begin
   IR := GenIR(SrcNot);
   AssertTrue('emits xor', Pos('xor ', IR) > 0);
+end;
+
+procedure TBooleanOpsTests.TestCodegen_Not_IntEmitsXorNeg1;
+var IR: string;
+begin
+  IR := GenIR('''
+      program P;
+      var I, R: Integer;
+      begin
+        I := 5;
+        R := not I
+      end.
+      ''');
+  AssertTrue('emits xor with -1', Pos('xor ', IR) > 0);
+  AssertTrue('mask is -1', Pos(', -1', IR) > 0);
 end;
 
 initialization

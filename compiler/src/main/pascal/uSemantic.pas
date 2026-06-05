@@ -7854,11 +7854,21 @@ begin
   else if AExpr is TNotExpr then
   begin
     Result := AnalyseExpr(TNotExpr(AExpr).Expr);
-    if Result.Kind <> tyBoolean then
+    if Result.Kind = tyBoolean then
+      Result := FTable.TypeBoolean
+    else if Result.IsNumeric and not Result.IsFloat then
+    begin
+      if Result.Kind = tyUInt64 then
+        Result := FTable.TypeUInt64
+      else if Result.Kind = tyInt64 then
+        Result := FTable.TypeInt64
+      else
+        Result := FTable.TypeInteger;
+    end
+    else
       SemanticError(
-        Format('''not'' requires a Boolean operand, got ''%s''', [Result.Name]),
+        Format('''not'' requires a Boolean or integer operand, got ''%s''', [Result.Name]),
         AExpr.Line, AExpr.Col);
-    Result := FTable.TypeBoolean;
   end
   else
     SemanticError('Unknown expression node', AExpr.Line, AExpr.Col);
