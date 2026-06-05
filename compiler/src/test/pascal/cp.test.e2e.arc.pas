@@ -29,12 +29,14 @@ type
     procedure TestRun_TListARC_Valgrind;
     procedure TestRun_IntfValueParam_Retained_Valgrind;
     { Regression: a const string param bound to a freshly-built TEMPORARY must
-      stay alive for the whole call.  An over-eager "elide retain/release for
-      const params" optimisation (reverted) dropped the callee-side retain, so
-      the temporary was freed mid-call -> use-after-free in the RTL string
-      routines.  A string LITERAL hides this (it is immortal); a concatenation
-      result does not. }
+      stay alive for the whole call.  Under the const-param ARC elision the
+      callee skips the retain, so the call site must keep the temporary alive
+      (EnsureConstStringRef).  A string LITERAL hides this (it is immortal); a
+      concatenation result does not. }
     procedure TestRun_ConstStringTemp_StaysAlive_Valgrind;
+    { Caller-side companion to the elision: a +0 concat transient forwarded
+      through nested const-string routines and read again afterwards. }
+    procedure TestRun_ConstStringParam_TransientRetained_Valgrind;
     { Three instantiations of the same generic class: verifies the Pointer→class
       ARC coercion bug is fixed (the 3rd instantiation no longer uses freed memory). }
     procedure TestRun_ThreeGenericInstances_AllWork;
@@ -412,6 +414,50 @@ begin
   begin
     if Log = '' then Log := '(valgrind produced no output)';
     Fail('const string temp freed mid-call — valgrind reports:' + LE + Log);
+  end;
+end;
+
+const
+  { Caller-side companion to the const-param elision.  A string concat result
+    leaves _StringConcat at rc=0 (a "+0 transient").  The callee no longer
+    retains the const-string buffer, so the call site must keep it alive for
+    the duration of the call.  Process forwards the borrowed buffer to a
+    nested const-string routine and reads it again afterwards; without the
+    caller-side retain inserted by EnsureConstStringRef the buffer is freed
+    mid-call and the trailing WriteLn observes corrupted data (or aborts).
+
+    Valgrind catches the converse regression: an over-retain that never gets
+    released would leak the concat buffer. }
+  SrcConstStrTransient = '''
+    program P;
+    procedure Inner(const T: string);
+    begin
+      WriteLn(T)
+    end;
+    procedure Process(const S: string);
+    begin
+      Inner(S);
+      Inner(S);
+      WriteLn(S)
+    end;
+    begin
+      Process('foo' + 'bar')
+    end.
+    ''';
+
+procedure TE2EArcTests.TestRun_ConstStringParam_TransientRetained_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstStrTransient, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('stdout', 'foobar' + LE + 'foobar' + LE + 'foobar' + LE, Output);
+  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  OK := RunUnderValgrind(SrcConstStrTransient, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output)';
+    Fail('const-string transient retain missing — valgrind reports:' + LE + Log);
   end;
 end;
 

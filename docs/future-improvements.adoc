@@ -1083,7 +1083,7 @@ to distinguish this from simple enums so existing code is unaffected.
   is acceptable provided it is a new keyword.
 
 
-== ARC: elide retain/release for const value parameters
+== ARC: elide retain/release for const value parameters (IMPLEMENTED)
 
 A `const` parameter promises the caller keeps the argument alive for the
 duration of the call, so the callee-side `_StringAddRef`/`_StringRelease`
@@ -1092,8 +1092,17 @@ redundant.  Eliding it removes two RTL calls per const string/class/interface
 parameter — a measurable saving on hot paths that thread strings through many
 `const` parameters (the parser and semantic analyser do this heavily).
 
-This optimisation was implemented (commit `5a5b5d4`) and reverted after it
-introduced a use-after-free.  The reason it is unsound as stated:
+Status: shipped.  The elision is in place (the four entry/exit ARC loops skip
+`IsConstParam`), paired with a *caller-side* retain for transient string
+arguments — `EnsureConstStringRef`/`ReleaseConstStringArgs` wrap a value-mode
+argument to a const-string parameter with `_StringAddRef` before the call and
+`_StringRelease` after, which is a no-op for immortal literals and nets to zero
+for owned strings, so the cost lands only on the `+0` transients that need it.
+The remainder of this section is retained as the design record.
+
+The first attempt (commit `5a5b5d4`) elided the pair *without* the caller-side
+retain and was reverted after it introduced a use-after-free.  The reason it was
+unsound as stated:
 
 * The "caller keeps it alive" premise holds for a *named* argument the caller
   owns for the whole call, but *not* for a *temporary* bound to the const

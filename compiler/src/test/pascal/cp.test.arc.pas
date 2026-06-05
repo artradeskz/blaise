@@ -48,6 +48,21 @@ type
     procedure TestARC_StringVarParam_NoAddRef;
     procedure TestARC_StringVarParam_NoRelease;
 
+    { String const parameter: callee skips the addref/release pair (5a5b5d4
+      elision — the caller keeps a named argument alive for the whole call). }
+    procedure TestARC_StringConstParam_NoAddRef;
+    procedure TestARC_StringConstParam_NoRelease;
+
+    { Caller-side retain when a transient (concat result, +0 rc) is passed
+      to a routine with a const-string parameter.  The callee no longer
+      retains under the 5a5b5d4 elision, so the call site must keep the
+      buffer alive for the call duration. }
+    procedure TestARC_StringConstParam_CallerRetainsTransient_AddRef;
+    procedure TestARC_StringConstParam_CallerRetainsTransient_Release;
+
+    { Interface const parameter: callee skips the addref/release pair too. }
+    procedure TestARC_IntfConstParam_NoAddRef;
+
     { Interface value parameter: addref on entry, release on exit (via the
       obj slot — interfaces ARC through _ClassAddRef/_ClassRelease). }
     procedure TestARC_IntfValueParam_AddRefOnEntry;
@@ -298,6 +313,57 @@ const
         begin end.
         ''';
 
+  SrcConstParam =
+    '''
+        program P;
+        procedure Greet(const S: string);
+        begin end;
+        begin end.
+        ''';
+
+  { Concat result (rc=0 +0 transient) passed to a const-string parameter.
+    The body of Greet calls another const-string routine to force at least
+    one ARC event against the borrowed buffer; without the caller-side
+    retain inserted by EnsureConstStringRef, that event drives the
+    transient's refcount negative. }
+  SrcConstParamTransient =
+    '''
+        program P;
+        procedure Inner(const T: string);
+        begin end;
+        procedure Greet(const S: string);
+        begin
+          Inner(S)
+        end;
+        begin
+          Greet('foo' + 'bar')
+        end.
+        ''';
+
+  SrcIntfConstParam =
+    '''
+        program P;
+        type
+          IThing = interface
+            procedure Emit;
+          end;
+          TThing = class(TObject, IThing)
+            procedure Emit;
+          end;
+        procedure TThing.Emit;
+        begin end;
+        procedure DoSomething(const MyIntf: IThing);
+        begin
+          MyIntf.Emit
+        end;
+        var T: TThing; F: IThing;
+        begin
+          T := TThing.Create;
+          F := T;
+          DoSomething(F)
+        end.
+        ''';
+
   SrcIntfValueParam =
     '''
         program P;
@@ -385,6 +451,52 @@ var
 begin
   IR := GenIR(SrcVarParam);
   AssertFalse('no release for string var param', IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TARCTests.TestARC_StringConstParam_NoAddRef;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConstParam);
+  AssertFalse('no addref for string const param', IRContains(IR, 'call $_StringAddRef'));
+end;
+
+procedure TARCTests.TestARC_StringConstParam_NoRelease;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConstParam);
+  AssertFalse('no release for string const param', IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TARCTests.TestARC_StringConstParam_CallerRetainsTransient_AddRef;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConstParamTransient);
+  AssertTrue('caller retains transient before const-string call',
+    IRContains(IR, 'call $_StringAddRef'));
+end;
+
+procedure TARCTests.TestARC_StringConstParam_CallerRetainsTransient_Release;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConstParamTransient);
+  AssertTrue('caller releases transient after const-string call',
+    IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TARCTests.TestARC_IntfConstParam_NoAddRef;
+var
+  Body: string;
+begin
+  Body := ExtractDoSomethingBody(GenIR(SrcIntfConstParam));
+  AssertTrue('DoSomething emitted', Body <> '');
+  AssertFalse('no addref for interface const param',
+    Pos('call $_ClassAddRef', Body) > 0);
+  AssertFalse('no release for interface const param',
+    Pos('call $_ClassRelease', Body) > 0);
 end;
 
 function ExtractDoSomethingBody(const AIR: string): string;

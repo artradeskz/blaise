@@ -241,6 +241,14 @@ type
       AArgs and AArgTemps are parallel: AArgTemps.Strings[i] is the temp for
       AArgs.Items[i], or '' if that arg was not a value temp (e.g. var param). }
     procedure EmitOwnedArgReleases(AArgs: TObjectList; AArgTemps: TStringList);
+    { Caller-side retain/release for a const-string param.  A const param skips
+      the callee-side _StringAddRef/_StringRelease pair (see 5a5b5d4), so a
+      fresh transient (rc=0 from _StringConcat or a function returning string)
+      would be unowned for the duration of the call.  Variables/fields/literals
+      already have a live owner — the AddRef/Release pair nets to zero on them. }
+    procedure EnsureConstStringRef(const AArgTemp: string; APar: TMethodParam);
+    procedure ReleaseConstStringArgs(AArgs: TObjectList;
+      AArgTemps: TStringList; AParams: TObjectList);
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
     procedure EmitCaseStmt(AStmt: TCaseStmt);
     procedure EmitProcCall(ACall: TProcCall);
@@ -3426,6 +3434,37 @@ begin
   end;
 end;
 
+{ call $_StringAddRef(l <ArgTemp>) }
+procedure TCodeGenQBE.EnsureConstStringRef(const AArgTemp: string;
+  APar: TMethodParam);
+begin
+  if (APar = nil) or (AArgTemp = '') then Exit;
+  if APar.IsConstParam and (APar.ResolvedType <> nil) and
+     (APar.ResolvedType.Kind = tyString) then
+    EmitLine(Format('  call $_StringAddRef(l %s)', [AArgTemp]));
+end;
+
+{ call $_StringRelease(l <ArgTemps[I]>) for each const-string param. }
+procedure TCodeGenQBE.ReleaseConstStringArgs(AArgs: TObjectList;
+  AArgTemps: TStringList; AParams: TObjectList);
+var
+  I: Integer;
+  Par: TMethodParam;
+begin
+  if (AArgs = nil) or (AArgTemps = nil) or (AParams = nil) then Exit;
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    if I >= AArgTemps.Count then Break;
+    if AArgTemps.Strings[I] = '' then Continue;
+    if I >= AParams.Count then Break;
+    Par := TMethodParam(AParams.Items[I]);
+    if Par.IsConstParam and (Par.ResolvedType <> nil) and
+       (Par.ResolvedType.Kind = tyString) then
+      EmitLine(Format('  call $_StringRelease(l %s)',
+        [AArgTemps.Strings[I]]));
+  end;
+end;
+
 procedure TCodeGenQBE.EmitAssignment(AAssign: TAssignment);
 var
   ValTemp, OldTemp, QType, StoreInstr, PtrTemp: string;
@@ -4818,6 +4857,7 @@ begin
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
         ArgTemps.Add(ArgTemp);
+        EnsureConstStringRef(ArgTemp, Par);
         QType   := QbeTypeOf(Par.ResolvedType);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
         ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
@@ -4839,6 +4879,7 @@ begin
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
       EmitOwnedArgReleases(ACall.Args, ArgTemps);
+      ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
       ArgTemps.Free();
       { Receiver was a +1-owned temporary (function/property return) used
         transiently — release it so the temporary does not leak. }
@@ -4852,6 +4893,7 @@ begin
       FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     EmitOwnedArgReleases(ACall.Args, ArgTemps);
+    ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
     ArgTemps.Free();
     if ExprOwnsRef(ACall.ObjExpr) then
       EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
@@ -4988,6 +5030,7 @@ begin
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
         ArgTemps.Add(ArgTemp);
+        EnsureConstStringRef(ArgTemp, Par);
         QType   := QbeTypeOf(Par.ResolvedType);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
         ArgLine := ArgLine + Format(', %s %s',
@@ -5018,6 +5061,7 @@ begin
       EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     end;
     EmitOwnedArgReleases(ACall.Args, ArgTemps);
+    ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
   finally
     ArgTemps.Free();
   end;
@@ -5312,11 +5356,13 @@ begin
   EmitParamAllocs(AMethod, nil);
 
   { ARC: addref string and class value params on entry — balances the
-    release pass at method exit. }
+    release pass at method exit. const params are skipped: the caller
+    guarantees the object stays alive for the whole call, so the callee
+    needs no retain/release. }
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -5334,7 +5380,8 @@ begin
       { Interfaces ARC through the object slot of their fat pointer; the
         itab is static and needs no refcounting. }
       ValTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj',
+        [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     end;
   end;
@@ -5375,11 +5422,12 @@ begin
     FExitLabel := SavedExitLbl;
   end;
 
-  { ARC: release string and class value params on exit. }
+  { ARC: release string and class value params on exit. const params are
+    skipped to match the entry pass (no retain was taken). }
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -6156,11 +6204,13 @@ begin
   end;
 
   { ARC: addref string and class value params on entry (callee owns a
-    retained copy that is balanced by the release pass at function exit). }
+    retained copy that is balanced by the release pass at function exit).
+    const params are skipped: the caller keeps the object alive for the
+    whole call, so no retain/release is needed. }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -6178,7 +6228,8 @@ begin
       { Interfaces ARC through the object slot of their fat pointer; the
         itab is static and needs no refcounting. }
       ValTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, Par.ParamName]));
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj',
+        [ValTemp, Par.ParamName]));
       EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     end;
   end;
@@ -6225,11 +6276,12 @@ begin
   end;
 
   { ARC: release string and class value params on exit (balances the
-    addref inserted at function entry). }
+    addref inserted at function entry). const params are skipped to match
+    the entry pass (no retain was taken). }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -6370,55 +6422,64 @@ begin
       ArgTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
       ArgLine := Format('l %s', [ArgTemp]);
-      for I := 0 to ACall.Args.Count - 1 do
-      begin
-        Par := TMethodParam(MDecl.Params.Items[I]);
-        if Par.IsOpenArray then
+      ArgTemps := TStringList.Create();
+      try
+        for I := 0 to ACall.Args.Count - 1 do
         begin
-          if TASTExpr(ACall.Args.Items[I]) is TArrayLiteralExpr then
+          Par := TMethodParam(MDecl.Params.Items[I]);
+          if Par.IsOpenArray then
           begin
-            ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])));
-            ArgLine := ArgLine + Format(', l %s, l %d',
-              [ArgTemp, TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])).Elements.Count - 1]);
+            if TASTExpr(ACall.Args.Items[I]) is TArrayLiteralExpr then
+            begin
+              ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])));
+              ArgLine := ArgLine + Format(', l %s, l %d',
+                [ArgTemp, TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])).Elements.Count - 1]);
+            end
+            else if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+            begin
+              { Static array coerced to open-array: pass base ptr + compile-time high }
+              ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+              ArgLine := ArgLine + Format(', l %s, l %d', [ArgTemp,
+                TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).HighBound -
+                TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).LowBound]);
+            end
+            else
+            begin
+              ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+              ArgTemp2 := AllocTemp;
+              EmitLine(Format('  %s =l loadl %%_var_%s_high',
+                [ArgTemp2, TIdentExpr(TASTExpr(ACall.Args.Items[I])).Name]));
+              ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+            end;
           end
-          else if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+          else if Par.IsVarParam then
+            ArgLine := ArgLine + Format(', l %s',
+              [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
+          else if (Par.ResolvedType <> nil) and
+                  (Par.ResolvedType.Kind = tyInterface) then
           begin
-            { Static array coerced to open-array: pass base ptr + compile-time high }
-            ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
-            ArgLine := ArgLine + Format(', l %s, l %d', [ArgTemp,
-              TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).HighBound -
-              TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).LowBound]);
+            EmitInterfaceExprPair(TASTExpr(ACall.Args.Items[I]),
+              ArgTemp, ArgTemp2);
+            ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
           end
           else
           begin
-            ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[I]));
-            ArgTemp2 := AllocTemp;
-            EmitLine(Format('  %s =l loadl %%_var_%s_high',
-              [ArgTemp2, TIdentExpr(TASTExpr(ACall.Args.Items[I])).Name]));
-            ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+            ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+            while ArgTemps.Count < I do ArgTemps.Add('');
+            ArgTemps.Add(ArgTemp);
+            EnsureConstStringRef(ArgTemp, Par);
+            ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
+            ArgLine := ArgLine + Format(', %s %s',
+              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
-        end
-        else if Par.IsVarParam then
-          ArgLine := ArgLine + Format(', l %s',
-            [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
-        else if (Par.ResolvedType <> nil) and
-                (Par.ResolvedType.Kind = tyInterface) then
-        begin
-          EmitInterfaceExprPair(TASTExpr(ACall.Args.Items[I]),
-            ArgTemp, ArgTemp2);
-          ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
-        end
-        else
-        begin
-          ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
-          ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
-          ArgLine := ArgLine + Format(', %s %s',
-            [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
         end;
+        EmitLine(Format('  call $%s(%s)',
+          [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+        ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
+        Exit;
+      finally
+        ArgTemps.Free;
       end;
-      EmitLine(Format('  call $%s(%s)',
-        [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
-      Exit;
     end;
     ArgLine := '';
     { Captured-var pointers are prepended as implicit leading args.
@@ -6488,6 +6549,7 @@ begin
         begin
           ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
           ArgTemps.Add(ArgTemp);
+          EnsureConstStringRef(ArgTemp, Par);
           ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
           ArgLine := ArgLine + Format('%s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
         end;
@@ -6499,6 +6561,7 @@ begin
       else
         EmitLine(Format('  call $%s(%s)', [QBEMangle(ACall.Name), ArgLine]));
       EmitOwnedArgReleases(ACall.Args, ArgTemps);
+      ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
     finally
       ArgTemps.Free();
     end;
@@ -8085,55 +8148,64 @@ begin
         EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
         ArgLine  := Format('l %s', [ArgTemp]);
         FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FC.Name);
-        for I := 0 to FC.Args.Count - 1 do
-        begin
-          Par := TMethodParam(MDecl.Params.Items[I]);
-          if Par.IsOpenArray then
+        ArgTemps := TStringList.Create();
+        try
+          for I := 0 to FC.Args.Count - 1 do
           begin
-            if TASTExpr(FC.Args.Items[I]) is TArrayLiteralExpr then
+            Par := TMethodParam(MDecl.Params.Items[I]);
+            if Par.IsOpenArray then
             begin
-              ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])));
-              ArgLine := ArgLine + Format(', l %s, l %d',
-                [ArgTemp, TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])).Elements.Count - 1]);
+              if TASTExpr(FC.Args.Items[I]) is TArrayLiteralExpr then
+              begin
+                ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])));
+                ArgLine := ArgLine + Format(', l %s, l %d',
+                  [ArgTemp, TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])).Elements.Count - 1]);
+              end
+              else if TASTExpr(FC.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+              begin
+                { Static array coerced to open-array: pass base ptr + compile-time high }
+                ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+                ArgLine := ArgLine + Format(', l %s, l %d', [ArgTemp,
+                  TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).HighBound -
+                  TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).LowBound]);
+              end
+              else
+              begin
+                ArgTemp  := EmitExpr(TASTExpr(FC.Args.Items[I]));
+                ArgTemp2 := AllocTemp;
+                EmitLine(Format('  %s =l loadl %%_var_%s_high',
+                  [ArgTemp2, TIdentExpr(TASTExpr(FC.Args.Items[I])).Name]));
+                ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+              end;
             end
-            else if TASTExpr(FC.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+            else if Par.IsVarParam then
+              ArgLine := ArgLine + Format(', l %s',
+                [EmitLValueAddr(TASTExpr(FC.Args.Items[I]))])
+            else if (Par.ResolvedType <> nil) and
+                    (Par.ResolvedType.Kind = tyInterface) then
             begin
-              { Static array coerced to open-array: pass base ptr + compile-time high }
-              ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
-              ArgLine := ArgLine + Format(', l %s, l %d', [ArgTemp,
-                TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).HighBound -
-                TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).LowBound]);
+              EmitInterfaceExprPair(TASTExpr(FC.Args.Items[I]),
+                ArgTemp, ArgTemp2);
+              ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
             end
             else
             begin
-              ArgTemp  := EmitExpr(TASTExpr(FC.Args.Items[I]));
-              ArgTemp2 := AllocTemp;
-              EmitLine(Format('  %s =l loadl %%_var_%s_high',
-                [ArgTemp2, TIdentExpr(TASTExpr(FC.Args.Items[I])).Name]));
-              ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+              ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+              while ArgTemps.Count < I do ArgTemps.Add('');
+              ArgTemps.Add(ArgTemp);
+              EnsureConstStringRef(ArgTemp, Par);
+              ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
+              ArgLine := ArgLine + Format(', %s %s',
+                [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
             end;
-          end
-          else if Par.IsVarParam then
-            ArgLine := ArgLine + Format(', l %s',
-              [EmitLValueAddr(TASTExpr(FC.Args.Items[I]))])
-          else if (Par.ResolvedType <> nil) and
-                  (Par.ResolvedType.Kind = tyInterface) then
-          begin
-            EmitInterfaceExprPair(TASTExpr(FC.Args.Items[I]),
-              ArgTemp, ArgTemp2);
-            ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
-          end
-          else
-          begin
-            ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
-            ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
-            ArgLine := ArgLine + Format(', %s %s',
-              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
+          T := AllocTemp;
+          EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
+          ReleaseConstStringArgs(FC.Args, ArgTemps, MDecl.Params);
+          Exit(MaybeNormalizeExtReturn(T, MDecl));
+        finally
+          ArgTemps.Free;
         end;
-        T := AllocTemp;
-        EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
-        Exit(MaybeNormalizeExtReturn(T, MDecl));
       end;
       if MDecl.IsExternal and (MDecl.ExternalName <> '') then
         FuncName := '$' + MDecl.ExternalName
@@ -8193,6 +8265,7 @@ begin
           begin
             ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
             ArgTemps.Add(ArgTemp);
+            EnsureConstStringRef(ArgTemp, Par);
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
             ArgLine := ArgLine + Format('%s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
@@ -8200,6 +8273,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
         EmitOwnedArgReleases(FC.Args, ArgTemps);
+        ReleaseConstStringArgs(FC.Args, ArgTemps, MDecl.Params);
         Result := MaybeNormalizeExtReturn(T, MDecl);
       finally
         ArgTemps.Free();
@@ -8293,6 +8367,7 @@ begin
             Par     := TMethodParam(MDecl.Params.Items[I]);
             ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
             if Par.IsVarParam then ArgTemps.Add('') else ArgTemps.Add(ArgTemp);
+            EnsureConstStringRef(ArgTemp, Par);
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
               QbeTypeOf(Par.ResolvedType));
             ArgLine := ArgLine + Format(', %s %s',
@@ -8304,6 +8379,7 @@ begin
             FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
           EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
           EmitOwnedArgReleases(MCallExpr.Args, ArgTemps);
+          ReleaseConstStringArgs(MCallExpr.Args, ArgTemps, MDecl.Params);
         finally
           ArgTemps.Free();
         end;
@@ -8450,6 +8526,7 @@ begin
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
         ArgTemps.Add(ArgTemp);
+        EnsureConstStringRef(ArgTemp, Par);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
           QbeTypeOf(Par.ResolvedType));
         ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
@@ -8472,6 +8549,7 @@ begin
     else
       EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
     EmitOwnedArgReleases(MCallExpr.Args, ArgTemps);
+    ReleaseConstStringArgs(MCallExpr.Args, ArgTemps, MDecl.Params);
     ArgTemps.Free();
     { Receiver was a +1-owned temporary (function/property return) used as
       the call target — release it so the temporary does not leak.  The
