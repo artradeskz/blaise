@@ -1,0 +1,93 @@
+= Kanban TUI — A Terminal Task Board
+
+A three-column Kanban board for the terminal, written entirely in Blaise Pascal.
+
+== Features
+
+* Three fixed columns: *Todo*, *In Progress*, *Done*
+* Add, delete, and move tasks with single-key shortcuts
+* Per-task detail files (multi-line notes via `$EDITOR`)
+* Priority tagging (high/low) with visual indicators
+* Human-readable `.kanban` file format (works with grep, git, etc.)
+* Pure Pascal — no C code, no external libraries beyond libc
+* Box-drawing characters and ANSI colour output
+* Vim-style keybindings (hjkl navigation)
+
+== Building
+
+[source,bash]
+----
+./build.sh [path-to-blaise-compiler]
+----
+
+The build script compiles the Blaise source to QBE IR, assembles it, and links the final binary.
+
+== Usage
+
+[source,bash]
+----
+./kanban                 # uses ./board.kanban
+./kanban myproject.kanban
+----
+
+== Keybindings
+
+[cols="1,3"]
+|===
+| Key | Action
+
+| `j` / `k` | Move cursor up / down
+| `Tab` / arrows | Switch columns
+| `a` | Add a new task to the current column
+| `d` | Delete the selected task
+| `h` | Move task left (toward Todo)
+| `l` | Move task right (toward Done)
+| `p` | Cycle priority (none -> high -> low)
+| `Enter` | Open detail view for the selected task
+| `?` | Show help
+| `q` | Save and quit
+|===
+
+=== Detail View
+
+| Key | Action
+
+| `j` / `k` | Scroll up / down
+| `e` | Edit detail in `$EDITOR` (defaults to nano)
+| `Esc` | Return to board
+
+== Data Format
+
+The `.kanban` file is a simple, human-readable text format:
+
+[source]
+----
+#next-id: 8
+
+## Todo
+- 5 | Add UTF-8 lexer support | priority:high
+- 6 | Benchmark hash map
+
+## In Progress
+- 3 | TUI Kanban app | priority:high
+
+## Done
+- 1 | Bootstrap compiler
+----
+
+Per-task detail files are stored in a `.kanban.d/` subdirectory alongside the `.kanban` file, named by task ID (e.g., `board.kanban.d/3.txt`).
+Detail files only exist for tasks that have notes — no empty placeholders.
+
+== Architecture
+
+[cols="1,3"]
+|===
+| File | Role
+
+| `kanban_app.pas` | Main program — parses args, wires components, runs the UI
+| `kanban.terminal.pas` | Terminal abstraction — raw mode, key reading, ANSI output, box drawing
+| `kanban.data.pas` | Data model — load/save `.kanban` files, manage tasks and detail files
+| `kanban.ui.pas` | TUI rendering and input handling — board view, detail view, input mode
+|===
+
+The terminal unit uses `external name` bindings to POSIX functions (`tcgetattr`, `tcsetattr`, `ioctl`, `read`) for raw terminal control — no C shim required.
