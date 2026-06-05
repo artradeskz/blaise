@@ -292,8 +292,8 @@ begin
     Lines := TStringList.Create;
     try
       Lines.Text := Trim(Output);
-      AssertEquals('existing file = 1', '1', Lines.Strings[0]);
-      AssertEquals('missing file = 0',  '0', Lines.Strings[1]);
+      AssertEquals('existing file = True', 'True', Lines.Strings[0]);
+      AssertEquals('missing file = False', 'False', Lines.Strings[1]);
     finally
       Lines.Free;
     end;
@@ -401,8 +401,8 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('/tmp exists = 1',  '1', Lines.Strings[0]);
-    AssertEquals('missing dir = 0',  '0', Lines.Strings[1]);
+    AssertEquals('/tmp exists = True',  'True',  Lines.Strings[0]);
+    AssertEquals('missing dir = False', 'False', Lines.Strings[1]);
   finally
     Lines.Free;
   end;
@@ -436,8 +436,8 @@ begin
     Lines := TStringList.Create;
     try
       Lines.Text := Trim(Output);
-      AssertEquals('ForceDirectories returned 1', '1', Lines.Strings[0]);
-      AssertEquals('DirectoryExists returned 1',  '1', Lines.Strings[1]);
+      AssertEquals('ForceDirectories returned True', 'True', Lines.Strings[0]);
+      AssertEquals('DirectoryExists returned True',  'True', Lines.Strings[1]);
     finally
       Lines.Free;
     end;
@@ -568,9 +568,9 @@ begin
     Lines := TStringList.Create;
     try
       Lines.Text := Trim(Output);
-      AssertEquals('RenameFile returns 1', '1', Lines.Strings[0]);
-      AssertEquals('old name gone (0)', '0', Lines.Strings[1]);
-      AssertEquals('new name exists (1)', '1', Lines.Strings[2]);
+      AssertEquals('RenameFile returns True',  'True',  Lines.Strings[0]);
+      AssertEquals('old name gone (False)',    'False', Lines.Strings[1]);
+      AssertEquals('new name exists (True)',   'True',  Lines.Strings[2]);
     finally
       Lines.Free;
     end;
@@ -586,7 +586,7 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRenameFileMissing, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('RenameFile missing = 0', '0', Trim(Output));
+  AssertEquals('RenameFile missing = False', 'False', Trim(Output));
 end;
 
 procedure TE2ESysUtilsTests.TestRun_SetCurrentDir_ChangesDir;
@@ -601,8 +601,8 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('SetCurrentDir /tmp returns 1', '1', Lines.Strings[0]);
-    AssertEquals('GetCurrentDir non-empty', '1', Lines.Strings[1]);
+    AssertEquals('SetCurrentDir /tmp returns True', 'True', Lines.Strings[0]);
+    AssertEquals('GetCurrentDir non-empty',         'True', Lines.Strings[1]);
   finally
     Lines.Free;
   end;
@@ -659,9 +659,9 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('LineEnding = #10', '1', Lines.Strings[0]);
-    AssertEquals('DirectorySeparator = /', '1', Lines.Strings[1]);
-    AssertEquals('PathSeparator = :', '1', Lines.Strings[2]);
+    AssertEquals('LineEnding = #10', 'True', Lines.Strings[0]);
+    AssertEquals('DirectorySeparator = /', 'True', Lines.Strings[1]);
+    AssertEquals('PathSeparator = :', 'True', Lines.Strings[2]);
   finally
     Lines.Free;
   end;
@@ -673,7 +673,7 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcGetCurrentDir, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('GetCurrentDir non-empty', '1', Trim(Output));
+  AssertEquals('GetCurrentDir non-empty', 'True', Trim(Output));
 end;
 
 initialization

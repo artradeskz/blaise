@@ -3172,3 +3172,24 @@ All three constants are defined in `system.pas` and pre-seeded as compiler
 built-ins in `RegisterBuiltins`.  Their values are derived from the compilation
 target (`GTarget` in `blaise.codegen.target`), so cross-compilation to a
 different OS produces the correct constants without conditional compilation.
+
+== Boolean formatting — `WriteLn` prints `True` / `False`
+
+Both Delphi and FPC print `TRUE` / `FALSE` (case varies by RTL version) when a
+Boolean value is passed to `Write` / `WriteLn`.  Early Blaise treated booleans as
+plain integers, so `WriteLn(True)` printed `1` and `WriteLn(False)` printed `0`.
+
+This was a codegen shortcut, not a deliberate design choice.  It surprised users
+familiar with any other Pascal dialect and made program output harder to read.
+
+Blaise now emits a dedicated `_SysWriteBool` call for Boolean-typed arguments.
+The runtime writes the literal string `True` or `False` — no heap allocation, no
+string conversion.  `BoolToStr` in `sysutils.pas` is unaffected and continues to
+return `'True'` / `'False'` as a string value.
+
+*Alternatives considered:*
+
+* `TRUE` / `FALSE` (all-caps, matching Delphi) — rejected; Blaise identifiers are
+  `True` / `False` (title-case), and the output should match the language.
+* Keeping `1` / `0` and requiring explicit `BoolToStr` — rejected; the implicit
+  integer rendering was a bug, not a feature.

@@ -2753,8 +2753,9 @@ begin
       UInt32 / Word (unsigned-32)  -> _SysWriteUInt64, zero-extended, so a
                                       value above 2^31 prints as a large
                                       positive number, not a signed wrap
+      Boolean                      -> _SysWriteBool   (prints True/False)
       everything else (Integer,
-        Byte, Boolean, Enum, ...)  -> _SysWriteInt    (32-bit signed; their
+        Byte, Enum, ...)           -> _SysWriteInt    (32-bit signed; their
                                       value range is non-negative there)
     The value is already in %rax 64-bit-extended (unsigned narrow loads
     zero-extend), so the unsigned-32 path needs no extra extension.
@@ -2784,6 +2785,13 @@ begin
       Self.EmitExprToXmm0(ArgExpr);
       Self.Emit(#9'movl $1, %edi');
       Self.Emit(#9'callq _SysWriteSingle');
+    end
+    else if K = tyBoolean then
+    begin
+      Self.EmitExprToEax(ArgExpr);
+      Self.Emit(#9'movl %eax, %esi');
+      Self.Emit(#9'movl $1, %edi');
+      Self.Emit(#9'callq _SysWriteBool');
     end
     else
     begin

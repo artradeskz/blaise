@@ -25,6 +25,8 @@ type
   published
     { Boolean, WriteLn, break/exit }
     procedure TestRun_BooleanOps_AllExpressions;
+    procedure TestRun_WriteLn_BoolVar_PrintsTrueOrFalse;
+    procedure TestRun_WriteLn_BoolExpr_PrintsTrueOrFalse;
     procedure TestRun_MultiArgWriteLn_PrintsAllArgs;
     procedure TestRun_ForBreak_StopsAtFiveHalt;
     procedure TestRun_ExitFromFunction_ReturnsImmediately;
@@ -99,6 +101,25 @@ const
       if A and not B then WriteLn('t1');
       if A or B then WriteLn('t2');
       if not (A and B) then WriteLn('t3')
+    end.
+    ''';
+
+  SrcWriteLnBoolVar = '''
+    program P;
+    var B: Boolean;
+    begin
+      B := True;
+      WriteLn(B);
+      B := False;
+      WriteLn(B)
+    end.
+    ''';
+
+  SrcWriteLnBoolExpr = '''
+    program P;
+    begin
+      WriteLn(3 > 2);
+      WriteLn(1 = 2)
     end.
     ''';
 
@@ -520,6 +541,18 @@ begin
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('all three branches fire',
     't1' + LE + 't2' + LE + 't3' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_WriteLn_BoolVar_PrintsTrueOrFalse;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcWriteLnBoolVar, 'True' + LE + 'False' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_WriteLn_BoolExpr_PrintsTrueOrFalse;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcWriteLnBoolExpr, 'True' + LE + 'False' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_MultiArgWriteLn_PrintsAllArgs;

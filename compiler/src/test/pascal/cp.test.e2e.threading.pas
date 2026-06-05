@@ -275,7 +275,7 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTerminateFlag, Output, RCode));
   AssertEquals('exit code', 0, RCode);
-  AssertEquals('stdout', '1' + LE + 'ok' + LE, Output)
+  AssertEquals('stdout', 'True' + LE + 'ok' + LE, Output)
 end;
 
 procedure TE2EThreadingTests.TestRun_Thread_FinishedAfterExecute;
@@ -284,7 +284,7 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcFinishedFlag, Output, RCode));
   AssertEquals('exit code', 0, RCode);
-  AssertEquals('stdout', '0' + LE + '1' + LE, Output)
+  AssertEquals('stdout', 'False' + LE + 'True' + LE, Output)
 end;
 
 procedure TE2EThreadingTests.TestRun_Thread_MultipleThreads;

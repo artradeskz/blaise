@@ -60,6 +60,7 @@ type
     procedure SysWriteUInt64(Fd: Integer; N: UInt64); virtual; abstract;
     procedure SysWriteDouble(Fd: Integer; V: Double); virtual; abstract;
     procedure SysWriteSingle(Fd: Integer; V: Single); virtual; abstract;
+    procedure SysWriteBool(Fd: Integer; B: Boolean); virtual; abstract;
     procedure SysWriteNewline(Fd: Integer); virtual; abstract;
 
     { File-descriptor primitives — used by streams }

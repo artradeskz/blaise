@@ -68,6 +68,7 @@ type
     procedure SysWriteUInt64(Fd: Integer; N: UInt64); override;
     procedure SysWriteDouble(Fd: Integer; V: Double); override;
     procedure SysWriteSingle(Fd: Integer; V: Single); override;
+    procedure SysWriteBool(Fd: Integer; B: Boolean); override;
     procedure SysWriteNewline(Fd: Integer); override;
 
     { File-descriptor primitives }
@@ -243,6 +244,7 @@ procedure _SysWriteInt64(Fd: Integer; N: Int64);
 procedure _SysWriteUInt64(Fd: Integer; N: UInt64);
 procedure _SysWriteDouble(Fd: Integer; V: Double);
 procedure _SysWriteSingle(Fd: Integer; V: Single);
+procedure _SysWriteBool(Fd: Integer; B: Boolean);
 procedure _SysWriteNewline(Fd: Integer);
 
 { File-descriptor primitives }
@@ -802,6 +804,22 @@ begin
   _StringRelease(S);
 end;
 
+procedure TRtlPlatformPosix.SysWriteBool(Fd: Integer; B: Boolean);
+var
+  Buf: array[0..4] of Byte;
+begin
+  if B then
+  begin
+    Buf[0] := 84;  Buf[1] := 114; Buf[2] := 117; Buf[3] := 101;
+    WriteAllToFd(Fd, PChar(@Buf[0]), 4);
+  end
+  else
+  begin
+    Buf[0] := 70;  Buf[1] := 97;  Buf[2] := 108; Buf[3] := 115; Buf[4] := 101;
+    WriteAllToFd(Fd, PChar(@Buf[0]), 5);
+  end;
+end;
+
 { ================================================================== }
 { TRtlPlatformPosix — File-descriptor primitives                      }
 { ================================================================== }
@@ -1275,6 +1293,11 @@ end;
 procedure _SysWriteSingle(Fd: Integer; V: Single);
 begin
   GRtlPlatform.SysWriteSingle(Fd, V);
+end;
+
+procedure _SysWriteBool(Fd: Integer; B: Boolean);
+begin
+  GRtlPlatform.SysWriteBool(Fd, B);
 end;
 
 procedure _SysWriteNewline(Fd: Integer);

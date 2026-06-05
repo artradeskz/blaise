@@ -320,7 +320,7 @@ var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcStringSameText, Output, RCode));
-  AssertEquals('SameText(''Hello'', ''hello'') = True (1)', '1', Trim(Output));
+  AssertEquals('SameText(''Hello'', ''hello'') = True', 'True', Trim(Output));
 end;
 
 procedure TE2EStringOpsTests.TestRun_StringOps_IntToStr;

@@ -669,8 +669,8 @@ begin
   try
     Lines.Text := Trim(Output);
     AssertEquals('Count=2',             '2', Lines.Strings[0]);
-    AssertEquals('Text contains line1', '1', Lines.Strings[1]);
-    AssertEquals('Text contains line2', '1', Lines.Strings[2]);
+    AssertEquals('Text contains line1', 'True', Lines.Strings[1]);
+    AssertEquals('Text contains line2', 'True', Lines.Strings[2]);
   finally
     Lines.Free
   end
@@ -692,9 +692,9 @@ begin
     AssertEquals('Count=500',            '500', Lines.Strings[0]);
     LenStr := Lines.Strings[1];
     AssertTrue('Length(Text) > 3500', StrToInt(LenStr) > 3500);
-    AssertEquals('contains line_1',   '1', Lines.Strings[2]);
-    AssertEquals('contains line_250', '1', Lines.Strings[3]);
-    AssertEquals('contains line_499', '1', Lines.Strings[4]);
+    AssertEquals('contains line_1',   'True', Lines.Strings[2]);
+    AssertEquals('contains line_250', 'True', Lines.Strings[3]);
+    AssertEquals('contains line_499', 'True', Lines.Strings[4]);
   finally
     Lines.Free
   end
@@ -788,9 +788,9 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('Find(cherry)=1 (true)',  '1', Lines.Strings[0]);
-    AssertEquals('Find(cherry) idx',       '1', Lines.Strings[1]);
-    AssertEquals('Find(durian)=0 (false)', '0', Lines.Strings[2]);
+    AssertEquals('Find(cherry)=True (true)',  'True', Lines.Strings[0]);
+    AssertEquals('Find(cherry) idx',          '1',    Lines.Strings[1]);
+    AssertEquals('Find(durian)=False (false)', 'False', Lines.Strings[2]);
   finally
     Lines.Free
   end

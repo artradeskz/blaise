@@ -147,7 +147,7 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('Owner=nil is true',     '1', Lines.Strings[0]);
+    AssertEquals('Owner=nil is true',     'True', Lines.Strings[0]);
     AssertEquals('ComponentCount=0',      '0', Lines.Strings[1]);
   finally
     Lines.Free
@@ -173,7 +173,7 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcOwnerRef, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertEquals('Child.Owner=Parent', '1', Trim(Output));
+  AssertEquals('Child.Owner=Parent', 'True', Trim(Output));
 end;
 
 procedure TE2ETComponentTests.TestRun_ComponentCount;

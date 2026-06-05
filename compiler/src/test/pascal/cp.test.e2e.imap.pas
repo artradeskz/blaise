@@ -342,10 +342,10 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictAddContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { ContainsKey(10) -> true (1), ContainsKey(99) -> false (0), Count=2 }
-  AssertTrue('contains 10 -> 1', Pos('1', Output) >= 0);
-  AssertTrue('contains 99 -> 0', Pos('0', Output) >= 0);
-  AssertTrue('count=2',          Pos('2', Output) >= 0);
+  { ContainsKey(10) -> true, ContainsKey(99) -> false, Count=2 }
+  AssertTrue('contains 10 -> True',  Pos('True',  Output) >= 0);
+  AssertTrue('contains 99 -> False', Pos('False', Output) >= 0);
+  AssertTrue('count=2',              Pos('2',     Output) >= 0);
 end;
 
 procedure TE2EIMapTests.TestRun_IMap_TDictionary_TryGetValue;
@@ -356,9 +356,9 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictTryGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertTrue('found -> 1',  Pos('1',  Output) >= 0);
-  AssertTrue('value=99',    Pos('99', Output) >= 0);
-  AssertTrue('missing -> 0', Pos('0', Output) >= 0);
+  AssertTrue('found -> True',  Pos('True',  Output) >= 0);
+  AssertTrue('value=99',       Pos('99',    Output) >= 0);
+  AssertTrue('missing -> False', Pos('False', Output) >= 0);
 end;
 
 procedure TE2EIMapTests.TestRun_IMap_TDictionary_Remove;
@@ -369,9 +369,9 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictRemove, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertTrue('count=2',          Pos('2', Output) >= 0);
-  AssertTrue('removed key gone', Pos('0', Output) >= 0);
-  AssertTrue('other key stays',  Pos('1', Output) >= 0);
+  AssertTrue('count=2',          Pos('2',     Output) >= 0);
+  AssertTrue('removed key gone', Pos('False', Output) >= 0);
+  AssertTrue('other key stays',  Pos('True',  Output) >= 0);
 end;
 
 procedure TE2EIMapTests.TestRun_IMap_TOrderedDictionary_AddAndContainsKey;
@@ -382,9 +382,9 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOrdDictAddContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertTrue('contains 10 -> 1', Pos('1', Output) >= 0);
-  AssertTrue('contains 99 -> 0', Pos('0', Output) >= 0);
-  AssertTrue('count=2',          Pos('2', Output) >= 0);
+  AssertTrue('contains 10 -> True',  Pos('True',  Output) >= 0);
+  AssertTrue('contains 99 -> False', Pos('False', Output) >= 0);
+  AssertTrue('count=2',              Pos('2',     Output) >= 0);
 end;
 
 procedure TE2EIMapTests.TestRun_IMap_TOrderedDictionary_TryGetValue;
@@ -395,9 +395,9 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOrdDictTryGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertTrue('found -> 1',   Pos('1',  Output) >= 0);
-  AssertTrue('value=99',     Pos('99', Output) >= 0);
-  AssertTrue('missing -> 0', Pos('0',  Output) >= 0);
+  AssertTrue('found -> True',    Pos('True',  Output) >= 0);
+  AssertTrue('value=99',         Pos('99',    Output) >= 0);
+  AssertTrue('missing -> False', Pos('False', Output) >= 0);
 end;
 
 procedure TE2EIMapTests.TestRun_IMap_SwapImplementation_SameCallSite;
@@ -408,8 +408,8 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcSwapImpl, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertTrue('TDict dispatch correct',    Pos('1', Output) >= 0);
-  AssertTrue('TOrdDict dispatch correct', Pos('1', Output) >= 0);
+  AssertTrue('TDict dispatch correct',    Pos('True', Output) >= 0);
+  AssertTrue('TOrdDict dispatch correct', Pos('True', Output) >= 0);
 end;
 
 { Regression: a generic class implementing a generic interface

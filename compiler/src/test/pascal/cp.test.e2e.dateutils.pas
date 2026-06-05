@@ -598,7 +598,7 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantNow, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertEquals('InstantNow > 2020 epoch', '1', Trim(Output));
+  AssertEquals('InstantNow > 2020 epoch', 'True', Trim(Output));
 end;
 
 procedure TE2EDateUtilsTests.TestRun_MakeDate_ToString;
@@ -789,9 +789,9 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('A.IsBefore(B)=true',  '1', Lines.Strings[0]);
-    AssertEquals('A.IsAfter(B)=false',  '0', Lines.Strings[1]);
-    AssertEquals('B.IsAfter(A)=true',   '1', Lines.Strings[2]);
+    AssertEquals('A.IsBefore(B)=true',  'True',  Lines.Strings[0]);
+    AssertEquals('A.IsAfter(B)=false',  'False', Lines.Strings[1]);
+    AssertEquals('B.IsAfter(A)=true',   'True',  Lines.Strings[2]);
   finally
     Lines.Free
   end
@@ -809,8 +809,8 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('A.Equals(B)=true',  '1', Lines.Strings[0]);
-    AssertEquals('A.Equals(C)=false', '0', Lines.Strings[1]);
+    AssertEquals('A.Equals(B)=true',  'True',  Lines.Strings[0]);
+    AssertEquals('A.Equals(C)=false', 'False', Lines.Strings[1]);
   finally
     Lines.Free
   end
@@ -909,8 +909,8 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('IsNegative=true',       '1',   Lines.Strings[0]);
-    AssertEquals('Abs.IsNegative=false',  '0',   Lines.Strings[1]);
+    AssertEquals('IsNegative=true',       'True',  Lines.Strings[0]);
+    AssertEquals('Abs.IsNegative=false',  'False', Lines.Strings[1]);
     AssertEquals('Abs.TotalSeconds=120',  '120', Lines.Strings[2]);
   finally
     Lines.Free
@@ -1035,7 +1035,7 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseInstantOffset, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  AssertEquals('offset == UTC equivalent', '1', Trim(Output));
+  AssertEquals('offset == UTC equivalent', 'True', Trim(Output));
 end;
 
 procedure TE2EDateUtilsTests.TestRun_ParseDuration;
@@ -1091,10 +1091,10 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('2000 is leap',  '1', Lines.Strings[0]);
-    AssertEquals('1900 not leap', '0', Lines.Strings[1]);
-    AssertEquals('2024 is leap',  '1', Lines.Strings[2]);
-    AssertEquals('2025 not leap', '0', Lines.Strings[3]);
+    AssertEquals('2000 is leap',  'True',  Lines.Strings[0]);
+    AssertEquals('1900 not leap', 'False', Lines.Strings[1]);
+    AssertEquals('2024 is leap',  'True',  Lines.Strings[2]);
+    AssertEquals('2025 not leap', 'False', Lines.Strings[3]);
   finally
     Lines.Free
   end
@@ -1230,8 +1230,8 @@ begin
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('>= -50400s', '1', Lines.Strings[0]);
-    AssertEquals('<= +50400s', '1', Lines.Strings[1]);
+    AssertEquals('>= -50400s', 'True', Lines.Strings[0]);
+    AssertEquals('<= +50400s', 'True', Lines.Strings[1]);
   finally
     Lines.Free
   end

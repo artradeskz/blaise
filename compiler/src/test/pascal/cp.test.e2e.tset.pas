@@ -176,8 +176,8 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcExclude, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=2 after exclude', Pos('2', Output) >= 0);
-  { Boolean false prints as 0 in Blaise }
-  AssertTrue('contains returns false (0)', Pos('0', Output) >= 0);
+  { Boolean false prints as False in Blaise }
+  AssertTrue('contains returns false (False)', Pos('False', Output) >= 0);
 end;
 
 procedure TE2ESetTests.TestRun_TSet_ContainsMembership;
@@ -188,9 +188,9 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { Boolean true prints as 1, false as 0 in Blaise }
-  AssertTrue('contains 42 -> true (1)',  Pos('1', Output) >= 0);
-  AssertTrue('contains 99 -> false (0)', Pos('0', Output) >= 0);
+  { Boolean true prints as True, false as False in Blaise }
+  AssertTrue('contains 42 -> true (True)',  Pos('True', Output) >= 0);
+  AssertTrue('contains 99 -> false (False)', Pos('False', Output) >= 0);
 end;
 
 procedure TE2ESetTests.TestRun_TSet_CountTracking;

@@ -849,16 +849,16 @@ begin
     '--- walk ---' + LE +
     '  value=40' + LE +
     '  tag=0' + LE +
-    '  marked=0' + LE +
+    '  marked=False' + LE +
     '  value=30' + LE +
     '  tag=1' + LE +
-    '  marked=1' + LE +
+    '  marked=True' + LE +
     '  value=20' + LE +
     '  tag=0' + LE +
-    '  marked=0' + LE +
+    '  marked=False' + LE +
     '  value=10' + LE +
     '  tag=0' + LE +
-    '  marked=0' + LE +
+    '  marked=False' + LE +
     'pop=40' + LE +
     'pop=30' + LE +
     'count_after_pops=2' + LE;
@@ -917,10 +917,10 @@ begin
     'list[1]_after_delete=30' + LE +
     'dict.count=4' + LE +
     'beta=2' + LE +
-    'has_gamma=1' + LE +
+    'has_gamma=True' + LE +
     'beta_after_update=99' + LE +
     'count_after_remove=3' + LE +
-    'has_alpha_after_remove=0' + LE;
+    'has_alpha_after_remove=False' + LE;
   AssertEquals('milestone stdout', Expected, Output);
 end;
 
@@ -1194,7 +1194,7 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcVarParamClassFields, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('var-param writeback visible through class field', '4096' + LE + '1' + LE, Output);
+  AssertEquals('var-param writeback visible through class field', '4096' + LE + 'True' + LE, Output);
 end;
 
 procedure TE2EClasses2Tests.TestRun_LocalVar_ShadowsOwnMethod;

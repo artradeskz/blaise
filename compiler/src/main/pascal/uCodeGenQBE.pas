@@ -10,7 +10,7 @@ unit uCodeGenQBE;
 
 { QBE IR emitter for Blaise.
   WriteLn/Write are built-ins emitted as calls to _SysWriteStr/_SysWriteInt/
-  _SysWriteInt64/_SysWriteNewline (blaise_sys.pas / blaise_sys.c).
+  _SysWriteInt64/_SysWriteBool/_SysWriteNewline (rtl.platform.posix.pas).
   Records are stack-allocated; field access uses pointer arithmetic. }
 
 interface
@@ -7021,6 +7021,9 @@ begin
     ArgTemp  := EmitExpr(ArgExpr);
     if IsString then
       EmitLine(Format('  call $_SysWriteStr(w %s, l %s)', [FdLit, ArgTemp]))
+    else if (ArgExpr.ResolvedType <> nil) and
+            (ArgExpr.ResolvedType.Kind = tyBoolean) then
+      EmitLine(Format('  call $_SysWriteBool(w %s, w %s)', [FdLit, ArgTemp]))
     else if (ArgExpr.ResolvedType <> nil) and
             (ArgExpr.ResolvedType.Kind = tyDouble) then
       EmitLine(Format('  call $_SysWriteDouble(w %s, d %s)', [FdLit, ArgTemp]))

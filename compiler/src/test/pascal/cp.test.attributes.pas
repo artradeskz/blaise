@@ -565,7 +565,7 @@ var Output: string;
 begin
   Output := CompileAndRun(Src);
   if Output = '<toolchain-missing>' then begin Ignore('toolchain unavailable'); Exit end;
-  AssertEquals('stdout', '1' + #10, Output);
+  AssertEquals('stdout', 'True' + #10, Output);
 end;
 
 procedure TCustomAttributeTests.TestE2E_HasClassAttribute_False;
@@ -584,7 +584,7 @@ var Output: string;
 begin
   Output := CompileAndRun(Src);
   if Output = '<toolchain-missing>' then begin Ignore('toolchain unavailable'); Exit end;
-  AssertEquals('stdout', '0' + #10, Output);
+  AssertEquals('stdout', 'False' + #10, Output);
 end;
 
 procedure TCustomAttributeTests.TestE2E_HasClassAttribute_InheritedFromParent;
@@ -606,7 +606,7 @@ var Output: string;
 begin
   Output := CompileAndRun(Src);
   if Output = '<toolchain-missing>' then begin Ignore('toolchain unavailable'); Exit end;
-  AssertEquals('stdout', '1' + #10 + '1' + #10, Output);
+  AssertEquals('stdout', 'True' + #10 + 'True' + #10, Output);
 end;
 
 procedure TCustomAttributeTests.TestE2E_HasClassAttribute_MultipleAttributes;
@@ -629,7 +629,7 @@ var Output: string;
 begin
   Output := CompileAndRun(Src);
   if Output = '<toolchain-missing>' then begin Ignore('toolchain unavailable'); Exit end;
-  AssertEquals('stdout', '1' + #10 + '1' + #10, Output);
+  AssertEquals('stdout', 'True' + #10 + 'True' + #10, Output);
 end;
 
 initialization

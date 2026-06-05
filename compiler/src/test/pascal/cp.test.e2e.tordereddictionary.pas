@@ -215,10 +215,10 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcTryGetValue, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { Boolean true prints as 1, false as 0 in Blaise }
-  AssertTrue('found -> true (1)',    Pos('1',  Output) >= 0);
-  AssertTrue('value=99',             Pos('99', Output) >= 0);
-  AssertTrue('missing -> false (0)', Pos('0',  Output) >= 0);
+  { Boolean true prints as True, false as False in Blaise }
+  AssertTrue('found -> true (True)',    Pos('True',  Output) >= 0);
+  AssertTrue('value=99',                Pos('99', Output) >= 0);
+  AssertTrue('missing -> false (False)', Pos('False',  Output) >= 0);
 end;
 
 procedure TE2EOrdDictTests.TestRun_OrdDict_Remove;

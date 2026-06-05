@@ -1536,7 +1536,7 @@ const
 procedure TE2ENativeTests.TestRun_Native_String_SameText;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcStrSameText, '1' + LE, 0);
+  AssertRunsOnBoth(SrcStrSameText, 'True' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Format_IntArg;

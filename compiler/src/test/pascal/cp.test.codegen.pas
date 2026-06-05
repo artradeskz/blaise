@@ -32,6 +32,7 @@ type
     procedure TestWriteLn_NoArgs_CallsSysWriteNewline;
     procedure TestWriteLn_StringLit_CallsSysWriteStr;
     procedure TestWriteLn_IntExpr_CallsSysWriteInt;
+    procedure TestWriteLn_BoolExpr_CallsSysWriteBool;
 
     { Variables and assignment }
     procedure TestIntVar_HasAlloc;
@@ -192,6 +193,15 @@ begin
     IRContains(IR, 'call $_SysWriteInt(w 1,'));
   AssertTrue('Calls _SysWriteNewline for line ending',
     IRContains(IR, 'call $_SysWriteNewline(w 1)'));
+end;
+
+procedure TCodeGenTests.TestWriteLn_BoolExpr_CallsSysWriteBool;
+var
+  IR: string;
+begin
+  IR := GenerateIR('program P; var b: Boolean; begin b := True; WriteLn(b) end.');
+  AssertTrue('Calls _SysWriteBool',
+    IRContains(IR, 'call $_SysWriteBool(w 1,'));
 end;
 
 { Variables and assignment }
