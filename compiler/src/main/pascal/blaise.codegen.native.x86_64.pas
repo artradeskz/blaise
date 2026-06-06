@@ -184,6 +184,16 @@ type
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     { Lower a for loop. }
     procedure EmitForStmt(AFor: TForStmt);
+    { Lower a for-in loop.  Dispatches to one of five strategies depending on
+      the boolean flags set by the semantic analyser: static array, dynamic
+      array, string byte-iteration, set bit-scan, or class enumerator. }
+    procedure EmitForInStmt(AStmt: TForInStmt);
+    { Lower a case statement.  Linear comparison chain, not a jump table. }
+    procedure EmitCaseStmt(AStmt: TCaseStmt);
+    { Emit the element-to-loop-variable assignment for index-based for-in
+      paths.  Handles ARC (string/class AddRef/Release) and width-correct
+      stores.  AElemInRax is True when the element value is already in %rax. }
+    procedure EmitForInAssignElem(AStmt: TForInStmt);
     { Count all try/finally and try/except statements nested inside AStmt
       (recursively) to pre-allocate exc frame slots in BuildFrame. }
     function CountTryStmts(AStmt: TASTStmt): Integer;
@@ -2110,6 +2120,8 @@ var
   MD:  TMethodDecl;
   Unsigned: Boolean;
   AOE: TAddrOfExpr;
+  SetMask, SetI: Integer;
+  SetElem: TASTExpr;
 begin
   if AExpr is TNilLiteral then
   begin
@@ -3006,6 +3018,21 @@ begin
 
   { P^ — pointer dereference read.  Load the pointer into %rcx, then load
     the pointed-to value into %rax through (%rcx). }
+  { Set literal [EnumA, EnumC, ...] — compute bitmask at compile time. }
+  if (AExpr is TArrayLiteralExpr) and
+     (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tySet) then
+  begin
+    SetMask := 0;
+    for SetI := 0 to TArrayLiteralExpr(AExpr).Elements.Count - 1 do
+    begin
+      SetElem := TASTExpr(TArrayLiteralExpr(AExpr).Elements.Items[SetI]);
+      if (SetElem is TIdentExpr) and TIdentExpr(SetElem).IsConstant then
+        SetMask := SetMask or (1 shl TIdentExpr(SetElem).ConstValue);
+    end;
+    Self.Emit(Format(#9'movl $%d, %%eax', [SetMask]));
+    Exit;
+  end;
+
   if AExpr is TDerefExpr then
   begin
     Self.EmitExprToEax(TDerefExpr(AExpr).Expr);
@@ -3627,6 +3654,463 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
+{ For-in and Case statements                                           }
+{ ------------------------------------------------------------------ }
+
+{ Assign the element value (already in %rax) to the for-in loop variable,
+  with ARC handling for strings and classes. }
+procedure TX86_64Backend.EmitForInAssignElem(AStmt: TForInStmt);
+var
+  VarOp: string;
+begin
+  if AStmt.VarIsGlobal then
+    VarOp := AStmt.VarName + '(%rip)'
+  else
+    VarOp := Self.VarOperand(AStmt.VarName);
+  if AStmt.ResolvedVarType.IsString then
+  begin
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _StringAddRef');
+    Self.Emit(Format(#9'movq %s, %%rdi', [VarOp]));
+    Self.Emit(#9'callq _StringRelease');
+    Self.Emit(#9'popq %rax');
+    Self.Emit(Format(#9'movq %%rax, %s', [VarOp]));
+  end
+  else if AStmt.ResolvedVarType.Kind = tyClass then
+  begin
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(Format(#9'movq %s, %%rdi', [VarOp]));
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');
+    Self.Emit(Format(#9'movq %%rax, %s', [VarOp]));
+  end
+  else
+    Self.EmitStoreVar(VarOp, AStmt.ResolvedVarType);
+end;
+
+procedure TX86_64Backend.EmitForInStmt(AStmt: TForInStmt);
+var
+  LCond, LBody, LNext, LEnd: string;
+  IdxOp:     string;
+  SAT:       TStaticArrayTypeDesc;
+  DAT:       TDynArrayTypeDesc;
+  ElemSize:  Integer;
+  GetEDecl, MNDecl, CurDecl: TMethodDecl;
+  EnumOp, Sym: string;
+  SlotOff:   Integer;
+begin
+  if AStmt.IsArrayIter then
+  begin
+    { ---- Static array iteration ----
+      idx runs ArrayLow..ArrayHigh (inclusive).  Element address =
+      base + (idx - ArrayLow) * ElemSize. }
+    SAT      := TStaticArrayTypeDesc(AStmt.CollExpr.ResolvedType);
+    ElemSize := SAT.ElementType.RawSize;
+    IdxOp    := Self.VarOperand(AStmt.IdxVarName);
+    LCond := Self.NewLabel('ficond');
+    LBody := Self.NewLabel('fibody');
+    LNext := Self.NewLabel('finext');
+    LEnd  := Self.NewLabel('fiend');
+
+    { Initialise index to ArrayLow }
+    Self.Emit(Format(#9'movl $%d, %%eax', [AStmt.ArrayLow]));
+    Self.Emit(Format(#9'movl %%eax, %s', [IdxOp]));
+
+    Self.Emit(LCond + ':');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(Format(#9'cmpl $%d, %%eax', [AStmt.ArrayHigh]));
+    Self.Emit(#9'jle ' + LBody);
+    Self.Emit(#9'jmp ' + LEnd);
+
+    Self.Emit(LBody + ':');
+    FBreakLabels.Push(LEnd);
+    FBreakExcDepths.Push(FExcDepth);
+    FContinueLabels.Push(LNext);
+    FContinueExcDepths.Push(FExcDepth);
+
+    { Compute element address: base + (idx - ArrayLow) * ElemSize }
+    Self.EmitExprToEax(AStmt.CollExpr);
+    Self.Emit(#9'movq %rax, %rcx');
+    Self.Emit(Format(#9'movslq %s, %%rax', [IdxOp]));
+    if AStmt.ArrayLow <> 0 then
+      Self.Emit(Format(#9'subq $%d, %%rax', [AStmt.ArrayLow]));
+    Self.Emit(Format(#9'imulq $%d, %%rax, %%rax', [ElemSize]));
+    Self.Emit(#9'addq %rcx, %rax');
+    { Load element from (%rax) }
+    case ElemSize of
+      1: if IsUnsignedInt(SAT.ElementType) then
+           Self.Emit(#9'movzbq (%rax), %rax')
+         else
+           Self.Emit(#9'movsbq (%rax), %rax');
+      2: if IsUnsignedInt(SAT.ElementType) then
+           Self.Emit(#9'movzwq (%rax), %rax')
+         else
+           Self.Emit(#9'movswq (%rax), %rax');
+      4: Self.Emit(#9'movslq (%rax), %rax');
+    else
+      Self.Emit(#9'movq (%rax), %rax');
+    end;
+    Self.EmitForInAssignElem(AStmt);
+
+    Self.EmitStmt(AStmt.Body);
+    FContinueExcDepths.Pop;
+    FContinueLabels.Pop;
+    FBreakExcDepths.Pop;
+    FBreakLabels.Pop;
+
+    Self.Emit(LNext + ':');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(#9'addl $1, %eax');
+    Self.Emit(Format(#9'movl %%eax, %s', [IdxOp]));
+    Self.Emit(#9'jmp ' + LCond);
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  if AStmt.IsDynArrayIter then
+  begin
+    { ---- Dynamic array iteration ----
+      idx runs 0.._DynArrayLength(ptr)-1.  Element address =
+      data_ptr + idx * ElemSize. }
+    DAT      := TDynArrayTypeDesc(AStmt.CollExpr.ResolvedType);
+    ElemSize := DAT.ElementType.RawSize;
+    IdxOp    := Self.VarOperand(AStmt.IdxVarName);
+    LCond := Self.NewLabel('ficond');
+    LBody := Self.NewLabel('fibody');
+    LNext := Self.NewLabel('finext');
+    LEnd  := Self.NewLabel('fiend');
+
+    Self.Emit(Format(#9'movl $0, %s', [IdxOp]));
+
+    Self.Emit(LCond + ':');
+    { Get length via _DynArrayLength }
+    Self.EmitExprToEax(AStmt.CollExpr);
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _DynArrayLength');
+    Self.Emit(#9'movl %eax, %ecx');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(#9'cmpl %ecx, %eax');
+    Self.Emit(#9'jl ' + LBody);
+    Self.Emit(#9'jmp ' + LEnd);
+
+    Self.Emit(LBody + ':');
+    FBreakLabels.Push(LEnd);
+    FBreakExcDepths.Push(FExcDepth);
+    FContinueLabels.Push(LNext);
+    FContinueExcDepths.Push(FExcDepth);
+
+    { Element address: data_ptr + idx * ElemSize }
+    Self.EmitExprToEax(AStmt.CollExpr);
+    Self.Emit(#9'movq %rax, %rcx');
+    Self.Emit(Format(#9'movslq %s, %%rax', [IdxOp]));
+    Self.Emit(Format(#9'imulq $%d, %%rax, %%rax', [ElemSize]));
+    Self.Emit(#9'addq %rcx, %rax');
+    case ElemSize of
+      1: if IsUnsignedInt(DAT.ElementType) then
+           Self.Emit(#9'movzbq (%rax), %rax')
+         else
+           Self.Emit(#9'movsbq (%rax), %rax');
+      2: if IsUnsignedInt(DAT.ElementType) then
+           Self.Emit(#9'movzwq (%rax), %rax')
+         else
+           Self.Emit(#9'movswq (%rax), %rax');
+      4: Self.Emit(#9'movslq (%rax), %rax');
+    else
+      Self.Emit(#9'movq (%rax), %rax');
+    end;
+    Self.EmitForInAssignElem(AStmt);
+
+    Self.EmitStmt(AStmt.Body);
+    FContinueExcDepths.Pop;
+    FContinueLabels.Pop;
+    FBreakExcDepths.Pop;
+    FBreakLabels.Pop;
+
+    Self.Emit(LNext + ':');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(#9'addl $1, %eax');
+    Self.Emit(Format(#9'movl %%eax, %s', [IdxOp]));
+    Self.Emit(#9'jmp ' + LCond);
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  if AStmt.IsStringIter then
+  begin
+    { ---- String byte-iteration ----
+      String data pointer layout: [data...]
+      Length at data_ptr - 8 (4-byte integer).
+      idx runs 0..length-1.  Element = byte at data_ptr + idx. }
+    IdxOp := Self.VarOperand(AStmt.IdxVarName);
+    LCond := Self.NewLabel('ficond');
+    LBody := Self.NewLabel('fibody');
+    LNext := Self.NewLabel('finext');
+    LEnd  := Self.NewLabel('fiend');
+
+    Self.Emit(Format(#9'movl $0, %s', [IdxOp]));
+
+    Self.Emit(LCond + ':');
+    { Load string length from data_ptr - 8 }
+    Self.EmitExprToEax(AStmt.CollExpr);
+    Self.Emit(#9'movl -8(%rax), %ecx');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(#9'cmpl %ecx, %eax');
+    Self.Emit(#9'jl ' + LBody);
+    Self.Emit(#9'jmp ' + LEnd);
+
+    Self.Emit(LBody + ':');
+    FBreakLabels.Push(LEnd);
+    FBreakExcDepths.Push(FExcDepth);
+    FContinueLabels.Push(LNext);
+    FContinueExcDepths.Push(FExcDepth);
+
+    { Load byte at data_ptr + idx }
+    Self.EmitExprToEax(AStmt.CollExpr);
+    Self.Emit(#9'movq %rax, %rcx');
+    Self.Emit(Format(#9'movslq %s, %%rax', [IdxOp]));
+    Self.Emit(#9'addq %rcx, %rax');
+    Self.Emit(#9'movzbq (%rax), %rax');
+    Self.EmitForInAssignElem(AStmt);
+
+    Self.EmitStmt(AStmt.Body);
+    FContinueExcDepths.Pop;
+    FContinueLabels.Pop;
+    FBreakExcDepths.Pop;
+    FBreakLabels.Pop;
+
+    Self.Emit(LNext + ':');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(#9'addl $1, %eax');
+    Self.Emit(Format(#9'movl %%eax, %s', [IdxOp]));
+    Self.Emit(#9'jmp ' + LCond);
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  if AStmt.IsSetIter then
+  begin
+    { ---- Set iteration ----
+      Evaluate set expression once into mask slot.  Iterate bit positions
+      0..SetBitCount-1.  For each set bit, assign the ordinal to the loop
+      variable and run the body. }
+    IdxOp := Self.VarOperand(AStmt.IdxVarName);
+    LCond := Self.NewLabel('ficond');
+    LBody := Self.NewLabel('fibody');
+    LNext := Self.NewLabel('finext');
+    LEnd  := Self.NewLabel('fiend');
+
+    { Evaluate set expression once }
+    Self.EmitExprToEax(AStmt.CollExpr);
+    Self.Emit(Format(#9'movl %%eax, %s',
+      [Self.VarOperand(AStmt.SetMaskVarName)]));
+    Self.Emit(Format(#9'movl $0, %s', [IdxOp]));
+
+    Self.Emit(LCond + ':');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(Format(#9'cmpl $%d, %%eax', [AStmt.SetBitCount]));
+    Self.Emit(#9'jl ' + LBody);
+    Self.Emit(#9'jmp ' + LEnd);
+
+    Self.Emit(LBody + ':');
+    { Test bit: (mask >> idx) & 1 }
+    Self.Emit(Format(#9'movl %s, %%eax',
+      [Self.VarOperand(AStmt.SetMaskVarName)]));
+    Self.Emit(Format(#9'movl %s, %%ecx', [IdxOp]));
+    Self.Emit(#9'shrl %cl, %eax');
+    Self.Emit(#9'andl $1, %eax');
+    Self.Emit(#9'testl %eax, %eax');
+    Self.Emit(#9'jne ' + LBody + '_yes');
+    Self.Emit(#9'jmp ' + LNext);
+    Self.Emit(LBody + '_yes:');
+
+    FBreakLabels.Push(LEnd);
+    FBreakExcDepths.Push(FExcDepth);
+    FContinueLabels.Push(LNext);
+    FContinueExcDepths.Push(FExcDepth);
+
+    { Assign ordinal (idx) to loop variable }
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.EmitForInAssignElem(AStmt);
+
+    Self.EmitStmt(AStmt.Body);
+    FContinueExcDepths.Pop;
+    FContinueLabels.Pop;
+    FBreakExcDepths.Pop;
+    FBreakLabels.Pop;
+
+    Self.Emit(LNext + ':');
+    Self.Emit(Format(#9'movl %s, %%eax', [IdxOp]));
+    Self.Emit(#9'addl $1, %eax');
+    Self.Emit(Format(#9'movl %%eax, %s', [IdxOp]));
+    Self.Emit(#9'jmp ' + LCond);
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  { ---- Class enumerator protocol ----
+    GetEnumerator → enumerator object (ARC'd).
+    while MoveNext do LoopVar := Current. }
+  LCond := Self.NewLabel('ficond');
+  LBody := Self.NewLabel('fibody');
+  LEnd  := Self.NewLabel('fiend');
+  GetEDecl := TMethodDecl(AStmt.GetEnumDecl);
+  MNDecl   := TMethodDecl(AStmt.MoveNextDecl);
+  CurDecl  := TMethodDecl(AStmt.CurrentDecl);
+  EnumOp   := Self.VarOperand(AStmt.EnumVarName);
+
+  { Call GetEnumerator on the collection }
+  Self.EmitExprToEax(AStmt.CollExpr);
+  Self.Emit(#9'movq %rax, %rdi');
+  Sym := MethodEmitNameNative(GetEDecl, GetEDecl.OwnerTypeName, GetEDecl.Name);
+  if GetEDecl.VTableSlot >= 0 then
+  begin
+    SlotOff := (GetEDecl.VTableSlot + 1) * 8;
+    Self.Emit(#9'movq (%rdi), %rcx');
+    Self.Emit(Format(#9'movq %d(%%rcx), %%r10', [SlotOff]));
+    Self.Emit(#9'callq *%r10');
+  end
+  else
+    Self.Emit(#9'callq ' + Sym);
+
+  { ARC-assign the enumerator into the synthetic slot }
+  Self.Emit(#9'pushq %rax');
+  Self.Emit(#9'movq %rax, %rdi');
+  Self.Emit(#9'callq _ClassAddRef');
+  Self.Emit(Format(#9'movq %s, %%rdi', [EnumOp]));
+  Self.Emit(#9'callq _ClassRelease');
+  Self.Emit(#9'popq %rax');
+  Self.Emit(Format(#9'movq %%rax, %s', [EnumOp]));
+
+  { Condition: call MoveNext }
+  Self.Emit(LCond + ':');
+  Self.Emit(Format(#9'movq %s, %%rdi', [EnumOp]));
+  Sym := MethodEmitNameNative(MNDecl, MNDecl.OwnerTypeName, MNDecl.Name);
+  if MNDecl.VTableSlot >= 0 then
+  begin
+    SlotOff := (MNDecl.VTableSlot + 1) * 8;
+    Self.Emit(#9'movq (%rdi), %rcx');
+    Self.Emit(Format(#9'movq %d(%%rcx), %%r10', [SlotOff]));
+    Self.Emit(#9'callq *%r10');
+  end
+  else
+    Self.Emit(#9'callq ' + Sym);
+  Self.Emit(#9'testl %eax, %eax');
+  Self.Emit(#9'jne ' + LBody);
+  Self.Emit(#9'jmp ' + LEnd);
+
+  { Body: read Current, assign to loop var }
+  Self.Emit(LBody + ':');
+  FBreakLabels.Push(LEnd);
+  FBreakExcDepths.Push(FExcDepth);
+  FContinueLabels.Push(LCond);
+  FContinueExcDepths.Push(FExcDepth);
+
+  Self.Emit(Format(#9'movq %s, %%rdi', [EnumOp]));
+  Sym := MethodEmitNameNative(CurDecl, CurDecl.OwnerTypeName, CurDecl.Name);
+  if CurDecl.VTableSlot >= 0 then
+  begin
+    SlotOff := (CurDecl.VTableSlot + 1) * 8;
+    Self.Emit(#9'movq (%rdi), %rcx');
+    Self.Emit(Format(#9'movq %d(%%rcx), %%r10', [SlotOff]));
+    Self.Emit(#9'callq *%r10');
+  end
+  else
+    Self.Emit(#9'callq ' + Sym);
+  Self.EmitForInAssignElem(AStmt);
+
+  Self.EmitStmt(AStmt.Body);
+  FContinueExcDepths.Pop;
+  FContinueLabels.Pop;
+  FBreakExcDepths.Pop;
+  FBreakLabels.Pop;
+
+  Self.Emit(#9'jmp ' + LCond);
+  Self.Emit(LEnd + ':');
+end;
+
+procedure TX86_64Backend.EmitCaseStmt(AStmt: TCaseStmt);
+var
+  EndLbl, ElseLbl, BranchLbl, NextLbl: string;
+  Branch:       TCaseBranch;
+  I, J:         Integer;
+  BranchLabels: TStringList;
+begin
+  { Evaluate selector once, keep in %rax, save to %r10 (caller-saved scratch). }
+  Self.EmitExprToEax(AStmt.Selector);
+  Self.Emit(#9'movq %rax, %r10');
+
+  EndLbl  := Self.NewLabel('csend');
+  ElseLbl := Self.NewLabel('cselse');
+
+  BranchLabels := TStringList.Create;
+  for I := 0 to AStmt.Branches.Count - 1 do
+    BranchLabels.Add(Self.NewLabel('csbr'));
+
+  { Dispatch block: linear chain of comparisons.  For each branch, test all
+    its values; on any match, jump to that branch body.  On no match for
+    any branch, fall through to the else block. }
+  for I := 0 to AStmt.Branches.Count - 1 do
+  begin
+    Branch    := TCaseBranch(AStmt.Branches.Items[I]);
+    BranchLbl := BranchLabels.Strings[I];
+    for J := 0 to Branch.Values.Count - 1 do
+    begin
+      NextLbl := Self.NewLabel('csnxt');
+      if AStmt.IsStringCase then
+      begin
+        { String comparison: call _StringEquals(selector, value) }
+        Self.Emit(#9'pushq %r10');
+        Self.EmitExprToEax(TASTExpr(Branch.Values.Items[J]));
+        Self.Emit(#9'movq %rax, %rsi');
+        Self.Emit(#9'popq %r10');
+        Self.Emit(#9'movq %r10, %rdi');
+        Self.Emit(#9'pushq %r10');
+        Self.Emit(#9'callq _StringEquals');
+        Self.Emit(#9'popq %r10');
+        Self.Emit(#9'testl %eax, %eax');
+        Self.Emit(#9'jne ' + BranchLbl);
+        Self.Emit(#9'jmp ' + NextLbl);
+      end
+      else
+      begin
+        { Integer/enum comparison }
+        Self.Emit(#9'pushq %r10');
+        Self.EmitExprToEax(TASTExpr(Branch.Values.Items[J]));
+        Self.Emit(#9'movl %eax, %ecx');
+        Self.Emit(#9'popq %r10');
+        Self.Emit(#9'cmpl %ecx, %r10d');
+        Self.Emit(#9'je ' + BranchLbl);
+        Self.Emit(#9'jmp ' + NextLbl);
+      end;
+      Self.Emit(NextLbl + ':');
+    end;
+  end;
+  Self.Emit(#9'jmp ' + ElseLbl);
+
+  { Branch bodies }
+  for I := 0 to AStmt.Branches.Count - 1 do
+  begin
+    Branch    := TCaseBranch(AStmt.Branches.Items[I]);
+    BranchLbl := BranchLabels.Strings[I];
+    Self.Emit(BranchLbl + ':');
+    Self.EmitStmt(Branch.Stmt);
+    Self.Emit(#9'jmp ' + EndLbl);
+  end;
+
+  { Else block }
+  Self.Emit(ElseLbl + ':');
+  if AStmt.ElseStmt <> nil then
+    Self.EmitStmt(AStmt.ElseStmt);
+  Self.Emit(#9'jmp ' + EndLbl);
+
+  Self.Emit(EndLbl + ':');
+  BranchLabels.Free;
+end;
+
+{ ------------------------------------------------------------------ }
 { Exception handling                                                   }
 { ------------------------------------------------------------------ }
 
@@ -3697,6 +4181,15 @@ begin
     RepS := TRepeatStmt(AStmt);
     for I := 0 to RepS.Body.Stmts.Count - 1 do
       Result := Result + Self.CountTryStmts(TASTStmt(RepS.Body.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TForInStmt then
+    Exit(Self.CountTryStmts(TForInStmt(AStmt).Body));
+  if AStmt is TCaseStmt then
+  begin
+    for I := 0 to TCaseStmt(AStmt).Branches.Count - 1 do
+      Result := Result + Self.CountTryStmts(TCaseBranch(TCaseStmt(AStmt).Branches.Items[I]).Stmt);
+    Result := Result + Self.CountTryStmts(TCaseStmt(AStmt).ElseStmt);
     Exit;
   end;
 end;
@@ -4147,6 +4640,18 @@ begin
   if AStmt is TForStmt then
   begin
     Self.EmitForStmt(TForStmt(AStmt));
+    Exit;
+  end;
+
+  if AStmt is TForInStmt then
+  begin
+    Self.EmitForInStmt(TForInStmt(AStmt));
+    Exit;
+  end;
+
+  if AStmt is TCaseStmt then
+  begin
+    Self.EmitCaseStmt(TCaseStmt(AStmt));
     Exit;
   end;
 

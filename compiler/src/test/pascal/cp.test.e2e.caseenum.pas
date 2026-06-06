@@ -99,19 +99,15 @@ const
         ''';
 
 procedure TE2ECaseEnumTests.TestRun_Case_IntegerBranch;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcCaseInt, Output, RCode));
-  AssertEquals('case N=2 -> 22', '22', Trim(Output));
+  AssertRunsOnBoth(SrcCaseInt, '22' + LineEnding, 0);
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Case_ElseBranch;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcCaseElse, Output, RCode));
-  AssertEquals('case N=7 -> else -> 99', '99', Trim(Output));
+  AssertRunsOnBoth(SrcCaseElse, '99' + LineEnding, 0);
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Enum_OrdinalValues;
@@ -131,11 +127,9 @@ begin
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Enum_InCase;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcEnumCase, Output, RCode));
-  AssertEquals('dEast=2', '2', Trim(Output));
+  AssertRunsOnBoth(SrcEnumCase, '2' + LineEnding, 0);
 end;
 
 const

@@ -756,49 +756,33 @@ begin
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_ByteVar_PrintsBytes;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcForInStringByte, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('bytes of ''Hi''', '72' + LE + '105' + LE, Output);
+  AssertRunsOnBoth(SrcForInStringByte, '72' + LE + '105' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_IntegerVar_PrintsBytes;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcForInStringInteger, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('bytes of ''Hi'' via Integer var', '72' + LE + '105' + LE, Output);
+  AssertRunsOnBoth(SrcForInStringInteger, '72' + LE + '105' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_Array_Integer_PrintsElements;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcForInArrayInteger, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('array elements 10 20 30',
-    '10' + LE + '20' + LE + '30' + LE, Output);
+  AssertRunsOnBoth(SrcForInArrayInteger, '10' + LE + '20' + LE + '30' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_ClassEnumerator_PrintsElements;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcForInClassEnum, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('range 3..5', '3' + LE + '4' + LE + '5' + LE, Output);
+  AssertRunsOnBoth(SrcForInClassEnum, '3' + LE + '4' + LE + '5' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_Set_PrintsMembers;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcForInSet, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('Red=0 Blue=2', '0' + LE + '2' + LE, Output);
+  AssertRunsOnBoth(SrcForInSet, '0' + LE + '2' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_NestedProc_MutatesCapturedVar;

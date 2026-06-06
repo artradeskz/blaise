@@ -491,21 +491,11 @@ const Src =
       WriteLn(x)
   end.
   ''';
-var Output: string; RCode: Integer;
-  Lines: TStringList;
+var LE: string;
 begin
+  LE := LineEnding;
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
-  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  Lines := TStringList.Create;
-  try
-    Lines.Text := Trim(Output);
-    AssertEquals('line count', 4, Lines.Count);
-    AssertEquals('da[0]', '10', Lines.Strings[0]);
-    AssertEquals('da[1]', '20', Lines.Strings[1]);
-    AssertEquals('da[2]', '30', Lines.Strings[2]);
-    AssertEquals('da[3]', '40', Lines.Strings[3]);
-  finally Lines.Free end
+  AssertRunsOnBoth(Src, '10' + LE + '20' + LE + '30' + LE + '40' + LE, 0);
 end;
 
 procedure TE2EStaticArrayTests.TestRun_DynArray_ForIn_EmptyArray_NoIterations;
@@ -523,12 +513,9 @@ const Src =
     WriteLn(count)
   end.
   ''';
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
-  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('no iterations on nil/empty array', '0', Trim(Output));
+  AssertRunsOnBoth(Src, '0' + LineEnding, 0);
 end;
 
 initialization
