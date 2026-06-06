@@ -23,9 +23,8 @@
   all supported targets.  The generous allocation leaves room for future
   ARM64 jmp_buf growth without a compiler change.
 
-  Thread safety: g_exc_top and g_current_exception are plain globals.
-  When threadvar support is added to the language, they should become
-  thread-local.
+  Thread safety: g_exc_top and g_current_exception are declared as
+  threadvar, giving each thread its own exception chain.
 }
 
 unit blaise_exc;
@@ -59,7 +58,7 @@ function  _BlaiseGetMem(Size: Integer): Pointer; external name '_BlaiseGetMem';
 function  _libc_write(Fd: Integer; Buf: Pointer; Count: Int64): Int64; external name 'write';
 procedure _libc_abort; external name 'abort';
 
-var
+threadvar
   g_exc_top: Pointer;
   g_current_exception: Pointer;
 
