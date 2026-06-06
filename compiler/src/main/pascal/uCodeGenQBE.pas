@@ -5039,7 +5039,6 @@ begin
   SelfTemp := AllocTemp;
   if ACall.IsImplicitSelf then
   begin
-    { Load Self, add field offset, load the class pointer from there }
     EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
     if ACall.ImplicitBaseInfo.Offset > 0 then
     begin
@@ -5048,10 +5047,23 @@ begin
         [FPtrTemp, SelfTemp, ACall.ImplicitBaseInfo.Offset]));
       SelfTemp := FPtrTemp;
     end;
-    FPtrTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s', [FPtrTemp, SelfTemp]));
-    SelfTemp := FPtrTemp;
+    if ACall.ImplicitBaseInfo.TypeDesc.Kind = tyRecord then
+      { Record field of Self: address IS the record — no deref }
+    else
+    begin
+      FPtrTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, SelfTemp]));
+      SelfTemp := FPtrTemp;
+    end;
   end
+  else if (MDecl <> nil) and MDecl.IsRecordMethod and ACall.IsVarParam then
+  begin
+    { Record var-param receiver — slot holds the record address; load once. }
+    EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, ACall.ObjectName]));
+  end
+  else if (MDecl <> nil) and MDecl.IsRecordMethod then
+    { Regular record variable: VarRef IS the record address — pass directly. }
+    SelfTemp := VarRef(ACall.ObjectName, ACall.IsGlobal)
   else if ACall.IsVarParam then
   begin
     { Var/out param: local slot holds caller's address — dereference twice }

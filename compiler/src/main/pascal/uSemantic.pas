@@ -5268,7 +5268,7 @@ begin
     ACall.ImplicitBaseInfo :=
       FCurrentClass.FindField(ACall.ObjectName);
     if (ACall.ImplicitBaseInfo <> nil) and
-       (ACall.ImplicitBaseInfo.TypeDesc.Kind in [tyClass, tyInterface]) then
+       (ACall.ImplicitBaseInfo.TypeDesc.Kind in [tyClass, tyInterface, tyRecord]) then
     begin
       ACall.IsImplicitSelf := True;
       { Interface field: dispatch via vtable, same semantics as the
@@ -5318,9 +5318,9 @@ begin
     SemanticError(
       Format('''%s'' is not a variable', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
-  if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface]) then
+  if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface, tyRecord]) then
     SemanticError(
-      Format('''%s'' is not a class or interface variable', [ACall.ObjectName]),
+      Format('''%s'' is not a class, interface, or record variable', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
 
   { Interface method call: look up method in interface type descriptor }

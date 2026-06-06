@@ -31,6 +31,9 @@ type
     procedure TestRun_Record_FourByteFields_PackedAndRoundTrip;
     procedure TestRun_Record_ByteThenInteger_RoundTrip;
     procedure TestRun_Record_NestedFieldAssign_MethodCall;
+    procedure TestRun_Record_StmtMethodCall_Local;
+    procedure TestRun_Record_StmtMethodCall_ImplicitSelf;
+    procedure TestRun_Record_StmtMethodCall_Result;
   end;
 
 implementation
@@ -188,6 +191,88 @@ const
     end.
     ''';
 
+  SrcRecordStmtMethodCallLocal = '''
+    program P;
+    type
+      TCounter = record
+        Value: Integer;
+        procedure Inc;
+        function GetValue: Integer;
+      end;
+    procedure TCounter.Inc;
+    begin
+      Value := Value + 1
+    end;
+    function TCounter.GetValue: Integer;
+    begin
+      Result := Value
+    end;
+    var
+      C: TCounter;
+    begin
+      C.Value := 0;
+      C.Inc;
+      C.Inc;
+      C.Inc;
+      WriteLn(C.GetValue)
+    end.
+    ''';
+
+  SrcRecordStmtMethodCallImplicitSelf = '''
+    program P;
+    type
+      TCounter = record
+        Value: Integer;
+        procedure Inc;
+      end;
+      TApp = class
+        FC: TCounter;
+        procedure Run;
+      end;
+    procedure TCounter.Inc;
+    begin
+      Value := Value + 1
+    end;
+    procedure TApp.Run;
+    begin
+      FC.Inc;
+      FC.Inc;
+      FC.Inc;
+      WriteLn(FC.Value)
+    end;
+    var
+      A: TApp;
+    begin
+      A := TApp.Create;
+      A.Run
+    end.
+    ''';
+
+  SrcRecordStmtMethodCallResult = '''
+    program P;
+    type
+      TPoint = record
+        X, Y: Integer;
+        procedure SetXY(AX, AY: Integer);
+      end;
+    procedure TPoint.SetXY(AX, AY: Integer);
+    begin
+      X := AX;
+      Y := AY
+    end;
+    function MakePoint(AX, AY: Integer): TPoint;
+    begin
+      Result.SetXY(AX, AY)
+    end;
+    var
+      P: TPoint;
+    begin
+      P := MakePoint(5, 8);
+      WriteLn(P.X);
+      WriteLn(P.Y)
+    end.
+    ''';
+
   SrcRecordNestedFieldAssignMethodCall = '''
     program P;
     type
@@ -302,6 +387,24 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nested field assign + method call',
     '2026-6-5' + LE + '2026-6-5' + LE, Output);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Local;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordStmtMethodCallLocal, '3' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_ImplicitSelf;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordStmtMethodCallImplicitSelf, '3' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Result;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordStmtMethodCallResult, '5' + LE + '8' + LE, 0);
 end;
 
 initialization

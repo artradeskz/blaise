@@ -2145,6 +2145,23 @@ begin
 
   if AExpr is TIdentExpr then
   begin
+    if TIdentExpr(AExpr).IsImplicitSelf and
+       (TIdentExpr(AExpr).ImplicitFieldInfo <> nil) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo).Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rcx',
+          [TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo).Offset]));
+      if (TIdentExpr(AExpr).ResolvedType <> nil) and
+         (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+        Self.Emit(#9'movq %rcx, %rax')
+      else if (TIdentExpr(AExpr).ResolvedType <> nil) and
+              (TIdentExpr(AExpr).ResolvedType.Kind = tyClass) then
+        Self.Emit(#9'movq (%rcx), %rax')
+      else
+        Self.EmitLoadVar('(%rcx)', Self.IntExprType(AExpr));
+      Exit;
+    end;
     if (TIdentExpr(AExpr).ResolvedType <> nil) and
        (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray]) then
     begin
@@ -2708,6 +2725,10 @@ begin
     else if FAE.IsImplicitSelf then
     begin
       Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.ImplicitBaseInfo.Offset]));
+      if FAE.IsClassAccess then
+        Self.Emit(#9'movq (%rcx), %rcx');
       if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
         Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
       else
@@ -2923,7 +2944,13 @@ begin
           Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
       end
       else if FAE.IsImplicitSelf then
-        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]))
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.ImplicitBaseInfo.Offset]));
+        if FAE.IsClassAccess then
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
       else if FAE.IsVarParam then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
       else
@@ -2995,7 +3022,13 @@ begin
           Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
       end
       else if FAE.IsImplicitSelf then
-        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]))
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.ImplicitBaseInfo.Offset]));
+        if FAE.IsClassAccess then
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
       else if FAE.IsVarParam then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
       else
@@ -3378,8 +3411,29 @@ begin
     Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
   end;
 
-  { Load Self (the receiver) into %r10 (movq for class pointer). }
-  if ACall.ObjectName <> '' then
+  { Load Self (the receiver) into %r10. }
+  if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+    if ACall.ImplicitBaseInfo.Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%r10', [ACall.ImplicitBaseInfo.Offset]));
+    if ACall.ImplicitBaseInfo.TypeDesc.Kind <> tyRecord then
+      Self.Emit(#9'movq (%r10), %r10');
+  end
+  else if MD.IsRecordMethod and ACall.IsVarParam then
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
+  end
+  else if MD.IsRecordMethod then
+  begin
+    if FSretFunc and SameText(ACall.ObjectName, 'Result') then
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Result')]))
+    else if Self.IsLocal(ACall.ObjectName) then
+      Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+  end
+  else if ACall.ObjectName <> '' then
   begin
     if Self.IsLocal(ACall.ObjectName) then
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
@@ -4420,6 +4474,7 @@ var
   LCond, LBody:          string;
   FDynArgName: string;
   FDynElemSz:  Integer;
+  ISFld:   TFieldInfo;
 begin
   if AStmt is TAssignment then
   begin
@@ -4613,6 +4668,15 @@ begin
       end;
       Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize]));
       Self.Emit(#9'callq memcpy');
+    end
+    else if (Asgn.ImplicitSelfField <> nil) then
+    begin
+      Self.EmitExprToEax(Asgn.Expr);
+      ISFld := TFieldInfo(Asgn.ImplicitSelfField);
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if ISFld.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
+      Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
     end
     else
     begin
@@ -5032,7 +5096,13 @@ begin
     begin
       Self.Emit(#9'pushq %rax');
       if FA.IsImplicitSelf then
-        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]))
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
       else if Self.IsLocal(FA.RecordName) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
       else
