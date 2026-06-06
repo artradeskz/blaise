@@ -134,6 +134,7 @@ type
     FInlineResultQTypes: TStringList;  { one QBE type per frame }
     FInlineDepth:        Integer;      { active inline depth; cap to prevent runaway }
 
+    function  ExportPrefix: string;
     function  AllocTemp: string;
     function  AllocLabel(const APrefix: string): string;
     function  CoerceArg(const AArgTemp: string; AArgExpr: TASTExpr; const AParamQType: string): string;
@@ -368,6 +369,7 @@ type
       const AName: string): TMethodDecl;
   public
     FDebugMode: Boolean;
+    FExportAll: Boolean;
     constructor Create;
     destructor Destroy; override;
     procedure Generate(AProg: TProgram);
@@ -381,6 +383,7 @@ type
       the units contain class type definitions.  Prog.SymbolTable is correct. }
     procedure SetSymbolTable(ASymTable: TSymbolTable);
     procedure SetDebugMode(AEnabled: Boolean);
+    procedure SetExportAll(AEnabled: Boolean);
     procedure AppendUnit(AUnit: TUnit);
     { Append program IR to existing output (companion to AppendUnit).
       Emits any remaining string literals and the $main function. }
@@ -528,6 +531,14 @@ begin
   inherited Destroy;
 end;
 
+function TCodeGenQBE.ExportPrefix: string;
+begin
+  if FExportAll then
+    Result := 'export '
+  else
+    Result := ''
+end;
+
 function TCodeGenQBE.AllocTemp: string;
 begin
   Result := Format('%%_t%d', [FTempCount]);
@@ -661,8 +672,8 @@ begin
   Mangled := QBEMangle(AClassName);
   Sym := ClassUnitPrefix(AClassName) + Mangled;
   { immortal ARC string: refcnt=-1, length, capacity, data, NUL }
-  EmitLine(Format('data $__cn_%s = { w -1, w %d, w %d, b "%s", b 0 }',
-    [Sym, Length(AClassName), Length(AClassName), AClassName]));
+  EmitLine(Format('%sdata $__cn_%s = { w -1, w %d, w %d, b "%s", b 0 }',
+    [ExportPrefix, Sym, Length(AClassName), Length(AClassName), AClassName]));
   Result := '$__cn_' + Sym + ' + 12';
 end;
 
@@ -675,8 +686,8 @@ var
   Sym: string;
 begin
   Sym := ClassUnitPrefix(AClassName) + QBEMangle(AClassName) + '_' + QBEMangle(AMethodName);
-  EmitLine(Format('data $__mn_%s = { w -1, w %d, w %d, b "%s", b 0 }',
-    [Sym, Length(AMethodName), Length(AMethodName), AMethodName]));
+  EmitLine(Format('%sdata $__mn_%s = { w -1, w %d, w %d, b "%s", b 0 }',
+    [ExportPrefix, Sym, Length(AMethodName), Length(AMethodName), AMethodName]));
   Result := '$__mn_' + Sym + ' + 12';
 end;
 
@@ -5403,13 +5414,12 @@ begin
   begin
     RetQType := QbeTypeOf(AMethod.ResolvedReturnType);
     if AMethod.ResolvedReturnType.Kind = tyRecord then
-      { sret: function becomes void }
-      EmitLine(Format('function %s(%s) {', [FuncName, Sig]))
+      EmitLine(Format('%sfunction %s(%s) {', [ExportPrefix, FuncName, Sig]))
     else
-      EmitLine(Format('function %s %s(%s) {', [RetQType, FuncName, Sig]));
+      EmitLine(Format('%sfunction %s %s(%s) {', [ExportPrefix, RetQType, FuncName, Sig]));
   end
   else
-    EmitLine(Format('function %s(%s) {', [FuncName, Sig]));
+    EmitLine(Format('%sfunction %s(%s) {', [ExportPrefix, FuncName, Sig]));
 
   EmitLine('@start');
   EmitParamAllocs(AMethod, nil);
@@ -5583,16 +5593,13 @@ begin
     skip the System block; per-class typeinfo continues for both. }
   if not FSystemDefsEmitted then
   begin
-    EmitLine('data $typeinfo_TObject = { l 0, l 0, l ' +
+    EmitLine('export data $typeinfo_TObject = { l 0, l 0, l ' +
              EmitClassNameRef('TObject') + ', l 0' +
              ', l 8, l $_FieldCleanup_TObject, l $vtable_TObject, l 0 }');
-    EmitLine('data $typeinfo_TCustomAttribute = { l $typeinfo_TObject, l 0, l ' +
+    EmitLine('export data $typeinfo_TCustomAttribute = { l $typeinfo_TObject, l 0, l ' +
              EmitClassNameRef('TCustomAttribute') + ', l 0' +
              ', l 8, l $_FieldCleanup_TCustomAttribute' +
              ', l $vtable_TCustomAttribute, l 0 }');
-    { Don't set FSystemDefsEmitted here — EmitTypeInfoDefs only
-      emits typeinfo, not vtable or FieldCleanup.  The flag is set
-      by AppendUnit which emits all three blocks together. }
   end;
 
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
@@ -5706,9 +5713,9 @@ var
 begin
   if not FSystemDefsEmitted then
   begin
-    EmitLine('data $vtable_TObject = { l $typeinfo_TObject' +
+    EmitLine('export data $vtable_TObject = { l $typeinfo_TObject' +
              ', l $TObject_Destroy, l $TObject_ToString }');
-    EmitLine('data $vtable_TCustomAttribute = { l $typeinfo_TCustomAttribute' +
+    EmitLine('export data $vtable_TCustomAttribute = { l $typeinfo_TCustomAttribute' +
              ', l $TObject_Destroy, l $TObject_ToString }');
   end;
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
@@ -5952,7 +5959,7 @@ var
   PtrT:   string;
   Walk:   TRecordTypeDesc;
 begin
-  EmitLine(Format('function $_FieldCleanup_%s(l %%self) {', [AMangledName]));
+  EmitLine(Format('%sfunction $_FieldCleanup_%s(l %%self) {', [ExportPrefix, AMangledName]));
   EmitLine('@start');
   Walk := ARec;
   while Walk <> nil do
@@ -6023,12 +6030,12 @@ var
 begin
   if not FSystemDefsEmitted then
   begin
-    EmitLine('function $_FieldCleanup_TObject(l %self) {');
+    EmitLine('export function $_FieldCleanup_TObject(l %self) {');
     EmitLine('@start');
     EmitLine('  ret');
     EmitLine('}');
     EmitLine('');
-    EmitLine('function $_FieldCleanup_TCustomAttribute(l %self) {');
+    EmitLine('export function $_FieldCleanup_TCustomAttribute(l %self) {');
     EmitLine('@start');
     EmitLine('  ret');
     EmitLine('}');
@@ -6147,7 +6154,7 @@ begin
   else
     FuncName := '$' + QBEMangle(ADecl.Name);
   IsFunc   := ADecl.ResolvedReturnType <> nil;
-  if AExported then Prefix := 'export ' else Prefix := '';
+  if AExported or FExportAll then Prefix := 'export ' else Prefix := '';
 
   { Captured outer-scope variables are prepended as implicit pointer params.
     The call site in the enclosing function passes the address of each var. }
@@ -10691,6 +10698,11 @@ begin
   FDebugMode := AEnabled;
 end;
 
+procedure TCodeGenQBE.SetExportAll(AEnabled: Boolean);
+begin
+  FExportAll := AEnabled;
+end;
+
 procedure TCodeGenQBE.AppendUnit(AUnit: TUnit);
 var
   I, J, K, S:  Integer;
@@ -10794,10 +10806,12 @@ begin
 
         { System-unit (TObject / TCustomAttribute) FieldCleanup stubs.
           Emitted once per codegen pass when this unit declares any
-          class.  QBE emits these as local symbols (no .globl), so
-          each .o gets its own private copy — collapses the
-          rtl.platform.posix carve-out from the runtime Makefile. }
-        if (not FSystemDefsEmitted) and (FSymTable <> nil) then
+          class.  In monolithic mode QBE emits these as local symbols
+          (no .globl), so each .o gets its own private copy.  In
+          separate-compilation mode (FExportAll) they would collide
+          across per-unit .o files, so skip them here — the main
+          program's AppendProgram emits the authoritative copies. }
+        if (not FExportAll) and (not FSystemDefsEmitted) and (FSymTable <> nil) then
           for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
           begin
             TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
@@ -10859,16 +10873,14 @@ begin
         begin
           TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
           if TD.Def is TInterfaceTypeDef then
-            EmitLine('data $typeinfo_' + ClassSymName(TD.Name) + ' = { l 0 }');
+            EmitLine(ExportPrefix + 'data $typeinfo_' + ClassSymName(TD.Name) + ' = { l 0 }');
         end;
 
         { System-unit (TObject / TCustomAttribute) typeinfo + vtable.
           Emitted alongside the FieldCleanup stubs above, also gated
-          on FSystemDefsEmitted.  This is the block that sets the
-          flag — after it runs, EmitTypeInfoDefs / EmitVTableDefs /
-          EmitFieldCleanupDefs in the program path skip their System
-          portions (they still emit per-class typeinfo/vtable). }
-        if not FSystemDefsEmitted then
+          on FSystemDefsEmitted.  Skipped in separate-compilation mode
+          (FExportAll) — the main program provides these. }
+        if (not FExportAll) and (not FSystemDefsEmitted) then
           for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
           begin
             TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
@@ -10916,7 +10928,7 @@ begin
               Inc(PubCount);
           if PubCount > 0 then
           begin
-            MethLine := 'data $methods_' + ClassSymName(TD.Name) + ' = { l ' + IntToStr(PubCount);
+            MethLine := ExportPrefix + 'data $methods_' + ClassSymName(TD.Name) + ' = { l ' + IntToStr(PubCount);
             for J := 0 to CD.Methods.Count - 1 do
             begin
               MDecl := TMethodDecl(CD.Methods.Items[J]);
@@ -10934,7 +10946,7 @@ begin
 
           if RT.ClassAttributeCount > 0 then
           begin
-            AttrsLine := 'data $attrs_' + ClassSymName(TD.Name) + ' = { l ' + IntToStr(RT.ClassAttributeCount);
+            AttrsLine := ExportPrefix + 'data $attrs_' + ClassSymName(TD.Name) + ' = { l ' + IntToStr(RT.ClassAttributeCount);
             for J := 0 to RT.ClassAttributeCount - 1 do
               AttrsLine := AttrsLine + ', l $typeinfo_' + ClassSymName(RT.ClassAttributeAt(J));
             AttrsLine := AttrsLine + ' }';
@@ -10944,7 +10956,7 @@ begin
           else
             AttrsStr := '0';
 
-          EmitLine('data $typeinfo_' + ClassSymName(TD.Name) +
+          EmitLine(ExportPrefix + 'data $typeinfo_' + ClassSymName(TD.Name) +
                    ' = { l ' + ParentStr + ', l ' + ImplStr +
                    ', l ' + EmitClassNameRef(TD.Name) +
                    ', l ' + MethStr +
@@ -10966,7 +10978,7 @@ begin
           if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
           RT := TRecordTypeDesc(TDesc);
           if not RT.HasVTable then Continue;
-          VLine := 'data $vtable_' + ClassSymName(TD.Name) +
+          VLine := ExportPrefix + 'data $vtable_' + ClassSymName(TD.Name) +
                    ' = { l $typeinfo_' + ClassSymName(TD.Name);
           for S := 0 to RT.VTableCount - 1 do
           begin
@@ -10992,7 +11004,7 @@ begin
         for I := 0 to AUnit.GenericIntfInstances.Count - 1 do
         begin
           GII := TGenericInterfaceInstance(AUnit.GenericIntfInstances.Items[I]);
-          EmitLine('data $typeinfo_' + GII.InstName + ' = { l 0 }');
+          EmitLine(ExportPrefix + 'data $typeinfo_' + GII.InstName + ' = { l 0 }');
         end;
 
         { Generic class instance typeinfo + vtable + itab/impllist.  Mirrors
@@ -11011,7 +11023,7 @@ begin
             ImplStr := '$impllist_' + MName
           else
             ImplStr := '0';
-          EmitLine('data $typeinfo_' + MName +
+          EmitLine(ExportPrefix + 'data $typeinfo_' + MName +
                    ' = { l ' + ParentStr + ', l ' + ImplStr +
                    ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0' +
                    ', l ' + IntToStr(RT.TotalSize) +
@@ -11020,7 +11032,7 @@ begin
 
           if RT.HasVTable then
           begin
-            VLine := 'data $vtable_' + MName + ' = { l $typeinfo_' + MName;
+            VLine := ExportPrefix + 'data $vtable_' + MName + ' = { l $typeinfo_' + MName;
             for S := 0 to RT.VTableCount - 1 do
             begin
               E := RT.VTableEntryAt(S);
@@ -11041,7 +11053,7 @@ begin
             begin
               IntfDesc   := RT.ImplementsIntfAt(J);
               IntfMangle := QBEMangle(IntfDesc.Name);
-              ItabLine   := 'data $itab_' + MName + '_' + IntfMangle + ' = {';
+              ItabLine   := ExportPrefix + 'data $itab_' + MName + '_' + IntfMangle + ' = {';
               for K := 0 to IntfDesc.MethodCount - 1 do
               begin
                 MethName := IntfDesc.MethodName(K);
@@ -11063,7 +11075,7 @@ begin
               ItabLine := ItabLine + ' }';
               EmitLine(ItabLine);
             end;
-            ImplLine := 'data $impllist_' + MName + ' = {';
+            ImplLine := ExportPrefix + 'data $impllist_' + MName + ' = {';
             for J := 0 to RT.ImplementsCount - 1 do
             begin
               IntfDesc   := RT.ImplementsIntfAt(J);
@@ -11093,7 +11105,7 @@ begin
           begin
             IntfDesc   := ClassRT.ImplementsIntfAt(J);
             IntfMangle := QBEMangle(IntfDesc.Name);
-            ItabLine   := 'data $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle + ' = {';
+            ItabLine   := ExportPrefix + 'data $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle + ' = {';
             for K := 0 to IntfDesc.MethodCount - 1 do
             begin
               MethName := IntfDesc.MethodName(K);
@@ -11110,7 +11122,7 @@ begin
             ItabLine := ItabLine + ' }';
             EmitLine(ItabLine);
           end;
-          ImplLine := 'data $impllist_' + ClassSymName(TD.Name) + ' = {';
+          ImplLine := ExportPrefix + 'data $impllist_' + ClassSymName(TD.Name) + ' = {';
           for J := 0 to ClassRT.ImplementsCount - 1 do
           begin
             IntfDesc   := ClassRT.ImplementsIntfAt(J);

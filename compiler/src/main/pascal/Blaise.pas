@@ -811,7 +811,8 @@ begin
         { Per-unit codegen: fresh TCodeGenQBE, shared symbol table. }
         UnitCG := TCodeGenQBE.Create;
         try
-          UnitCG.SetSymbolTable(Semantic.GetSymbolTable);
+          UnitCG.SetSymbolTable(Prog.SymbolTable);
+          UnitCG.SetExportAll(True);
           UnitCG.AppendUnit(TUnit(Units.Items[I]));
           UnitIR := UnitCG.GetOutput;
         finally
