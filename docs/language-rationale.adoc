@@ -3327,3 +3327,79 @@ patterns on Linux x86_64 (`%fs:Name@tpoff`).
   is the correct choice for a compiler targeting Linux x86_64.
 * Implicit TLS via runtime per-thread tables — rejected; the explicit keyword
   makes the intent clear and matches established Pascal practice (Delphi, FPC).
+
+== `TThread` Lifetime and ARC — No `FreeOnTerminate`
+
+=== Decision
+
+Blaise's `TThread` does not provide the `FreeOnTerminate` property found in
+Delphi and FPC.  Thread lifetime is managed entirely through ARC: when the
+last reference to a `TThread` instance is released, `Destroy` calls `WaitFor`
+(which calls `pthread_join`), blocking until the OS thread has fully exited
+before the object's memory is freed.
+
+The trampoline (the free procedure passed to `pthread_create`) does *not*
+hold an ARC reference to the `TThread` instance.  It accesses the object
+only while the thread is running; `pthread_join` in `Destroy` guarantees
+the trampoline has returned before the object is deallocated, so there is
+no use-after-free.
+
+=== Rationale
+
+In Delphi and FPC, object lifetime is manual.  `Free` directly calls
+`Destroy`, and if the programmer forgets to call it the object leaks.
+`FreeOnTerminate` exists to handle the "fire-and-forget" pattern: when a
+thread is spawned and the caller discards the reference, the thread must
+clean itself up on completion or the `TThread` instance leaks.
+
+In Blaise, ARC eliminates this class of leak.  Every relevant scenario is
+already handled:
+
+* *Explicit Free* — `Free` lowers to `_ClassRelease`.  If this drops the
+  refcount to zero, `Destroy` runs, which calls `WaitFor`.  The caller
+  blocks until the thread finishes, then the object is freed.
+* *Scope exit* — when a local `TThread` variable goes out of scope, ARC
+  emits `_ClassRelease`.  Same chain: `Destroy` → `WaitFor` → join → free.
+* *Field in an owning object* — when the owner is destroyed, the field is
+  released.  Same chain.
+* *Reassignment* — `T := nil` or `T := SomeOtherThread` releases the old
+  reference.  Same chain.
+
+In every case, ARC ensures the `TThread` is joined and freed exactly once,
+without any explicit cleanup code from the programmer.
+
+=== Why the trampoline must not hold an ARC reference
+
+The original implementation had `Start` call `_ClassAddRef` on the
+`TThread` instance, and the trampoline call `_ClassRelease` in its
+`finally` block.  This created a reference-count of 2 (one for the caller,
+one for the trampoline).  The consequence: when the caller released its
+reference (via `Free`, scope exit, or reassignment), the refcount dropped
+to 1 — not zero — so `Destroy` did not run, `WaitFor` was never called,
+and the main program could exit before the thread finished.
+
+Removing the trampoline's ARC reference restores the correct behaviour:
+the caller's reference is the *only* reference, so releasing it triggers
+`Destroy` → `WaitFor`.  The `pthread_join` call is the synchronisation
+barrier that guarantees the trampoline has fully returned before the object
+is deallocated.
+
+=== Migration note
+
+Code ported from Delphi or FPC that sets `FreeOnTerminate := True` will
+fail to compile.  The fix is to simply delete the assignment — ARC handles
+the lifetime automatically.  The Blaise migration analyser flags this
+pattern and explains the removal.
+
+=== Alternatives considered
+
+* *Keep `FreeOnTerminate` for compatibility* — rejected.  The property
+  introduces a second, redundant lifetime model that conflicts with ARC
+  semantics.  Keeping it would require the trampoline to hold an extra ARC
+  reference (breaking the join-on-free guarantee) or special-case logic in
+  `Destroy` (complexity for a feature that ARC already covers).
+* *Detached threads (no join)* — not yet supported.  If a future use-case
+  requires truly detached threads (where the caller never waits), this
+  would be a separate API (`TThread.Detach` or a `TDetachedThread`
+  subclass) with explicit opt-in semantics, not a boolean property on the
+  base class.

@@ -9,7 +9,7 @@
 unit cp.test.e2e.threading;
 
 { E2E tests for TThread and TCriticalSection from the RTL Classes unit.
-  Covers: basic thread creation, WaitFor, Terminate flag, FreeOnTerminate,
+  Covers: basic thread creation, WaitFor, Terminate flag,
   mutex-based synchronisation via TCriticalSection. }
 
 interface

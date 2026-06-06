@@ -87,24 +87,55 @@ type
   { TThread                                                              }
   { ------------------------------------------------------------------ }
 
+  { Lightweight wrapper around a POSIX thread.
+    Lifetime is managed by ARC — there is no FreeOnTerminate property.
+    When the last reference is released, Destroy calls WaitFor (which
+    joins the OS thread) before freeing the object. This guarantees the
+    thread has fully exited before the memory is reclaimed.
+
+    Typical usage:
+
+      T := TMyThread.Create(False);   // starts immediately
+      // ... do other work ...
+      T.Free;                         // blocks until Execute returns
+
+    Or simply let ARC handle it:
+
+      procedure SpawnWork;
+      var T: TMyThread;
+      begin
+        T := TMyThread.Create(False);
+      end;  // scope exit joins and frees automatically }
+
   TThreadProc = procedure(Arg: Pointer);
 
   TThread = class
   private
     FHandle:          Int64;
     FFinished:        Boolean;
-    FFreeOnTerminate: Boolean;
     FTerminated:      Boolean;
   protected
+    { Override this method with the thread's workload. Check Terminated
+      periodically in long-running loops to support cooperative shutdown. }
     procedure Execute; virtual;
   public
+    { Pass False to start the thread immediately, or True to defer
+      execution until Start is called. }
     constructor Create(ACreateSuspended: Boolean);
+    { Joins the OS thread (if still running) then frees the object.
+      Called automatically by ARC when the last reference is released. }
     procedure Destroy;
+    { Spawns the OS thread. Called automatically by Create(False).
+      Has no effect if the thread is already running. }
     procedure Start;
+    { Sets the Terminated flag. Does not forcibly stop the thread —
+      Execute must poll Terminated and exit cooperatively. }
     procedure Terminate;
+    { Blocks until the thread has finished. Called automatically by
+      Destroy; call it explicitly when you need the result before
+      releasing the reference. }
     procedure WaitFor;
     property Finished:        Boolean read FFinished;
-    property FreeOnTerminate: Boolean read FFreeOnTerminate write FFreeOnTerminate;
     property Terminated:      Boolean read FTerminated;
   end;
 
@@ -945,10 +976,7 @@ begin
   try
     T.Execute
   finally
-    T.FFinished := True;
-    if T.FFreeOnTerminate then
-      _ClassRelease(Arg);
-    _ClassRelease(Arg)
+    T.FFinished := True
   end
 end;
 
@@ -956,7 +984,6 @@ constructor TThread.Create(ACreateSuspended: Boolean);
 begin
   Self.FHandle := 0;
   Self.FFinished := False;
-  Self.FFreeOnTerminate := False;
   Self.FTerminated := False;
   if not ACreateSuspended then
     Self.Start
@@ -978,9 +1005,6 @@ var
   H: Int64;
 begin
   if Self.FHandle <> 0 then Exit;
-  _ClassAddRef(Pointer(Self));
-  if Self.FFreeOnTerminate then
-    _ClassAddRef(Pointer(Self));
   Fn := @ThreadTrampoline;
   H := 0;
   pthread_create(@H, nil, Pointer(Fn), Pointer(Self));
