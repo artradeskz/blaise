@@ -33,6 +33,7 @@ type
     procedure TestRun_ThreadVar_MainThread_ReadWrite;
     procedure TestRun_ThreadVar_MixedWithGlobalVar;
     procedure TestRun_PerThreadAllocator_IndependentAllocs;
+    procedure TestRun_AtomicARC_SharedObject_NoCorruption;
   end;
 
 implementation
@@ -414,6 +415,67 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcPerThreadAlloc, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout', '2' + LE, Output)
+end;
+
+const
+  SrcAtomicARC =
+    '''
+    program P;
+    uses Classes;
+    type
+      TSharedData = class
+        Value: Integer;
+      end;
+      TArcThread = class(TThread)
+        Shared: TSharedData;
+      protected
+        procedure Execute; override;
+      end;
+    procedure TArcThread.Execute;
+    var
+      Local: TSharedData;
+      I: Integer;
+    begin
+      for I := 0 to 999 do
+      begin
+        Local := Self.Shared;
+        if Local.Value <> 42 then
+        begin
+          WriteLn('CORRUPT');
+          Exit
+        end;
+        Local := nil
+      end
+    end;
+    var
+      S: TSharedData;
+      A, B, C: TArcThread;
+    begin
+      S := TSharedData.Create;
+      S.Value := 42;
+      A := TArcThread.Create(True);
+      B := TArcThread.Create(True);
+      C := TArcThread.Create(True);
+      A.Shared := S;
+      B.Shared := S;
+      C.Shared := S;
+      A.Start;
+      B.Start;
+      C.Start;
+      A.WaitFor;
+      B.WaitFor;
+      C.WaitFor;
+      WriteLn('ok')
+    end.
+    ''';
+
+procedure TE2EThreadingTests.TestRun_AtomicARC_SharedObject_NoCorruption;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcAtomicARC, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('stdout', 'ok' + LE, Output)
 end;
 
 initialization

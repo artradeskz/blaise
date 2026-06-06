@@ -10,11 +10,11 @@
   Blaise RTL — ARC management (pure Pascal)
 
   String layout — data-pointer convention (shared with blaise_str.pas):
-    data_ptr − 12  RefCount  (Integer, 4 bytes)
-    data_ptr −  8  Length    (Integer, 4 bytes)
-    data_ptr −  4  Capacity  (Integer, 4 bytes)
+    data_ptr - 12  RefCount  (Integer, 4 bytes)
+    data_ptr -  8  Length    (Integer, 4 bytes)
+    data_ptr -  4  Capacity  (Integer, 4 bytes)
     data_ptr +  0  UTF-8 char data + NUL terminator
-    ↑ the DATA POINTER is what the variable slot holds
+    the DATA POINTER is what the variable slot holds
 
   Class instance layout — same offset convention for ARC header:
     +--[4 bytes]--+--[4 bytes]--+--[8 bytes]--+--[user fields...]--+
@@ -23,6 +23,12 @@
                                                ^--- user pointer (what Pascal code sees)
 
   nil = unassigned.  RefCount = -1 = immortal (string literals).
+
+  Thread safety: all refcount increments and decrements use atomic
+  lock xadd instructions (via _AtomicAddInt32/_AtomicSubInt32 from
+  blaise_atomic_x86_64.s).  The atomic decrement returns the previous
+  value, so exactly one thread sees the transition to zero and performs
+  destruction -- no TOCTOU race.
 }
 
 unit blaise_arc;
@@ -72,6 +78,11 @@ procedure _libc_abort; external name 'abort';
 function  _BlaiseGetMem(Size: Integer): Pointer; external name '_BlaiseGetMem';
 procedure _BlaiseFreeMem(Ptr: Pointer);          external name '_BlaiseFreeMem';
 procedure _WeakZeroSlots(Target: Pointer);       external name '_WeakZeroSlots';
+
+function  _AtomicAddInt32(Ptr: PInteger; Delta: Integer): Integer;
+            external name '_AtomicAddInt32';
+function  _AtomicSubInt32(Ptr: PInteger; Delta: Integer): Integer;
+            external name '_AtomicSubInt32';
 
 procedure MemCopy(Dst, Src: Pointer; N: Integer);
 begin
@@ -347,15 +358,14 @@ end;
 procedure _ClassRelease(UserPtr: Pointer);
 var
   Base: PChar;
-  RC: PInteger;
+  OldRC: Integer;
   CleanupSlot: PPointer;
   Cleanup: TFieldCleanupProc;
 begin
   if UserPtr = nil then Exit;
   Base := PChar(UserPtr) - CLASS_HDR;
-  RC := PInteger(Base);
-  RC^ := RC^ - 1;
-  if RC^ = 0 then
+  OldRC := _AtomicSubInt32(PInteger(Base), 1);
+  if OldRC = 1 then
   begin
     if GLTEnabled then
       LTDelete(UserPtr);
@@ -376,31 +386,30 @@ end;
 
 procedure _StringAddRef(Ptr: Pointer);
 var
-  RC: ^Integer;
+  RC: PInteger;
 begin
   if Ptr = nil then Exit;
-  RC := Ptr - HDR_SIZE;   { RefCount at data_ptr − 12 }
+  RC := PInteger(Ptr - HDR_SIZE);
   if RC^ = IMMORTAL then Exit;
-  RC^ := RC^ + 1;
+  _AtomicAddInt32(RC, 1);
 end;
 
 procedure _StringRelease(Ptr: Pointer);
 var
   Base: Pointer;
-  RC, LN, CP: ^Integer;
+  RC: PInteger;
+  LN, CP: ^Integer;
+  OldRC: Integer;
 begin
   if Ptr = nil then Exit;
-  Base := Ptr - HDR_SIZE;  { header base = data_ptr − 12 }
-  RC   := Base;
+  Base := Ptr - HDR_SIZE;
+  RC := PInteger(Base);
   if RC^ = IMMORTAL then Exit;
-  { Sanity-check the header before decrement.  Catches double-free,
-    use-after-free, and write-past-end corruption with a clear message
-    instead of a wild segfault later. }
   LN := Base + 4;
   CP := Base + 8;
   _StringReleaseCheck(Ptr, RC^, LN^, CP^);
-  RC^ := RC^ - 1;
-  if RC^ = 0 then _BlaiseFreeMem(Base);
+  OldRC := _AtomicSubInt32(RC, 1);
+  if OldRC = 1 then _BlaiseFreeMem(Base);
 end;
 
 function _StringEquals(S1, S2: Pointer): Integer;
@@ -639,12 +648,10 @@ end;
 procedure _ClassAddRef(UserPtr: Pointer);
 var
   Hdr: Pointer;
-  RC:  ^Integer;
 begin
   if UserPtr = nil then Exit;
   Hdr := UserPtr - CLASS_HDR;
-  RC  := Hdr;
-  RC^ := RC^ + 1;
+  _AtomicAddInt32(PInteger(Hdr), 1);
 end;
 
 procedure _ClassFree(UserPtr: Pointer);
