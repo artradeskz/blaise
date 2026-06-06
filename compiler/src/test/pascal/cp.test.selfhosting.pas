@@ -52,6 +52,8 @@ type
     procedure TestCodegen_ReadFile_CallsRTL;
     procedure TestCodegen_WriteFile_CallsRTL;
     procedure TestCodegen_FileExists_CallsRTL;
+    procedure TestSemantic_FileAge_ReturnsInt64;
+    procedure TestCodegen_FileAge_CallsRTL;
 
     { ------------------------------------------------------------------ }
     { GetEnvVar / Exec / Halt (Gap 2 — environment and process)          }
@@ -208,6 +210,15 @@ const
         var B: Boolean;
         begin
           B := FileExists('test.txt')
+        end.
+        ''';
+
+  SrcFileAge =
+    '''
+        program P;
+        var A: Int64;
+        begin
+          A := FileAge('test.txt')
         end.
         ''';
 
@@ -499,6 +510,36 @@ var
 begin
   IR := GenIR(SrcFileExists);
   AssertTrue('FileExists calls _FileExists', Pos('_FileExists', IR) > 0);
+end;
+
+procedure TSelfHostingTests.TestSemantic_FileAge_ReturnsInt64;
+var
+  Lex:  TLexer;
+  Par:  TParser;
+  SA:   TSemanticAnalyser;
+  Prog: TProgram;
+  Ass:  TAssignment;
+begin
+  Lex  := TLexer.Create(SrcFileAge);
+  Par  := TParser.Create(Lex);
+  Prog := Par.Parse;
+  Par.Free;
+  Lex.Free;
+  SA   := TSemanticAnalyser.Create;
+  SA.Analyse(Prog);
+  SA.Free;
+  Ass := TAssignment(Prog.Block.Stmts[0]);
+  AssertEquals('FileAge returns Int64',
+    Ord(tyInt64), Ord(Ass.Expr.ResolvedType.Kind));
+  Prog.Free;
+end;
+
+procedure TSelfHostingTests.TestCodegen_FileAge_CallsRTL;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcFileAge);
+  AssertTrue('FileAge calls _FileAge', Pos('_FileAge', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }

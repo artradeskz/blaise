@@ -7238,6 +7238,16 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'FileAge') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('FileAge requires exactly 1 argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    Result := FTable.TypeInt64;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'ForceDirectories') then
   begin
     if AExpr.Args.Count <> 1 then

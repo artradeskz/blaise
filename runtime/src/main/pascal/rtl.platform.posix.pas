@@ -40,6 +40,7 @@ type
     function ReadFile(const APath: string): string; override;
     procedure WriteFile(const APath, AContent: string); override;
     procedure AppendFile(const APath, AContent: string); override;
+    function FileAge(const APath: string): Int64; override;
 
     { Directory operations }
     function DirectoryExists(const APath: string): Boolean; override;
@@ -220,6 +221,7 @@ function  _RenameFile(OldPath, NewPath: Pointer): Integer;
 function  _ReadFile(Path: Pointer): Pointer;
 procedure _WriteFile(Path, Content: Pointer);
 procedure _AppendFile(Path, Content: Pointer);
+function  _FileAge(Path: Pointer): Int64;
 
 { Directory operations }
 function  _DirectoryExists(Path: Pointer): Integer;
@@ -497,6 +499,14 @@ begin
   if Len > 0 then
     WriteAllToFd(Fd, StrData(Pointer(AContent)), Len);
   libc_close(Fd);
+end;
+
+function TRtlPlatformPosix.FileAge(const APath: string): Int64;
+var
+  St: TStatBuf;
+begin
+  if libc_stat(StrData(Pointer(APath)), @St) <> 0 then begin Result := -1; Exit end;
+  Result := St.Mtime;
 end;
 
 { ================================================================== }
@@ -1203,6 +1213,11 @@ end;
 procedure _AppendFile(Path, Content: Pointer);
 begin
   GRtlPlatform.AppendFile(string(PChar(Path)), string(PChar(Content)));
+end;
+
+function _FileAge(Path: Pointer): Int64;
+begin
+  Result := GRtlPlatform.FileAge(string(PChar(Path)));
 end;
 
 function _DirectoryExists(Path: Pointer): Integer;

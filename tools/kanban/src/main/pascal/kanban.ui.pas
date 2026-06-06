@@ -28,6 +28,7 @@ type
     FInputPrompt: string;
     FStatusMsg: string;
     FNeedsRedraw: Boolean;
+    FPollCounter: Integer;
     procedure DrawBoard;
     procedure DrawColumn(ColIndex: Integer; Row, Col, Width, Height: Integer);
     procedure DrawStatusBar;
@@ -64,7 +65,8 @@ begin
   FInputBuf := '';
   FInputPrompt := '';
   FStatusMsg := 'q:quit  a:add  d:delete  Enter:details  h/l:move task  ?:help';
-  FNeedsRedraw := True
+  FNeedsRedraw := True;
+  FPollCounter := 0
 end;
 
 function TKanbanUI.ColumnTitle(ColIndex: Integer): string;
@@ -343,6 +345,7 @@ begin
     FTerm.ShowCursor;
     FTerm.BufFlush;
     FTerm.DisableRawMode;
+    FBoard.MergeFromDisk;
     FBoard.Save;
     Halt(0)
   end;
@@ -594,7 +597,7 @@ end;
 
 procedure TKanbanUI.Run;
 var
-  Key: Integer;
+  Key, Merged: Integer;
 begin
   FTerm.EnableRawMode;
   try
@@ -610,6 +613,27 @@ begin
       end;
 
       Key := FTerm.ReadKey;
+
+      if Key = KEY_NONE then
+      begin
+        FPollCounter := FPollCounter + 1;
+        if FPollCounter >= 20 then
+        begin
+          FPollCounter := 0;
+          if FBoard.HasExternalChanges then
+          begin
+            Merged := FBoard.MergeFromDisk;
+            if Merged > 0 then
+            begin
+              FStatusMsg := 'Reloaded ' + IntToStr(Merged) + ' new task(s) from disk';
+              Self.ClampRow;
+              FNeedsRedraw := True
+            end
+          end
+        end
+      end
+      else
+        FPollCounter := 0;
 
       if FViewMode = vmBoard then
         Self.HandleBoardKey(Key)

@@ -15,6 +15,10 @@ uses Classes, Contnrs, StrUtils, DateUtils;
 type
   TTaskStatus = (tsTodo, tsInProgress, tsDone);
 
+  TIntHolder = class
+    FValue: Integer;
+  end;
+
   TTask = class
     FId: Integer;
     FTitle: string;
@@ -32,9 +36,12 @@ type
     FTasks: TObjectList;
     FNextId: Integer;
     FFilePath: string;
+    FLastMtime: Int64;
+    FDeletedIds: TObjectList;
     function GetCount: Integer;
     procedure ParseLine(const Line: string; CurrentStatus: TTaskStatus);
     function FormatTask(Task: TTask): string;
+    function IsDeleted(AId: Integer): Boolean;
   public
     constructor Create(const AFilePath: string);
     destructor Destroy; override;
@@ -50,6 +57,8 @@ type
     function HasDetail(AId: Integer): Boolean;
     function LoadDetail(AId: Integer): string;
     procedure SaveDetail(AId: Integer; const AContent: string);
+    function HasExternalChanges: Boolean;
+    function MergeFromDisk: Integer;
     property Count: Integer read GetCount;
     property FilePath: string read FFilePath;
   end;
@@ -63,11 +72,14 @@ begin
   inherited Create;
   FFilePath := AFilePath;
   FTasks := TObjectList.Create(True);
-  FNextId := 1
+  FDeletedIds := TObjectList.Create(True);
+  FNextId := 1;
+  FLastMtime := -1
 end;
 
 destructor TBoard.Destroy;
 begin
+  FDeletedIds.Free;
   FTasks.Free;
   inherited Destroy
 end;
@@ -209,7 +221,8 @@ begin
     end
   finally
     Lines.Free
-  end
+  end;
+  FLastMtime := FileAge(FFilePath)
 end;
 
 procedure TBoard.Save;
@@ -218,6 +231,8 @@ var
   I: Integer;
   Task: TTask;
 begin
+  if Self.HasExternalChanges then
+    Self.MergeFromDisk;
   Lines := TStringList.Create;
   try
     Lines.Add('#next-id: ' + IntToStr(FNextId));
@@ -257,7 +272,8 @@ begin
     Lines.SaveToFile(FFilePath)
   finally
     Lines.Free
-  end
+  end;
+  FLastMtime := FileAge(FFilePath)
 end;
 
 function TBoard.AddTask(const ATitle: string; AStatus: TTaskStatus): TTask;
@@ -277,11 +293,26 @@ begin
   FTasks.Add(Result)
 end;
 
+function TBoard.IsDeleted(AId: Integer): Boolean;
+var
+  I: Integer;
+begin
+  I := 0;
+  while I < FDeletedIds.Count do
+  begin
+    if TIntHolder(FDeletedIds.Get(I)).FValue = AId then
+      Exit(True);
+    I := I + 1
+  end;
+  Result := False
+end;
+
 procedure TBoard.DeleteTask(AId: Integer);
 var
   I: Integer;
   Task: TTask;
   DetailPath: string;
+  Holder: TIntHolder;
 begin
   I := 0;
   while I < FTasks.Count do
@@ -293,6 +324,9 @@ begin
       if FileExists(DetailPath) then
         DeleteFile(DetailPath);
       FTasks.Delete(I);
+      Holder := TIntHolder.Create;
+      Holder.FValue := AId;
+      FDeletedIds.Add(Holder);
       Exit
     end;
     I := I + 1
@@ -393,6 +427,73 @@ begin
   if not DirectoryExists(DirPath) then
     ForceDirectories(DirPath);
   WriteFile(Self.GetDetailPath(AId), AContent)
+end;
+
+function TBoard.HasExternalChanges: Boolean;
+var
+  CurrentMtime: Int64;
+begin
+  CurrentMtime := FileAge(FFilePath);
+  Result := (CurrentMtime <> -1) and (CurrentMtime <> FLastMtime)
+end;
+
+function TBoard.MergeFromDisk: Integer;
+var
+  DiskBoard: TBoard;
+  I, Merged, MaxId: Integer;
+  DiskTask, MemTask, NewTask: TTask;
+begin
+  Merged := 0;
+  DiskBoard := TBoard.Create(FFilePath);
+  try
+    DiskBoard.Load;
+
+    MaxId := FNextId;
+    if DiskBoard.FNextId > MaxId then
+      MaxId := DiskBoard.FNextId;
+
+    I := 0;
+    while I < DiskBoard.FTasks.Count do
+    begin
+      DiskTask := TTask(DiskBoard.FTasks.Get(I));
+      if Self.IsDeleted(DiskTask.FId) then
+      begin
+        I := I + 1;
+        Continue
+      end;
+      MemTask := Self.FindById(DiskTask.FId);
+      if MemTask = nil then
+      begin
+        NewTask := TTask.Create;
+        NewTask.FId := DiskTask.FId;
+        NewTask.FTitle := DiskTask.FTitle;
+        NewTask.FStatus := DiskTask.FStatus;
+        NewTask.FCreated := DiskTask.FCreated;
+        NewTask.FPriority := DiskTask.FPriority;
+        FTasks.Add(NewTask);
+        Merged := Merged + 1
+      end
+      else if MemTask.FTitle <> DiskTask.FTitle then
+      begin
+        MemTask.FId := MaxId;
+        MaxId := MaxId + 1;
+        NewTask := TTask.Create;
+        NewTask.FId := DiskTask.FId;
+        NewTask.FTitle := DiskTask.FTitle;
+        NewTask.FStatus := DiskTask.FStatus;
+        NewTask.FCreated := DiskTask.FCreated;
+        NewTask.FPriority := DiskTask.FPriority;
+        FTasks.Add(NewTask);
+        Merged := Merged + 1
+      end;
+      I := I + 1
+    end;
+    FNextId := MaxId
+  finally
+    DiskBoard.Free
+  end;
+  FLastMtime := FileAge(FFilePath);
+  Result := Merged
 end;
 
 function CreatedToLocalDate(const AUtcStr: string): string;

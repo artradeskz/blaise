@@ -32,6 +32,7 @@ type
     function ReadFile(const APath: string): string; virtual; abstract;
     procedure WriteFile(const APath, AContent: string); virtual; abstract;
     procedure AppendFile(const APath, AContent: string); virtual; abstract;
+    function FileAge(const APath: string): Int64; virtual; abstract;
 
     { Directory operations }
     function DirectoryExists(const APath: string): Boolean; virtual; abstract;

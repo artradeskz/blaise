@@ -1593,6 +1593,7 @@ begin
   Sym := TSymbol.Create('WriteFile',  skProcedure, nil);          Define(Sym);
   Sym := TSymbol.Create('AppendFile', skProcedure, nil);          Define(Sym);
   Sym := TSymbol.Create('FileExists',             skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('FileAge',               skFunction,  FTypeInt64);   Define(Sym);
   Sym := TSymbol.Create('DeleteFile',             skProcedure, nil);          Define(Sym);
   Sym := TSymbol.Create('CurrentExceptionMessage', skFunction,  FTypeString);  Define(Sym);
   { Environment and process }

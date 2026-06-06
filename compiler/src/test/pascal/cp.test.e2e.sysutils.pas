@@ -47,6 +47,7 @@ type
     procedure TestRun_BoolToStr_TrueAndFalse;
     procedure TestRun_PlatformConstants;
     procedure TestRun_GetCurrentDir_ReturnsNonEmpty;
+    procedure TestRun_FileAge_ReturnsTimestamp;
   end;
 
 implementation
@@ -551,6 +552,17 @@ const
         end.
         ''';
 
+  SrcFileAge =
+    '''
+        program P;
+        var Age: Int64;
+        begin
+          Age := FileAge(ParamStr(1));
+          WriteLn(Age > 0);
+          WriteLn(FileAge('__no_such_file_xyz__'))
+        end.
+        ''';
+
 procedure TE2ESysUtilsTests.TestRun_RenameFile_Works;
 var
   Output: string;
@@ -674,6 +686,35 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcGetCurrentDir, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('GetCurrentDir non-empty', 'True', Trim(Output));
+end;
+
+procedure TE2ESysUtilsTests.TestRun_FileAge_ReturnsTimestamp;
+var
+  Output: string;
+  RCode: Integer;
+  TmpFile: string;
+  Lines: TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  TmpFile := GetTempFileName('', 'blaise_fileage_test');
+  Lines := TStringList.Create;
+  Lines.Add('x');
+  Lines.SaveToFile(TmpFile);
+  Lines.Free;
+  try
+    AssertTrue('compile+run',
+      CompileAndRun(SrcFileAge, Output, RCode, [TmpFile]));
+    Lines := TStringList.Create;
+    try
+      Lines.Text := Trim(Output);
+      AssertEquals('existing file age > 0', 'True', Lines.Strings[0]);
+      AssertEquals('missing file age = -1', '-1', Lines.Strings[1]);
+    finally
+      Lines.Free;
+    end;
+  finally
+    if FileExists(TmpFile) then DeleteFile(TmpFile);
+  end;
 end;
 
 initialization
