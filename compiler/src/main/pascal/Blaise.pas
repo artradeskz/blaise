@@ -701,6 +701,9 @@ begin
     ConfigPaths.Free;
   end;
 
+  if (UnitCacheDir <> '') and (SearchPaths.IndexOf(UnitCacheDir) < 0) then
+    SearchPaths.Add(UnitCacheDir);
+
   if not FileExists(SourceFile) then
   begin
     WriteLn(StdErr, 'Error: source file not found: ', SourceFile);
@@ -847,7 +850,7 @@ begin
       end;
       on E: Exception do
       begin
-        WriteLn(StdErr, 'Compiler error: ', Exception(E).Message);
+        WriteLn(StdErr, 'Compiler error [', Exception(E).ClassName, ']: ', Exception(E).Message);
         Halt(1);
       end;
     end;

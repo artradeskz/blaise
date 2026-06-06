@@ -38,7 +38,7 @@ interface
 
 uses
   Classes, Contnrs, SysUtils, uAST, uSymbolTable, uUnitInterface,
-  uSemantic;
+  uSemantic, uStrCompat;
 
 type
   EImportError = class(Exception);
@@ -68,6 +68,71 @@ function ResolveTypeName(const ATypeName: string; ATable: TSymbolTable): TTypeDe
 begin
   if ATypeName = '' then begin Result := nil; Exit; end;
   Result := ATable.FindType(ATypeName);
+end;
+
+{ Resolve an inline type name that is not a registered symbol.
+  Handles:
+    - '^BaseName'         → pointer to BaseName
+    - 'array[L..H] of E' → static array
+    - 'array of E'        → dynamic array
+    - 'class of X'        → metaclass
+  Returns nil if the pattern is not recognised. }
+function ResolveInlineTypeName(const ATypeName: string;
+                               ATable: TSymbolTable): TTypeDesc;
+var
+  DotDot, OfPos: Integer;
+  LowStr, HighStr, ElemName: string;
+  Lo, Hi: Integer;
+  ElemSym: TSymbol;
+  BaseSym: TSymbol;
+begin
+  Result := nil;
+  if Length(ATypeName) < 2 then Exit;
+
+  if StrAt(ATypeName, 0) = Ord('^') then
+  begin
+    BaseSym := ATable.Lookup(StrCopyTail(ATypeName, 1));
+    if (BaseSym <> nil) and (BaseSym.Kind = skType) then
+      Result := ATable.NewPointerType('', BaseSym.TypeDesc)
+    else
+      Result := ATable.NewPointerType('', nil);
+    Exit;
+  end;
+
+  if StrHead(ATypeName, 6) = 'array[' then
+  begin
+    DotDot := StrPos('..', ATypeName);
+    OfPos  := StrPos('] of ', ATypeName);
+    if (DotDot < 0) or (OfPos < 0) then Exit;
+    LowStr   := StrCopyTail(StrHead(ATypeName, DotDot), 6);
+    HighStr  := StrCopyTail(StrHead(ATypeName, OfPos), DotDot + 2);
+    ElemName := StrCopyTail(ATypeName, OfPos + 5);
+    Lo := StrToInt(LowStr);
+    Hi := StrToInt(HighStr);
+    ElemSym := ATable.Lookup(ElemName);
+    if (ElemSym <> nil) and (ElemSym.Kind = skType) then
+      Result := ATable.NewStaticArrayType(ElemSym.TypeDesc, Lo, Hi);
+    Exit;
+  end;
+
+  if (Length(ATypeName) > 9) and (StrHead(ATypeName, 9) = 'array of ') then
+  begin
+    ElemName := StrCopyTail(ATypeName, 9);
+    ElemSym := ATable.Lookup(ElemName);
+    if (ElemSym <> nil) and (ElemSym.Kind = skType) then
+      Result := ATable.NewDynArrayType(ElemSym.TypeDesc);
+    Exit;
+  end;
+
+  if (Length(ATypeName) > 9) and (StrHead(ATypeName, 9) = 'class of ') then
+  begin
+    BaseSym := ATable.Lookup(StrCopyTail(ATypeName, 9));
+    if (BaseSym <> nil) and (BaseSym.Kind = skType) then
+      Result := ATable.NewMetaClassType('', BaseSym.TypeDesc)
+    else
+      Result := ATable.NewMetaClassType('', nil);
+    Exit;
+  end;
 end;
 
 { ----- Type-entry registration ---------------------------------- }
@@ -188,14 +253,20 @@ var
   I:        Integer;
 begin
   IntfDef  := TInterfaceTypeDef(AEntry.Def);
-  IntfDesc := ATable.NewInterfaceType(AEntry.Name);
 
-  Sym := TSymbol.Create(AEntry.Name, skType, IntfDesc);
-  Sym.OwningUnit := AUnitName;
-  if not ATable.Define(Sym) then
+  Sym := ATable.Lookup(AEntry.Name);
+  if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc is TInterfaceTypeDesc) then
+    IntfDesc := TInterfaceTypeDesc(Sym.TypeDesc)
+  else
   begin
-    Sym.Free;
-    Exit;
+    IntfDesc := ATable.NewInterfaceType(AEntry.Name);
+    Sym := TSymbol.Create(AEntry.Name, skType, IntfDesc);
+    Sym.OwningUnit := AUnitName;
+    if not ATable.Define(Sym) then
+    begin
+      Sym.Free;
+      Exit;
+    end;
   end;
 
   if IntfDef.ParentName <> '' then
@@ -221,7 +292,8 @@ begin
 end;
 
 procedure RegisterClass(AEntry: TTypeEntry; ATable: TSymbolTable;
-                        const AUnitName: string);
+                        const AUnitName: string;
+                        ASemantic: TSemanticAnalyser = nil);
 var
   ClassDef: TClassTypeDef;
   RT:       TRecordTypeDesc;
@@ -230,18 +302,28 @@ var
   Sym:      TSymbol;
   FldSym:   TSymbol;
   FldDecl:  TFieldDecl;
+  FldType:  TTypeDesc;
   FldInfo:  TFieldInfo;
+  MDecl:    TMethodDecl;
+  PropDecl: TPropertyDecl;
+  PropInfo: TPropertyInfo;
   I, J:     Integer;
 begin
   ClassDef := TClassTypeDef(AEntry.Def);
-  RT := ATable.NewClassType(AEntry.Name);
 
-  Sym := TSymbol.Create(AEntry.Name, skType, RT);
-  Sym.OwningUnit := AUnitName;
-  if not ATable.Define(Sym) then
+  Sym := ATable.Lookup(AEntry.Name);
+  if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc is TRecordTypeDesc) then
+    RT := TRecordTypeDesc(Sym.TypeDesc)
+  else
   begin
-    Sym.Free;
-    Exit;  { duplicate; skip — caller's responsibility }
+    RT := ATable.NewClassType(AEntry.Name);
+    Sym := TSymbol.Create(AEntry.Name, skType, RT);
+    Sym.OwningUnit := AUnitName;
+    if not ATable.Define(Sym) then
+    begin
+      Sym.Free;
+      Exit;
+    end;
   end;
 
   { Parent resolution mirrors uSemantic.AnalyseTypeDecls pass-2:
@@ -278,13 +360,18 @@ begin
   for I := 0 to ClassDef.Fields.Count - 1 do
   begin
     FldDecl := TFieldDecl(ClassDef.Fields.Items[I]);
+    FldType := nil;
     FldSym  := ATable.Lookup(FldDecl.TypeName);
-    if (FldSym = nil) or (FldSym.Kind <> skType) then
+    if (FldSym <> nil) and (FldSym.Kind = skType) then
+      FldType := FldSym.TypeDesc
+    else
+      FldType := ResolveInlineTypeName(FldDecl.TypeName, ATable);
+    if FldType = nil then
       raise EImportError.CreateFmt(
-        'Class %s field type ''%s'' unresolved',
+        'Class %s field type %s unresolved',
         [AEntry.Name, FldDecl.TypeName]);
     for J := 0 to FldDecl.Names.Count - 1 do
-      RT.AddField(FldDecl.Names.Strings[J], FldSym.TypeDesc);
+      RT.AddField(FldDecl.Names.Strings[J], FldType);
   end;
 
   { Methods: walk TRoutineSig list; for virtual/override, register
@@ -295,7 +382,16 @@ begin
     ResolvedQbeName but the lookup-key dance is left to a follow-up
     (overloaded class methods are not in the 6c-B happy path). }
   for I := 0 to AEntry.Methods.Count - 1 do
+  begin
     RegisterClassMethod(RT, TRoutineSig(AEntry.Methods.Items[I]));
+    if ASemantic <> nil then
+    begin
+      MDecl := SynthesiseMethodDecl(
+        TRoutineSig(AEntry.Methods.Items[I]), AUnitName, ATable);
+      ATable.OwnImportedDecl(MDecl);
+      ASemantic.RegisterImportedMethod(AEntry.Name, MDecl);
+    end;
+  end;
 
   { Interface implements list — names are 'Unit.Type' (cross-unit) or
     just 'Type' (local).  We strip any 'Unit.' prefix since the
@@ -308,6 +404,45 @@ begin
     Sym := ATable.Lookup(ParentName);
     if (Sym <> nil) and (Sym.TypeDesc is TInterfaceTypeDesc) then
       RT.AddImplements(TInterfaceTypeDesc(Sym.TypeDesc));
+  end;
+
+  { Properties. }
+  for I := 0 to ClassDef.Properties.Count - 1 do
+  begin
+    PropDecl := TPropertyDecl(ClassDef.Properties.Items[I]);
+    PropInfo := TPropertyInfo.Create;
+    PropInfo.Name := PropDecl.Name;
+    FldSym := ATable.Lookup(PropDecl.TypeName);
+    if (FldSym <> nil) and (FldSym.Kind = skType) then
+      PropInfo.TypeDesc := FldSym.TypeDesc
+    else
+    begin
+      FldType := ResolveInlineTypeName(PropDecl.TypeName, ATable);
+      if FldType <> nil then
+        PropInfo.TypeDesc := FldType;
+    end;
+    if PropDecl.ReadName <> '' then
+    begin
+      if RT.FindField(PropDecl.ReadName) <> nil then
+        PropInfo.ReadField := PropDecl.ReadName
+      else
+        PropInfo.ReadMethod := PropDecl.ReadName;
+    end;
+    if PropDecl.WriteName <> '' then
+    begin
+      if RT.FindField(PropDecl.WriteName) <> nil then
+        PropInfo.WriteField := PropDecl.WriteName
+      else
+        PropInfo.WriteMethod := PropDecl.WriteName;
+    end;
+    PropInfo.IndexParamName := PropDecl.IndexParamName;
+    if PropDecl.IndexTypeName <> '' then
+    begin
+      FldSym := ATable.Lookup(PropDecl.IndexTypeName);
+      if (FldSym <> nil) and (FldSym.Kind = skType) then
+        PropInfo.IndexTypeDesc := FldSym.TypeDesc;
+    end;
+    RT.AddProperty(PropInfo);
   end;
 
   { Class attributes.  uSemanticExport currently copies the raw
@@ -340,31 +475,78 @@ var
   FldType:  TTypeDesc;
 begin
   RecDef  := TRecordTypeDef(AEntry.Def);
-  RecDesc := ATable.NewRecordType(AEntry.Name);
-  RecDesc.IsPacked := RecDef.IsPacked;
 
-  { Pre-register so self-referential pointer fields (rare in records,
-    common in classes) can resolve against the in-progress type. }
-  Sym := TSymbol.Create(AEntry.Name, skType, RecDesc);
-  Sym.OwningUnit := AUnitName;
-  if not ATable.Define(Sym) then
+  Sym := ATable.Lookup(AEntry.Name);
+  if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc is TRecordTypeDesc) then
+    RecDesc := TRecordTypeDesc(Sym.TypeDesc)
+  else
   begin
-    Sym.Free;
-    Exit;  { duplicate — caller responsibility }
+    RecDesc := ATable.NewRecordType(AEntry.Name);
+    Sym := TSymbol.Create(AEntry.Name, skType, RecDesc);
+    Sym.OwningUnit := AUnitName;
+    if not ATable.Define(Sym) then
+    begin
+      Sym.Free;
+      Exit;
+    end;
   end;
+  RecDesc.IsPacked := RecDef.IsPacked;
 
   for I := 0 to RecDef.Fields.Count - 1 do
   begin
     FldDecl := TFieldDecl(RecDef.Fields.Items[I]);
+    FldType := nil;
     FldSym  := ATable.Lookup(FldDecl.TypeName);
-    if (FldSym = nil) or (FldSym.Kind <> skType) then
+    if (FldSym <> nil) and (FldSym.Kind = skType) then
+      FldType := FldSym.TypeDesc
+    else
+      FldType := ResolveInlineTypeName(FldDecl.TypeName, ATable);
+    if FldType = nil then
       raise EImportError.CreateFmt(
-        'Record %s field type ''%s'' unresolved',
+        'Record %s field type %s unresolved',
         [AEntry.Name, FldDecl.TypeName]);
-    FldType := FldSym.TypeDesc;
     for J := 0 to FldDecl.Names.Count - 1 do
       RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
   end;
+end;
+
+procedure RegisterProcType(AEntry: TTypeEntry; ATable: TSymbolTable;
+                           const AUnitName: string);
+var
+  Def:       TProceduralTypeDef;
+  ProcDesc:  TProceduralTypeDesc;
+  Sym:       TSymbol;
+  K:         Integer;
+  MParam:    TMethodParam;
+  ParamInfo: TProcParamInfo;
+  TSym:      TSymbol;
+begin
+  Def      := TProceduralTypeDef(AEntry.Def);
+  ProcDesc := ATable.NewProceduralType(AEntry.Name);
+  ProcDesc.IsMethodPtr := Def.IsMethodPtr;
+  for K := 0 to Def.Params.Count - 1 do
+  begin
+    MParam := TMethodParam(Def.Params.Items[K]);
+    TSym   := ATable.Lookup(MParam.TypeName);
+    if (TSym <> nil) and (TSym.Kind = skType) then
+    begin
+      ParamInfo := TProcParamInfo.Create;
+      ParamInfo.Name         := MParam.ParamName;
+      ParamInfo.TypeDesc     := TSym.TypeDesc;
+      ParamInfo.IsVarParam   := MParam.IsVarParam;
+      ParamInfo.IsConstParam := MParam.IsConstParam;
+      ProcDesc.Params.Add(ParamInfo);
+    end;
+  end;
+  if Def.IsFunction then
+  begin
+    TSym := ATable.Lookup(Def.ReturnTypeName);
+    if (TSym <> nil) and (TSym.Kind = skType) then
+      ProcDesc.ReturnType := TSym.TypeDesc;
+  end;
+  Sym := TSymbol.Create(AEntry.Name, skType, ProcDesc);
+  Sym.OwningUnit := AUnitName;
+  if not ATable.Define(Sym) then Sym.Free;
 end;
 
 procedure RegisterAlias(AEntry: TTypeEntry; ATable: TSymbolTable;
@@ -379,40 +561,63 @@ var
 begin
   AliasDef  := TTypeAliasDef(AEntry.Def);
   AliasName := AliasDef.TypeName;
-  if (Length(AliasName) > 0) and (AliasName[1] = '^') then
-  begin
-    BaseSym  := ATable.Lookup(Copy(AliasName, 2, Length(AliasName) - 1));
-    BaseType := nil;
-    if (BaseSym <> nil) and (BaseSym.Kind = skType) then
-      BaseType := BaseSym.TypeDesc;
-    AliasDesc := ATable.NewPointerType(AEntry.Name, BaseType);
-  end
+  BaseSym := ATable.Lookup(AliasName);
+  if (BaseSym <> nil) and (BaseSym.Kind = skType) then
+    AliasDesc := BaseSym.TypeDesc
   else
   begin
-    BaseSym := ATable.Lookup(AliasName);
-    if (BaseSym = nil) or (BaseSym.Kind <> skType) then
+    AliasDesc := ResolveInlineTypeName(AliasName, ATable);
+    if AliasDesc = nil then
       raise EImportError.CreateFmt(
         'Type alias %s = %s: base not found', [AEntry.Name, AliasName]);
-    AliasDesc := BaseSym.TypeDesc;
   end;
   Sym := TSymbol.Create(AEntry.Name, skType, AliasDesc);
   Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then Sym.Free;
 end;
 
-procedure RegisterTypes(AIface: TUnitInterface; ATable: TSymbolTable);
+procedure RegisterTypes(AIface: TUnitInterface; ATable: TSymbolTable;
+                        ASemantic: TSemanticAnalyser = nil);
 var
   I: Integer;
   Entry: TTypeEntry;
+  Sym: TSymbol;
 begin
+  { Pass 1: pre-register class, record, and interface names so
+    forward references (field types pointing at later types in the
+    same unit) resolve during pass 2. }
+  for I := 0 to AIface.Types.Count - 1 do
+  begin
+    Entry := TTypeEntry(AIface.Types.Items[I]);
+    if Entry.IsGeneric or (Entry.Def is TGenericInterfaceDef) then
+      Continue;
+    if Entry.Def is TClassTypeDef then
+    begin
+      Sym := TSymbol.Create(Entry.Name, skType, ATable.NewClassType(Entry.Name));
+      Sym.OwningUnit := AIface.Name;
+      if not ATable.Define(Sym) then Sym.Free;
+    end
+    else if Entry.Def is TRecordTypeDef then
+    begin
+      Sym := TSymbol.Create(Entry.Name, skType, ATable.NewRecordType(Entry.Name));
+      Sym.OwningUnit := AIface.Name;
+      if not ATable.Define(Sym) then Sym.Free;
+    end
+    else if Entry.Def is TInterfaceTypeDef then
+    begin
+      Sym := TSymbol.Create(Entry.Name, skType, ATable.NewInterfaceType(Entry.Name));
+      Sym.OwningUnit := AIface.Name;
+      if not ATable.Define(Sym) then Sym.Free;
+    end;
+  end;
+
+  { Pass 2: fill in details — enums, sets, aliases, proc types go
+    here in full; class/record/interface fill fields/methods/parents
+    using the pre-registered descriptor. }
   for I := 0 to AIface.Types.Count - 1 do
   begin
     Entry := TTypeEntry(AIface.Types.Items[I]);
 
-    { Generic type templates — register the AST template so the
-      consumer's FindTypeOrInstantiate path can clone-and-substitute
-      on demand.  Matches uSemantic.AnalyseTypeDecls pass-1 for
-      TGenericTypeDef / TGenericInterfaceDef. }
     if Entry.IsGeneric or (Entry.Def is TGenericInterfaceDef) then
     begin
       ATable.RegisterGeneric(Entry.Name, Entry.Def);
@@ -428,9 +633,11 @@ begin
     else if Entry.Def is TInterfaceTypeDef then
       RegisterInterface(Entry, ATable, AIface.Name)
     else if Entry.Def is TClassTypeDef then
-      RegisterClass(Entry, ATable, AIface.Name)
+      RegisterClass(Entry, ATable, AIface.Name, ASemantic)
     else if Entry.Def is TRecordTypeDef then
       RegisterRecord(Entry, ATable, AIface.Name)
+    else if Entry.Def is TProceduralTypeDef then
+      RegisterProcType(Entry, ATable, AIface.Name)
     else
       raise EImportError.CreateFmt(
         'Type %s.%s: import of %s not yet implemented',
@@ -636,9 +843,7 @@ begin
   Saved := ATable.DefineOwningUnit;
   ATable.DefineOwningUnit := AIface.Name;
   try
-    { Types FIRST — consts, vars, and routine params look up against
-      the symbol table by name. }
-    RegisterTypes  (AIface, ATable);
+    RegisterTypes  (AIface, ATable, ASemantic);
     RegisterConsts (AIface, ATable);
     RegisterVars   (AIface, ATable);
     RegisterRoutines(AIface, ATable, ASemantic);

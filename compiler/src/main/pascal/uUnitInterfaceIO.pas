@@ -296,6 +296,25 @@ begin
             EncodeFieldList(Def.Fields);
 end;
 
+function EncodePropertyList(AList: TObjectList): string;
+var
+  I: Integer;
+  P: TPropertyDecl;
+begin
+  Result := EncodeCount(AList.Count);
+  for I := 0 to AList.Count - 1 do
+  begin
+    P := TPropertyDecl(AList.Items[I]);
+    Result := Result +
+              EncodeLpstr(P.Name) +
+              EncodeLpstr(P.TypeName) +
+              EncodeLpstr(P.ReadName) +
+              EncodeLpstr(P.WriteName) +
+              EncodeLpstr(P.IndexParamName) +
+              EncodeLpstr(P.IndexTypeName);
+  end;
+end;
+
 function WriteClassPayload(AEntry: TTypeEntry): string;
 var
   Def: TClassTypeDef;
@@ -307,7 +326,8 @@ begin
     EncodeStringList(AEntry.Attributes) +
     EncodeStringList(AEntry.Implements) +
     EncodeFieldList(Def.Fields) +
-    EncodeMethodList(AEntry.Methods);
+    EncodeMethodList(AEntry.Methods) +
+    EncodePropertyList(Def.Properties);
 end;
 
 { Encode a TMethodDecl (AST) using the same per-method payload shape
@@ -1691,6 +1711,7 @@ begin
   ReadStringListBlock(AText, APos, AEntry.Implements);
   ReadFieldList(AText, APos, Def.Fields);
   ReadMethodList(AText, APos, AEntry.Methods);
+  ReadPropertyList(AText, APos, Def.Properties);
   AEntry.IsClass := True;
   AEntry.Def     := Def;
 end;
@@ -1728,6 +1749,26 @@ var
 begin
   C := DecodeCount(AText, APos);
   for I := 1 to C do ATarget.Add(ReadMethodDecl(AText, APos));
+end;
+
+procedure ReadPropertyList(const AText: string; var APos: Integer;
+                           ATarget: TObjectList);
+var
+  C, I: Integer;
+  P:    TPropertyDecl;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+  begin
+    P := TPropertyDecl.Create;
+    P.Name           := ReadLpstrAt(AText, APos);
+    P.TypeName       := ReadLpstrAt(AText, APos);
+    P.ReadName       := ReadLpstrAt(AText, APos);
+    P.WriteName      := ReadLpstrAt(AText, APos);
+    P.IndexParamName := ReadLpstrAt(AText, APos);
+    P.IndexTypeName  := ReadLpstrAt(AText, APos);
+    ATarget.Add(P);
+  end;
 end;
 
 procedure ReadInlineBodies(const AText: string; var APos: Integer;

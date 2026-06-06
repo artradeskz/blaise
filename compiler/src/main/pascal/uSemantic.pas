@@ -262,6 +262,8 @@ type
       goes through FProcIndex instead. }
     procedure RegisterImportedRoutine(const AName: string;
                                       ADecl: TMethodDecl);
+    procedure RegisterImportedMethod(const ATypeName: string;
+                                     ADecl: TMethodDecl);
 
     { Register a TUnitInterface in FUnitIfaces, keyed by AIface.Name.
       AIface is NOT owned — caller (Blaise.pas) retains lifetime.
@@ -1377,6 +1379,12 @@ begin
     iface's unit name before we get here; don't overwrite with
     FCurrentUnitName since the analyser may not be mid-analysis. }
   FProcIndex.AddObject(AName, ADecl);
+end;
+
+procedure TSemanticAnalyser.RegisterImportedMethod(const ATypeName: string;
+                                                    ADecl: TMethodDecl);
+begin
+  FMethodIndex.AddObject(ATypeName + '.' + ADecl.Name, ADecl);
 end;
 
 procedure TSemanticAnalyser.RegisterUnitIface(AIface: TUnitInterface);

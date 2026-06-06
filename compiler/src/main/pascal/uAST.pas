@@ -1591,6 +1591,7 @@ end;
 
 function CloneVarDecl(ASrc: TVarDecl): TVarDecl; forward;
 function CloneFieldDecl(ASrc: TFieldDecl): TFieldDecl; forward;
+function ClonePropertyDecl(ASrc: TPropertyDecl): TPropertyDecl; forward;
 { CloneTypeDecl, CloneConstDecl, CloneMethodDecl, CloneMethodParam,
   CloneTypeDef are now declared in the interface section. }
 function CloneGenericTypeDef(ASrc: TGenericTypeDef): TGenericTypeDef; forward;
@@ -2011,6 +2012,17 @@ begin
     Result.Attributes.Add(ASrc.Attributes.Strings[I]);
 end;
 
+function ClonePropertyDecl(ASrc: TPropertyDecl): TPropertyDecl;
+begin
+  Result := TPropertyDecl.Create;
+  Result.Name           := ASrc.Name;
+  Result.TypeName       := ASrc.TypeName;
+  Result.ReadName       := ASrc.ReadName;
+  Result.WriteName      := ASrc.WriteName;
+  Result.IndexParamName := ASrc.IndexParamName;
+  Result.IndexTypeName  := ASrc.IndexTypeName;
+end;
+
 function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl;
 begin
   Result := TTypeDecl.Create;
@@ -2212,10 +2224,8 @@ begin
     Result.Methods.Add(CloneMethodDecl(TMethodDecl(ASrc.Methods.Items[I])));
   for I := 0 to ASrc.Attributes.Count - 1 do
     Result.Attributes.Add(ASrc.Attributes.Strings[I]);
-  { Properties intentionally NOT cloned in this Phase 2 cut —
-    TPropertyDecl is plain data with no owned subtrees, but no
-    current consumer requires it; revisit when Phase 3 wires class
-    member export. }
+  for I := 0 to ASrc.Properties.Count - 1 do
+    Result.Properties.Add(ClonePropertyDecl(TPropertyDecl(ASrc.Properties.Items[I])));
 end;
 
 function CloneGenericTypeDef(ASrc: TGenericTypeDef): TGenericTypeDef;
