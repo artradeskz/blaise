@@ -264,7 +264,8 @@ begin
               tkVirtual, tkOverride, tkExternal, tkIs, tkAs, tkAnd, tkOr,
               tkNot, tkExit, tkBreak, tkContinue, tkInherited, tkCase,
               tkOf, tkArray, tkSet, tkIn, tkShl, tkShr, tkSar, tkXor, tkConst,
-              tkOut, tkConstructor, tkDestructor, tkDiv, tkMod]);
+              tkOut, tkConstructor, tkDestructor, tkDiv, tkMod,
+              tkThreadvar]);
 end;
 
 { ------------------------------------------------------------------ }

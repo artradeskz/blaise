@@ -319,6 +319,11 @@ begin
     tyString, tyMetaClass, tyDynArray:          Result := 8;
     tyDouble:                                   Result := 8;
     tySingle:                                   Result := 4;
+    tySet:
+      if TSetTypeDesc(AType).BitCount > 32 then
+        Result := 8
+      else
+        Result := 4;
   else
     Result := 4;
   end;
@@ -2120,7 +2125,8 @@ var
   MD:  TMethodDecl;
   Unsigned: Boolean;
   AOE: TAddrOfExpr;
-  SetMask, SetI: Integer;
+  SetMask: Int64;
+  SetI: Integer;
   SetElem: TASTExpr;
 begin
   if AExpr is TNilLiteral then
@@ -2464,6 +2470,56 @@ begin
       Self.Emit(#9'movq %rax, %rsi');
       Self.Emit(#9'popq %rdi');
       Self.Emit(#9'callq _StringConcat');
+      Exit;
+    end;
+    { Set membership: elem in SetVar — (set >> ord(elem)) & 1 }
+    if (BE.Op = boIn) and
+       (BE.Right.ResolvedType <> nil) and
+       (BE.Right.ResolvedType.Kind = tySet) then
+    begin
+      Self.EmitExprToEax(BE.Left);
+      Self.Emit(#9'movl %eax, %ecx');
+      Self.EmitExprToEax(BE.Right);
+      if TSetTypeDesc(BE.Right.ResolvedType).BitCount > 32 then
+      begin
+        Self.Emit(#9'shrq %cl, %rax');
+        Self.Emit(#9'andq $1, %rax');
+      end
+      else
+      begin
+        Self.Emit(#9'shrl %cl, %eax');
+        Self.Emit(#9'andl $1, %eax');
+      end;
+      Exit;
+    end;
+    { Set arithmetic: union (+), difference (-), intersection (*) }
+    if (BE.Left.ResolvedType <> nil) and
+       (BE.Left.ResolvedType.Kind = tySet) and
+       (BE.Op in [boAdd, boSub, boMul, boEQ, boNE]) then
+    begin
+      Self.EmitExprToEax(BE.Left);
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(BE.Right);
+      Self.Emit(#9'movq %rax, %rcx');
+      Self.Emit(#9'popq %rax');
+      case BE.Op of
+        boAdd: Self.Emit(#9'orq %rcx, %rax');
+        boSub:
+        begin
+          Self.Emit(#9'notq %rcx');
+          Self.Emit(#9'andq %rcx, %rax');
+        end;
+        boMul: Self.Emit(#9'andq %rcx, %rax');
+        boEQ, boNE:
+        begin
+          Self.Emit(#9'cmpq %rcx, %rax');
+          if BE.Op = boEQ then
+            Self.Emit(#9'sete %al')
+          else
+            Self.Emit(#9'setne %al');
+          Self.Emit(#9'movzbl %al, %eax');
+        end;
+      end;
       Exit;
     end;
     { left -> %rax, save; right -> %rax; left -> %rcx; combine in 64 bits. }
@@ -3072,9 +3128,12 @@ begin
     begin
       SetElem := TASTExpr(TArrayLiteralExpr(AExpr).Elements.Items[SetI]);
       if (SetElem is TIdentExpr) and TIdentExpr(SetElem).IsConstant then
-        SetMask := SetMask or (1 shl TIdentExpr(SetElem).ConstValue);
+        SetMask := SetMask or (Int64(1) shl TIdentExpr(SetElem).ConstValue);
     end;
-    Self.Emit(Format(#9'movl $%d, %%eax', [SetMask]));
+    if TSetTypeDesc(AExpr.ResolvedType).BitCount > 32 then
+      Self.Emit(Format(#9'movabsq $%s, %%rax', [IntToStr(SetMask)]))
+    else
+      Self.Emit(Format(#9'movl $%s, %%eax', [IntToStr(SetMask)]));
     Exit;
   end;
 
@@ -3988,8 +4047,16 @@ begin
 
     { Evaluate set expression once }
     Self.EmitExprToEax(AStmt.CollExpr);
-    Self.Emit(Format(#9'movl %%eax, %s',
-      [Self.VarOperand(AStmt.SetMaskVarName)]));
+    if AStmt.SetBitCount > 32 then
+    begin
+      Self.Emit(Format(#9'movq %%rax, %s',
+        [Self.VarOperand(AStmt.SetMaskVarName)]));
+    end
+    else
+    begin
+      Self.Emit(Format(#9'movl %%eax, %s',
+        [Self.VarOperand(AStmt.SetMaskVarName)]));
+    end;
     Self.Emit(Format(#9'movl $0, %s', [IdxOp]));
 
     Self.Emit(LCond + ':');
@@ -4000,12 +4067,24 @@ begin
 
     Self.Emit(LBody + ':');
     { Test bit: (mask >> idx) & 1 }
-    Self.Emit(Format(#9'movl %s, %%eax',
-      [Self.VarOperand(AStmt.SetMaskVarName)]));
-    Self.Emit(Format(#9'movl %s, %%ecx', [IdxOp]));
-    Self.Emit(#9'shrl %cl, %eax');
-    Self.Emit(#9'andl $1, %eax');
-    Self.Emit(#9'testl %eax, %eax');
+    if AStmt.SetBitCount > 32 then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.VarOperand(AStmt.SetMaskVarName)]));
+      Self.Emit(Format(#9'movl %s, %%ecx', [IdxOp]));
+      Self.Emit(#9'shrq %cl, %rax');
+      Self.Emit(#9'andq $1, %rax');
+      Self.Emit(#9'testq %rax, %rax');
+    end
+    else
+    begin
+      Self.Emit(Format(#9'movl %s, %%eax',
+        [Self.VarOperand(AStmt.SetMaskVarName)]));
+      Self.Emit(Format(#9'movl %s, %%ecx', [IdxOp]));
+      Self.Emit(#9'shrl %cl, %eax');
+      Self.Emit(#9'andl $1, %eax');
+      Self.Emit(#9'testl %eax, %eax');
+    end;
     Self.Emit(#9'jne ' + LBody + '_yes');
     Self.Emit(#9'jmp ' + LNext);
     Self.Emit(LBody + '_yes:');
@@ -4933,6 +5012,64 @@ begin
       else
         raise ENativeCodeGenError.Create(
           'native backend: Inc/Dec only supports simple variable arguments');
+      Exit;
+    end;
+    { Include(S, elem): S := S or (1 shl ord(elem)) }
+    if SameText(PC.Name, 'Include') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movl %eax, %ecx');
+      FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
+      if (TASTExpr(PC.Args.Items[0]).ResolvedType <> nil) and
+         (TSetTypeDesc(TASTExpr(PC.Args.Items[0]).ResolvedType).BitCount > 32) then
+      begin
+        Self.Emit(#9'movq $1, %rax');
+        Self.Emit(#9'shlq %cl, %rax');
+        if Self.IsLocal(FDynArgName) then
+        begin
+          Self.Emit(Format(#9'orq %%rax, %s', [Self.VarOperand(FDynArgName)]));
+        end
+        else
+          Self.Emit(Format(#9'orq %%rax, %s(%%rip)', [FDynArgName]));
+      end
+      else
+      begin
+        Self.Emit(#9'movl $1, %eax');
+        Self.Emit(#9'shll %cl, %eax');
+        if Self.IsLocal(FDynArgName) then
+          Self.Emit(Format(#9'orl %%eax, %s', [Self.VarOperand(FDynArgName)]))
+        else
+          Self.Emit(Format(#9'orl %%eax, %s(%%rip)', [FDynArgName]));
+      end;
+      Exit;
+    end;
+    { Exclude(S, elem): S := S and (not (1 shl ord(elem))) }
+    if SameText(PC.Name, 'Exclude') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movl %eax, %ecx');
+      FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
+      if (TASTExpr(PC.Args.Items[0]).ResolvedType <> nil) and
+         (TSetTypeDesc(TASTExpr(PC.Args.Items[0]).ResolvedType).BitCount > 32) then
+      begin
+        Self.Emit(#9'movq $1, %rax');
+        Self.Emit(#9'shlq %cl, %rax');
+        Self.Emit(#9'notq %rax');
+        if Self.IsLocal(FDynArgName) then
+          Self.Emit(Format(#9'andq %%rax, %s', [Self.VarOperand(FDynArgName)]))
+        else
+          Self.Emit(Format(#9'andq %%rax, %s(%%rip)', [FDynArgName]));
+      end
+      else
+      begin
+        Self.Emit(#9'movl $1, %eax');
+        Self.Emit(#9'shll %cl, %eax');
+        Self.Emit(#9'notl %eax');
+        if Self.IsLocal(FDynArgName) then
+          Self.Emit(Format(#9'andl %%eax, %s', [Self.VarOperand(FDynArgName)]))
+        else
+          Self.Emit(Format(#9'andl %%eax, %s(%%rip)', [FDynArgName]));
+      end;
       Exit;
     end;
     if PC.IsIndirectCall then

@@ -1250,7 +1250,11 @@ bitmask in which bit N is set when the enum member with ordinal N is included.
 
 - ≤ 32 enum members: stored as a single QBE `w` (32-bit word).
 - 33–64 members: stored as a single QBE `l` (64-bit long).
-- More than 64 members: deferred (no use case in the current codebase).
+- More than 64 members: rejected by the semantic analyser.  QBE has no 128-bit
+  integer type, so supporting 65–256 elements would require a byte-array
+  representation — deferred until a real use case arises.  FPC/Delphi support
+  up to 256 with a 32-byte fixed-size set, but 64 covers the vast majority of
+  real-world enum sets.
 
 Sets are value types (copied on assignment), not heap-allocated.
 

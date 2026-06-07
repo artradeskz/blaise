@@ -2838,6 +2838,11 @@ begin
   end
   else if EnumDesc <> nil then
   begin
+    if EnumDesc.Members.Count > 64 then
+      SemanticError(
+        Format('Enumeration ''%s'' has %d members; set types support at most 64',
+          [EnumDesc.Name, EnumDesc.Members.Count]),
+        ACD.Line, ACD.Col);
     { Inferred set type: find or create the canonical 'set of <Enum>'. }
     CanonName := 'set of ' + EnumDesc.Name;
     ExistTD   := FTable.FindType(CanonName);
@@ -3151,6 +3156,11 @@ begin
          not (BaseSym.TypeDesc is TEnumTypeDesc) then
         SemanticError(
           Format('Set base type ''%s'' must be an enumeration type', [SetDef.BaseTypeName]),
+          TD.Line, TD.Col);
+      if TEnumTypeDesc(BaseSym.TypeDesc).Members.Count > 64 then
+        SemanticError(
+          Format('Enumeration ''%s'' has %d members; set types support at most 64',
+            [SetDef.BaseTypeName, TEnumTypeDesc(BaseSym.TypeDesc).Members.Count]),
           TD.Line, TD.Col);
       SetDesc := FTable.NewSetType(TD.Name, TEnumTypeDesc(BaseSym.TypeDesc));
       Sym := TSymbol.Create(TD.Name, skType, SetDesc);
@@ -4981,7 +4991,7 @@ begin
       ForInS.ResolvedVarType := ElemType;
       ForInS.SetBitCount    := TSetTypeDesc(CollType).BitCount;
 
-      { Inject synthetic mask slot (Integer) for the evaluated set value }
+      { Inject synthetic mask slot for the evaluated set value }
       ForInS.SetMaskVarName := '__setmask_' + IntToStr(FForInCounter);
       { Inject synthetic index slot (Integer) for the bit position }
       ForInS.IdxVarName := '__idx_' + IntToStr(FForInCounter);
@@ -4990,8 +5000,16 @@ begin
       begin
         SynthDecl := TVarDecl.Create();
         SynthDecl.Names.Add(ForInS.SetMaskVarName);
-        SynthDecl.TypeName    := 'Integer';
-        SynthDecl.ResolvedType := FTable.TypeInteger;
+        if TSetTypeDesc(CollType).BitCount > 32 then
+        begin
+          SynthDecl.TypeName    := 'Int64';
+          SynthDecl.ResolvedType := FTable.TypeInt64;
+        end
+        else
+        begin
+          SynthDecl.TypeName    := 'Integer';
+          SynthDecl.ResolvedType := FTable.TypeInteger;
+        end;
         SynthDecl.IsGlobal    := False;
         FCurrentLocalBlock.Decls.Add(SynthDecl);
 

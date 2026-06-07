@@ -91,6 +91,24 @@ type
     procedure TestSemantic_EmptyLiteral_NonSetAssign_Fails;
     procedure TestCodegen_SetLiteralArg_FoldsToBitmask;
     procedure TestCodegen_SetParam_SpillsAtWordWidth;
+
+    { ------------------------------------------------------------------ }
+    { 64-bit sets (>32 members)                                            }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Set64_TypeRegistered;
+    procedure TestSemantic_Set64_TooManyMembers_Fails;
+    procedure TestCodegen_Set64_VarAllocsEmitsLongZero;
+    procedure TestCodegen_Set64_LiteralEmitsLongMask;
+    procedure TestCodegen_Set64_InOperatorUsesLong;
+    procedure TestCodegen_Set64_IncludeUsesLong;
+    procedure TestCodegen_Set64_ExcludeUsesLong;
+    procedure TestCodegen_Set64_UnionUsesLong;
+    procedure TestCodegen_Set64_DifferenceUsesLong;
+    procedure TestCodegen_Set64_IntersectionUsesLong;
+    procedure TestCodegen_Set64_EqualityUsesLong;
+    procedure TestCodegen_Set64_InequalityUsesLong;
+    procedure TestCodegen_Set64_SizeOfReturns8;
+    procedure TestCodegen_Set64_ParamSpillsAtLongWidth;
   end;
 
 implementation
@@ -342,6 +360,182 @@ const
           B := S1 <> S2
         end.
         ''';
+
+  BigEnum =
+    '''
+        type
+          TBig = (
+            X00, X01, X02, X03, X04, X05, X06, X07,
+            X08, X09, X10, X11, X12, X13, X14, X15,
+            X16, X17, X18, X19, X20, X21, X22, X23,
+            X24, X25, X26, X27, X28, X29, X30, X31,
+            X32, X33, X34, X35, X36, X37, X38, X39,
+            X40, X41, X42, X43, X44, X45, X46, X47);
+          TBigSet = set of TBig;
+        ''';
+
+  SrcSet64TypeDecl =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        begin
+        end.
+        ''';
+
+  SrcSet64VarEmpty =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S: TBigSet;
+        begin
+          S := []
+        end.
+        ''';
+
+  SrcSet64Literal =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S: TBigSet;
+        begin
+          S := [X40]
+        end.
+        ''';
+
+  SrcSet64InOperator =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S: TBigSet; B: Boolean;
+        begin
+          S := [X40];
+          B := X40 in S
+        end.
+        ''';
+
+  SrcSet64Include =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S: TBigSet;
+        begin
+          S := [];
+          Include(S, X40)
+        end.
+        ''';
+
+  SrcSet64Exclude =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S: TBigSet;
+        begin
+          S := [X40];
+          Exclude(S, X40)
+        end.
+        ''';
+
+  SrcSet64Union =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S1, S2, S3: TBigSet;
+        begin
+          S1 := [X00];
+          S2 := [X40];
+          S3 := S1 + S2
+        end.
+        ''';
+
+  SrcSet64Difference =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S1, S2, S3: TBigSet;
+        begin
+          S1 := [X00, X40];
+          S2 := [X00];
+          S3 := S1 - S2
+        end.
+        ''';
+
+  SrcSet64Intersection =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S1, S2, S3: TBigSet;
+        begin
+          S1 := [X00, X40];
+          S2 := [X40];
+          S3 := S1 * S2
+        end.
+        ''';
+
+  SrcSet64Equality =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S1, S2: TBigSet; B: Boolean;
+        begin
+          S1 := [X40];
+          S2 := [X40];
+          B := S1 = S2
+        end.
+        ''';
+
+  SrcSet64Inequality =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var S1, S2: TBigSet; B: Boolean;
+        begin
+          S1 := [X40];
+          S2 := [X00];
+          B := S1 <> S2
+        end.
+        ''';
+
+  SrcSet64LiteralArg =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        procedure Take(S: TBigSet);
+        begin
+          if X40 in S then Halt(0)
+        end;
+        begin
+          Take([X40])
+        end.
+        ''';
+
+  SrcSet64SizeOf =
+    'program P;' + #10 +
+    BigEnum +
+    '''
+        var N: Integer;
+        begin
+          N := SizeOf(TBigSet)
+        end.
+        ''';
+
+  SrcSetTooManyMembers =
+    '''
+    program P;
+    type
+      THuge = (
+        A00, A01, A02, A03, A04, A05, A06, A07,
+        A08, A09, A10, A11, A12, A13, A14, A15,
+        A16, A17, A18, A19, A20, A21, A22, A23,
+        A24, A25, A26, A27, A28, A29, A30, A31,
+        A32, A33, A34, A35, A36, A37, A38, A39,
+        A40, A41, A42, A43, A44, A45, A46, A47,
+        A48, A49, A50, A51, A52, A53, A54, A55,
+        A56, A57, A58, A59, A60, A61, A62, A63,
+        A64);
+      THugeSet = set of THuge;
+    begin
+    end.
+    ''';
 
   SrcSetBadBaseType =
     '''
@@ -808,6 +1002,129 @@ begin
   IR := GenIR(SrcSetLiteralArg);
   AssertTrue('set param spilled with storew', Pos('storew %_par_S', IR) > 0);
   AssertFalse('set param not spilled with storel', Pos('storel %_par_S', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ 64-bit sets (>32 members)                                            }
+{ ------------------------------------------------------------------ }
+
+procedure TSetTests.TestSemantic_Set64_TypeRegistered;
+begin
+  SemanticOK(SrcSet64TypeDecl);
+end;
+
+procedure TSetTests.TestSemantic_Set64_TooManyMembers_Fails;
+begin
+  SemanticFail(SrcSetTooManyMembers);
+end;
+
+procedure TSetTests.TestCodegen_Set64_VarAllocsEmitsLongZero;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64VarEmpty);
+  AssertTrue('64-bit set var zero-initialised with l 0',
+    (Pos('{ l 0 }', IR) > 0) or (Pos('storel 0', IR) > 0));
+end;
+
+procedure TSetTests.TestCodegen_Set64_LiteralEmitsLongMask;
+var
+  IR: string;
+begin
+  { [X40] -> bit 40 -> mask = 1099511627776 = Int64(1) shl 40 }
+  IR := GenIR(SrcSet64Literal);
+  AssertTrue('64-bit set literal emits =l copy',
+    Pos('=l copy 1099511627776', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_InOperatorUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64InOperator);
+  AssertTrue('in operator on 64-bit set uses =l shr',
+    Pos('=l shr', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_IncludeUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Include);
+  AssertTrue('Include on 64-bit set uses loadl', Pos('loadl', IR) > 0);
+  AssertTrue('Include on 64-bit set uses =l shl', Pos('=l shl', IR) > 0);
+  AssertTrue('Include on 64-bit set uses =l or', Pos('=l or', IR) > 0);
+  AssertTrue('Include on 64-bit set uses storel', Pos('storel', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_ExcludeUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Exclude);
+  AssertTrue('Exclude on 64-bit set uses loadl', Pos('loadl', IR) > 0);
+  AssertTrue('Exclude on 64-bit set uses =l shl', Pos('=l shl', IR) > 0);
+  AssertTrue('Exclude on 64-bit set uses =l xor', Pos('=l xor', IR) > 0);
+  AssertTrue('Exclude on 64-bit set uses =l and', Pos('=l and', IR) > 0);
+  AssertTrue('Exclude on 64-bit set uses storel', Pos('storel', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_UnionUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Union);
+  AssertTrue('union on 64-bit set uses =l or', Pos('=l or', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_DifferenceUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Difference);
+  AssertTrue('difference on 64-bit set uses =l xor', Pos('=l xor', IR) > 0);
+  AssertTrue('difference on 64-bit set uses =l and', Pos('=l and', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_IntersectionUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Intersection);
+  AssertTrue('intersection on 64-bit set uses =l and', Pos('=l and', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_EqualityUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Equality);
+  AssertTrue('64-bit set equality uses ceql', Pos('ceql', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_InequalityUsesLong;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64Inequality);
+  AssertTrue('64-bit set inequality uses cnel', Pos('cnel', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_SizeOfReturns8;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64SizeOf);
+  AssertTrue('SizeOf(TBigSet) emits copy 8', Pos('copy 8', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set64_ParamSpillsAtLongWidth;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSet64LiteralArg);
+  AssertTrue('64-bit set param spilled with storel', Pos('storel %_par_S', IR) > 0);
+  AssertFalse('64-bit set param not spilled with storew', Pos('storew %_par_S', IR) > 0);
 end;
 
 initialization

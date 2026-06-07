@@ -574,6 +574,12 @@ SetType
     = SET OF IDENT
     ;
 
+(* The base enumeration must have at most 64 members.  Sets with up to 32
+ * members occupy 4 bytes (QBE 'w'); sets with 33–64 members occupy 8 bytes
+ * (QBE 'l').  Each member ordinal N maps to bit (1 shl N) in the bitmask.
+ * Enumerations with more than 64 members are rejected by the semantic
+ * analyser — extending to 256 (byte-array sets) is a future goal. *)
+
 (* Procedural type — bare or method pointer.
  *
  * Without 'of object', the type is a bare function/procedure pointer

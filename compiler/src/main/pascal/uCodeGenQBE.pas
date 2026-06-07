@@ -2740,6 +2740,9 @@ var
   BitT:       string;
   OrdT:       string;
   LblNext:    string;
+  SetMQT:     string;
+  SetMLd:     string;
+  SetMSt:     string;
 begin
   if AStmt.IsArrayIter then
   begin
@@ -3095,12 +3098,17 @@ begin
     LblNext  := AllocLabel('forin_next');
     LblEnd   := AllocLabel('forin_end');
 
+    { Determine mask width from set type }
+    SetMQT := QbeTypeOf(AStmt.CollExpr.ResolvedType);
+    SetMLd := LoadInstrFor(AStmt.CollExpr.ResolvedType);
+    SetMSt := StoreInstrFor(AStmt.CollExpr.ResolvedType);
+
     { Evaluate the set expression once and store in mask slot }
     MaskT := EmitExpr(AStmt.CollExpr);
     if IsPromoted(AStmt.SetMaskVarName) then
-      EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.SetMaskVarName, MaskT]))
+      EmitLine(Format('  %%_var_%s =%s copy %s', [AStmt.SetMaskVarName, SetMQT, MaskT]))
     else
-      EmitLine(Format('  storew %s, %s', [MaskT, MaskSlot]));
+      EmitLine(Format('  %s %s, %s', [SetMSt, MaskT, MaskSlot]));
 
     { Initialise index to 0 }
     if IsPromoted(AStmt.IdxVarName) then
@@ -3125,15 +3133,15 @@ begin
     MaskT := AllocTemp();
     BitT  := AllocTemp();
     if IsPromoted(AStmt.SetMaskVarName) then
-      EmitLine(Format('  %s =w copy %%_var_%s', [MaskT, AStmt.SetMaskVarName]))
+      EmitLine(Format('  %s =%s copy %%_var_%s', [MaskT, SetMQT, AStmt.SetMaskVarName]))
     else
-      EmitLine(Format('  %s =w loadw %s', [MaskT, MaskSlot]));
+      EmitLine(Format('  %s =%s %s %s', [MaskT, SetMQT, SetMLd, MaskSlot]));
     IdxW := AllocTemp();
     if IsPromoted(AStmt.IdxVarName) then
       EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
     else
       EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
-    EmitLine(Format('  %s =w shr %s, %s', [BitT, MaskT, IdxW]));
+    EmitLine(Format('  %s =%s shr %s, %s', [BitT, SetMQT, MaskT, IdxW]));
     CmpT := AllocTemp();
     EmitLine(Format('  %s =w and %s, 1', [CmpT, BitT]));
     { If bit is 0 skip body, go directly to forin_next }
@@ -6559,6 +6567,9 @@ var
   FPtrTemp:  string;
   ArgTemps:  TStringList;
   I:         Integer;
+  SetQT:     string;
+  SetLoad:   string;
+  SetStore:  string;
 begin
   { Indirect call through a procedural-typed variable: load the function
     pointer from the variable and call through it.  For 'of object' types
@@ -6908,30 +6919,36 @@ begin
   else if UCaseName = 'INCLUDE' then
   begin
     { Include(S, elem): S := S or (1 shl ord(elem)) }
+    SetQT := QbeTypeOf(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+    SetLoad := LoadInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+    SetStore := StoreInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
     ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
     ArgTemp2 := AllocTemp();
-    EmitLine(Format('  %s =w loadw %s', [ArgTemp2, ArgTemp]));
-    SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));  { enum ordinal }
+    EmitLine(Format('  %s =%s %s %s', [ArgTemp2, SetQT, SetLoad, ArgTemp]));
+    SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
     ArgLine  := AllocTemp();
-    EmitLine(Format('  %s =w shl 1, %s', [ArgLine, SizeTemp]));
+    EmitLine(Format('  %s =%s shl 1, %s', [ArgLine, SetQT, SizeTemp]));
     SizeTemp := AllocTemp();
-    EmitLine(Format('  %s =w or %s, %s', [SizeTemp, ArgTemp2, ArgLine]));
-    EmitLine(Format('  storew %s, %s', [SizeTemp, ArgTemp]));
+    EmitLine(Format('  %s =%s or %s, %s', [SizeTemp, SetQT, ArgTemp2, ArgLine]));
+    EmitLine(Format('  %s %s, %s', [SetStore, SizeTemp, ArgTemp]));
   end
   else if UCaseName = 'EXCLUDE' then
   begin
     { Exclude(S, elem): S := S and (not (1 shl ord(elem))) }
+    SetQT := QbeTypeOf(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+    SetLoad := LoadInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+    SetStore := StoreInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
     ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
     ArgTemp2 := AllocTemp();
-    EmitLine(Format('  %s =w loadw %s', [ArgTemp2, ArgTemp]));
-    SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));  { enum ordinal }
+    EmitLine(Format('  %s =%s %s %s', [ArgTemp2, SetQT, SetLoad, ArgTemp]));
+    SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
     ArgLine  := AllocTemp();
-    EmitLine(Format('  %s =w shl 1, %s', [ArgLine, SizeTemp]));
+    EmitLine(Format('  %s =%s shl 1, %s', [ArgLine, SetQT, SizeTemp]));
     SizeTemp := AllocTemp();
-    EmitLine(Format('  %s =w xor %s, -1', [SizeTemp, ArgLine]));
+    EmitLine(Format('  %s =%s xor %s, -1', [SizeTemp, SetQT, ArgLine]));
     ArgLine  := AllocTemp();
-    EmitLine(Format('  %s =w and %s, %s', [ArgLine, ArgTemp2, SizeTemp]));
-    EmitLine(Format('  storew %s, %s', [ArgLine, ArgTemp]));
+    EmitLine(Format('  %s =%s and %s, %s', [ArgLine, SetQT, ArgTemp2, SizeTemp]));
+    EmitLine(Format('  %s %s, %s', [SetStore, ArgLine, ArgTemp]));
   end
   else if UCaseName = 'DELETEFILE' then
   begin
@@ -7237,6 +7254,7 @@ var
   PT:           TProceduralTypeDesc;
   SlotAddr:     string;
   DataTemp:     string;
+  SQT:          string;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -9973,8 +9991,9 @@ begin
     { Set membership: elem in SetVar — (set >> ord(elem)) & 1 }
     if BinExpr.Op = boIn then
     begin
+      SQT := QbeTypeOf(BinExpr.Right.ResolvedType);
       ArgTemp := AllocTemp();
-      EmitLine(Format('  %s =w shr %s, %s', [ArgTemp, R, L]));
+      EmitLine(Format('  %s =%s shr %s, %s', [ArgTemp, SQT, R, L]));
       EmitLine(Format('  %s =w and %s, 1', [T, ArgTemp]));
       Exit(T);
     end;
@@ -9983,21 +10002,28 @@ begin
     if (BinExpr.Left.ResolvedType <> nil) and
        (BinExpr.Left.ResolvedType.Kind = tySet) then
     begin
+      SQT := QbeTypeOf(BinExpr.Left.ResolvedType);
       case BinExpr.Op of
         boAdd:  { union: or }
-          EmitLine(Format('  %s =w or %s, %s', [T, L, R]));
+          EmitLine(Format('  %s =%s or %s, %s', [T, SQT, L, R]));
         boSub:  { difference: L and (not R) }
         begin
           ArgTemp := AllocTemp();
-          EmitLine(Format('  %s =w xor %s, -1', [ArgTemp, R]));
-          EmitLine(Format('  %s =w and %s, %s', [T, L, ArgTemp]));
+          EmitLine(Format('  %s =%s xor %s, -1', [ArgTemp, SQT, R]));
+          EmitLine(Format('  %s =%s and %s, %s', [T, SQT, L, ArgTemp]));
         end;
         boMul:  { intersection: and }
-          EmitLine(Format('  %s =w and %s, %s', [T, L, R]));
+          EmitLine(Format('  %s =%s and %s, %s', [T, SQT, L, R]));
         boEQ:
-          EmitLine(Format('  %s =w ceqw %s, %s', [T, L, R]));
+          if SQT = 'l' then
+            EmitLine(Format('  %s =w ceql %s, %s', [T, L, R]))
+          else
+            EmitLine(Format('  %s =w ceqw %s, %s', [T, L, R]));
         boNE:
-          EmitLine(Format('  %s =w cnew %s, %s', [T, L, R]));
+          if SQT = 'l' then
+            EmitLine(Format('  %s =w cnel %s, %s', [T, L, R]))
+          else
+            EmitLine(Format('  %s =w cnew %s, %s', [T, L, R]));
       else
         raise ECodeGenError.Create(Format(
           'Operator not supported for set types at line %d', [BinExpr.Line]));
@@ -11866,15 +11892,13 @@ begin
 end;
 
 function TCodeGenQBE.EmitSetLiteralExpr(AExpr: TArrayLiteralExpr): string;
-{ Compute a compile-time bitmask for a set literal [elem, ...].
-  Each element must be a constant enum value; bit (1 shl ordinal) is set.
-  Returns a QBE temp holding the 32-bit integer mask. }
 var
-  Mask:   Integer;
+  Mask:   Int64;
   I:      Integer;
   Elem:   TASTExpr;
   IdExpr: TIdentExpr;
   Tmp:    string;
+  QT:     string;
 begin
   Mask := 0;
   for I := 0 to AExpr.Elements.Count - 1 do
@@ -11886,10 +11910,11 @@ begin
     if not IdExpr.IsConstant then
       raise ECodeGenError.Create(Format(
         'Set literal element ''%s'' is not a constant', [IdExpr.Name]));
-    Mask := Mask or (1 shl IdExpr.ConstValue);
+    Mask := Mask or (Int64(1) shl IdExpr.ConstValue);
   end;
   Tmp := AllocTemp();
-  EmitLine(Format('  %s =w copy %d', [Tmp, Mask]));
+  QT := QbeTypeOf(AExpr.ResolvedType);
+  EmitLine(Format('  %s =%s copy %s', [Tmp, QT, IntToStr(Mask)]));
   Result := Tmp;
 end;
 
