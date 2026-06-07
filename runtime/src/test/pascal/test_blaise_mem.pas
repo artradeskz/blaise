@@ -500,7 +500,7 @@ begin
   _BlaiseFreeMem(A);
   B := _BlaiseGetMem(65536);
   AssertNotNull('second large', B);
-  AssertEquals('cache returns same block', PtrUInt(A), PtrUInt(B));
+  AssertEquals('cache returns same block', Pointer(A), Pointer(B));
   _BlaiseFreeMem(B);
   Result := '';
 end;
