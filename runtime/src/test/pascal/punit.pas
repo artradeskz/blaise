@@ -628,7 +628,7 @@ end;
 
 function GetTestErrorMessage : string;
 begin
-  case GetTestError of
+  case GetTestError() of
     teOK                  : Result := SErrOK;
     teTestsRunning        : Result := SErrTestsRunning;
     teRegistryEmpty       : Result := SErrRegistryEmpty;
@@ -730,7 +730,7 @@ end;
 function SetupTestRegistry : TTestError;
 begin
   Result := SetTestError(teOK);
-  Result := TearDownTestRegistry;
+  Result := TearDownTestRegistry();
   if Result = teOK then
     DoSetupTestRegistry;
 end;
@@ -739,7 +739,7 @@ function TearDownTestRegistry : TTestError;
 begin
   SetTestError(teOK);
   FreeSuiteList(TestRegistry);
-  Result := GetTestError;
+  Result := GetTestError();
 end;
 
 { -----------------------------------------------------------------------
@@ -890,7 +890,7 @@ var
 begin
   Result := nil;
   SetTestError(teOK);
-  if not CheckInactive then
+  if not CheckInactive() then
     exit;
   DoSetupTestRegistry;
   if AName = '' then
@@ -937,7 +937,7 @@ var
 begin
   Result := nil;
   SetTestError(teOK);
-  if not CheckInactive then
+  if not CheckInactive() then
     Exit;
   if ASuite = nil then
     SetTestError(teNoSuite)
@@ -2521,7 +2521,7 @@ begin
       else if Assigned(S) then
         R := RunSuite(S)
       else
-        R := RunAllTests;
+        R := RunAllTests();
       if R <> teOK then
         Halt(5)
       else
@@ -2589,12 +2589,12 @@ initialization
   RequirePassed    := False;
   DefaultDoubleDelta := 1E-14;
   CurrentRunMode   := rvNormal;
-  SetupTestRegistry;
+  SetupTestRegistry();
   SetupSysHandlers;
 
 finalization
   TearDownSysHandlers;
-  TearDownTestRegistry;
+  TearDownTestRegistry();
   ResetRun(CurrentRun);
 
 end.
