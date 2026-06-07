@@ -280,7 +280,7 @@ begin
         program Test;
         procedure Foo; external;
         begin
-          Foo
+          Foo()
         end.
         '''
   );
@@ -305,7 +305,7 @@ begin
         function Bar: Integer; external;
         var x: Integer;
         begin
-          x := Bar
+          x := Bar()
         end.
         '''
   );
@@ -347,7 +347,7 @@ begin
         program Test;
         procedure Foo; external;
         begin
-          Foo
+          Foo()
         end.
         '''
   );
@@ -364,7 +364,7 @@ begin
         program Test;
         procedure Foo; external name 'c_foo';
         begin
-          Foo
+          Foo()
         end.
         '''
   );
@@ -440,7 +440,7 @@ begin
         function Foo: Integer; external;
         var i: Integer;
         begin
-          i := Foo;
+          i := Foo();
         end.
         '''
   );

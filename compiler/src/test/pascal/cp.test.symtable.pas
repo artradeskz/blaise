@@ -171,7 +171,7 @@ var
 begin
   ST := TSymbolTable.Create();
   try
-    AssertTrue('Integer is numeric', ST.FindType('Integer').IsNumeric);
+    AssertTrue('Integer is numeric', ST.FindType('Integer').IsNumeric());
   finally
     ST.Free();
   end;
@@ -183,7 +183,7 @@ var
 begin
   ST := TSymbolTable.Create();
   try
-    AssertFalse('Boolean is not numeric', ST.FindType('Boolean').IsNumeric);
+    AssertFalse('Boolean is not numeric', ST.FindType('Boolean').IsNumeric());
   finally
     ST.Free();
   end;
@@ -195,7 +195,7 @@ var
 begin
   ST := TSymbolTable.Create();
   try
-    AssertTrue('string IsString', ST.FindType('string').IsString);
+    AssertTrue('string IsString', ST.FindType('string').IsString());
   finally
     ST.Free();
   end;
@@ -207,7 +207,7 @@ var
 begin
   ST := TSymbolTable.Create();
   try
-    AssertFalse('Integer IsString', ST.FindType('Integer').IsString);
+    AssertFalse('Integer IsString', ST.FindType('Integer').IsString());
   finally
     ST.Free();
   end;

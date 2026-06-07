@@ -74,7 +74,7 @@ begin
   Result := '';
   FIn := TFileInputStream.Create(APath);
   try
-    SetLength(Result, Integer(FIn.Size));
+    SetLength(Result, Integer(FIn.Size()));
     if Length(Result) > 0 then
       FIn.Read(PChar(Result), Length(Result));
   finally

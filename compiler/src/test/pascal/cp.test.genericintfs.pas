@@ -335,7 +335,7 @@ begin
   try
     VD       := TVarDecl(Prog.Block.Decls[0]);
     IntfDesc := TInterfaceTypeDesc(VD.ResolvedType);
-    AssertEquals('Two methods', 2, IntfDesc.MethodCount);
+    AssertEquals('Two methods', 2, IntfDesc.MethodCount());
     AssertEquals('First method is Equals',     'Equals',      IntfDesc.MethodName(0));
     AssertEquals('Second method is GetHashCode', 'GetHashCode', IntfDesc.MethodName(1));
   finally

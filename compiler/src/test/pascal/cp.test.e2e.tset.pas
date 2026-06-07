@@ -161,7 +161,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDeduplicate, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=1 after three identical includes', Pos('1', Output) >= 0);
@@ -172,7 +172,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcExclude, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=2 after exclude', Pos('2', Output) >= 0);
@@ -185,7 +185,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   { Boolean true prints as True, false as False in Blaise }
@@ -198,7 +198,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcCountTracking, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('starts at 0', Pos('0', Output) >= 0);

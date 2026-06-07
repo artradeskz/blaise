@@ -145,7 +145,7 @@ begin
   begin
     TypeDesc := ASymbolTable.FindType(AEntry.Name);
     if (TypeDesc <> nil) and (TypeDesc is TRecordTypeDesc) then
-      AEntry.InstanceSize := TRecordTypeDesc(TypeDesc).TotalSize;
+      AEntry.InstanceSize := TRecordTypeDesc(TypeDesc).TotalSize();
   end;
 
   { VTableLayout: TRoutineSig.VTableSlot is populated by

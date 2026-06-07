@@ -42,8 +42,8 @@ type
                       out AStdout: string): Integer;
     function  RunProcNoArgs(const AExe: string; out AStdout: string): Integer;
   protected
-    function  ToolchainAvailable: Boolean;
-    function  ValgrindAvailable: Boolean;
+    function  ToolchainAvailable(): Boolean;
+    function  ValgrindAvailable(): Boolean;
     procedure SetUpScratch(const ADirName: string);
     procedure SetUp; override;
     function  CompileAndRun(const ASrc: string;
@@ -128,12 +128,12 @@ begin
   Result := IncludeTrailingPathDelimiter(GetCurrentDir())
 end;
 
-function TE2ETestCase.ToolchainAvailable: Boolean;
+function TE2ETestCase.ToolchainAvailable(): Boolean;
 begin
   Result := FileExists(FQBE) and FileExists(FRTL)
 end;
 
-function TE2ETestCase.ValgrindAvailable: Boolean;
+function TE2ETestCase.ValgrindAvailable(): Boolean;
 var Dummy: string;
 begin
   Result := RunProc('valgrind', ['--version'], Dummy) = 0
@@ -146,17 +146,17 @@ begin
   FCounter := 0;
   FQBE := GetEnvironmentVariable('BLAISE_QBE');
   if FQBE = '' then
-    FQBE := ProjectRoot + 'vendor/qbe/qbe';
+    FQBE := ProjectRoot() + 'vendor/qbe/qbe';
   FRTL := GetEnvironmentVariable('BLAISE_RTL');
   if FRTL = '' then
-    FRTL := ProjectRoot + 'runtime/target/blaise_rtl.a';
-  FRTLUnitPath := ProjectRoot + 'runtime/src/main/pascal';
-  FStdlibUnitPath := ProjectRoot + 'stdlib/src/main/pascal'
+    FRTL := ProjectRoot() + 'runtime/target/blaise_rtl.a';
+  FRTLUnitPath := ProjectRoot() + 'runtime/src/main/pascal';
+  FStdlibUnitPath := ProjectRoot() + 'stdlib/src/main/pascal'
 end;
 
 procedure TE2ETestCase.SetUpScratch(const ADirName: string);
 begin
-  FScratch := ProjectRoot + ADirName;
+  FScratch := ProjectRoot() + ADirName;
   ForceDirectories(FScratch);
   FCounter := 0
 end;

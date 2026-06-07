@@ -145,7 +145,7 @@ const
 procedure TE2EPointersTests.TestRun_Pointer_GetMem_WriteRead_FreeMem;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcGetMemWriteRead, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('42', '42' + LE, Output);
@@ -154,7 +154,7 @@ end;
 procedure TE2EPointersTests.TestRun_Pointer_TypedPointer_Deref;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTypedPointerDeref, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('99', '99' + LE, Output);
@@ -163,7 +163,7 @@ end;
 procedure TE2EPointersTests.TestRun_Pointer_NilCheck;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPointerNilCheck, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nil', 'nil' + LE, Output);
@@ -172,7 +172,7 @@ end;
 procedure TE2EPointersTests.TestRun_PCharSubscript_ChrAssignment;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPCharSubscriptChr, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ABCD', 'ABCD' + LE, Output);
@@ -181,7 +181,7 @@ end;
 procedure TE2EPointersTests.TestRun_PCharSubscript_HashCharLiteralAssignment;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPCharSubscriptHashChar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ABCD', 'ABCD' + LE, Output);
@@ -190,7 +190,7 @@ end;
 procedure TE2EPointersTests.TestRun_StaticArrayOfPChar_ElementPreservesAllBits;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcStaticArrayPChar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('two PChar values round-tripped through static array',

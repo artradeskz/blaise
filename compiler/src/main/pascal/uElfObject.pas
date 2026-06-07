@@ -256,13 +256,13 @@ begin
     Exit;
   end;
   try
-    if FS.Size < ELF32_EHDR_SIZE then
+    if FS.Size() < ELF32_EHDR_SIZE then
       Exit;
 
     { Always read the larger 64-bit header — if the file is 32-bit
       we just look at fewer of the trailing fields. }
     HSize := ELF64_EHDR_SIZE;
-    if FS.Size < HSize then
+    if FS.Size() < HSize then
       HSize := ELF32_EHDR_SIZE;
 
     if not BlockRead(FS, 0, HSize, Buf) then
@@ -591,7 +591,7 @@ begin
   { Slurp the entire file. }
   FIn := TFileInputStream.Create(APath);
   try
-    SetLength(OldFile, Integer(FIn.Size));
+    SetLength(OldFile, Integer(FIn.Size()));
     if FIn.Read(PChar(OldFile), Length(OldFile)) <> Length(OldFile) then
       raise EElfObject.Create(APath + ': short read on original file');
   finally

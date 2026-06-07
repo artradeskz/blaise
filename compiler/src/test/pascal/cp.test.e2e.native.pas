@@ -1003,63 +1003,63 @@ const
 
 procedure TE2ENativeTests.TestRun_Native_EmptyProgram_ExitsZero;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcEmpty, '', 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IntArithmetic_WriteLn;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArith, '14' + LE + '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_DivModAndNesting;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDivMod,
     '3' + LE + '2' + LE + '30' + LE + '-3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_WriteNoNewline;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcWriteNoNL, '123' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IfElse;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIfElse, '1' + LE + '0' + LE + '44' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ComparisonsAndNestedIf;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcComparisons,
     '11' + LE + '22' + LE + '44' + LE + '55' + LE + '66' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Repeat;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRepeat, '8' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VarsAndForLoop;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcVarsForLoop, '15' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_DownToAndNestedFor;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDownToNested, '543210' + LE + '9' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_CounterLoops;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { while writes 0,1,2 (Write, no newline), then WriteLn(9) -> "0129"; repeat
     counts 0->2->4->6 and WriteLn(n) -> "6". }
   AssertRunsOnBoth(SrcCounterLoops, '0129' + LE + '6' + LE, 0);
@@ -1067,13 +1067,13 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_ForEndEvaluatedOnce;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcForEndOnce, '3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_FunctionsAndCalls;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Square(6)=36; Sum3(1,2,3)=6; PrintTwice(9)=9,9; Square(Square(2))=16;
     Square(3)+Sum3(10,20,30)=9+60=69 }
   AssertRunsOnBoth(SrcFunctions,
@@ -1082,26 +1082,26 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_Recursion;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecursion, '120' + LE + '1' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ForLoopOverLocal;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcForOverLocal, '55' + LE + '5050' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_WiderIntGlobals;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcWiderIntGlobals,
     '200' + LE + '50000' + LE + '-1000' + LE + '5000000000' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Int64Arithmetic;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { 100000*100000 = 10000000000; 4e9+4e9 = 8000000000; /1e6 = 8000 }
   AssertRunsOnBoth(SrcInt64Arith,
     '10000000000' + LE + '8000000000' + LE + '8000' + LE, 0);
@@ -1109,7 +1109,7 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_WiderIntParamsAndReturn;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { AddBytes(200,100)=300; ScaleBig(2e9)*3=6000000000; ClampWord(40000)=40000 }
   AssertRunsOnBoth(SrcWiderIntParams,
     '300' + LE + '6000000000' + LE + '40000' + LE, 0);
@@ -1117,7 +1117,7 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_TypeCastConversions;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Byte(300)=44 (300 mod 256); Word(70000)=4464 (70000 mod 65536);
     Int64(1000000)^2 = 1000000000000 }
   AssertRunsOnBoth(SrcTypeCasts,
@@ -1126,142 +1126,142 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_SignednessAndWraparound;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { SmallInt -2 reads back -2; Word 65534 reads back 65534; -2 + 5 = 3 }
   AssertRunsOnBoth(SrcSignedness, '-2' + LE + '65534' + LE + '3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_WriteUnsigned32;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcWriteUnsigned32, '3000000000' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VarParamSwap;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcVarParamSwap, '7' + LE + '3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VarParamPassThrough;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcVarParamPassThrough, '25' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VarParamWiderInt;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcVarParamWiderInt,
     '9000000000' + LE + '255' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_OutParam;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcOutParam, '42' + LE + '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ForBreak;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcForBreak, '5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_WhileContinue;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Sum of odd numbers 1..9: 1+3+5+7+9 = 25 }
   AssertRunsOnBoth(SrcWhileContinue, '25' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ExitFromFunction;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcExitFunc, '7' + LE + '9' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ExitValueShorthand;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Clamp(5,1,10)=5; Clamp(-3,1,10)=1; Clamp(99,1,10)=10 }
   AssertRunsOnBoth(SrcExitValue, '5' + LE + '1' + LE + '10' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_SevenArgs;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { 1+2+3+4+5+6+7 = 28 }
   AssertRunsOnBoth(SrcSevenArgs, '28' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_EightArgs;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { 1+2+3+4+5+6+7+8 = 36; 100-1-2-3-4-5-6-7 = 72 }
   AssertRunsOnBoth(SrcEightArgs, '36' + LE + '72' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IndirectCall_BareProc;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIndirectBareProc, '42' + LE + '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IndirectCall_BareFunc;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { F = Add: 3+4 = 7; F = Mul: 3*4 = 12 }
   AssertRunsOnBoth(SrcIndirectBareFunc, '7' + LE + '12' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Record_GlobalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordGlobal, '3' + LE + '7' + LE + '10' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Record_LocalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordLocal, '20' + LE + '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Record_AsParam;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { |4-1| + |6-2| = 3 + 4 = 7 }
   AssertRunsOnBoth(SrcRecordParam, '7' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticArray_GlobalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStaticArrayGlobal, '10' + LE + '30' + LE + '50' + LE + '90' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticArray_LocalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStaticArrayLocal, '6' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticArray_NonZeroLow;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { 100 + 200 + 300 = 600 }
   AssertRunsOnBoth(SrcStaticArrayNonZeroLow, '600' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IndirectCall_MethodPtr;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIndirectMethodPtr, '15' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordReturnFunction;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordReturnFunction, '3' + LE + '7' + LE, 0);
 end;
 
@@ -1271,50 +1271,50 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_GlobalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDoubleGlobal, '3.14' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_LocalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDoubleLocal, '2.5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_Arithmetic;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDoubleArith, '13' + LE + '7' + LE + '30' + LE + '3.33333333333333' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_Comparison;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDoubleCompare, '1' + LE + '0' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_WriteLn;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDoubleWriteLn, '1.5' + LE + '2.5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Single_GlobalReadWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcSingleGlobal, '1.5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_FuncParam;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Scale(3.0, 2.0) = 6.0 }
   AssertRunsOnBoth(SrcDoubleFuncParam, '6' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Double_FuncReturn;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Half(7.0) = 3.5 }
   AssertRunsOnBoth(SrcDoubleFuncReturn, '3.5' + LE, 0);
 end;
@@ -1462,87 +1462,87 @@ const
 
 procedure TE2ENativeTests.TestRun_Native_String_WriteLnLiteral;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrWriteLnLiteral, 'hello' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_AssignAndWrite;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrAssignAndWrite, 'world' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Concat;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrConcat, 'foobar' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Length;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrLength, '5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Pos;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Pos is 0-based in Blaise: 'world' starts at index 6 }
   AssertRunsOnBoth(SrcStrPos, '6' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Copy;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Copy('hello', 1, 3) = 'ell' }
   AssertRunsOnBoth(SrcStrCopy, 'ell' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_UpperCase;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrUpperCase, 'HELLO' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_IntToStr;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrIntToStr, '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_StrToInt;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrStrToInt, '123' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Param;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrParam, 'Hello World' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_FuncReturn;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrFuncReturn, 'abab' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Delete;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrDelete, 'Hello' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_SetLength;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrSetLength, 'Hel' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Subscript;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { S[0]='A'=65, S[1]='B'=66, S[2]='C'=67 }
   AssertRunsOnBoth(SrcStrSubscript,
     '65' + LE + '66' + LE + '67' + LE, 0);
@@ -1595,31 +1595,31 @@ const
 
 procedure TE2ENativeTests.TestRun_Native_String_SameText;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStrSameText, 'True' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Format_IntArg;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcFormatIntArg, 'val=42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Format_StrArg;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcFormatStrArg, 'hello world' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_Format_MixedArgs;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcFormatMixedArgs, 'Alice=30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_ConcatWithInt;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcConcatWithInt, 'x=7' + LE, 0);
 end;
 
@@ -1800,27 +1800,27 @@ const
 
 procedure TE2ENativeTests.TestRun_Native_TryFinally_Normal;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcTryFinallyNormal, 'in_try' + LE + 'in_finally' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryFinally_NestedNormal;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcTryFinallyNested,
     'inner_try' + LE + 'inner_fin' + LE + 'outer_fin' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryFinally_ExitUnwind;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcExitThroughFinally,
     'in_try' + LE + 'in_finally' + LE + 'after' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryFinally_BreakUnwind;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcBreakThroughFinally,
     'iter' + LE + 'fin' + LE +
     'iter' + LE + 'fin' + LE +
@@ -1829,37 +1829,37 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_TryExcept_Bare;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcTryExceptBare, '1' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryExcept_TypedHandler;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcTypedExcept, '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryExcept_SubclassMatch;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcSubclassMatch, '7' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryExcept_BareRaisePropagate;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcBareRaisePropagate, '2' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TryExcept_ElseBody;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcElseBody, '5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ExitThroughNestedFinally;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcExitNestedFinally,
     'inner_fin' + LE + 'outer_fin' + LE + 'after' + LE, 0);
 end;
@@ -2705,254 +2705,254 @@ const
 
 procedure TE2ENativeTests.TestRun_Native_OpenArray_Sum;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcOASum, '15' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_OpenArray_HighLow;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcOAHighLow, '0' + LE + '2' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_OpenArray_Length;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcOALength, '3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticToOpen_Length;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStaticToOpenLen, '5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticToOpen_Sum;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStaticToOpenSum, '60' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticToOpen_PassToNested;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcStaticToOpenNested, '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_DynArray_SetLengthAndAccess;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDynArrayBasic, '10' + LE + '20' + LE + '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_DynArray_LengthAndHigh;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcDynArrayLenHigh, '5' + LE + '4' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Interface_ZeroArgDispatch;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfZeroArg, '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Interface_ArgDispatch;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfArg, '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Interface_ProcDispatch;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfProc, 'box' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Interface_IntfToIntfCopy;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfCopy, '21' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Interface_AsCast;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfAsCast, '7' + LE + '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Interface_NilClear;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfNilClear, '5' + LE + '13' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Inherited_Proc;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcInheritedProc, 'base' + LE + 'derived' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Inherited_FuncSetsResult;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcInheritedFunc, '21' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_MethodVarParam_Mutates;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcMethodVarParam, '6' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_MethodVarParam_Swap;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcMethodVarSwap, '7' + LE + '3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_InterfaceField_ShadowsGlobal;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfFieldShadowsGlobal, 'printed' + LE, 0);
 end;
 
 
 procedure TE2ENativeTests.TestRun_Native_IntfParam_Proc;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamProc, 'doc' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IntfParam_Method;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamMethod, 'method' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IntfParam_Constructor;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamCtor, 'ctor' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IntfParam_Inherited;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamInherited, 'inherited' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IntfParam_ClassExpr;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamClassExpr, 'class-expr' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordArrayField_StaticRead;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordStaticArrayField, '99' + LE + '0' + LE + '0' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcClassField_StoreAndRead;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcClassField, '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcStringField_StoreAndRead;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcStringField, 'hello' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcClassAssignNil_Destroys;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcClassAssignNil, 'destroyed' + LE + 'done' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcValueParam_String;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcValueParamString, 'arc-ok' + LE + 'arc-ok' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcValueParam_Class;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcValueParamClass, '7' + LE + '7' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_AddrOf_LocalVariable;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcAddrOfLocalVar, '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_AddrOf_StaticArrayElement;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcAddrOfStaticArrayElem, '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_AddrOf_DynArrayElement;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcAddrOfDynArrayElem, '200' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_AddrOf_RecordFieldArrayElem;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcAddrOfRecFieldArrElem, '25' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_AddrOf_MethodPointer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcAddrOfMethodPtr, '7' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_BitwiseNot_Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcBitwiseNotInt, '-1' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_BitwiseNot_Bitmask;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcBitwiseNotBitmask, '4' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericRecord_Method;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcGenericRecordMethod, '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericClass_Method;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcGenericClassMethod, '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericFunc_Standalone;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcGenericFuncStandalone, '7' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericClass_Interface;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcGenericClassInterface, '55' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Record_NestedFieldAssign;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNestedRecordFieldAssign, '2037' + LE + '2037' + LE, 0);
 end;
 

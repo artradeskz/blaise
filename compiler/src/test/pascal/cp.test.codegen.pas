@@ -378,7 +378,7 @@ begin
     end;
     var B: Boolean;
     begin
-      B := IsOK
+      B := IsOK()
     end.
     ''');
   AssertTrue('IsOK function emitted', IRContains(IR, '$IsOK'));
@@ -439,7 +439,7 @@ begin
     'var MyObj: TFoo;'                               + LineEnding +
     'begin'                                          + LineEnding +
     '  MyObj := TFoo.Create();'                        + LineEnding +
-    '  WriteLn(myobj.GetVal)'                        + LineEnding +
+    '  WriteLn(myobj.GetVal())'                        + LineEnding +
     'end.');
   AssertTrue('definition uses declared $MyObj',
     Pos('data $MyObj', IR) >= 0);

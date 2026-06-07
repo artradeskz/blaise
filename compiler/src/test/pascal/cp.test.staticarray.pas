@@ -284,7 +284,7 @@ begin
     MD   := TMethodDecl(P.Block.ProcDecls[0]);
     Decl := TVarDecl(MD.Body.Decls[0]);
     { 8 elements × 1 byte each = 8 bytes }
-    AssertEquals('ByteSize = 8', 8, Decl.ResolvedType.ByteSize);
+    AssertEquals('ByteSize = 8', 8, Decl.ResolvedType.ByteSize());
   finally P.Free(); end;
 end;
 
@@ -296,7 +296,7 @@ begin
     MD   := TMethodDecl(P.Block.ProcDecls[0]);
     Decl := TVarDecl(MD.Body.Decls[0]);
     { 4 elements × 4 bytes each = 16 bytes }
-    AssertEquals('ByteSize = 16', 16, Decl.ResolvedType.ByteSize);
+    AssertEquals('ByteSize = 16', 16, Decl.ResolvedType.ByteSize());
   finally P.Free(); end;
 end;
 

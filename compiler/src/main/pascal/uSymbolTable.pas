@@ -619,7 +619,7 @@ begin
     tyStaticArray:
       Result := (TStaticArrayTypeDesc(Self).HighBound -
                  TStaticArrayTypeDesc(Self).LowBound + 1) *
-                 TStaticArrayTypeDesc(Self).ElementType.RawSize;
+                 TStaticArrayTypeDesc(Self).ElementType.RawSize();
     tyProcedural:
       if TProceduralTypeDesc(Self).IsMethodPtr then Result := 16
       else Result := 8;
@@ -644,7 +644,7 @@ begin
     tyStaticArray:
       Result := (TStaticArrayTypeDesc(Self).HighBound -
                  TStaticArrayTypeDesc(Self).LowBound + 1) *
-                 TStaticArrayTypeDesc(Self).ElementType.RawSize;
+                 TStaticArrayTypeDesc(Self).ElementType.RawSize();
     tyProcedural:
       if TProceduralTypeDesc(Self).IsMethodPtr then Result := 16
       else Result := 8;
@@ -661,7 +661,7 @@ begin
     tySmallInt, tyWord:  Result := 2;
     tySingle:            Result := 4;
     tyInt64, tyUInt64, tyString:   Result := 8;
-    tyRecord:            Result := TRecordTypeDesc(Self).MaxAlign;
+    tyRecord:            Result := TRecordTypeDesc(Self).MaxAlign();
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
     tyStaticArray: Result := TStaticArrayTypeDesc(Self).ElementType.AllocAlign();
   else
@@ -725,7 +725,7 @@ var
   I, A: Integer;
   FT:   TTypeDesc;
 begin
-  if HasVTable then
+  if HasVTable() then
     Result := 8
   else
     Result := 0;
@@ -735,7 +735,7 @@ begin
     A  := FieldAlign(FT);
     if (A > 1) and (Result mod A <> 0) then
       Inc(Result, A - Result mod A);
-    Inc(Result, FT.ByteSize);
+    Inc(Result, FT.ByteSize());
   end;
 end;
 
@@ -745,7 +745,7 @@ var
   Offset: Integer;
   A:      Integer;
 begin
-  Offset := PackedSize;
+  Offset := PackedSize();
   A      := FieldAlign(AType);
   if (A > 1) and (Offset mod A <> 0) then
     Offset := Offset + (A - Offset mod A);
@@ -771,7 +771,7 @@ function TRecordTypeDesc.TotalSize: Integer;
 var
   Algn: Integer;
 begin
-  Result := PackedSize;
+  Result := PackedSize();
   { Tail-pad records up to their own alignment so that arrays of records
     and back-to-back fields stay naturally aligned.  Class instances are
     heap-allocated singletons (never directly in arrays — only references
@@ -780,7 +780,7 @@ begin
     padding. }
   if Kind = tyClass then Exit;
   if FIsPacked then Exit;
-  Algn := MaxAlign;
+  Algn := MaxAlign();
   if (Algn > 1) and (Result mod Algn <> 0) then
     Inc(Result, Algn - Result mod Algn);
 end;
@@ -791,7 +791,7 @@ var
   FT:   TTypeDesc;
 begin
   Result := 1;
-  if HasVTable then
+  if HasVTable() then
     Result := 8;  { vptr requires 8-byte alignment }
   for I := 0 to FFields.Count - 1 do
   begin
@@ -883,10 +883,10 @@ var
   I: Integer;
   Src, Dst: TVTableEntry;
 begin
-  if (AParent = nil) or (AParent.VTableCount = 0) then Exit;
+  if (AParent = nil) or (AParent.VTableCount() = 0) then Exit;
   if FVTable = nil then
     FVTable := TObjectList.Create(True);
-  for I := 0 to AParent.VTableCount - 1 do
+  for I := 0 to AParent.VTableCount() - 1 do
   begin
     Src      := AParent.VTableEntryAt(I);
     Dst      := TVTableEntry.Create();

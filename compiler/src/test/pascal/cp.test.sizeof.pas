@@ -195,7 +195,7 @@ var
   Output: string;
   RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('SizeOf(X)=4 then SizeOf(B)=1', '4' + LE + '1' + LE, Output);

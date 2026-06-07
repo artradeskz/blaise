@@ -2166,7 +2166,7 @@ begin
     try
       FIn := TFileInputStream.Create(AIface.SourceFile);
       try
-        SetLength(Src, Integer(FIn.Size));
+        SetLength(Src, Integer(FIn.Size()));
         if Length(Src) > 0 then
           FIn.Read(PChar(Src), Length(Src));
       finally
@@ -2197,7 +2197,7 @@ var
 begin
   FIn := TFileInputStream.Create(APath);
   try
-    SetLength(Bytes, Integer(FIn.Size));
+    SetLength(Bytes, Integer(FIn.Size()));
     if Length(Bytes) > 0 then
       FIn.Read(PChar(Bytes), Length(Bytes));
   finally

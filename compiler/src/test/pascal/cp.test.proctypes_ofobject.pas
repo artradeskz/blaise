@@ -534,8 +534,8 @@ begin
   Prog := AnalyseSrc(Src);
   try
     TD := TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType;
-    AssertEquals('IsMethodPtr ByteSize is 16', 16, TD.ByteSize);
-    AssertEquals('IsMethodPtr RawSize is 16',  16, TD.RawSize);
+    AssertEquals('IsMethodPtr ByteSize is 16', 16, TD.ByteSize());
+    AssertEquals('IsMethodPtr RawSize is 16',  16, TD.RawSize());
   finally
     Prog.Free();
   end;
@@ -557,8 +557,8 @@ begin
   Prog := AnalyseSrc(Src);
   try
     TD := TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType;
-    AssertEquals('bare procedural ByteSize stays 8', 8, TD.ByteSize);
-    AssertEquals('bare procedural RawSize stays 8',  8, TD.RawSize);
+    AssertEquals('bare procedural ByteSize stays 8', 8, TD.ByteSize());
+    AssertEquals('bare procedural RawSize stays 8',  8, TD.RawSize());
   finally
     Prog.Free();
   end;

@@ -743,7 +743,7 @@ begin
     try
       Lexer  := TLexer.Create(Source.Text, SourceFile);
       Parser := TParser.Create(Lexer);
-      IsUnitMode := Parser.IsUnitTopLevel;
+      IsUnitMode := Parser.IsUnitTopLevel();
       if IsUnitMode then
         TopUnit := Parser.ParseUnit()
       else
@@ -781,7 +781,7 @@ begin
           begin
             ImportUnitInterface(
               TUnitInterface(Loader.PrebuiltIfaces.Items[I]),
-              Semantic.GetSymbolTable, Semantic);
+              Semantic.GetSymbolTable(), Semantic);
             Semantic.RegisterUnitIface(
               TUnitInterface(Loader.PrebuiltIfaces.Items[I]));
           end;
@@ -793,7 +793,7 @@ begin
               so cross-unit type references resolve to qualified names. }
             UnitIfaces.Add(ExportUnitInterface(TUnit(Units.Items[I]),
                                                UnitIfaces,
-                                               Semantic.GetSymbolTable));
+                                               Semantic.GetSymbolTable()));
             Semantic.RegisterUnitIface(
               TUnitInterface(UnitIfaces.Items[UnitIfaces.Count - 1]));
             { Emit on-disk artifact when --emit-iface DIR was passed.
@@ -829,11 +829,11 @@ begin
         else
           TopIfacePath := LowerCase(TopUnit.Name) + '.bif.tmp';
         WriteUnitInterfaceToFile(
-          ExportUnitInterface(TopUnit, UnitIfaces, Semantic.GetSymbolTable),
+          ExportUnitInterface(TopUnit, UnitIfaces, Semantic.GetSymbolTable()),
           TopIfacePath);
         if EmitIfaceDir <> '' then
           WriteUnitInterfaceToFile(
-            ExportUnitInterface(TopUnit, UnitIfaces, Semantic.GetSymbolTable),
+            ExportUnitInterface(TopUnit, UnitIfaces, Semantic.GetSymbolTable()),
             IncludeTrailingPathDelimiter(EmitIfaceDir) +
               LowerCase(TopUnit.Name) + '.bif');
       end
@@ -941,7 +941,7 @@ begin
       if IsUnitMode then
       begin
         { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }
-        CG.SetSymbolTable(Semantic.GetSymbolTable);
+        CG.SetSymbolTable(Semantic.GetSymbolTable());
         if (Units <> nil) and not SkipDepCodegen then
           for I := 0 to Units.Count - 1 do
             CG.AppendUnit(TUnit(Units.Items[I]));

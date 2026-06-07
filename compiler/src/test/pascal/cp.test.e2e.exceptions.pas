@@ -337,7 +337,7 @@ const
 procedure TE2EExceptionTests.TestRun_BareTryFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcBareTryFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout', 'in_try' + LE + 'in_finally' + LE, Output);
@@ -346,7 +346,7 @@ end;
 procedure TE2EExceptionTests.TestRun_TryFinally_PreservesLocals;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPreservesLocals, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('locals preserved',
@@ -356,7 +356,7 @@ end;
 procedure TE2EExceptionTests.TestRun_NestedTryFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcNestedTryFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout',
@@ -366,7 +366,7 @@ end;
 procedure TE2EExceptionTests.TestRun_ExitThroughFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExitThroughFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   { Exit runs the finally body, then control returns to the caller. }
@@ -377,7 +377,7 @@ end;
 procedure TE2EExceptionTests.TestRun_ExitValueThroughFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExitValueThroughFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   { True: Exit(42) sets Result, runs finally, returns 42.
@@ -390,7 +390,7 @@ end;
 procedure TE2EExceptionTests.TestRun_ExitThroughNestedFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExitThroughNestedFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   { Both finally bodies run, innermost first, before the caller resumes. }
@@ -401,7 +401,7 @@ end;
 procedure TE2EExceptionTests.TestRun_BreakThroughFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcBreakThroughFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   { Iterations 0,1 print iter+fin; iteration 2 breaks but still runs fin. }
@@ -413,7 +413,7 @@ end;
 procedure TE2EExceptionTests.TestRun_VirtualDispatchInsideTryFinally;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcVirtualDispatchInTry, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout (virtual -> marked -> 1)', '1' + LE, Output);
@@ -422,7 +422,7 @@ end;
 procedure TE2EExceptionTests.TestRun_TypedExcept_CorrectHandlerMatched;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTypedExceptCorrect, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('EFoo handler ran', '42', Trim(Output));
@@ -431,7 +431,7 @@ end;
 procedure TE2EExceptionTests.TestRun_TypedExcept_SubclassMatchesParentHandler;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTypedExceptSubclass, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('EBar matches EFoo handler', '7', Trim(Output));
@@ -440,7 +440,7 @@ end;
 procedure TE2EExceptionTests.TestRun_TypedExcept_UnmatchedReraises;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTypedExceptUnmatched, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('unmatched inner re-raises to outer', '3', Trim(Output));
@@ -449,7 +449,7 @@ end;
 procedure TE2EExceptionTests.TestRun_TypedExcept_BareRaisePropagatesToOuter;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTypedExceptBareRaise, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('bare raise propagated to outer handler', '2', Trim(Output));
@@ -458,7 +458,7 @@ end;
 procedure TE2EExceptionTests.TestRun_TypedExcept_ElseBodyRunsWhenNoMatch;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTypedExceptElseRun, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('else body ran when no handler matched', '5', Trim(Output));
@@ -467,7 +467,7 @@ end;
 procedure TE2EExceptionTests.TestRun_FinallyStringMutation_SurvivesReraise;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcFinallyStringMutationSurvives, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('string mutations in finally survive re-raise', 'A,F,H,', Trim(Output));

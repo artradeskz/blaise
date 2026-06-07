@@ -313,7 +313,7 @@ const
     var B: TBase;
     begin
       B := TChild.Create();
-      WriteLn((B as TChild).Name);
+      WriteLn((B as TChild).Name());
       B.Free()
     end.
     ''';
@@ -394,7 +394,7 @@ const
     begin
       S := TSquare.Create();
       TSquare(S).FSide := 4;
-      WriteLn(S.Area);
+      WriteLn(S.Area());
       S.Free()
     end.
     ''';
@@ -417,7 +417,7 @@ const
     var A: TA;
     begin
       A := TC.Create();
-      WriteLn(A.Lvl);
+      WriteLn(A.Lvl());
       A.Free()
     end.
     ''';
@@ -555,13 +555,13 @@ const
     end;
     procedure Tmi.use;
     begin
-      im.print;
+      im.print();
     end;
     var
       im: Tmi;
     begin
       im := Tmi.Create(Toutput.Create());
-      im.use;
+      im.use();
     end.
     ''';
 
@@ -718,11 +718,11 @@ const
         function TParent.Tag: Integer;
         begin Result := 2 end;
         function TParent.Echo: Integer;
-        begin Result := Tag end;
+        begin Result := Tag() end;
         var C: TChild;
         begin
           C := TChild.Create();
-          WriteLn(C.Echo);
+          WriteLn(C.Echo());
           C.Free()
         end.
         ''';
@@ -749,12 +749,12 @@ const
         begin Result := 2 end;
         function TChild.FromInh: Integer;
         begin
-          inherited Tag
+          inherited Tag()
         end;
         var C: TChild;
         begin
           C := TChild.Create();
-          WriteLn(C.FromInh);
+          WriteLn(C.FromInh());
           C.Free()
         end.
         ''';
@@ -829,7 +829,7 @@ var
   RCode: Integer;
   Expected: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   Path := GetCurrentDir();
   // Walk up to project root looking for tests/phase2_milestone.pas
   while (Path <> '') and
@@ -869,8 +869,8 @@ procedure TE2EClasses2Tests.TestRun_Phase2Milestone_Valgrind;
 var
   Path, Src, Log: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   Path := GetCurrentDir();
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase2_milestone.pas')) and
@@ -895,7 +895,7 @@ var
   RCode: Integer;
   Expected: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   Path := GetCurrentDir();
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase3_milestone.pas')) and
@@ -928,8 +928,8 @@ procedure TE2EClasses2Tests.TestRun_Phase3Milestone_Valgrind;
 var
   Path, Src, Log: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   Path := GetCurrentDir();
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase3_milestone.pas')) and
@@ -951,7 +951,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_MultiTypeBlock_BothClassesWork;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcMultiTypeBlock, Output, RCode));
   AssertEquals('TCounter(3).Double = 6', '6', Trim(Output));
 end;
@@ -959,7 +959,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_ToString_DefaultReturnsClassName;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcToStringDefault, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('default ToString returns class name',
@@ -969,7 +969,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_ToString_OverrideDispatchedVirtually;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcToStringOverride, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('override reached through static base type',
@@ -979,7 +979,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_ToString_InheritedOverrideStillReached;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcToStringInheritedOverride, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('inherited override still reached',
@@ -989,7 +989,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritsFrom_SameClass_ReturnsTrue;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromBase, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('same class returns true', 'yes' + LE, Output);
@@ -998,7 +998,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritsFrom_Parent_ReturnsTrue;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromParent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('child inherits from parent', 'yes' + LE, Output);
@@ -1007,7 +1007,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritsFrom_GrandParent_ReturnsTrue;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromGrandParent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('grandchild inherits from base', 'yes' + LE, Output);
@@ -1016,7 +1016,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritsFrom_Unrelated_ReturnsFalse;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromUnrelated, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('unrelated class returns false', 'no' + LE, Output);
@@ -1025,7 +1025,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritsFrom_Reverse_ReturnsFalse;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromReverse, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('parent does not inherit from child', 'no' + LE, Output);
@@ -1034,7 +1034,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritsFrom_ClassType_Works;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritsFromClassType, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ClassType.InheritsFrom works', 'yes' + LE, Output);
@@ -1043,7 +1043,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Is_CorrectSubclass_True;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIsTrue, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('yes', 'yes' + LE, Output);
@@ -1052,7 +1052,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Is_WrongClass_False;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIsFalse, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('no', 'no' + LE, Output);
@@ -1061,7 +1061,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_As_DowncastCallsMethod;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcAsDowncast, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('child', 'child' + LE, Output);
@@ -1070,7 +1070,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Inherited_CallsParentMethod;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInherited, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('15', '15' + LE, Output);
@@ -1079,7 +1079,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Inherited_VarParam_PassesByReference;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcInheritedVarParam, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('5+10+1', '16' + LE, Output);
@@ -1088,7 +1088,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Virtual_OverrideDispatch;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcVirtualOverride, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('16', '16' + LE, Output);
@@ -1097,7 +1097,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_MultiLevel_Inheritance_Chain;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcMultiLevelChain, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('3', '3' + LE, Output);
@@ -1106,7 +1106,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Interface_Dispatch_CallsImpl;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfDispatch, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('hello', 'hello' + LE, Output);
@@ -1115,7 +1115,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Interface_ARC_NoLeak;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfDispatch, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
 end;
@@ -1123,7 +1123,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Interface_GlobalNil_LinksAndRuns;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfGlobalNil, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('spoke then after nil',
@@ -1133,7 +1133,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Interface_Is_As_Roundtrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfIsAs, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('printing', 'printing' + LE, Output);
@@ -1142,7 +1142,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Interface_MethodParam_ByValue_Dispatches;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfMethodParam, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('greet+1', '43' + LE, Output);
@@ -1151,7 +1151,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Supports_TwoArg_BooleanResult;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcSupportsTwoArgRun, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('yes', 'yes' + LE, Output);
@@ -1160,7 +1160,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_Supports_ThreeArg_AssignsAndCalls;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcSupportsThreeArgRun, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('hello', 'hello' + LE, Output);
@@ -1169,7 +1169,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_ConstructorOverload_PicksCorrectArity;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcCtorOverloadArity, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1-arg constructor body ran', '42' + LE, Output);
@@ -1178,7 +1178,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_MethodReadsProgramGlobal;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcMethodReadsProgramGlobal, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('global read by method', '42' + LE, Output);
@@ -1191,7 +1191,7 @@ begin
     class reference must address into the heap object, not into the storage
     slot of N itself.  Before the fix the writes landed in unrelated memory
     and the WriteLn calls printed 0 / False. }
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcVarParamClassFields, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('var-param writeback visible through class field', '4096' + LE + 'True' + LE, Output);
@@ -1200,7 +1200,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_LocalVar_ShadowsOwnMethod;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcResolve_LocalVar_OverOwnMethod, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('local var wins over class method', '42' + LE, Output);
@@ -1209,7 +1209,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_ParentMethod_ShadowsProgramProc;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcResolve_ParentMethod_OverProgramProc, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('inherited method wins over program-level proc', '2' + LE, Output);
@@ -1218,7 +1218,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_ExplicitSelf_AlwaysClassMember;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcResolve_ExplicitSelf_AlwaysClassMember, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Self.X reaches class method despite local var X', '200' + LE, Output);
@@ -1227,7 +1227,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InheritedCall_AlwaysParent;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcResolve_InheritedAlwaysParent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('inherited Tag reaches parent despite subclass override', '1' + LE, Output);
@@ -1236,7 +1236,7 @@ end;
 procedure TE2EClasses2Tests.TestRun_InterfaceField_ShadowsGlobal_Dispatches;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfFieldShadowsGlobal, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('interface dispatch through field shadowing global', 'printed' + LE, Output);

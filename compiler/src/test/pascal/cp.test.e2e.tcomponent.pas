@@ -141,7 +141,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCreateNilOwner, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -159,7 +159,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcName, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Name=MyComp', 'MyComp', Trim(Output));
@@ -170,7 +170,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcOwnerRef, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Child.Owner=Parent', 'True', Trim(Output));
@@ -181,7 +181,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcComponentCount, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('ComponentCount=3', '3', Trim(Output));
@@ -193,7 +193,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcComponentsArray, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -212,7 +212,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcOwnerFreesChildren, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();

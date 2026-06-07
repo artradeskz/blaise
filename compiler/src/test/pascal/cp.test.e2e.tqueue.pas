@@ -166,7 +166,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcFIFO, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('Dequeue returns 10 first (FIFO)', Pos('10', Output) >= 0);
@@ -179,7 +179,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcPeekNoRemove, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('Peek returns 7', Pos('7', Output) >= 0);
@@ -191,7 +191,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcCountTracking, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('starts at 0', Pos('0', Output) >= 0);
@@ -203,7 +203,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcGrowBeyond, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=8', Pos('8', Output) >= 0);

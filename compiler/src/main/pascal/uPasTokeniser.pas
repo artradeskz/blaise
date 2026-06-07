@@ -226,7 +226,7 @@ begin
     Advance();
   Advance();
   FToken.Len := FPos - FToken.TextStart;
-  AdvanceLine
+  AdvanceLine()
 end;
 
 procedure TFpgPascalTokeniser.ReadIdentifierOrKeyword;
@@ -239,10 +239,10 @@ begin
     if not (((C >= 65) and (C <= 90)) or ((C >= 97) and (C <= 122)) or
             ((C >= 48) and (C <= 57)) or (C = 95)) then
       Break;
-    Advance
+    Advance()
   end;
   FToken.Len := FPos - FToken.TextStart;
-  if BinarySearchKeyword(UpperCase(TokenText)) then
+  if BinarySearchKeyword(UpperCase(TokenText())) then
     FToken.Kind := fptkKeyword
   else
     FToken.Kind := fptkIdentifier
@@ -303,7 +303,7 @@ begin
     while (FPos <= Length(FSource)) and
           (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
            (PosOrd(FSource, FPos) = 95)) do
-      Advance
+      Advance()
   end;
 
   if (FPos <= Length(FSource)) and
@@ -316,7 +316,7 @@ begin
     while (FPos <= Length(FSource)) and
           (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
            (PosOrd(FSource, FPos) = 95)) do
-      Advance
+      Advance()
   end;
 
   FToken.Len := FPos - FToken.TextStart
@@ -329,7 +329,7 @@ begin
   FToken.Kind := fptkString;
   while True do
   begin
-    C := Peek;
+    C := Peek();
     if C = 39 then
     begin
       Advance();
@@ -339,14 +339,14 @@ begin
         begin
           Advance();
           if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 39) then
-            Advance
+            Advance()
           else
             Break
         end
         else if (PosOrd(FSource, FPos) = 10) or (PosOrd(FSource, FPos) = 13) then
           Break
         else
-          Advance
+          Advance()
       end
     end
     else if C = 35 then
@@ -359,13 +359,13 @@ begin
               (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
                ((PosOrd(FSource, FPos) >= 65) and (PosOrd(FSource, FPos) <= 70)) or
                ((PosOrd(FSource, FPos) >= 97) and (PosOrd(FSource, FPos) <= 102))) do
-          Advance
+          Advance()
       end
       else
       begin
         while (FPos <= Length(FSource)) and
               ((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) do
-          Advance
+          Advance()
       end
     end
     else if C = 94 then
@@ -374,7 +374,7 @@ begin
       if (FPos <= Length(FSource)) and
          (((PosOrd(FSource, FPos) >= 65) and (PosOrd(FSource, FPos) <= 90)) or
           ((PosOrd(FSource, FPos) >= 97) and (PosOrd(FSource, FPos) <= 122))) then
-        Advance
+        Advance()
     end
     else
       Break
@@ -393,12 +393,12 @@ begin
     Advance();
     if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 10) then
       Advance();
-    AdvanceLine
+    AdvanceLine()
   end
   else if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 10) then
   begin
     Advance();
-    AdvanceLine
+    AdvanceLine()
   end;
   while FPos <= Length(FSource) do
   begin
@@ -417,15 +417,15 @@ begin
       Advance();
       if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 10) then
         Advance();
-      AdvanceLine
+      AdvanceLine()
     end
     else if PosOrd(FSource, FPos) = 10 then
     begin
       Advance();
-      AdvanceLine
+      AdvanceLine()
     end
     else
-      Advance
+      Advance()
   end;
   FToken.Len := FPos - FToken.TextStart
 end;
@@ -449,15 +449,15 @@ begin
       Advance();
       if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 10) then
         Advance();
-      AdvanceLine
+      AdvanceLine()
     end
     else if PosOrd(FSource, FPos) = 10 then
     begin
       Advance();
-      AdvanceLine
+      AdvanceLine()
     end
     else
-      Advance
+      Advance()
   end;
   FToken.Len := FPos - FToken.TextStart
 end;
@@ -483,15 +483,15 @@ begin
       Advance();
       if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 10) then
         Advance();
-      AdvanceLine
+      AdvanceLine()
     end
     else if PosOrd(FSource, FPos) = 10 then
     begin
       Advance();
-      AdvanceLine
+      AdvanceLine()
     end
     else
-      Advance
+      Advance()
   end;
   FToken.Len := FPos - FToken.TextStart
 end;
@@ -513,12 +513,12 @@ begin
   C := PosOrd(FSource, FPos);
   C2 := PeekAt(1);
   Advance();
-  if C = 58 then begin if C2 = 61 then Advance end           { := }
-  else if C = 60 then begin if (C2 = 62) or (C2 = 61) then Advance end  { <>, <= }
-  else if C = 62 then begin if C2 = 61 then Advance end      { >= }
-  else if C = 46 then begin if C2 = 46 then Advance end      { .. }
-  else if C = 42 then begin if C2 = 42 then Advance end      { ** }
-  else if C = 64 then begin if C2 = 64 then Advance end      { @@ }
+  if C = 58 then begin if C2 = 61 then Advance() end           { := }
+  else if C = 60 then begin if (C2 = 62) or (C2 = 61) then Advance() end  { <>, <= }
+  else if C = 62 then begin if C2 = 61 then Advance() end      { >= }
+  else if C = 46 then begin if C2 = 46 then Advance() end      { .. }
+  else if C = 42 then begin if C2 = 42 then Advance() end      { ** }
+  else if C = 64 then begin if C2 = 64 then Advance() end      { @@ }
   ;
   FToken.Len := FPos - FToken.TextStart
 end;
@@ -648,7 +648,7 @@ end;
 
 function TFpgPascalTokeniser.TokenTextUpper: string;
 begin
-  Result := UpperCase(TokenText)
+  Result := UpperCase(TokenText())
 end;
 
 end.

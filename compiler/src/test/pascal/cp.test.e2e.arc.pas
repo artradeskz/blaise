@@ -209,11 +209,11 @@ const
 procedure TE2EArcTests.TestRun_ClassArc_NoExplicitFree_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue(CompileAndRun(SrcClassArcNoFree, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('field reread', '42' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcClassArcNoFree, Log);
   if not OK then
   begin
@@ -225,11 +225,11 @@ end;
 procedure TE2EArcTests.TestRun_InterfaceArc_CarriesLifetime_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue(CompileAndRun(SrcInterfaceArcLifetime, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('interface method result', '17' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcInterfaceArcLifetime, Log);
   if not OK then
   begin
@@ -241,11 +241,11 @@ end;
 procedure TE2EArcTests.TestRun_WeakRef_BreaksCycle_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue(CompileAndRun(SrcWeakCycle, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('values printed via A/B', '1' + LE + '2' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcWeakCycle, Log);
   if not OK then
   begin
@@ -257,11 +257,11 @@ end;
 procedure TE2EArcTests.TestRun_ClassDestroy_FreesBuffer_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcDestroyFreesBuffer, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('stdout', 'ok' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcDestroyFreesBuffer, Log);
   if not OK then
   begin
@@ -273,12 +273,12 @@ end;
 procedure TE2EArcTests.TestRun_TListARC_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTListARCValgrind, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('stdout',
     '10' + LE + '20' + LE + '30' + LE + '3' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcTListARCValgrind, Log);
   if not OK then
   begin
@@ -373,11 +373,11 @@ const
 procedure TE2EArcTests.TestRun_IntfValueParam_Retained_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcIntfValueParamRetained, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('stdout', '55' + LE + '55' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcIntfValueParamRetained, Log);
   if not OK then
   begin
@@ -411,11 +411,11 @@ const
 procedure TE2EArcTests.TestRun_ConstStringTemp_StaysAlive_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcConstStringTemp, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('stdout', 'hello world' + LE + '11' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcConstStringTemp, Log);
   if not OK then
   begin
@@ -455,11 +455,11 @@ const
 procedure TE2EArcTests.TestRun_ConstStringParam_TransientRetained_Valgrind;
 var Output: string; RCode: Integer; Log: string; OK: Boolean;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcConstStrTransient, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('stdout', 'foobar' + LE + 'foobar' + LE + 'foobar' + LE, Output);
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcConstStrTransient, Log);
   if not OK then
   begin
@@ -471,7 +471,7 @@ end;
 procedure TE2EArcTests.TestRun_ThreeGenericInstances_AllWork;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcThreeGenericInstances, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('all three instances produce correct output',
@@ -519,7 +519,7 @@ const
 procedure TE2EArcTests.TestRun_PtrRvalueToClassLocal_PreservesLifetime;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcPtrRvalueClassLocal, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('counter after Borrow then after L.Free()',
@@ -549,7 +549,7 @@ const
 procedure TE2EArcTests.TestRun_ClassVarAssignNil_Destroys;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcClassAssignNil, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('O := nil triggers destroy',

@@ -236,7 +236,7 @@ const
 procedure TE2ECollections2Tests.TestRun_TObjectList_AddGetCount;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTObjectListAddGetCount, Output, RCode));
   AssertEquals('count=3', '3', Trim(Copy(Output, 0, Pos(#10, Output))));
 end;
@@ -244,7 +244,7 @@ end;
 procedure TE2ECollections2Tests.TestRun_TObjectList_Delete;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTObjectListDelete, Output, RCode));
   AssertEquals('count after delete=2', '2', Trim(Output));
 end;
@@ -252,8 +252,8 @@ end;
 procedure TE2ECollections2Tests.TestRun_Collections_Valgrind;
 var OK: Boolean; Log: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
   OK := RunUnderValgrind(SrcCollectionsValgrind, Log);
   if not OK then
   begin
@@ -305,14 +305,14 @@ const
     var h: THolder;
     begin
       h := THolder.Create();
-      h.Fill;
-      WriteLn(h.Total);
+      h.Fill();
+      WriteLn(h.Total());
       h.Free()
     end.
     ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+link+run',
     CompileAndRunWithUnit('twodicts', UnitSrc, DrvSrc, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);

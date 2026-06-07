@@ -549,7 +549,7 @@ begin
   begin
     RT := TRecordTypeDesc(ArgType);
     Implements := False;
-    for I := 0 to RT.ImplementsCount - 1 do
+    for I := 0 to RT.ImplementsCount() - 1 do
       if RT.ImplementsIntfAt(I) = ConstrType then
       begin
         Implements := True;
@@ -633,8 +633,8 @@ begin
     Exit;
   { enum ↔ enum (same type) already handled by = check above;
     enum ↔ integer: allow assignment between enum and integer types }
-  if (AExpected.Kind = tyEnum) and AActual.IsNumeric then Exit;
-  if (AActual.Kind  = tyEnum) and AExpected.IsNumeric then Exit;
+  if (AExpected.Kind = tyEnum) and AActual.IsNumeric() then Exit;
+  if (AActual.Kind  = tyEnum) and AExpected.IsNumeric() then Exit;
   { set ↔ set: two set types over the same base enum are the same type, even
     when one is a named alias (TBackendSet) and the other anonymous
     (set of TBackend) — set values are structural, not nominal. }
@@ -646,10 +646,10 @@ begin
     Delphi/FPC).  Float → integer still requires explicit Trunc/Round.
     Exception: Int64 ↔ UInt64 requires an explicit cast since the same
     bit pattern means different values across the sign boundary. }
-  if AExpected.IsFloat and AActual.IsFloat then Exit;
-  if AExpected.IsFloat and AActual.IsNumeric and (not AActual.IsFloat) then Exit;
-  if AExpected.IsNumeric and AActual.IsNumeric
-     and (not AExpected.IsFloat) and (not AActual.IsFloat) then
+  if AExpected.IsFloat() and AActual.IsFloat() then Exit;
+  if AExpected.IsFloat() and AActual.IsNumeric() and (not AActual.IsFloat()) then Exit;
+  if AExpected.IsNumeric() and AActual.IsNumeric()
+     and (not AExpected.IsFloat()) and (not AActual.IsFloat()) then
   begin
     if not (((AExpected.Kind = tyInt64)  and (AActual.Kind = tyUInt64)) or
             ((AExpected.Kind = tyUInt64) and (AActual.Kind = tyInt64))) then
@@ -666,7 +666,7 @@ begin
   if (AExpected.Kind = tyInterface) and (AActual.Kind = tyClass) then
   begin
     RT := TRecordTypeDesc(AActual);
-    for I := 0 to RT.ImplementsCount - 1 do
+    for I := 0 to RT.ImplementsCount() - 1 do
       if RT.ImplementsIntfAt(I) = AExpected then
         Exit;
   end;
@@ -861,9 +861,9 @@ begin
 
       { Compute mangled QBE name for overloaded forward decls. }
       if MDecl.IsOverload then
-        MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name + '$' + MangleParamSig(MDecl)
+        MDecl.ResolvedQbeName := CurrentUnitPrefix() + MDecl.Name + '$' + MangleParamSig(MDecl)
       else
-        MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name;
+        MDecl.ResolvedQbeName := CurrentUnitPrefix() + MDecl.Name;
 
       RegisterProcDecl(MDecl.Name, MDecl);
 
@@ -1003,9 +1003,9 @@ begin
       begin
         { Impl-only declaration — register symbol and index it }
         if ImplDecl.IsOverload then
-          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
-          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name;
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name;
         RegisterProcDecl(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
@@ -1168,9 +1168,9 @@ begin
     end;
 
     if MDecl.IsOverload then
-      MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name + '$' + MangleParamSig(MDecl)
+      MDecl.ResolvedQbeName := CurrentUnitPrefix() + MDecl.Name + '$' + MangleParamSig(MDecl)
     else
-      MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name;
+      MDecl.ResolvedQbeName := CurrentUnitPrefix() + MDecl.Name;
 
     RegisterProcDecl(MDecl.Name, MDecl);
 
@@ -1307,9 +1307,9 @@ begin
       begin
         { Impl-only declaration — register in impl scope (does not persist) }
         if ImplDecl.IsOverload then
-          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
-          ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name;
+          ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name;
         RegisterProcDecl(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
@@ -1406,8 +1406,8 @@ begin
     Walks each global-scope symbol once and grabs the ones whose
     OwningUnit matches AIface.Name. }
   if FTable = nil then Exit;
-  Scope := FTable.GlobalScope;
-  for I := 0 to Scope.SymbolCount - 1 do
+  Scope := FTable.GlobalScope();
+  for I := 0 to Scope.SymbolCount() - 1 do
   begin
     Sym := Scope.SymbolAt(I);
     if (Sym <> nil) and SameText(Sym.OwningUnit, AIface.Name) then
@@ -2082,11 +2082,11 @@ begin
     begin
       NewMDecl := TMethodDecl(ClonedCD.Methods.Items[J]);
       if NewMDecl.IsVirtual then
-        RT.AddVTableSlot(NewMDecl.Name, '$' + CurrentUnitPrefix + ATypeName + '_' + NewMDecl.Name)
+        RT.AddVTableSlot(NewMDecl.Name, '$' + CurrentUnitPrefix() + ATypeName + '_' + NewMDecl.Name)
       else if NewMDecl.IsOverride then
         RT.OverrideVTableSlot(
           RT.FindVTableSlot(NewMDecl.Name),
-          '$' + CurrentUnitPrefix + ATypeName + '_' + NewMDecl.Name);
+          '$' + CurrentUnitPrefix() + ATypeName + '_' + NewMDecl.Name);
     end;
 
     { Resolve fields }
@@ -2119,7 +2119,7 @@ begin
         otherwise codegen emits 'TBox_Integer_Create' on one side and
         'UseBox_TBox_Integer_Create' on the other. }
       NewMDecl.OwningUnit     := Sym.OwningUnit;
-      NewMDecl.ResolvedQbeName := CurrentUnitPrefix +
+      NewMDecl.ResolvedQbeName := CurrentUnitPrefix() +
                                   ATypeName + '_' + NewMDecl.Name;
       if SameText(NewMDecl.Name, 'Destroy') then
       begin
@@ -2375,7 +2375,7 @@ begin
       Key      := ATypeName + '.' + NewMDecl.Name;
       FMethodIndex.AddObject(Key, NewMDecl);
       NewMDecl.OwningUnit      := Sym.OwningUnit;
-      NewMDecl.ResolvedQbeName := CurrentUnitPrefix +
+      NewMDecl.ResolvedQbeName := CurrentUnitPrefix() +
                                   ATypeName + '_' + NewMDecl.Name;
 
       for K := 0 to NewMDecl.Params.Count - 1 do
@@ -3286,7 +3286,7 @@ begin
             TD.Line, TD.Col);
         IntfDesc.Parent := TInterfaceTypeDesc(Sym.TypeDesc);
         { Inherit parent methods (propagate var-param flags too) }
-        for J := 0 to IntfDesc.Parent.MethodCount - 1 do
+        for J := 0 to IntfDesc.Parent.MethodCount() - 1 do
           IntfDesc.AddMethod(IntfDesc.Parent.MethodName(J),
             IntfDesc.Parent.MethodReturnTypeName(J),
             IntfDesc.Parent.MethodParamVarFlagsStr(J));
@@ -3463,7 +3463,7 @@ begin
             MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
           if MDecl.IsVirtual then
           begin
-            Slot := RT.AddVTableSlot(MangledKey, '$' + CurrentUnitPrefix + TD.Name + '_' + MangledKey);
+            Slot := RT.AddVTableSlot(MangledKey, '$' + CurrentUnitPrefix() + TD.Name + '_' + MangledKey);
             if MDecl.IsAbstract then
             begin
               RT.VTableEntryAt(Slot).IsAbstract := True;
@@ -3488,7 +3488,7 @@ begin
                 end;
               end;
             end;
-            RT.OverrideVTableSlot(Slot, '$' + CurrentUnitPrefix + TD.Name + '_' + MangledKey);
+            RT.OverrideVTableSlot(Slot, '$' + CurrentUnitPrefix() + TD.Name + '_' + MangledKey);
             { Override clears the abstract flag on the inherited slot }
             if Slot >= 0 then
               RT.VTableEntryAt(Slot).IsAbstract := False;
@@ -3500,7 +3500,7 @@ begin
       (inherited but not overridden). If so, mark the class as abstract. }
     if RT <> nil then
     begin
-      for J := 0 to RT.VTableCount - 1 do
+      for J := 0 to RT.VTableCount() - 1 do
         if RT.VTableEntryAt(J).IsAbstract then
         begin
           RT.HasAbstractMethods := True;
@@ -3569,7 +3569,7 @@ begin
         MangledKey := MDecl.Name;
         if MDecl.IsOverload then
           MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
-        MDecl.ResolvedQbeName := CurrentUnitPrefix + TD.Name + '_' + MangledKey;
+        MDecl.ResolvedQbeName := CurrentUnitPrefix() + TD.Name + '_' + MangledKey;
 
         { Reject duplicate-without-overload at registration time.  Walk
           existing FMethodIndex entries for this (TypeName.Name) — if
@@ -3745,7 +3745,7 @@ begin
             TD.Line, TD.Col);
         IntfDesc := TInterfaceTypeDesc(IntfSym.TypeDesc);
         RT.AddImplements(IntfDesc);
-        for J := 0 to IntfDesc.MethodCount - 1 do
+        for J := 0 to IntfDesc.MethodCount() - 1 do
         begin
           Key := IntfDesc.MethodName(J);
           if RT.FindField(Key) = nil then
@@ -4768,7 +4768,7 @@ begin
       SemanticError(
         Format('''%s'' is not a variable', [ForS.VarName]),
         ForS.Line, ForS.Col);
-    if not VarSym.TypeDesc.IsOrdinal then
+    if not VarSym.TypeDesc.IsOrdinal() then
       SemanticError(
         Format('Loop variable ''%s'' must be an ordinal type, got ''%s''',
           [ForS.VarName, VarSym.TypeDesc.Name]),
@@ -4935,7 +4935,7 @@ begin
         SemanticError(
           Format('''%s'' is not a variable', [ForInS.VarName]),
           ForInS.Line, ForInS.Col);
-      if not VarSym.TypeDesc.IsOrdinal then
+      if not VarSym.TypeDesc.IsOrdinal() then
         SemanticError(
           Format('for-in over string: loop variable ''%s'' must be an ordinal type',
             [ForInS.VarName]),
@@ -4971,7 +4971,7 @@ begin
       ElemType := TSetTypeDesc(CollType).BaseType;
       { Loop variable must be the same enum type as the set's base type,
         or any numeric type (ordinal compatibility). Reject non-ordinal types. }
-      if not VarSym.TypeDesc.IsOrdinal then
+      if not VarSym.TypeDesc.IsOrdinal() then
         SemanticError(
           Format('for-in over set: loop variable ''%s'' must be an ordinal type',
             [ForInS.VarName]),
@@ -6055,7 +6055,7 @@ begin
     mirrors Pascal's treatment of untyped integer constants.  Floating-point
     params score 1 (widening) so an Integer overload beats a Double overload
     when both are candidates. }
-  if (AArgExpr is TIntLiteral) and AParam.IsNumeric then
+  if (AArgExpr is TIntLiteral) and AParam.IsNumeric() then
   begin
     if AParam.Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64,
                        tySmallInt, tyWord, tyByte] then
@@ -6086,13 +6086,13 @@ begin
   end;
   { Same numeric kind = exact match (same kind, just possibly different
     descriptor instance). }
-  if AParam.IsNumeric and AArg.IsNumeric and (AParam.Kind = AArg.Kind) then
+  if AParam.IsNumeric() and AArg.IsNumeric() and (AParam.Kind = AArg.Kind) then
   begin
     Exit(2);
   end;
   { Numeric widening: both numerics, kinds differ.  Captures
     Integer→Int64, Integer→Double, Single→Double, Byte→Integer, etc. }
-  if AParam.IsNumeric and AArg.IsNumeric then
+  if AParam.IsNumeric() and AArg.IsNumeric() then
   begin
     Exit(1);
   end;
@@ -6657,7 +6657,7 @@ begin
     if ArgType = nil then
       SemanticError(AExpr.Name + ' argument has no resolved type',
         AExpr.Line, AExpr.Col);
-    if ArgType.IsFloat then
+    if ArgType.IsFloat() then
       SemanticError(AExpr.Name +
         ' is not defined for floating-point types; use MaxDouble/MinDouble or Math.Infinity',
         AExpr.Line, AExpr.Col);
@@ -6668,7 +6668,7 @@ begin
       AExpr.ResolvedType := Result;
       Exit;
     end;
-    if ArgType.IsOrdinal then
+    if ArgType.IsOrdinal() then
     begin
       { Ordinal-bound form: result type is the argument's own type. }
       Result := ArgType;
@@ -6942,7 +6942,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError('Abs requires exactly one argument', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not Result.IsNumeric then
+    if not Result.IsNumeric() then
       SemanticError(Format('Abs requires a numeric argument, got ''%s''', [Result.Name]),
         AExpr.Line, AExpr.Col);
     AExpr.ResolvedType := Result;  { return type matches argument type }
@@ -6963,7 +6963,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError('Sqrt requires exactly one argument', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not Result.IsFloat then
+    if not Result.IsFloat() then
       SemanticError(Format('Sqrt requires a float argument, got ''%s''', [Result.Name]),
         AExpr.Line, AExpr.Col);
     AExpr.ResolvedType := Result;
@@ -6976,7 +6976,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not ArgType.IsFloat then
+    if not ArgType.IsFloat() then
       SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, ArgType.Name]),
         AExpr.Line, AExpr.Col);
     Result := FTable.TypeInteger;
@@ -6990,7 +6990,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not ArgType.IsFloat then
+    if not ArgType.IsFloat() then
       SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, ArgType.Name]),
         AExpr.Line, AExpr.Col);
     Result := FTable.TypeDouble;
@@ -7018,7 +7018,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not Result.IsFloat then
+    if not Result.IsFloat() then
       SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, Result.Name]),
         AExpr.Line, AExpr.Col);
     AExpr.ResolvedType := Result;  { return type matches argument type — Single→Single, Double→Double }
@@ -7031,7 +7031,7 @@ begin
       SemanticError('ArcTan2 requires exactly two arguments', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
-    if not Result.IsFloat then
+    if not Result.IsFloat() then
       SemanticError('ArcTan2 requires float arguments', AExpr.Line, AExpr.Col);
     AExpr.ResolvedType := Result;  { return type matches first argument type }
     Exit;
@@ -7042,7 +7042,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not ArgType.IsFloat then
+    if not ArgType.IsFloat() then
       SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, ArgType.Name]),
         AExpr.Line, AExpr.Col);
     Result := FTable.TypeBoolean;
@@ -7847,17 +7847,12 @@ begin
         AExpr.ResolvedType := Result;
         Exit;
       end;
-      { Bare zero-arg method reference: e.g. `TokenText` inside a method }
-      TIdentExpr(AExpr).ImplicitMethodDecl :=
-        FindMethodDecl(FCurrentClass.Name, TIdentExpr(AExpr).Name);
-      if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
-      begin
-        TIdentExpr(AExpr).IsImplicitSelfMethod := True;
-        Result :=
-          TMethodDecl(TIdentExpr(AExpr).ImplicitMethodDecl).ResolvedReturnType;
-        AExpr.ResolvedType := Result;
-        Exit;
-      end;
+      { Bare zero-arg method reference — error: mandatory () required }
+      if FindMethodDecl(FCurrentClass.Name, TIdentExpr(AExpr).Name) <> nil then
+        SemanticError(
+          Format('Bare reference to ''%s'' requires () for a call',
+            [TIdentExpr(AExpr).Name]),
+          AExpr.Line, AExpr.Col);
       { Property of current class, method-backed: rewrite to the read method }
       PropInfo := FCurrentClass.FindProperty(TIdentExpr(AExpr).Name);
       if PropInfo <> nil then
@@ -7927,6 +7922,15 @@ begin
       AExpr.ResolvedType := Result;
       Exit;
     end;
+    if (Sym.Kind in [skFunction, skProcedure]) then
+    begin
+      if (FCurrentEnclosingDecl = nil) or
+         (not SameText(FCurrentEnclosingDecl.Name, TIdentExpr(AExpr).Name)) then
+        SemanticError(
+          Format('Bare reference to ''%s'' requires () for a call',
+            [TIdentExpr(AExpr).Name]),
+          AExpr.Line, AExpr.Col);
+    end;
     Result := Sym.TypeDesc;
   end
   else if AExpr is TIndirectFuncCallExpr then
@@ -7958,7 +7962,7 @@ begin
     Result := AnalyseExpr(TNotExpr(AExpr).Expr);
     if Result.Kind = tyBoolean then
       Result := FTable.TypeBoolean
-    else if Result.IsNumeric and not Result.IsFloat then
+    else if Result.IsNumeric() and not Result.IsFloat() then
     begin
       if Result.Kind = tyUInt64 then
         Result := FTable.TypeUInt64
@@ -8043,25 +8047,19 @@ begin
         AAccess.ResolvedType := Result;
         Exit;
       end;
-      { Zero-arg method call via field access: Obj.Method (no parens) }
-      AAccess.ResolvedMethod := FindMethodDecl(RT.Name, AAccess.FieldName);
-      if AAccess.ResolvedMethod <> nil then
-      begin
-        AAccess.IsMethodCall := True;
-        Exit(TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType);
-      end;
-      { Built-in TObject.ToString: virtual dispatch yielding string.
-        Every class inherits this via vtable slot 1. }
+      { Zero-arg method call via field access: Obj.Method (no parens) — error }
+      if FindMethodDecl(RT.Name, AAccess.FieldName) <> nil then
+        SemanticError(
+          Format('Bare reference to ''%s'' requires () for a call',
+            [AAccess.FieldName]),
+          AAccess.Line, AAccess.Col);
+      { Built-in TObject.ToString: must use () }
       if SameText(AAccess.FieldName, 'ToString') and
          (BaseType.Kind = tyClass) then
-      begin
-        AAccess.IsMethodCall      := True;
-        AAccess.IsBuiltinToString := True;
-        AAccess.ResolvedMethod    := nil;
-        Result := FTable.TypeString;
-        AAccess.ResolvedType := Result;
-        Exit;
-      end;
+        SemanticError(
+          Format('Bare reference to ''%s'' requires () for a call',
+            [AAccess.FieldName]),
+          AAccess.Line, AAccess.Col);
       { Class-level constant (scalar or array): look up ClassName.ConstName }
       Sym := FTable.Lookup(BaseType.Name + '.' + AAccess.FieldName);
       if (Sym <> nil) and (Sym.Kind = skConstant) then
@@ -8087,7 +8085,7 @@ begin
     if AAccess.PropIndexExpr <> nil then
     begin
       { Subscript on a string field: Rec.Field[N] — emit char access. }
-      if FldInfo.TypeDesc.IsString then
+      if FldInfo.TypeDesc.IsString() then
       begin
         AnalyseExpr(AAccess.PropIndexExpr);
         AAccess.IsCharAccess := True;
@@ -8097,7 +8095,7 @@ begin
       { Subscript on a class field: Rec.Field[I] — use the field type's indexed property. }
       else if FldInfo.TypeDesc.Kind in [tyRecord, tyClass] then
       begin
-        PropInfo := TRecordTypeDesc(FldInfo.TypeDesc).FindIndexedProperty;
+        PropInfo := TRecordTypeDesc(FldInfo.TypeDesc).FindIndexedProperty();
         if PropInfo <> nil then
         begin
           AnalyseExpr(AAccess.PropIndexExpr);
@@ -8189,15 +8187,12 @@ begin
               Exit;
             end;
           end;
-          { Zero-arg method on the implicit-Self field: FTok.NextToken }
-          AAccess.ResolvedMethod := FindMethodDecl(RT.Name, AAccess.FieldName);
-          if AAccess.ResolvedMethod <> nil then
-          begin
-            AAccess.IsMethodCall := True;
-            Result := TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType;
-            AAccess.ResolvedType := Result;
-            Exit;
-          end;
+          { Zero-arg method on the implicit-Self field — error: mandatory () }
+          if FindMethodDecl(RT.Name, AAccess.FieldName) <> nil then
+            SemanticError(
+              Format('Bare reference to ''%s'' requires () for a call',
+                [AAccess.FieldName]),
+              AAccess.Line, AAccess.Col);
           SemanticError(
             Format('Type ''%s'' has no field ''%s''',
               [AAccess.RecordName, AAccess.FieldName]),
@@ -8206,7 +8201,7 @@ begin
         Result := AAccess.FieldInfo.TypeDesc;
         if AAccess.PropIndexExpr <> nil then
         begin
-          if AAccess.FieldInfo.TypeDesc.IsString then
+          if AAccess.FieldInfo.TypeDesc.IsString() then
           begin
             AnalyseExpr(AAccess.PropIndexExpr);
             AAccess.IsCharAccess := True;
@@ -8215,7 +8210,7 @@ begin
           end
           else if AAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyClass] then
           begin
-            PropInfo := TRecordTypeDesc(AAccess.FieldInfo.TypeDesc).FindIndexedProperty;
+            PropInfo := TRecordTypeDesc(AAccess.FieldInfo.TypeDesc).FindIndexedProperty();
             if PropInfo <> nil then
             begin
               AnalyseExpr(AAccess.PropIndexExpr);
@@ -8362,26 +8357,19 @@ begin
   FldInfo := RT.FindField(AAccess.FieldName);
   if FldInfo = nil then
   begin
-    { Zero-arg method call via field access: Obj.Method (no parens) }
-    AAccess.ResolvedMethod := FindMethodDecl(RT.Name, AAccess.FieldName);
-    if AAccess.ResolvedMethod <> nil then
-    begin
-      AAccess.IsMethodCall := True;
-      Result := TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType;
-      AAccess.ResolvedType := Result;
-      Exit;
-    end;
+    { Zero-arg method call via field access: Obj.Method (no parens) — error }
+    if FindMethodDecl(RT.Name, AAccess.FieldName) <> nil then
+      SemanticError(
+        Format('Bare reference to ''%s'' requires () for a call',
+          [AAccess.FieldName]),
+        AAccess.Line, AAccess.Col);
     { Built-in TObject.ToString: virtual dispatch yielding string. }
     if SameText(AAccess.FieldName, 'ToString') and
        (RecSym.TypeDesc.Kind = tyClass) then
-    begin
-      AAccess.IsMethodCall      := True;
-      AAccess.IsBuiltinToString := True;
-      AAccess.ResolvedMethod    := nil;
-      Result := FTable.TypeString;
-      AAccess.ResolvedType := Result;
-      Exit;
-    end;
+      SemanticError(
+        Format('Bare reference to ''%s'' requires () for a call',
+          [AAccess.FieldName]),
+        AAccess.Line, AAccess.Col);
     { Check if this is a property access }
     PropInfo := RT.FindProperty(AAccess.FieldName);
     if PropInfo <> nil then
@@ -8445,7 +8433,7 @@ begin
   Result := FldInfo.TypeDesc;
   if AAccess.PropIndexExpr <> nil then
   begin
-    if FldInfo.TypeDesc.IsString then
+    if FldInfo.TypeDesc.IsString() then
     begin
       AnalyseExpr(AAccess.PropIndexExpr);
       AAccess.IsCharAccess := True;
@@ -8454,7 +8442,7 @@ begin
     end
     else if FldInfo.TypeDesc.Kind in [tyRecord, tyClass] then
     begin
-      PropInfo := TRecordTypeDesc(FldInfo.TypeDesc).FindIndexedProperty;
+      PropInfo := TRecordTypeDesc(FldInfo.TypeDesc).FindIndexedProperty();
       if PropInfo <> nil then
       begin
         AnalyseExpr(AAccess.PropIndexExpr);
@@ -8554,7 +8542,7 @@ begin
   if ABin.Op in [boAnd, boOr, boXor] then
   begin
     { Bitwise or/and for integer types }
-    if LType.IsNumeric and RType.IsNumeric then
+    if LType.IsNumeric() and RType.IsNumeric() then
     begin
       if ((LType.Kind = tyInt64) and (RType.Kind = tyUInt64)) or
          ((LType.Kind = tyUInt64) and (RType.Kind = tyInt64)) then
@@ -8600,10 +8588,10 @@ begin
     if not (
       (LType = RType) or
       { Float comparisons: Single/Double are compatible with each other }
-      (LType.IsFloat and RType.IsFloat) or
+      (LType.IsFloat() and RType.IsFloat()) or
       { Integer/float mixing in comparisons is allowed (integer promotes) }
-      (LType.IsFloat and RType.IsNumeric) or
-      (RType.IsFloat and LType.IsNumeric) or
+      (LType.IsFloat() and RType.IsNumeric()) or
+      (RType.IsFloat() and LType.IsNumeric()) or
       ((LType.Kind = tyNil) and (RType.Kind in [tyClass, tyInterface, tyPointer, tyPChar])) or
       ((RType.Kind = tyNil) and (LType.Kind in [tyClass, tyInterface, tyPointer, tyPChar])) or
       ((LType.Kind = tyPointer) and (RType.Kind = tyPointer)) or
@@ -8627,17 +8615,17 @@ begin
   else
   begin
     { String concatenation: s1 + s2 → string }
-    if (ABin.Op = boAdd) and LType.IsString and RType.IsString then
+    if (ABin.Op = boAdd) and LType.IsString() and RType.IsString() then
     begin
       Exit(FTable.TypeString);
     end;
 
     { Pointer arithmetic: Pointer/PChar + Integer or Integer + Pointer → same type }
-    if (ABin.Op in [boAdd, boSub]) and (LType.Kind in [tyPointer, tyPChar]) and RType.IsNumeric then
+    if (ABin.Op in [boAdd, boSub]) and (LType.Kind in [tyPointer, tyPChar]) and RType.IsNumeric() then
     begin
       Exit(LType);
     end;
-    if (ABin.Op = boAdd) and LType.IsNumeric and (RType.Kind in [tyPointer, tyPChar]) then
+    if (ABin.Op = boAdd) and LType.IsNumeric() and (RType.Kind in [tyPointer, tyPChar]) then
     begin
       Exit(RType);
     end;
@@ -8645,12 +8633,12 @@ begin
     { Shift operators: result has the left operand's type; right is the shift amount }
     if ABin.Op in [boShl, boShr, boSar] then
     begin
-      if not LType.IsNumeric then
+      if not LType.IsNumeric() then
         SemanticError(
           Format('Left operand of ''%s'' must be numeric, got ''%s''',
             [BinaryOpName(ABin.Op), LType.Name]),
           ABin.Line, ABin.Col);
-      if not RType.IsNumeric then
+      if not RType.IsNumeric() then
         SemanticError(
           Format('Shift amount of ''%s'' must be numeric, got ''%s''',
             [BinaryOpName(ABin.Op), RType.Name]),
@@ -8660,18 +8648,18 @@ begin
       Exit;
     end;
 
-    if not LType.IsNumeric then
+    if not LType.IsNumeric() then
       SemanticError(
         Format('Left operand of ''%s'' must be numeric, got ''%s''',
           [BinaryOpName(ABin.Op), LType.Name]),
         ABin.Line, ABin.Col);
-    if not RType.IsNumeric then
+    if not RType.IsNumeric() then
       SemanticError(
         Format('Right operand of ''%s'' must be numeric, got ''%s''',
           [BinaryOpName(ABin.Op), RType.Name]),
         ABin.Line, ABin.Col);
     { `div` is integer division; reject float operands. }
-    if (ABin.Op = boDiv) and (LType.IsFloat or RType.IsFloat) then
+    if (ABin.Op = boDiv) and (LType.IsFloat() or RType.IsFloat()) then
       SemanticError(
         '''div'' requires integer operands; use ''/'' for real division',
         ABin.Line, ABin.Col);
@@ -8686,10 +8674,10 @@ begin
     end
     { Float promotion: if either side is float, result is float.
       Double wins over Single; any integer mixed with float promotes to Double. }
-    else if LType.IsFloat or RType.IsFloat then
+    else if LType.IsFloat() or RType.IsFloat() then
     begin
       if (LType.Kind = tyDouble) or (RType.Kind = tyDouble) or
-         (not LType.IsFloat) or (not RType.IsFloat) then
+         (not LType.IsFloat()) or (not RType.IsFloat()) then
         Result := FTable.TypeDouble
       else
         Result := FTable.TypeSingle;  { Single op Single → Single }
@@ -9010,7 +8998,7 @@ begin
   if StrType.Kind = tyStaticArray then
   begin
     IdxType := AnalyseExpr(AExpr.IndexExpr);
-    if not IdxType.IsNumeric then
+    if not IdxType.IsNumeric() then
       SemanticError(
         Format('Static array index must be numeric, got ''%s''', [IdxType.Name]),
         AExpr.Line, AExpr.Col);
@@ -9022,7 +9010,7 @@ begin
   if StrType.Kind = tyOpenArray then
   begin
     IdxType := AnalyseExpr(AExpr.IndexExpr);
-    if not IdxType.IsNumeric then
+    if not IdxType.IsNumeric() then
       SemanticError(
         Format('Open-array index must be numeric, got ''%s''', [IdxType.Name]),
         AExpr.Line, AExpr.Col);
@@ -9034,7 +9022,7 @@ begin
   if StrType.Kind = tyDynArray then
   begin
     IdxType := AnalyseExpr(AExpr.IndexExpr);
-    if not IdxType.IsNumeric then
+    if not IdxType.IsNumeric() then
       SemanticError(
         Format('Dynamic array index must be numeric, got ''%s''', [IdxType.Name]),
         AExpr.Line, AExpr.Col);
@@ -9046,7 +9034,7 @@ begin
   if StrType.Kind = tyPChar then
   begin
     IdxType := AnalyseExpr(AExpr.IndexExpr);
-    if not IdxType.IsNumeric then
+    if not IdxType.IsNumeric() then
       SemanticError(
         Format('PChar subscript index must be numeric, got ''%s''', [IdxType.Name]),
         AExpr.Line, AExpr.Col);
@@ -9054,13 +9042,13 @@ begin
     AExpr.ResolvedType := Result;
     Exit;
   end;
-  if not StrType.IsString then
+  if not StrType.IsString() then
     SemanticError(
       Format('String subscript ''[]'' requires a string expression, got ''%s''',
         [StrType.Name]),
       AExpr.Line, AExpr.Col);
   IdxType := AnalyseExpr(AExpr.IndexExpr);
-  if not IdxType.IsNumeric then
+  if not IdxType.IsNumeric() then
     SemanticError(
       Format('String subscript index must be numeric, got ''%s''', [IdxType.Name]),
       AExpr.Line, AExpr.Col);
@@ -9113,8 +9101,8 @@ var
   I, J:     Integer;
 begin
   SelType := AnalyseExpr(AStmt.Selector);
-  AStmt.IsStringCase := SelType.IsString;
-  if not (SelType.IsOrdinal or AStmt.IsStringCase) then
+  AStmt.IsStringCase := SelType.IsString();
+  if not (SelType.IsOrdinal() or AStmt.IsStringCase) then
     SemanticError(
       Format('case selector must be ordinal or string type, got ''%s''',
         [SelType.Name]),
@@ -9171,7 +9159,7 @@ begin
     AStmt.IsGlobal := Sym.IsGlobal;
     AStmt.ResolvedArrayType := FTable.TypePChar;
     IdxType := AnalyseExpr(AStmt.IndexExpr);
-    if not IdxType.IsNumeric then
+    if not IdxType.IsNumeric() then
       SemanticError('PChar subscript index must be numeric', AStmt.Line, AStmt.Col);
     AnalyseExpr(AStmt.ValueExpr);
     Exit;
@@ -9182,7 +9170,7 @@ begin
     AStmt.IsGlobal          := Sym.IsGlobal;
     AStmt.ResolvedArrayType := Sym.TypeDesc;
     IdxType := AnalyseExpr(AStmt.IndexExpr);
-    if not IdxType.IsNumeric then
+    if not IdxType.IsNumeric() then
       SemanticError('Dynamic array index must be numeric', AStmt.Line, AStmt.Col);
     ValType := AnalyseExpr(AStmt.ValueExpr);
     CheckTypesMatch(TDynArrayTypeDesc(Sym.TypeDesc).ElementType, ValType,
@@ -9197,7 +9185,7 @@ begin
   AStmt.IsGlobal := Sym.IsGlobal;
   AStmt.ResolvedArrayType := ArrType;
   IdxType := AnalyseExpr(AStmt.IndexExpr);
-  if not IdxType.IsNumeric then
+  if not IdxType.IsNumeric() then
     SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
   ValType := AnalyseExpr(AStmt.ValueExpr);
   CheckTypesMatch(ArrType.ElementType, ValType,

@@ -192,7 +192,7 @@ procedure TE2EStaticArrayTests.TestRun_AnonymousDecl_ReadWrite;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAnonReadWrite, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -208,7 +208,7 @@ procedure TE2EStaticArrayTests.TestRun_AnonymousDecl_NonZeroBase;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAnonNonZero, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -223,7 +223,7 @@ procedure TE2EStaticArrayTests.TestRun_AnonymousDecl_LowHighLength;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAnonLowHighLen, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -243,7 +243,7 @@ procedure TE2EStaticArrayTests.TestRun_TypeAlias_BasicReadWrite;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAliasBasic, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -259,7 +259,7 @@ procedure TE2EStaticArrayTests.TestRun_TypeAlias_NonZeroBase;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAliasNonZero, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -273,7 +273,7 @@ end;
 procedure TE2EStaticArrayTests.TestRun_TypeAlias_AsParam_Length;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAliasAsParam, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Length(TFive)=5', '5', Trim(Output));
@@ -283,7 +283,7 @@ procedure TE2EStaticArrayTests.TestRun_TypeAlias_MultipleVarsShareType;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAliasMultiVar, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -298,7 +298,7 @@ procedure TE2EStaticArrayTests.TestRun_TypeAlias_GlobalAndLocal;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcAliasGlobalLocal, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -327,7 +327,7 @@ const
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -355,7 +355,7 @@ const
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -391,7 +391,7 @@ const
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -425,7 +425,7 @@ const
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -449,7 +449,7 @@ const Src =
   ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('High of 15-element array is 14', '14', Trim(Output));
@@ -468,7 +468,7 @@ const Src =
   ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Low of dynamic array is always 0', '0', Trim(Output));
@@ -494,7 +494,7 @@ const Src =
 var LE: string;
 begin
   LE := LineEnding;
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertRunsOnBoth(Src, '10' + LE + '20' + LE + '30' + LE + '40' + LE, 0);
 end;
 
@@ -514,7 +514,7 @@ const Src =
   end.
   ''';
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertRunsOnBoth(Src, '0' + LineEnding, 0);
 end;
 

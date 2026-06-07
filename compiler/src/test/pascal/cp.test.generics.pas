@@ -620,7 +620,7 @@ begin
     AssertNotNull('TBox<string> instantiated', RT);
     FI := RT.FindField('FValue');
     AssertNotNull('FValue field exists', FI);
-    AssertTrue('FValue type is string', FI.TypeDesc.IsString);
+    AssertTrue('FValue type is string', FI.TypeDesc.IsString());
   finally
     Prog.Free();
   end;
@@ -641,7 +641,7 @@ begin
     FVal := RT.FindField('FVal');
     AssertNotNull('FKey field', FKey);
     AssertNotNull('FVal field', FVal);
-    AssertTrue('FKey is string', FKey.TypeDesc.IsString);
+    AssertTrue('FKey is string', FKey.TypeDesc.IsString());
     AssertEquals('FVal is tyInteger', Ord(tyInteger), Ord(FVal.TypeDesc.Kind));
   finally
     Prog.Free();

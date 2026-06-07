@@ -52,8 +52,8 @@ type
     FLookahead2: TToken;  { two-token lookahead for generic disambiguation }
 
     procedure Advance;
-    function  PeekKind: TTokenKind;
-    function  PeekKind2: TTokenKind;  { two tokens ahead }
+    function  PeekKind(): TTokenKind;
+    function  PeekKind2(): TTokenKind;  { two tokens ahead }
     procedure Expect(AKind: TTokenKind);
     function  Check(AKind: TTokenKind): Boolean;
     function  CheckUnitNamePart: Boolean;
@@ -133,12 +133,12 @@ begin
   FLookahead2 := FLexer.Next();
 end;
 
-function TParser.PeekKind: TTokenKind;
+function TParser.PeekKind(): TTokenKind;
 begin
   Result := FLookahead.Kind;
 end;
 
-function TParser.PeekKind2: TTokenKind;
+function TParser.PeekKind2(): TTokenKind;
 begin
   Result := FLookahead2.Kind;
 end;
@@ -171,14 +171,14 @@ begin
       Advance();
       Expect(tkRBracket);
       Expect(tkOf);
-      ElemTypeName := Self.ParseTypeName;
+      ElemTypeName := Self.ParseTypeName();
       Result := Format('array[%s..%s] of %s', [LStr, HStr, ElemTypeName]);
     end
     else
     begin
       { Dynamic array: array of T }
       Expect(tkOf);
-      ElemTypeName := Self.ParseTypeName;
+      ElemTypeName := Self.ParseTypeName();
       Result := 'array of ' + ElemTypeName;
     end;
     Exit;
@@ -187,7 +187,7 @@ begin
   if Check(tkCaret) then
   begin
     Advance();  { consume '^' }
-    Result := '^' + Self.ParseTypeName;  { Self. forces recursive call, not result-var read }
+    Result := '^' + Self.ParseTypeName();  { Self. forces recursive call, not result-var read }
     Exit;
   end;
   { Metaclass reference: 'class of TFoo' — encoded as 'class of <Name>'.
@@ -197,7 +197,7 @@ begin
   begin
     Advance();  { consume 'class' }
     Expect(tkOf);
-    Exit('class of ' + Self.ParseTypeName);
+    Exit('class of ' + Self.ParseTypeName());
   end;
   if not Check(tkIdent) then
     raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
@@ -271,7 +271,7 @@ end;
 
 function TParser.Parse: TProgram;
 begin
-  Result := ParseProgram;
+  Result := ParseProgram();
 end;
 
 function TParser.IsUnitTopLevel: Boolean;
@@ -299,7 +299,7 @@ begin
     if Check(tkUses) then
       ParseUses(Result);
 
-    Result.Block := ParseBlock;
+    Result.Block := ParseBlock();
 
     Expect(tkDot);
 
@@ -318,7 +318,7 @@ var
   UName: string;
 begin
   Expect(tkUses);
-  if not CheckUnitNamePart then
+  if not CheckUnitNamePart() then
     raise EParseError.Create(Format('Expected unit name after ''uses'' at line %d col %d in %s',
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   UName := FCurrent.Value;
@@ -326,7 +326,7 @@ begin
   while Check(tkDot) do
   begin
     Advance();
-    if not CheckUnitNamePart then
+    if not CheckUnitNamePart() then
       raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     UName := UName + '.' + FCurrent.Value;
@@ -336,7 +336,7 @@ begin
   while Check(tkComma) do
   begin
     Advance();
-    if not CheckUnitNamePart then
+    if not CheckUnitNamePart() then
       raise EParseError.Create(Format('Expected unit name after '','' at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     UName := FCurrent.Value;
@@ -344,7 +344,7 @@ begin
     while Check(tkDot) do
     begin
       Advance();
-      if not CheckUnitNamePart then
+      if not CheckUnitNamePart() then
         raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       UName := UName + '.' + FCurrent.Value;
@@ -447,9 +447,9 @@ begin
         if Check(tkColon) then
         begin
           Advance();
-          if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
-          else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
-          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+          if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+          else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
           else
             raise EParseError.Create(Format(
               'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
@@ -469,9 +469,9 @@ begin
           if Check(tkColon) then
           begin
             Advance();
-            if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
-            else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
-            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+            if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+            else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
             else
               raise EParseError.Create(Format(
                 'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
@@ -488,7 +488,7 @@ begin
           GID.Col        := TD.Col;
           GID.ParamNames.AddStrings(ParamNames);
           GID.ParamConstraints.AddStrings(ParamConstraints);
-          GID.IntfDef := ParseInterfaceDef;
+          GID.IntfDef := ParseInterfaceDef();
           TD.Def := GID;
         end
         else if Check(tkRecord) then
@@ -498,7 +498,7 @@ begin
           GRD.Col        := TD.Col;
           GRD.ParamNames.AddStrings(ParamNames);
           GRD.ParamConstraints.AddStrings(ParamConstraints);
-          GRD.RecordDef := ParseRecordDef;
+          GRD.RecordDef := ParseRecordDef();
           TD.Def := GRD;
         end
         else if Check(tkClass) then
@@ -508,7 +508,7 @@ begin
           GD.Col        := TD.Col;
           GD.ParamNames.AddStrings(ParamNames);
           GD.ParamConstraints.AddStrings(ParamConstraints);
-          GD.ClassDef := ParseClassDef;
+          GD.ClassDef := ParseClassDef();
           GD.ClassDef.Attributes.AddStrings(ClassAttrs);
           TD.Def := GD;
         end
@@ -534,40 +534,40 @@ begin
           raise EParseError.Create(Format(
             '''packed'' may only precede ''record'' at line %d col %d in %s',
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        TD.Def := ParseRecordDef;
+        TD.Def := ParseRecordDef();
         TRecordTypeDef(TD.Def).IsPacked := True;
       end
       else if Check(tkRecord) then
-        TD.Def := ParseRecordDef
-      else if Check(tkClass) and (PeekKind = tkOf) then
+        TD.Def := ParseRecordDef()
+      else if Check(tkClass) and (PeekKind() = tkOf) then
       begin
         { Metaclass alias: type TFooClass = class of TFoo;  Use the
           generic type-name parser, which already encodes the metaclass
           form as 'class of <Name>'. }
         AD := TTypeAliasDef.Create();
-        AD.TypeName := Self.ParseTypeName;
+        AD.TypeName := Self.ParseTypeName();
         TD.Def := AD;
       end
       else if Check(tkClass) then
       begin
-        TD.Def := ParseClassDef;
+        TD.Def := ParseClassDef();
         TClassTypeDef(TD.Def).Attributes.AddStrings(ClassAttrs);
       end
       else if Check(tkIntf) then
-        TD.Def := ParseInterfaceDef
+        TD.Def := ParseInterfaceDef()
       else if Check(tkLParen) then
-        TD.Def := ParseEnumDef
+        TD.Def := ParseEnumDef()
       else if Check(tkSet) then
-        TD.Def := ParseSetDef
+        TD.Def := ParseSetDef()
       else if Check(tkFunction) or Check(tkProcedure) then
-        TD.Def := ParseProceduralTypeDef
+        TD.Def := ParseProceduralTypeDef()
       else if Check(tkArray) or Check(tkCaret) or Check(tkIdent) then
       begin
         { Array alias:   type TArr = array[L..H] of T;
           Pointer alias: type PFoo = ^TFoo;
           Simple alias:  type TMyInt = Integer;  (ident rhs) }
         AD := TTypeAliasDef.Create();
-        AD.TypeName := Self.ParseTypeName;
+        AD.TypeName := Self.ParseTypeName();
         TD.Def := AD;
       end
       else
@@ -607,7 +607,7 @@ var
 begin
   Result := False;
   if not Check(tkIdent) then Exit;
-  if PeekKind <> tkLParen then Exit;
+  if PeekKind() <> tkLParen then Exit;
   TypeName := FCurrent.Value;
   Width := 0; IsSigned := False;
   if SameText(TypeName, 'Byte') then
@@ -633,7 +633,7 @@ begin
   Advance();          { consume type name }
   Expect(tkLParen);
   Negate := False;
-  if Check(tkMinus) then begin Negate := True; Advance; end;
+  if Check(tkMinus) then begin Negate := True; Advance(); end;
   if not Check(tkIntLit) then
     raise EParseError.Create(Format(
       'Expected integer literal inside ''%s(...)'' const cast at line %d col %d in %s',
@@ -707,13 +707,13 @@ begin
       Result.AddObject(AFirstStr, TObject(1))
     else
       Result.AddObject(AFirstStr, nil);
-    while CurrentIsConstBitOp do
+    while CurrentIsConstBitOp() do
     begin
-      OpName := ConsumeConstBitOpName;
+      OpName := ConsumeConstBitOpName();
       Result.AddObject(OpName, TObject(2));
       Sign := 1;
-      if Check(tkMinus) then begin Advance; Sign := -1; end;
-      if Check(tkIdent) and (PeekKind = tkLParen)
+      if Check(tkMinus) then begin Advance(); Sign := -1; end;
+      if Check(tkIdent) and (PeekKind() = tkLParen)
          and TryParseConstIntTypecast(CastVal) then
       begin
         if Sign < 0 then CastVal := -CastVal;
@@ -865,7 +865,7 @@ begin
           CD.ArrayElements.Add(FCurrent.Value);
           Advance();
         end
-        else if Check(tkIdent) and (PeekKind = tkLParen)
+        else if Check(tkIdent) and (PeekKind() = tkLParen)
              and TryParseConstIntTypecast(CastVal) then
         begin
           { TypeName(IntLit) typecast — store the truncated value }
@@ -886,7 +886,7 @@ begin
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         { Bit-op continuation — only applies when the element started as an
           integer operand (FirstOperand was set), not strings/floats. }
-        if (FirstOperand <> '') and CurrentIsConstBitOp then
+        if (FirstOperand <> '') and CurrentIsConstBitOp() then
         begin
           if CD.ArrayElementParts = nil then
           begin
@@ -901,7 +901,7 @@ begin
         else if CD.ArrayElementParts <> nil then
           CD.ArrayElementParts.Add(nil);
         if Check(tkComma) then
-          Advance
+          Advance()
         else
           Break;
       end;
@@ -927,7 +927,7 @@ begin
         CD.IntVal   := -ParseIntLiteral(FCurrent.Value);
         CD.IsString := False;
         Advance();
-        if CurrentIsConstBitOp then
+        if CurrentIsConstBitOp() then
         begin
           CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CD.IntVal), False);
           CD.IntVal := 0;
@@ -945,18 +945,18 @@ begin
       CD.IntVal   := ParseIntLiteral(FCurrent.Value);
       CD.IsString := False;
       Advance();
-      if CurrentIsConstBitOp then
+      if CurrentIsConstBitOp() then
       begin
         CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CD.IntVal), False);
         CD.IntVal := 0;
       end;
     end
-    else if Check(tkIdent) and (PeekKind = tkLParen)
+    else if Check(tkIdent) and (PeekKind() = tkLParen)
          and TryParseConstIntTypecast(CastVal) then
     begin
       { TypeName(IntLit) typecast in scalar const init }
       CD.IsString := False;
-      if CurrentIsConstBitOp then
+      if CurrentIsConstBitOp() then
       begin
         CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CastVal), False);
         CD.IntVal := 0;
@@ -965,7 +965,7 @@ begin
         CD.IntVal := CastVal;
     end
     else if Check(tkIdent)
-         and (PeekKind in [tkOr, tkAnd, tkXor, tkShl, tkShr]) then
+         and (PeekKind() in [tkOr, tkAnd, tkXor, tkShl, tkShr]) then
     begin
       { Bit-op chain whose first operand is a named constant. }
       FirstOperand := FCurrent.Value;
@@ -991,7 +991,7 @@ begin
           CD.SetElements.Add(FCurrent.Value);
           Advance();
           if Check(tkComma) then
-            Advance
+            Advance()
           else
             Break;
         end;
@@ -1168,7 +1168,7 @@ begin
     if Result.IsFunction then
     begin
       Expect(tkColon);
-      Result.ReturnTypeName := ParseTypeName;
+      Result.ReturnTypeName := ParseTypeName();
     end;
     { Optional 'of object' modifier — turns the bare procedural type into
       a method-pointer type, with a 16-byte (Code, Data) representation. }
@@ -1265,12 +1265,12 @@ begin
     begin
       Advance();
       { First name may be a plain class name or a generic interface name like IFoo<T> }
-      Result.ParentName := ParseGenericName;
+      Result.ParentName := ParseGenericName();
       { Additional names after a comma are implemented interface names }
       while Check(tkComma) do
       begin
         Advance();
-        Result.ImplementsNames.Add(ParseGenericName);
+        Result.ImplementsNames.Add(ParseGenericName());
       end;
       Expect(tkRParen);
     end;
@@ -1293,9 +1293,9 @@ begin
       else if Check(tkConst) then
         ParseConstBlock(Result.ConstDecls)
       else if Check(tkVar) then
-        Advance  { optional 'var' keyword before field declarations — consume and continue }
+        Advance()  { optional 'var' keyword before field declarations — consume and continue }
       else if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
-        Result.Properties.Add(ParsePropertyDecl)
+        Result.Properties.Add(ParsePropertyDecl())
       else if Check(tkIdent) or Check(tkLBracket) then
         ParseFieldDecl(Result.Fields)
       else if Check(tkFunction) then
@@ -1315,7 +1315,7 @@ begin
     until False;
     { Empty class declaration: TFoo = class(TBase); has no body, no 'end' }
     if Check(tkEnd) then
-      Advance
+      Advance()
     else if not (Check(tkSemicolon) or Check(tkEOF)) then
       raise EParseError.Create(Format(
         'Expected ''end'' in class definition at line %d col %d in %s',
@@ -1373,9 +1373,9 @@ begin
     if IsFunction then
       Expect(tkFunction)
     else if Check(tkProcedure) then
-      Advance
+      Advance()
     else if Check(tkConstructor) or Check(tkDestructor) then
-      Advance
+      Advance()
     else
       Expect(tkProcedure);  { will produce a clear error message }
     if not Check(tkIdent) then
@@ -1386,8 +1386,8 @@ begin
     { Type parameter list: applies to the method itself ('function Identity<T>')
       or the generic owner class ('procedure TList<T>.Add').  Parse tentatively;
       DOT after '>' decides which case it is. }
-    if Check(tkLessThan) and (PeekKind = tkIdent) and
-       (PeekKind2 in [tkGreaterThan, tkComma, tkColon]) then
+    if Check(tkLessThan) and (PeekKind() = tkIdent) and
+       (PeekKind2() in [tkGreaterThan, tkComma, tkColon]) then
     begin
       TempParams      := TStringList.Create();
       TempConstraints := TStringList.Create();
@@ -1402,9 +1402,9 @@ begin
         if Check(tkColon) then
         begin
           Advance();
-          if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
-          else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
-          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+          if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+          else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
           else
             raise EParseError.Create(Format(
               'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
@@ -1423,9 +1423,9 @@ begin
           if Check(tkColon) then
           begin
             Advance();
-            if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
-            else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
-            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+            if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+            else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
             else
               raise EParseError.Create(Format(
                 'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
@@ -1477,7 +1477,7 @@ begin
     if IsFunction then
     begin
       Expect(tkColon);
-      Result.ReturnTypeName := ParseTypeName;
+      Result.ReturnTypeName := ParseTypeName();
     end;
     Expect(tkSemicolon);
     { Consume method directives: virtual, override, and identifier-form directives
@@ -1488,13 +1488,13 @@ begin
       begin
         Result.IsVirtual := True;
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkOverride) then
       begin
         Result.IsOverride := True;
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkExternal) then
       begin
@@ -1507,20 +1507,20 @@ begin
           Result.ExternalName := FCurrent.Value;
           Expect(tkStringLit);
         end;
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkIdent) and SameText(FCurrent.Value, 'overload') then
       begin
         Result.IsOverload := True;
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkIdent) and SameText(FCurrent.Value, 'abstract') then
       begin
         Result.IsAbstract := True;
         Result.IsVirtual  := True;  { abstract implies virtual }
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkIdent) and
               (SameText(FCurrent.Value, 'inline')      or
@@ -1547,7 +1547,7 @@ begin
                 SameText(FCurrent.Value, 'safecall') then
           Result.CallingConv := LowerCase(FCurrent.Value);
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else
         Break;
@@ -1561,7 +1561,7 @@ begin
        (Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst) or
         (ACanHaveNestedProcs and (Check(tkProcedure) or Check(tkFunction)))) then
     begin
-      Result.Body := ParseBlock;
+      Result.Body := ParseBlock();
       Expect(tkSemicolon);
     end;
   except
@@ -1588,8 +1588,8 @@ begin
     IsOutGrp   := Check(tkOut);
     IsVarGrp   := Check(tkVar) or IsOutGrp;
     IsConstGrp := Check(tkConst);
-    if IsVarGrp then Advance
-    else if IsConstGrp then Advance;
+    if IsVarGrp then Advance()
+    else if IsConstGrp then Advance();
     Names := TStringList.Create();
     try
       if not Check(tkIdent) then
@@ -1612,10 +1612,10 @@ begin
       begin
         Advance();        { consume 'array' }
         Expect(tkOf);
-        TypeN := ParseTypeName;   { element type }
+        TypeN := ParseTypeName();   { element type }
       end
       else
-        TypeN := ParseTypeName;
+        TypeN := ParseTypeName();
       Default := nil;
       if Check(tkEquals) then
       begin
@@ -1634,7 +1634,7 @@ begin
         DefLine := FCurrent.Line;
         DefCol  := FCurrent.Col;
         Advance();  { consume '=' }
-        Default := ParseExpr;
+        Default := ParseExpr();
         if Default = nil then
           raise EParseError.Create(Format(
             'Expected default value expression at line %d col %d in %s',
@@ -1660,7 +1660,7 @@ begin
       Names.Free();
     end;
     if Check(tkSemicolon) then
-      Advance
+      Advance()
     else
       Break;
   until False;
@@ -1701,11 +1701,11 @@ begin
       Result.IndexParamName := FCurrent.Value;
       Advance();
       Expect(tkColon);
-      Result.IndexTypeName := ParseTypeName;
+      Result.IndexTypeName := ParseTypeName();
       Expect(tkRBracket);
     end;
     Expect(tkColon);
-    Result.TypeName := ParseTypeName;
+    Result.TypeName := ParseTypeName();
     { Optional: read Accessor }
     if Check(tkIdent) and SameText(FCurrent.Value, 'read') then
     begin
@@ -1795,7 +1795,7 @@ begin
       Advance();
     end;
     Expect(tkColon);
-    Fld.TypeName := ParseTypeName;
+    Fld.TypeName := ParseTypeName();
     Expect(tkSemicolon);
     AFields.Add(Fld);
   except
@@ -1814,7 +1814,7 @@ var
 begin
   IsTV := Check(tkThreadVar);
   if IsTV then
-    Advance
+    Advance()
   else
     Expect(tkVar);
   while Check(tkIdent) or Check(tkLBracket) do
@@ -1846,7 +1846,7 @@ begin
       Advance();
     end;
     Expect(tkColon);
-    Decl.TypeName := ParseTypeName;
+    Decl.TypeName := ParseTypeName();
     Expect(tkSemicolon);
     ABlock.Decls.Add(Decl);
   except
@@ -1865,11 +1865,11 @@ var
 begin
   while not (Check(tkEnd) or Check(tkEOF) or Check(tkElse)) do
   begin
-    Stmt := ParseStmt;
+    Stmt := ParseStmt();
     if Stmt <> nil then
       ABlock.Stmts.Add(Stmt);
     if Check(tkSemicolon) then
-      Advance
+      Advance()
     else
       Break;
   end;
@@ -1902,32 +1902,32 @@ begin
 
   if Check(tkIf) then
   begin
-    Exit(ParseIfStmt);
+    Exit(ParseIfStmt());
   end;
 
   if Check(tkWhile) then
   begin
-    Exit(ParseWhileStmt);
+    Exit(ParseWhileStmt());
   end;
 
   if Check(tkRepeat) then
   begin
-    Exit(ParseRepeatStmt);
+    Exit(ParseRepeatStmt());
   end;
 
   if Check(tkFor) then
   begin
-    Exit(ParseForStmt);
+    Exit(ParseForStmt());
   end;
 
   if Check(tkTry) then
   begin
-    Exit(ParseTryStmt);
+    Exit(ParseTryStmt());
   end;
 
   if Check(tkRaise) then
   begin
-    Exit(ParseRaiseStmt);
+    Exit(ParseRaiseStmt());
   end;
 
   if Check(tkExit) then
@@ -1942,7 +1942,7 @@ begin
     if Check(tkLParen) then
     begin
       Advance();
-      ExitS.Value := Self.ParseExpr;
+      ExitS.Value := Self.ParseExpr();
       Expect(tkRParen);
     end;
     Exit(ExitS);
@@ -1968,17 +1968,17 @@ begin
 
   if Check(tkInherited) then
   begin
-    Exit(ParseInheritedStmt);
+    Exit(ParseInheritedStmt());
   end;
 
   if Check(tkCase) then
   begin
-    Exit(ParseCaseStmt);
+    Exit(ParseCaseStmt());
   end;
 
   if Check(tkBegin) then
   begin
-    Exit(ParseCompoundStmt);
+    Exit(ParseCompoundStmt());
   end;
 
   if not Check(tkIdent) then
@@ -2000,10 +2000,10 @@ begin
     SubAssign.Col := Col;
     SubAssign.ArrayName := Name;
     try
-      SubAssign.IndexExpr := ParseExpr;
+      SubAssign.IndexExpr := ParseExpr();
       Expect(tkRBracket);
       Expect(tkAssign);
-      SubAssign.ValueExpr := ParseExpr;
+      SubAssign.ValueExpr := ParseExpr();
     except
       SubAssign.Free();
       raise;
@@ -2038,7 +2038,7 @@ begin
       FldNode.Col      := Col;
       FldNode.Base     := DerefNode;
       FldNode.FieldName := SecondIdent;
-      while Check(tkDot) and (PeekKind = tkIdent) do
+      while Check(tkDot) and (PeekKind() = tkIdent) do
       begin
         Advance();
         InnerFld           := TFieldAccessExpr.Create();
@@ -2057,7 +2057,7 @@ begin
       FldNode.Base      := nil;
       FldNode.Free();
       Expect(tkAssign);
-      FldAssign.Expr := ParseExpr;
+      FldAssign.Expr := ParseExpr();
       Result := FldAssign;
     end
     else
@@ -2072,7 +2072,7 @@ begin
       PtrIdNode.Col    := Col;
       PtrIdNode.Name   := Name;
       PtrWrite.PtrExpr := PtrIdNode;
-      PtrWrite.ValExpr := ParseExpr;
+      PtrWrite.ValExpr := ParseExpr();
       Result := PtrWrite;
     end;
   end
@@ -2094,10 +2094,10 @@ begin
       FldAssign.RecordName := Name;
       FldAssign.FieldName := SecondIdent;
       Advance();  { consume '[' }
-      FldAssign.PropIndexExpr := ParseExpr;
+      FldAssign.PropIndexExpr := ParseExpr();
       Expect(tkRBracket);
       Expect(tkAssign);
-      FldAssign.Expr := ParseExpr;
+      FldAssign.Expr := ParseExpr();
       Result := FldAssign;
     end
     else if Check(tkAssign) then
@@ -2109,7 +2109,7 @@ begin
       FldAssign.RecordName := Name;
       FldAssign.FieldName := SecondIdent;
       Expect(tkAssign);
-      FldAssign.Expr := ParseExpr;
+      FldAssign.Expr := ParseExpr();
       Result := FldAssign;
     end
     else
@@ -2178,7 +2178,7 @@ begin
           MCall.ObjExpr       := nil;  { transfer ownership — prevent double-free }
           MCall.Free();
           MCall := nil;
-          FldAssign.Expr := ParseExpr;
+          FldAssign.Expr := ParseExpr();
           Exit(FldAssign);
         end;
         Result := MCall;
@@ -2250,7 +2250,7 @@ begin
             FldAssign.ObjExpr   := TFieldAccessExpr(CastRcv).Base;
             TFieldAccessExpr(CastRcv).Base := nil;
             CastRcv.Free();
-            FldAssign.Expr := ParseExpr;
+            FldAssign.Expr := ParseExpr();
             Exit(FldAssign);
           end;
           raise EParseError.Create(Format(
@@ -2268,7 +2268,7 @@ begin
     Assign.Line := Line;
     Assign.Col  := Col;
     Assign.Name := Name;
-    Assign.Expr := ParseExpr;
+    Assign.Expr := ParseExpr();
     Result := Assign;
   end
   else
@@ -2286,11 +2286,11 @@ begin
       Advance();  { '(' }
       if not Check(tkRParen) then
       begin
-        FCallNode.Args.Add(ParseExpr);
+        FCallNode.Args.Add(ParseExpr());
         while Check(tkComma) do
         begin
           Advance();
-          FCallNode.Args.Add(ParseExpr);
+          FCallNode.Args.Add(ParseExpr());
         end;
       end;
       Expect(tkRParen);
@@ -2339,7 +2339,7 @@ begin
           FldAssign.ObjExpr  := TFieldAccessExpr(CastRcv).Base;
           TFieldAccessExpr(CastRcv).Base := nil; { transfer ownership }
           CastRcv.Free();
-          FldAssign.Expr := ParseExpr;
+          FldAssign.Expr := ParseExpr();
           Exit(FldAssign);
         end;
         { No-arg method call: Func(...).Field treated as Func(...).Method }
@@ -2385,9 +2385,9 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkWhile);
-    Result.Condition := ParseExpr;
+    Result.Condition := ParseExpr();
     Expect(tkDo);
-    Result.Body := ParseStmt;
+    Result.Body := ParseStmt();
   except
     Result.Free();
     raise;
@@ -2408,16 +2408,16 @@ begin
     Result.Body.Col  := FCurrent.Col;
     while not (Check(tkUntil) or Check(tkEOF)) do
     begin
-      Stmt := ParseStmt;
+      Stmt := ParseStmt();
       if Stmt <> nil then
         Result.Body.Stmts.Add(Stmt);
       if Check(tkSemicolon) then
-        Advance
+        Advance()
       else
         Break;
     end;
     Expect(tkUntil);
-    Result.Condition := ParseExpr;
+    Result.Condition := ParseExpr();
   except
     Result.Free();
     raise;
@@ -2431,9 +2431,9 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkIf);
-    Result.Condition := ParseExpr;
+    Result.Condition := ParseExpr();
     Expect(tkThen);
-    Result.ThenStmt := ParseStmt;
+    Result.ThenStmt := ParseStmt();
     // 'if cond then { comment } else' leaves ThenStmt nil when the comment is the only body.
     // Substitute an empty compound so EmitIfStmt can always call EmitStmt.
     if Result.ThenStmt = nil then
@@ -2441,7 +2441,7 @@ begin
     if Check(tkElse) then
     begin
       Advance();
-      Result.ElseStmt := ParseStmt;
+      Result.ElseStmt := ParseStmt();
     end;
   except
     Result.Free();
@@ -2476,9 +2476,9 @@ begin
       ForInS.Col     := SCol;
       ForInS.VarName := VarName;
       Advance();  { consume 'in' }
-      ForInS.CollExpr := ParseExpr;
+      ForInS.CollExpr := ParseExpr();
       Expect(tkDo);
-      ForInS.Body := ParseStmt;
+      ForInS.Body := ParseStmt();
     except
       ForInS.Free();
       Result := nil;
@@ -2495,7 +2495,7 @@ begin
       ForS.Col     := SCol;
       ForS.VarName := VarName;
       Expect(tkAssign);
-      ForS.StartExpr := ParseExpr;
+      ForS.StartExpr := ParseExpr();
       if Check(tkTo) then
       begin
         ForS.IsDownTo := False;
@@ -2510,9 +2510,9 @@ begin
         raise EParseError.Create(Format(
           'Expected ''to'' or ''downto'' at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      ForS.EndExpr := ParseExpr;
+      ForS.EndExpr := ParseExpr();
       Expect(tkDo);
-      ForS.Body := ParseStmt;
+      ForS.Body := ParseStmt();
     except
       ForS.Free();
       Result := nil;
@@ -2528,11 +2528,11 @@ var
 begin
   while not (Check(AStop1) or Check(AStop2) or Check(tkEnd) or Check(tkEOF)) do
   begin
-    S := ParseStmt;
+    S := ParseStmt();
     if S <> nil then
       ATarget.Stmts.Add(S);
     if Check(tkSemicolon) then
-      Advance
+      Advance()
     else
       Break;
   end;
@@ -2591,7 +2591,7 @@ begin
         begin
           while Check(tkIdent) and SameText(FCurrent.Value, 'on') do
           begin
-            TES.Handlers.Add(ParseExceptHandlerClause);
+            TES.Handlers.Add(ParseExceptHandlerClause());
             if Check(tkSemicolon) then
               Advance();
           end;
@@ -2684,7 +2684,7 @@ begin
     else
     begin
       { Single statement — nil means empty (bare semicolon); skip it }
-      Stmt := ParseStmt;
+      Stmt := ParseStmt();
       if Stmt <> nil then
         H.Body.Stmts.Add(Stmt);
     end;
@@ -2705,7 +2705,7 @@ begin
     { Bare raise has no expression; detect by checking statement terminators }
     if not (Check(tkSemicolon) or Check(tkEnd) or Check(tkEOF) or
             Check(tkFinally) or Check(tkExcept) or Check(tkElse)) then
-      Result.Expr := ParseExpr;
+      Result.Expr := ParseExpr();
   except
     Result.Free();
     raise;
@@ -2730,11 +2730,11 @@ begin
       Advance();
       if not Check(tkRParen) then
       begin
-        Result.Args.Add(ParseExpr);
+        Result.Args.Add(ParseExpr());
         while Check(tkComma) do
         begin
           Advance();
-          Result.Args.Add(ParseExpr);
+          Result.Args.Add(ParseExpr());
         end;
       end;
       Expect(tkRParen);
@@ -2756,11 +2756,11 @@ begin
     Expect(tkBegin);
     while not (Check(tkEnd) or Check(tkEOF)) do
     begin
-      Stmt := ParseStmt;
+      Stmt := ParseStmt();
       if Stmt <> nil then
         Result.Stmts.Add(Stmt);
       if Check(tkSemicolon) then
-        Advance
+        Advance()
       else
         Break;
     end;
@@ -2782,22 +2782,22 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkCase);
-    Result.Selector := ParseExpr;
+    Result.Selector := ParseExpr();
     Expect(tkOf);
     { Parse branches: value [, value]* : stmt }
     while not (Check(tkEnd) or Check(tkElse) or Check(tkEOF)) do
     begin
       Branch := TCaseBranch.Create();
-      Branch.Values.Add(ParseExpr);
+      Branch.Values.Add(ParseExpr());
       while Check(tkComma) do
       begin
         Advance();
-        Branch.Values.Add(ParseExpr);
+        Branch.Values.Add(ParseExpr());
       end;
       Expect(tkColon);
-      Stmt := ParseStmt;
+      Stmt := ParseStmt();
       { consume optional trailing semicolon between branches }
-      if Check(tkSemicolon) then Advance;
+      if Check(tkSemicolon) then Advance();
       if Stmt <> nil then
         Branch.Stmt := Stmt
       else
@@ -2808,17 +2808,17 @@ begin
     begin
       Advance();  { consume 'else' }
       if Check(tkBegin) then
-        Result.ElseStmt := ParseCompoundStmt
+        Result.ElseStmt := ParseCompoundStmt()
       else
       begin
         { Collect all statements until 'end' — FPC allows multi-stmt else without begin..end }
         CmpElse := TCompoundStmt.Create();
-        CmpElse.Stmts.Add(ParseStmt);
-        if Check(tkSemicolon) then Advance;
+        CmpElse.Stmts.Add(ParseStmt());
+        if Check(tkSemicolon) then Advance();
         while not (Check(tkEnd) or Check(tkEOF)) do
         begin
-          CmpElse.Stmts.Add(ParseStmt);
-          if Check(tkSemicolon) then Advance;
+          CmpElse.Stmts.Add(ParseStmt());
+          if Check(tkSemicolon) then Advance();
         end;
         if CmpElse.Stmts.Count = 1 then
         begin
@@ -2829,7 +2829,7 @@ begin
         else
           Result.ElseStmt := CmpElse;
       end;
-      if Check(tkSemicolon) then Advance;
+      if Check(tkSemicolon) then Advance();
     end;
     Expect(tkEnd);
   except
@@ -2840,21 +2840,21 @@ end;
 
 procedure TParser.ParseArgList(ACall: TProcCall);
 begin
-  ACall.Args.Add(ParseExpr);
+  ACall.Args.Add(ParseExpr());
   while Check(tkComma) do
   begin
     Advance();
-    ACall.Args.Add(ParseExpr);
+    ACall.Args.Add(ParseExpr());
   end;
 end;
 
 procedure TParser.ParseMethodCallArgList(ACall: TMethodCallStmt);
 begin
-  ACall.Args.Add(ParseExpr);
+  ACall.Args.Add(ParseExpr());
   while Check(tkComma) do
   begin
     Advance();
-    ACall.Args.Add(ParseExpr);
+    ACall.Args.Add(ParseExpr());
   end;
 end;
 
@@ -2873,9 +2873,9 @@ begin
     if IsFunction then
       Expect(tkFunction)
     else if Check(tkProcedure) then
-      Advance
+      Advance()
     else if Check(tkConstructor) or Check(tkDestructor) then
-      Advance
+      Advance()
     else
       Expect(tkProcedure);
     if not Check(tkIdent) then
@@ -2887,8 +2887,8 @@ begin
       Mirrors the subset of ParseMethodDecl's logic that applies to
       forward declarations (no '.MethodName' continuation here — those
       live in the implementation section). }
-    if Check(tkLessThan) and (PeekKind = tkIdent) and
-       (PeekKind2 in [tkGreaterThan, tkComma, tkColon]) then
+    if Check(tkLessThan) and (PeekKind() = tkIdent) and
+       (PeekKind2() in [tkGreaterThan, tkComma, tkColon]) then
     begin
       Result.TypeParams           := TStringList.Create();
       Result.TypeParamConstraints := TStringList.Create();
@@ -2902,9 +2902,9 @@ begin
       if Check(tkColon) then
       begin
         Advance();
-        if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
-        else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
-        else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+        if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+        else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+        else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
         else
           raise EParseError.Create(Format(
             'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
@@ -2923,9 +2923,9 @@ begin
         if Check(tkColon) then
         begin
           Advance();
-          if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
-          else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
-          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+          if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+          else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
           else
             raise EParseError.Create(Format(
               'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
@@ -2945,7 +2945,7 @@ begin
     if IsFunction then
     begin
       Expect(tkColon);
-      Result.ReturnTypeName := ParseTypeName;
+      Result.ReturnTypeName := ParseTypeName();
     end;
     Expect(tkSemicolon);
     { Directive loop — forward declarations may carry overload, external,
@@ -2962,13 +2962,13 @@ begin
           Result.ExternalName := FCurrent.Value;
           Expect(tkStringLit);
         end;
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkIdent) and SameText(FCurrent.Value, 'overload') then
       begin
         Result.IsOverload := True;
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else if Check(tkIdent) and
               (SameText(FCurrent.Value, 'inline')      or
@@ -2991,7 +2991,7 @@ begin
                 SameText(FCurrent.Value, 'safecall') then
           Result.CallingConv := LowerCase(FCurrent.Value);
         Advance();
-        if Check(tkSemicolon) then Advance;
+        if Check(tkSemicolon) then Advance();
       end
       else
         Break;
@@ -3021,7 +3021,7 @@ begin
     while Check(tkDot) do
     begin
       Advance();
-      if not CheckUnitNamePart then
+      if not CheckUnitNamePart() then
         raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.Name := Result.Name + '.' + FCurrent.Value;
@@ -3076,9 +3076,9 @@ begin
       Result.InitStmts := TObjectList.Create(True);
       while not (Check(tkEnd) or Check(tkFinalization) or Check(tkEOF)) do
       begin
-        InitStmt := ParseStmt;
+        InitStmt := ParseStmt();
         if InitStmt <> nil then Result.InitStmts.Add(InitStmt);
-        if Check(tkSemicolon) then Advance else Break;
+        if Check(tkSemicolon) then Advance() else Break;
       end;
     end;
     if Check(tkFinalization) then
@@ -3087,9 +3087,9 @@ begin
       Result.FinalStmts := TObjectList.Create(True);
       while not (Check(tkEnd) or Check(tkEOF)) do
       begin
-        InitStmt := ParseStmt;
+        InitStmt := ParseStmt();
         if InitStmt <> nil then Result.FinalStmts.Add(InitStmt);
-        if Check(tkSemicolon) then Advance else Break;
+        if Check(tkSemicolon) then Advance() else Break;
       end;
     end;
 
@@ -3120,7 +3120,7 @@ var
   OpLine:   Integer;
   OpCol:    Integer;
 begin
-  Result := ParseAddSub;
+  Result := ParseAddSub();
 
   { Comparison — non-associative, one level only }
   if Check(tkEquals) or Check(tkNotEquals) or
@@ -3136,7 +3136,7 @@ begin
     OpLine  := FCurrent.Line;
     OpCol   := FCurrent.Col;
     Advance();
-    Right       := ParseAddSub;
+    Right       := ParseAddSub();
     Node        := TBinaryExpr.Create();
     Node.Line   := OpLine;
     Node.Col    := OpCol;
@@ -3150,7 +3150,7 @@ begin
     OpLine  := FCurrent.Line;
     OpCol   := FCurrent.Col;
     Advance();
-    Right       := ParseAddSub;
+    Right       := ParseAddSub();
     Node        := TBinaryExpr.Create();
     Node.Line   := OpLine;
     Node.Col    := OpCol;
@@ -3189,7 +3189,7 @@ var
   OpLine: Integer;
   OpCol:  Integer;
 begin
-  Result := ParseTerm;
+  Result := ParseTerm();
   while Check(tkPlus) or Check(tkMinus) or Check(tkOr) do
   begin
     if      Check(tkPlus)  then Op := boAdd
@@ -3198,7 +3198,7 @@ begin
     OpLine := FCurrent.Line;
     OpCol  := FCurrent.Col;
     Advance();
-    Right      := ParseTerm;
+    Right      := ParseTerm();
     Node       := TBinaryExpr.Create();
     Node.Line  := OpLine;
     Node.Col   := OpCol;
@@ -3217,7 +3217,7 @@ var
   OpLine: Integer;
   OpCol:  Integer;
 begin
-  Result := ParseFactor;
+  Result := ParseFactor();
   while Check(tkStar) or Check(tkSlash) or Check(tkDiv) or Check(tkMod)
         or Check(tkAnd) or Check(tkXor) or Check(tkShl) or Check(tkShr)
         or Check(tkSar) do
@@ -3234,7 +3234,7 @@ begin
     OpLine     := FCurrent.Line;
     OpCol      := FCurrent.Col;
     Advance();
-    Right      := ParseFactor;
+    Right      := ParseFactor();
     Node       := TBinaryExpr.Create();
     Node.Line  := OpLine;
     Node.Col   := OpCol;
@@ -3278,7 +3278,7 @@ begin
         AddrNode.Line := FCurrent.Line;
         AddrNode.Col  := FCurrent.Col;
         Advance();  { consume '@' }
-        AddrNode.Expr := Self.ParseFactor;  { Self. forces recursive call }
+        AddrNode.Expr := Self.ParseFactor();  { Self. forces recursive call }
         Result := AddrNode;
       end;
     tkNot:
@@ -3287,7 +3287,7 @@ begin
         NotNode.Line := FCurrent.Line;
         NotNode.Col  := FCurrent.Col;
         Advance();  { consume 'not' }
-        NotNode.Expr := Self.ParseFactor;  { Self. forces recursive call }
+        NotNode.Expr := Self.ParseFactor();  { Self. forces recursive call }
         Result := NotNode;
       end;
     tkMinus:
@@ -3303,7 +3303,7 @@ begin
         NegNode.Op     := boSub;
         NegNode.Left   := ZeroNode;
         Advance();  { consume '-' }
-        NegNode.Right  := Self.ParseFactor;  { Self. forces recursive call, not result-var read }
+        NegNode.Right  := Self.ParseFactor();  { Self. forces recursive call, not result-var read }
         Result         := NegNode;
       end;
     tkNil:
@@ -3355,7 +3355,7 @@ begin
           inferred by the semantic pass from the LHS type.
           If the token two ahead is neither '>' nor ',', the '<' is a comparison
           operator (e.g. "if A < B then"). }
-        if Check(tkNotEquals) and (PeekKind = tkDot) then
+        if Check(tkNotEquals) and (PeekKind() = tkDot) then
         begin
           { Diamond: TFoo<> — the lexer folds '<>' into a single tkNotEquals token }
           Advance();  { consume '<>' }
@@ -3366,8 +3366,8 @@ begin
               'Expected ''.'' after ''<>'' at line %d col %d in %s',
               [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         end
-        else if Check(tkLessThan) and (PeekKind = tkIdent) and
-           (PeekKind2 in [tkGreaterThan, tkComma]) then
+        else if Check(tkLessThan) and (PeekKind() = tkIdent) and
+           (PeekKind2() in [tkGreaterThan, tkComma]) then
         begin
           Advance();  { consume '<' }
           Name := Name + '<' + FCurrent.Value;
@@ -3393,7 +3393,7 @@ begin
           SuppNode.Line     := Line;
           SuppNode.Col      := Col;
           Advance();  { consume '(' }
-          SuppNode.Obj      := ParseExpr;
+          SuppNode.Obj      := ParseExpr();
           Expect(tkComma);
           SuppNode.IntfTypeName := FCurrent.Value;
           Expect(tkIdent);
@@ -3425,11 +3425,11 @@ begin
             Advance();
             if not Check(tkRParen) then
             begin
-              MCallNode.Args.Add(ParseExpr);
+              MCallNode.Args.Add(ParseExpr());
               while Check(tkComma) do
               begin
                 Advance();
-                MCallNode.Args.Add(ParseExpr);
+                MCallNode.Args.Add(ParseExpr());
               end;
             end;
             Expect(tkRParen);
@@ -3448,11 +3448,11 @@ begin
             if Check(tkLBracket) then
             begin
               Advance();
-              FldNode.PropIndexExpr := ParseExpr;
+              FldNode.PropIndexExpr := ParseExpr();
               Expect(tkRBracket);
             end;
             { Chained access: A.B.C.D ... — wrap each subsequent '.IDENT' }
-            while Check(tkDot) and (PeekKind = tkIdent) do
+            while Check(tkDot) and (PeekKind() = tkIdent) do
             begin
               Advance();  { consume '.' }
               SecondName := FCurrent.Value;
@@ -3469,11 +3469,11 @@ begin
                 Advance();  { consume '(' }
                 if not Check(tkRParen) then
                 begin
-                  MCallNode.Args.Add(ParseExpr);
+                  MCallNode.Args.Add(ParseExpr());
                   while Check(tkComma) do
                   begin
                     Advance();
-                    MCallNode.Args.Add(ParseExpr);
+                    MCallNode.Args.Add(ParseExpr());
                   end;
                 end;
                 Expect(tkRParen);
@@ -3491,7 +3491,7 @@ begin
                 if Check(tkLBracket) then
                 begin
                   Advance();
-                  FldNode.PropIndexExpr := ParseExpr;
+                  FldNode.PropIndexExpr := ParseExpr();
                   Expect(tkRBracket);
                 end;
               end;
@@ -3508,17 +3508,17 @@ begin
           Advance();  { consume '(' }
           if not Check(tkRParen) then
           begin
-            FCallNode.Args.Add(ParseExpr);
+            FCallNode.Args.Add(ParseExpr());
             while Check(tkComma) do
             begin
               Advance();
-              FCallNode.Args.Add(ParseExpr);
+              FCallNode.Args.Add(ParseExpr());
             end;
           end;
           Expect(tkRParen);
           Result := FCallNode;
           { Postfix chained field/method access: FuncOrCast(...).Member ... }
-          while Check(tkDot) and (PeekKind = tkIdent) do
+          while Check(tkDot) and (PeekKind() = tkIdent) do
           begin
             Advance();  { consume '.' }
             SecondName := FCurrent.Value;
@@ -3552,11 +3552,11 @@ begin
               FldNode.Free();
               if not Check(tkRParen) then
               begin
-                MCallNode.Args.Add(ParseExpr);
+                MCallNode.Args.Add(ParseExpr());
                 while Check(tkComma) do
                 begin
                   Advance();
-                  MCallNode.Args.Add(ParseExpr);
+                  MCallNode.Args.Add(ParseExpr());
                 end;
               end;
               Expect(tkRParen);
@@ -3570,7 +3570,7 @@ begin
                 outer FieldAccess so the analyser can resolve the property
                 with its index in one place. }
               Advance();
-              FldNode.PropIndexExpr := ParseExpr;
+              FldNode.PropIndexExpr := ParseExpr();
               Expect(tkRBracket);
             end;
           end;
@@ -3593,7 +3593,7 @@ begin
           DerefNode.Expr := Result;
           Result         := DerefNode;
           { Deref-then-field: P^.Field or P^.Field.Sub ... }
-          while Check(tkDot) and (PeekKind = tkIdent) do
+          while Check(tkDot) and (PeekKind() = tkIdent) do
           begin
             Advance();  { consume '.' }
             FldNode           := TFieldAccessExpr.Create();
@@ -3615,11 +3615,11 @@ begin
           Advance();  { consume '[' }
           if not Check(tkRBracket) then
           begin
-            ArrNode.Elements.Add(ParseExpr);
+            ArrNode.Elements.Add(ParseExpr());
             while Check(tkComma) do
             begin
               Advance();  { consume ',' }
-              ArrNode.Elements.Add(ParseExpr);
+              ArrNode.Elements.Add(ParseExpr());
             end;
           end;
           Expect(tkRBracket);
@@ -3633,7 +3633,7 @@ begin
     tkLParen:
       begin
         Advance();
-        Inner := ParseExpr;
+        Inner := ParseExpr();
         Expect(tkRParen);
         { Postfix dereference: (Expr)^ and optional (Expr)^.Field chaining }
         if Check(tkCaret) then
@@ -3644,7 +3644,7 @@ begin
           DerefNode.Col  := FCurrent.Col;
           DerefNode.Expr := Inner;
           Result         := DerefNode;
-          while Check(tkDot) and (PeekKind = tkIdent) do
+          while Check(tkDot) and (PeekKind() = tkIdent) do
           begin
             Advance();
             FldNode           := TFieldAccessExpr.Create();
@@ -3680,11 +3680,11 @@ begin
         Advance();  { consume '(' }
         if not Check(tkRParen) then
         begin
-          IndCallNode.Args.Add(ParseExpr);
+          IndCallNode.Args.Add(ParseExpr());
           while Check(tkComma) do
           begin
             Advance();
-            IndCallNode.Args.Add(ParseExpr);
+            IndCallNode.Args.Add(ParseExpr());
           end;
         end;
         Expect(tkRParen);
@@ -3714,11 +3714,11 @@ begin
         Advance();  { consume '(' }
         if not Check(tkRParen) then
         begin
-          MCallNode.Args.Add(ParseExpr);
+          MCallNode.Args.Add(ParseExpr());
           while Check(tkComma) do
           begin
             Advance();
-            MCallNode.Args.Add(ParseExpr);
+            MCallNode.Args.Add(ParseExpr());
           end;
         end;
         Expect(tkRParen);
@@ -3735,7 +3735,7 @@ begin
         if Check(tkLBracket) then
         begin
           Advance();
-          FldNode.PropIndexExpr := ParseExpr;
+          FldNode.PropIndexExpr := ParseExpr();
           Expect(tkRBracket);
         end;
       end;
@@ -3749,7 +3749,7 @@ begin
       Result := nil;
       try
         Advance();  { consume '[' }
-        SubNode.IndexExpr := ParseExpr;
+        SubNode.IndexExpr := ParseExpr();
         Expect(tkRBracket);
       except
         SubNode.Free();

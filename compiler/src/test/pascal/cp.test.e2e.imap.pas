@@ -339,7 +339,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictAddContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   { ContainsKey(10) -> true, ContainsKey(99) -> false, Count=2 }
@@ -353,7 +353,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictTryGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('found -> True',  Pos('True',  Output) >= 0);
@@ -366,7 +366,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictRemove, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=2',          Pos('2',     Output) >= 0);
@@ -379,7 +379,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOrdDictAddContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('contains 10 -> True',  Pos('True',  Output) >= 0);
@@ -392,7 +392,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOrdDictTryGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('found -> True',    Pos('True',  Output) >= 0);
@@ -405,7 +405,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcSwapImpl, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('TDict dispatch correct',    Pos('True', Output) >= 0);
@@ -456,7 +456,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+link+run',
     CompileAndRunWithUnit('genmapunit', UnitSrc, ProgSrc, Output, RCode));
   AssertEquals('exit 0', 0, RCode);

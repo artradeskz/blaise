@@ -184,7 +184,7 @@ end;
 procedure TE2EOpenArrayTests.TestRun_OpenArray_Sum;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOpenArraySum, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Sum([1..5])=15', '15', Trim(Output));
@@ -194,7 +194,7 @@ procedure TE2EOpenArrayTests.TestRun_OpenArray_HighLow;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOpenArrayHighLow, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -210,7 +210,7 @@ end;
 procedure TE2EOpenArrayTests.TestRun_OpenArray_Length;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOpenArrayLength, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Length([10,20,30])=3', '3', Trim(Output));
@@ -223,7 +223,7 @@ end;
 procedure TE2EOpenArrayTests.TestRun_StaticToOpen_Length_ZeroBase;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcStaticLenZeroBase, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Length(B[0..4])=5', '5', Trim(Output));
@@ -232,7 +232,7 @@ end;
 procedure TE2EOpenArrayTests.TestRun_StaticToOpen_Length_NonZeroBase;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcStaticLenNonZero, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Length(B[3..7])=5', '5', Trim(Output));
@@ -241,7 +241,7 @@ end;
 procedure TE2EOpenArrayTests.TestRun_StaticToOpen_Sum;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcStaticSum, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Sum(B[0..2])=60', '60', Trim(Output));
@@ -250,7 +250,7 @@ end;
 procedure TE2EOpenArrayTests.TestRun_StaticToOpen_PassToNested;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcStaticPassNested, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nested sum=30', '30', Trim(Output));
@@ -260,7 +260,7 @@ procedure TE2EOpenArrayTests.TestRun_StaticToOpen_ConstParam_NoMutation;
 var Output: string; RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcStaticConstRead, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -307,7 +307,7 @@ const
 procedure TE2EOpenArrayTests.TestRun_OpenArray_ProcType_CallEach;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcProcTypeOpenArray, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1+2+3=6', '6', Trim(Output));

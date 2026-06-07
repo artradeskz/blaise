@@ -352,7 +352,7 @@ const
 procedure TE2ERecordsTests.TestRun_Record_FieldReadWrite;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordFieldRW, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('3 + 7 = 10', '10' + LE, Output);
@@ -361,7 +361,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_PassByValue;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordPassByValue, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('5 then 9', '5' + LE + '9' + LE, Output);
@@ -370,7 +370,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_PassByVar;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordPassByVar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('6 then 8', '6' + LE + '8' + LE, Output);
@@ -379,7 +379,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_AssignToVarParam;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordAssignToVarParam, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('11 22 33 44',
@@ -389,7 +389,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_StringField_ARC;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordStringField, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Ada Lovelace', 'Ada Lovelace' + LE, Output);
@@ -398,7 +398,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_NestedRecord;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordNested, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('10 + 20 = 30', '30' + LE, Output);
@@ -407,7 +407,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_FourByteFields_PackedAndRoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordFourBytes, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('size 4, fields 1..4',
@@ -417,7 +417,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_ByteThenInteger_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordByteThenInteger, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('tag=7, value=12345, size=8',
@@ -427,7 +427,7 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_NestedFieldAssign_MethodCall;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRecordNestedFieldAssignMethodCall, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nested field assign + method call',
@@ -436,31 +436,31 @@ end;
 
 procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Local;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordStmtMethodCallLocal, '3' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_ImplicitSelf;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordStmtMethodCallImplicitSelf, '3' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Result;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordStmtMethodCallResult, '5' + LE + '8' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_AddrOfImplicitSelf;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordAddrOfImplicitSelf, '10' + LE + '20' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_PointerDerefFieldAccess;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordPointerDerefFieldAccess, '42' + LE + '99' + LE, 0);
 end;
 

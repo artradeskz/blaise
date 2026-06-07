@@ -331,7 +331,7 @@ begin
         Sem := TSemanticAnalyser.Create();
         try
           Sem.AnalyseUnitForExport(U);
-          Result := ExportUnitInterface(U, nil, Sem.GetSymbolTable);
+          Result := ExportUnitInterface(U, nil, Sem.GetSymbolTable());
         finally
           Sem.Free();
         end;
@@ -2192,7 +2192,7 @@ begin
     Rec := TRecordTypeDesc(TyDesc);
     AssertTrue('parent TObject', Rec.Parent <> nil);
     AssertEquals('parent name', 'TObject', Rec.Parent.Name);
-    AssertTrue('inherits TObject vtable', Rec.HasVTable);
+    AssertTrue('inherits TObject vtable', Rec.HasVTable());
   finally
     Tab.Free();
     Iface.Free();
@@ -2367,7 +2367,7 @@ begin
     ImportUnitInterface(Iface, Tab);
     ITD := TInterfaceTypeDesc(Tab.FindType('IGreeter'));
     AssertTrue('IGreeter defined', ITD <> nil);
-    AssertEquals('two methods', 2, ITD.MethodCount);
+    AssertEquals('two methods', 2, ITD.MethodCount());
     AssertTrue('has Hello',  ITD.HasMethod('Hello'));
     AssertTrue('has Quit',   ITD.HasMethod('Quit'));
   finally
@@ -2398,7 +2398,7 @@ begin
     ImportUnitInterface(Iface, Tab);
     RT := TRecordTypeDesc(Tab.FindType('TFoo'));
     AssertTrue('TFoo defined', RT <> nil);
-    AssertEquals('one impl', 1, RT.ImplementsCount);
+    AssertEquals('one impl', 1, RT.ImplementsCount());
     AssertEquals('impl is IGreeter', 'IGreeter',
       RT.ImplementsIntfAt(0).Name);
   finally
@@ -2431,7 +2431,7 @@ begin
     ImportUnitInterface(Iface, Tab);
     RT := TRecordTypeDesc(Tab.FindType('TFoo'));
     AssertTrue('TFoo defined', RT <> nil);
-    AssertEquals('one attribute',  1, RT.ClassAttributeCount);
+    AssertEquals('one attribute',  1, RT.ClassAttributeCount());
     AssertEquals('MarkerAttribute', 'MarkerAttribute', RT.ClassAttributeAt(0));
   finally
     Tab.Free();
@@ -2578,7 +2578,7 @@ begin
   Iface := ParseAnalyseAndExport(DEP_SRC);  { also frees DEP source TUnit }
   Sem   := TSemanticAnalyser.Create();
   try
-    ImportUnitInterface(Iface, Sem.GetSymbolTable);
+    ImportUnitInterface(Iface, Sem.GetSymbolTable());
     Prog := ParseAndAnalyseProgram(MAIN_SRC, Sem);
     try
       { Analyse() transferred the table to Prog.SymbolTable. }
@@ -2614,7 +2614,7 @@ begin
   Iface := ParseAnalyseAndExport(DEP_SRC);
   Sem   := TSemanticAnalyser.Create();
   try
-    ImportUnitInterface(Iface, Sem.GetSymbolTable);
+    ImportUnitInterface(Iface, Sem.GetSymbolTable());
     Prog := ParseAndAnalyseProgram(MAIN_SRC, Sem);
     try
       AssertTrue('main analysed', Prog.SymbolTable <> nil);

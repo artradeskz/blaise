@@ -676,7 +676,7 @@ end;
 
 procedure TStringList.SaveToFile(APath: string);
 begin
-  WriteFile(APath, Self.GetText)
+  WriteFile(APath, Self.GetText())
 end;
 
 function TStringList.GetEnumerator: TStringListEnumerator;

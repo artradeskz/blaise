@@ -276,7 +276,7 @@ begin
     begin
       IntfDesc.Parent := TInterfaceTypeDesc(ParentSym.TypeDesc);
       { Inherit parent methods so FindMethod walks transparently. }
-      for I := 0 to IntfDesc.Parent.MethodCount - 1 do
+      for I := 0 to IntfDesc.Parent.MethodCount() - 1 do
         IntfDesc.AddMethod(
           IntfDesc.Parent.MethodName(I),
           IntfDesc.Parent.MethodReturnTypeName(I),

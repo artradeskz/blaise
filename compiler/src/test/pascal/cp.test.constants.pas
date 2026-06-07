@@ -468,7 +468,7 @@ begin
         end;
         var r: Integer;
         begin
-          r := Compute
+          r := Compute()
         end.
         '''
   );

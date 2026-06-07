@@ -488,7 +488,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcAddGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -507,7 +507,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCount, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -526,7 +526,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcIndexOfFound, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('IndexOf(second)=1', '1', Trim(Output));
@@ -537,7 +537,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcIndexOfNotFound, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('IndexOf(bar)=-1', '-1', Trim(Output));
@@ -549,7 +549,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDelete, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -569,7 +569,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInsert, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -590,7 +590,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcClear, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -609,7 +609,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcPut, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Strings[0]=replaced', 'replaced', Trim(Output));
@@ -621,7 +621,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcAddStrings, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -642,7 +642,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcForIn, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -662,7 +662,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTextGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -683,7 +683,7 @@ var
   Lines:  TStringList;
   LenStr: string;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTextGetMany, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -706,7 +706,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTextSet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -725,7 +725,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run',
     CompileAndRunWithRTL(SrcTextSetPreservesWhitespace, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
@@ -742,7 +742,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcGrow, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -762,7 +762,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcSortedOrder, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -782,7 +782,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcSortedFind, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -802,7 +802,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCaseInsensitive, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -821,7 +821,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDupIgnore, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -841,7 +841,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCustomSort, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -860,7 +860,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCommaTextGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('CommaText=alpha,beta,gamma', 'alpha,beta,gamma', Trim(Output));
@@ -872,7 +872,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCommaTextSet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -892,7 +892,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCommaTextQuoted, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   { item with space is quoted, plain item is not }

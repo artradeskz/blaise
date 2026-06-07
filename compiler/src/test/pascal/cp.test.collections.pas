@@ -542,7 +542,7 @@ const
             end;
             procedure SaveToFile(APath: string);
             begin
-              WriteFile(APath, Self.GetText + #10)
+              WriteFile(APath, Self.GetText() + #10)
             end;
             property Count: Integer read FCount;
             property Text: string read GetText write SetText;

@@ -279,9 +279,9 @@ const
       Bin := TBufferedInputStream.Create(Fin);
       R   := TStreamReader.Create(Bin);
       try
-        while not R.EndOfStream do
+        while not R.EndOfStream() do
         begin
-          Line := R.ReadLine;
+          Line := R.ReadLine();
           WriteLn(Line);
           Count := Count + 1
         end
@@ -306,9 +306,9 @@ const
       M := TMemoryInputStream.Create('aa' + #10 + 'bb' + #13#10 + 'cc' + #13 + 'dd');
       R := TStreamReader.Create(M);
       try
-        while not R.EndOfStream do
+        while not R.EndOfStream() do
         begin
-          L := R.ReadLine;
+          L := R.ReadLine();
           WriteLn('[', L, ']')
         end
       finally
@@ -328,7 +328,7 @@ const
       M := TMemoryInputStream.Create('hello world');
       R := TStreamReader.Create(M);
       try
-        S := R.ReadAll;
+        S := R.ReadAll();
         WriteLn(S);
         WriteLn(Length(S))
       finally
@@ -352,11 +352,11 @@ const
       try
         for I := 0 to 9 do Buf[I] := 65 + I;
         B.Write(@Buf[0], 10);
-        WriteLn(B.Size);
+        WriteLn(B.Size());
         N := B.Read(@Dst[0], 32);
         WriteLn(N);
         for I := 0 to N - 1 do WriteLn(Dst[I]);
-        WriteLn(B.Size)
+        WriteLn(B.Size())
       finally
         B.Free()
       end
@@ -379,8 +379,8 @@ const
         for I := 0 to 9 do Buf[I] := 65 + I;
         Src.Write(@Buf[0], 10);
         Src.TransferTo(Dst, 7);
-        WriteLn(Src.Size);
-        WriteLn(Dst.Size);
+        WriteLn(Src.Size());
+        WriteLn(Dst.Size());
         N := Dst.Read(@Got[0], 32);
         for I := 0 to N - 1 do WriteLn(Got[I]);
         N := Src.Read(@Got[0], 32);
@@ -409,7 +409,7 @@ const
         WriteLn(B.IndexOf(67));
         WriteLn(B.IndexOf(74));
         WriteLn(B.IndexOf(99));
-        WriteLn(B.Size)
+        WriteLn(B.Size())
       finally
         B.Free()
       end
@@ -545,7 +545,7 @@ const
       Vrf := TFileInputStream.Create('/tmp/blaise_copy_dst_e2e.txt');
       R   := TStreamReader.Create(Vrf);
       try
-        WriteLn(R.ReadAll)
+        WriteLn(R.ReadAll())
       finally
         R.Free()
       end
@@ -566,7 +566,7 @@ const
       try
         M.Write(@Buf[0], 3);
         if Supports(M, ISeekable, Sk) then
-          WriteLn(Sk.Size)
+          WriteLn(Sk.Size())
         else
           WriteLn('no');
       finally
@@ -578,7 +578,7 @@ const
 procedure TE2EStreamsTests.TestRun_MemoryOutputStream_WriteAndReadBack;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMemOutRoundTrip, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('memory stream round-trip', 'Hello' + LE, Output)
@@ -587,7 +587,7 @@ end;
 procedure TE2EStreamsTests.TestRun_MemoryInputStream_ReadsBytesBack;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMemInRoundTrip, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('read 3 bytes A B C',
@@ -597,7 +597,7 @@ end;
 procedure TE2EStreamsTests.TestRun_FileStream_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcFileRoundTrip, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('file round-trip ABCDE',
@@ -608,7 +608,7 @@ end;
 procedure TE2EStreamsTests.TestRun_VirtualDispatch_ThroughAbstractBase;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcVirtualDispatch, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('virtual dispatch reaches concrete Write', '1234' + LE, Output)
@@ -617,7 +617,7 @@ end;
 procedure TE2EStreamsTests.TestRun_ISeekable_Supports;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcSupportsISeekable, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('ISeekable.Size = 3', '3' + LE, Output)
@@ -626,7 +626,7 @@ end;
 procedure TE2EStreamsTests.TestRun_BufferedFile_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcBufferedFileRoundTrip, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('buffered round-trip A..J',
@@ -638,7 +638,7 @@ end;
 procedure TE2EStreamsTests.TestRun_BufferedOutput_FlushOnClose;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcBufferedFlushOnClose, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('Close drained the buffer',
@@ -649,7 +649,7 @@ end;
 procedure TE2EStreamsTests.TestRun_FileOpen_MissingFile_Raises;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcOpenMissingRaises, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('EStreamError caught', 'caught' + LE, Output)
@@ -658,7 +658,7 @@ end;
 procedure TE2EStreamsTests.TestRun_TextRoundTrip_WriteLineReadLine;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTextRoundTrip, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('text round-trip three lines',
@@ -668,7 +668,7 @@ end;
 procedure TE2EStreamsTests.TestRun_TextReader_MixedLineEndings;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTextMixedLineEndings, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('LF/CRLF/CR all recognised, terminators stripped',
@@ -678,7 +678,7 @@ end;
 procedure TE2EStreamsTests.TestRun_TextReader_ReadAll;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTextReadAll, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('ReadAll returns entire stream',
@@ -688,7 +688,7 @@ end;
 procedure TE2EStreamsTests.TestRun_TBuffer_WriteThenRead;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTBufferRoundTrip, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('TBuffer round-trip A..J',
@@ -701,7 +701,7 @@ end;
 procedure TE2EStreamsTests.TestRun_TBuffer_TransferTo_SplitsCorrectly;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTBufferTransferTo, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('Src.Size=3, Dst.Size=7, then A..G + H..J',
@@ -714,7 +714,7 @@ end;
 procedure TE2EStreamsTests.TestRun_TBuffer_IndexOf_FindsByte;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcTBufferIndexOf, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('IndexOf: 0, 2, 9, -1; size unchanged',
@@ -724,7 +724,7 @@ end;
 procedure TE2EStreamsTests.TestRun_InterfaceDispatch_ViaSupports;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceViaSupports, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('interface call via Supports reaches concrete Write', '1234' + LE, Output)
@@ -733,7 +733,7 @@ end;
 procedure TE2EStreamsTests.TestRun_InterfaceDispatch_AsFunctionParam;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceAsParam, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('interface as function param dispatches correctly', 'ABCD' + LE, Output)
@@ -742,7 +742,7 @@ end;
 procedure TE2EStreamsTests.TestRun_InterfaceArg_AsExpr;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceArgAsExpr, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('as-expr interface arg dispatches correctly', 'ABCD' + LE, Output)
@@ -751,7 +751,7 @@ end;
 procedure TE2EStreamsTests.TestRun_CopyStream_MemoryToMemory;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCopyStreamMemMem, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('CopyStream mem→mem',
@@ -761,7 +761,7 @@ end;
 procedure TE2EStreamsTests.TestRun_CopyStream_FileToFile;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCopyStreamFileFile, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('CopyStream file→file',

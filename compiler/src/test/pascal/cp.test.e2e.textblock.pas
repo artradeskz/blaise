@@ -82,7 +82,7 @@ const
 procedure TE2ETextBlockTests.TestRun_TextBlock_BasicContent;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTextBlockBasic, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   // Text block content is 'hello' + LF (newline before closing triple-quote).
@@ -93,7 +93,7 @@ end;
 procedure TE2ETextBlockTests.TestRun_TextBlock_IndentStripped;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTextBlockIndent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   // 'line1' + LF + 'line2' + LF = 12 chars after indent strip

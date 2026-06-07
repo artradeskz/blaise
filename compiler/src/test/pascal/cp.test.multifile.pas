@@ -143,7 +143,7 @@ var
 begin
   WriteUnit('MathUtils', Src);
 
-  Paths  := MakeSearchPaths;
+  Paths  := MakeSearchPaths();
   Loader := TUnitLoader.Create(Paths);
   Names  := TStringList.Create();
   try
@@ -169,7 +169,7 @@ var
   Names:  TStringList;
   Units:  TObjectList;
 begin
-  Paths  := MakeSearchPaths;
+  Paths  := MakeSearchPaths();
   Loader := TUnitLoader.Create(Paths);
   Names  := TStringList.Create();
   try
@@ -215,7 +215,7 @@ begin
   WriteUnit('CycleA', SrcA);
   WriteUnit('CycleB', SrcB);
 
-  Paths  := MakeSearchPaths;
+  Paths  := MakeSearchPaths();
   Loader := TUnitLoader.Create(Paths);
   Names  := TStringList.Create();
   try
@@ -269,7 +269,7 @@ begin
   WriteUnit('DepB', SrcB);
   WriteUnit('DepA', SrcA);
 
-  Paths  := MakeSearchPaths;
+  Paths  := MakeSearchPaths();
   Loader := TUnitLoader.Create(Paths);
   Names  := TStringList.Create();
   try

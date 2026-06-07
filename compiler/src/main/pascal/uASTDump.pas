@@ -70,8 +70,8 @@ begin
   else
     Result := Result + ':?';
   end;
-  if T.RawSize > 0 then
-    Result := Result + '(' + IntToStr(T.RawSize) + 'B)';
+  if T.RawSize() > 0 then
+    Result := Result + '(' + IntToStr(T.RawSize()) + 'B)';
 end;
 
 function FieldStr(F: TFieldInfo): string;

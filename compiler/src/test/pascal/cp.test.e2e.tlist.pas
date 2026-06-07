@@ -111,7 +111,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+link+run', CompileAndRunWithRTL(SrcTListString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('Count=2 printed',  Pos('2',     Output) >= 0);
@@ -124,7 +124,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+link+run', CompileAndRunWithRTL(SrcTListInteger, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('Count=3 printed', Pos('3',  Output) >= 0);
@@ -137,7 +137,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+link+run', CompileAndRunWithRTL(SrcTListIndexOfInteger, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('IndexOf(10)=0', Pos('0',  Output) >= 0);
@@ -151,7 +151,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+link+run', CompileAndRunWithRTL(SrcTListIndexOfStringNotFound, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('IndexOf(beta)=1',          Pos('1',  Output) >= 0);

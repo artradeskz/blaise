@@ -107,7 +107,7 @@ const
     var T: TTime;
     begin
       T := MakeTimeNano(9, 5, 3, 123000000);
-      WriteLn(T.ToStringNano)
+      WriteLn(T.ToStringNano())
     end.
     ''';
 
@@ -595,7 +595,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantNow, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('InstantNow > 2020 epoch', 'True', Trim(Output));
@@ -606,7 +606,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeDateToString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Date ISO 8601', '2025-05-15', Trim(Output));
@@ -617,7 +617,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeTimeToString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Time ISO 8601', '14:30:45', Trim(Output));
@@ -628,7 +628,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeTimeNanoToString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Time with nanos', '09:05:03.123000000', Trim(Output));
@@ -639,7 +639,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeDateTimeToString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('DateTime ISO 8601', '2025-05-15T14:30:45', Trim(Output));
@@ -651,7 +651,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeOffsetToString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -671,7 +671,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeOffsetUTC, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -691,7 +691,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantUtcRoundTrip, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -714,7 +714,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantToUnixSeconds, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -733,7 +733,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantAddDuration, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -753,7 +753,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantSubtractDuration, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -771,7 +771,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantSubtract, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Diff=3s', '3', Trim(Output));
@@ -783,7 +783,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantIsAfterIsBefore, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -803,7 +803,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantEquals, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -822,7 +822,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantToStringOffset, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -841,7 +841,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInstantToLocalDateTime, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -861,7 +861,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDurationTotalAccessors, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -882,7 +882,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDurationToString, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -903,7 +903,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDurationNegative, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -923,7 +923,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDurationAddSubtract, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -943,7 +943,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseDate, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -964,7 +964,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseTime, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -985,7 +985,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseDateTime, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1009,7 +1009,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseInstantUTC, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1032,7 +1032,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseInstantOffset, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('offset == UTC equivalent', 'True', Trim(Output));
@@ -1044,7 +1044,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseDuration, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1065,7 +1065,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcParseOffset, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1085,7 +1085,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcIsLeapYear, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1106,7 +1106,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDaysInMonth, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1127,7 +1127,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDayOfWeek, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1147,7 +1147,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDateAddDays, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1166,7 +1166,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDateAddMonthsClamp, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1186,7 +1186,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDateAddYears, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1205,7 +1205,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcDateDiffDays, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1224,7 +1224,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcSystemOffset, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();
@@ -1243,7 +1243,7 @@ var
   RCode:  Integer;
   Lines:  TStringList;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcMakeInstantLocal, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   Lines := TStringList.Create();

@@ -647,7 +647,7 @@ begin
     AssertNotNull('TFoo type exists', RT);
     { When interface-only parent is specified, TObject vtable must be copied
       so the vptr slot is present and field offsets start at offset 8. }
-    AssertTrue('TFoo has a vtable (vptr from TObject)', RT.HasVTable);
+    AssertTrue('TFoo has a vtable (vptr from TObject)', RT.HasVTable());
   finally
     Prog.Free();
   end;

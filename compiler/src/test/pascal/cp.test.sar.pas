@@ -209,7 +209,7 @@ const
 procedure TSarE2ETests.TestRun_NegativeInt64_Sar_PreservesSign;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcNegInt64Sar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   { -16 sar 2 = -4 (sign preserved) }
@@ -219,7 +219,7 @@ end;
 procedure TSarE2ETests.TestRun_NegativeInt64_Shr_DiscardsSign;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcNegInt64Shr, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   { -16 shr 2 = ((2^64 - 16) >> 2) = 2^62 - 4 = 4611686018427387900 }
@@ -230,7 +230,7 @@ end;
 procedure TSarE2ETests.TestRun_PositiveInteger_Sar_MatchesShr;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPosIntSar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   { 64 sar 2 = 16 (positive numbers behave identically) }

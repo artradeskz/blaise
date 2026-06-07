@@ -407,7 +407,7 @@ begin
     if raw.Kind = fptkEOF then Break;
     if raw.Kind = fptkDirective then
     begin
-      dname := DirectiveName(FTok.TokenText);
+      dname := DirectiveName(FTok.TokenText());
       if (dname = 'IFDEF') or (dname = 'IFNDEF') then
         Inc(depth)
       else if dname = 'ENDIF' then
@@ -435,7 +435,7 @@ begin
     if raw.Kind = fptkEOF then Break;
     if raw.Kind = fptkDirective then
     begin
-      dname := DirectiveName(FTok.TokenText);
+      dname := DirectiveName(FTok.TokenText());
       if (dname = 'IFDEF') or (dname = 'IFNDEF') then
         Inc(depth)
       else if dname = 'ENDIF' then
@@ -457,7 +457,7 @@ begin
       Continue;
     if raw.Kind = fptkDirective then
     begin
-      text  := FTok.TokenText;
+      text  := FTok.TokenText();
       dname := DirectiveName(text);
       if dname = 'IFDEF' then
       begin
@@ -469,7 +469,7 @@ begin
         { Symbol is never defined in Blaise — always execute the body }
       end
       else if dname = 'ELSE' then
-        SkipToEndif   { we were in the true branch; skip the else }
+        SkipToEndif()   { we were in the true branch; skip the else }
       ;
       { ENDIF and all other directives: silently consumed }
       Continue;
@@ -489,14 +489,14 @@ begin
 
     fptkKeyword:
       begin
-        text := FTok.TokenTextUpper;
+        text := FTok.TokenTextUpper();
         Result.Kind  := MapKeyword(text);
-        Result.Value := FTok.TokenText;
+        Result.Value := FTok.TokenText();
       end;
 
     fptkIdentifier:
       begin
-        text := FTok.TokenTextUpper;
+        text := FTok.TokenTextUpper();
         if      text = 'VIRTUAL'  then Result.Kind := tkVirtual
         else if text = 'OVERRIDE' then Result.Kind := tkOverride
         else if text = 'EXTERNAL' then Result.Kind := tkExternal
@@ -510,7 +510,7 @@ begin
         else if text = 'CONST'    then Result.Kind := tkConst
         else if text = 'OUT'      then Result.Kind := tkOut
         else                           Result.Kind := tkIdent;
-        Result.Value := FTok.TokenText;
+        Result.Value := FTok.TokenText();
       end;
 
     fptkNumber:
@@ -518,33 +518,33 @@ begin
         { Float only if it is a plain decimal literal (no $ % & prefix) and
           contains a decimal point or exponent marker.  Hex digits A-F and
           underscore groups like $FF_EC must not be misclassified as floats. }
-        if (StrAt(FTok.TokenText, 0) <> Ord('$')) and
-           (StrAt(FTok.TokenText, 0) <> Ord('%')) and
-           (StrAt(FTok.TokenText, 0) <> Ord('&')) and
-           ((StrPos('.', FTok.TokenText) >= 0) or
-            (StrPos('e', FTok.TokenText) >= 0) or
-            (StrPos('E', FTok.TokenText) >= 0)) then
+        if (StrAt(FTok.TokenText(), 0) <> Ord('$')) and
+           (StrAt(FTok.TokenText(), 0) <> Ord('%')) and
+           (StrAt(FTok.TokenText(), 0) <> Ord('&')) and
+           ((StrPos('.', FTok.TokenText()) >= 0) or
+            (StrPos('e', FTok.TokenText()) >= 0) or
+            (StrPos('E', FTok.TokenText()) >= 0)) then
           Result.Kind := tkFloatLit
         else
           Result.Kind := tkIntLit;
-        Result.Value := FTok.TokenText;
+        Result.Value := FTok.TokenText();
       end;
 
     fptkString:
       begin
         Result.Kind  := tkStringLit;
-        Result.Value := UnescapeString(FTok.TokenText);
+        Result.Value := UnescapeString(FTok.TokenText());
       end;
 
     fptkTextBlock:
       begin
         Result.Kind  := tkStringLit;
-        Result.Value := ProcessTextBlock(FTok.TokenText);
+        Result.Value := ProcessTextBlock(FTok.TokenText());
       end;
 
     fptkSymbol:
       begin
-        text := FTok.TokenText;
+        text := FTok.TokenText();
         if      text = ':=' then Result.Kind := tkAssign
         else if text = '='  then Result.Kind := tkEquals
         else if text = '<>' then Result.Kind := tkNotEquals

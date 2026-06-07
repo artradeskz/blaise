@@ -436,7 +436,7 @@ const
 procedure TUInt64E2ETests.TestRun_UInt64_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcUInt64RoundTrip, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('42', '42' + LE, Output);
@@ -445,7 +445,7 @@ end;
 procedure TUInt64E2ETests.TestRun_QWord_Alias;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcQWordAlias, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('100', '100' + LE, Output);
@@ -454,7 +454,7 @@ end;
 procedure TUInt64E2ETests.TestRun_UInt64_LargeLiteral;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcUInt64LargeLiteral, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('large literal round-trips',
@@ -464,7 +464,7 @@ end;
 procedure TUInt64E2ETests.TestRun_UInt64_Arithmetic;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcUInt64Arithmetic, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('sum, div, mod',
@@ -474,7 +474,7 @@ end;
 procedure TUInt64E2ETests.TestRun_UInt64_UnsignedCompare;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcUInt64UnsignedCompare, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('17e18 > 1 unsigned',

@@ -74,7 +74,7 @@ const
 procedure TE2EUsesChainTests.TestRun_ImplicitSystem_NoUsesClause_WriteLnInt;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue(CompileAndRun(SrcWriteLnInt, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('writeln(42)', '42' + LE, Output);
@@ -83,7 +83,7 @@ end;
 procedure TE2EUsesChainTests.TestRun_ImplicitSystem_NoUsesClause_IntToStr;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue(CompileAndRun(SrcIntToStr, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('IntToStr(123)', '123' + LE, Output);
@@ -92,7 +92,7 @@ end;
 procedure TE2EUsesChainTests.TestRun_ImplicitSystem_NoUsesClause_Length;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue(CompileAndRun(SrcLength, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Length(''hello'')', '5' + LE, Output);

@@ -253,7 +253,7 @@ begin
   Prog := AnalyseSrc(Src);
   try
     RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
-    AssertEquals('MaxAlign = 1 for packed', 1, RT.MaxAlign);
+    AssertEquals('MaxAlign = 1 for packed', 1, RT.MaxAlign());
     AssertEquals('B offset = 1 (no 8-byte align)', 1,
                  RT.FindField('B').Offset);
     AssertEquals('TotalSize = 9 (no tail pad)', 9, RT.TotalSize());
@@ -410,7 +410,7 @@ const
 procedure TPackedRecordE2ETests.TestRun_PackedRecord_ByteInt_Offsets;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcByteIntOffsets, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('A=9, B=12345, SizeOf=5',
@@ -420,7 +420,7 @@ end;
 procedure TPackedRecordE2ETests.TestRun_PackedRecord_SizeOfMatchesPacked;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPackedVsUnpacked, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   { Plain: A at 0, B at 8 (8-byte aligned), tail pad to MaxAlign=8 → 16.

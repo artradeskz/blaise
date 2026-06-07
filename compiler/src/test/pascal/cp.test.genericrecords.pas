@@ -336,7 +336,7 @@ begin
     AssertNotNull('RT exists', RT);
     FI := RT.FindField('Value');
     AssertNotNull('Value field exists', FI);
-    AssertTrue('field is string', FI.TypeDesc.IsString);
+    AssertTrue('field is string', FI.TypeDesc.IsString());
   finally
     Prog.Free();
   end;
@@ -358,7 +358,7 @@ begin
     FI1 := RT.FindField('Val');
     AssertNotNull('Key exists', FI0);
     AssertNotNull('Val exists', FI1);
-    AssertTrue('Key is string', FI0.TypeDesc.IsString);
+    AssertTrue('Key is string', FI0.TypeDesc.IsString());
     AssertEquals('Val is tyInteger', Ord(tyInteger), Ord(FI1.TypeDesc.Kind));
   finally
     Prog.Free();

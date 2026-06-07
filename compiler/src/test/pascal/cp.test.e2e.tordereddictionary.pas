@@ -199,7 +199,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcInsertionOrder, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('first key=10', Pos('10', Output) >= 0);
@@ -212,7 +212,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcTryGetValue, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   { Boolean true prints as True, false as False in Blaise }
@@ -226,7 +226,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcRemove, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=2 after remove', Pos('2', Output) >= 0);
@@ -239,7 +239,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcUpdateKeepsOrder, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count stays 2', Pos('2', Output) >= 0);

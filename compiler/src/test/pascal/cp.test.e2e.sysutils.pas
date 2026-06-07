@@ -245,7 +245,7 @@ const
 procedure TE2ESysUtilsTests.TestRun_ParamStr_PrintsArg;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
     CompileAndRun(SrcParamStrPrint, Output, RCode, ['hello']));
   AssertEquals('ParamStr(1) = hello', 'hello', Trim(Output));
@@ -254,7 +254,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ParamCount_WithArgs;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
     CompileAndRun(SrcParamCountPrint, Output, RCode, ['a', 'b', 'c']));
   AssertEquals('ParamCount = 3', '3', Trim(Output));
@@ -263,7 +263,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ReadWriteFile_RoundTrip;
 var Output: string; RCode: Integer; TmpFile: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   TmpFile := GetTempFileName('', 'blaise_rwtest');
   try
     AssertTrue('compile+run',
@@ -281,7 +281,7 @@ var
   TmpFile: string;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   TmpFile := GetTempFileName('', 'blaise_fe_test');
   Lines := TStringList.Create();
   Lines.Add('x');
@@ -306,7 +306,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_GetEnvVar_Path;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcGetEnvVarTest, Output, RCode));
   AssertTrue('GetEnvVar(BLAISE_TEST_VAR) returns empty when unset',
     Trim(Output) = '');
@@ -315,7 +315,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_Halt_ExitCode;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   CompileAndRun(SrcHaltTest, Output, RCode);
   AssertEquals('WriteLn before Halt', '42', Trim(Output));
   AssertEquals('Halt(7) sets exit code', 7, RCode);
@@ -324,7 +324,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ChangeFileExt_ChangesExtension;
 var Output: string; RCode: Integer; Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcChangeFileExtTest, Output, RCode));
   Lines := TStringList.Create();
   try
@@ -340,7 +340,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ExtractFileName_ReturnsName;
 var Output: string; RCode: Integer; Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExtractFileNameTest, Output, RCode));
   Lines := TStringList.Create();
   try
@@ -355,7 +355,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ExtractFilePath_ReturnsDir;
 var Output: string; RCode: Integer; Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExtractFilePathTest, Output, RCode));
   Lines := TStringList.Create();
   try
@@ -370,7 +370,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_IncludeTrailingPathDelimiter_AppendsSlash;
 var Output: string; RCode: Integer; Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
     CompileAndRun(SrcIncludeTrailingPathDelimiterTest, Output, RCode));
   Lines := TStringList.Create();
@@ -386,7 +386,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_GetProcessID_ReturnsNonZero;
 var Output: string; RCode: Integer; PID: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcGetProcessID, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   PID := StrToInt(Trim(Output));
@@ -396,7 +396,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_DirectoryExists_TrueAndFalse;
 var Output: string; RCode: Integer; Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcDirectoryExists, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -412,7 +412,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_GetTempDir_ReturnsPath;
 var Output: string; RCode: Integer; Dir: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcGetTempDir, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Dir := Trim(Output);
@@ -427,7 +427,7 @@ var
   Lines: TStringList;
   Dir: string;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   Dir := IncludeTrailingPathDelimiter(GetTempDir()) +
          'blaise_test_' + IntToStr(GetProcessID()) + '/a/b/c';
   try
@@ -456,7 +456,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_Sleep_DoesNotCrash;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcSleepTest, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('output is ok', 'ok', Trim(Output));
@@ -465,7 +465,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ProcessBuiltins_CapturesOutput;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsCapture, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('captured echo output', 'hello from process', Trim(Output));
@@ -474,7 +474,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_ProcessBuiltins_ExitCode;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsExitCode, Output, RCode));
   AssertEquals('program exit code 0', 0, RCode);
   AssertEquals('true exits with 0', '0', Trim(Output));
@@ -570,7 +570,7 @@ var
   OldFile, NewFile: string;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   OldFile := GetTempFileName('', 'blaise_rename_old');
   NewFile := OldFile + '.renamed';
   try
@@ -595,7 +595,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_RenameFile_MissingSource_ReturnsFalse;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRenameFileMissing, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('RenameFile missing = False', 'False', Trim(Output));
@@ -607,7 +607,7 @@ var
   RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcSetCurrentDir, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -626,7 +626,7 @@ var
   RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExtractFileExt, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -646,7 +646,7 @@ var
   RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcBoolToStr, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -665,7 +665,7 @@ var
   RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcPlatformConstants, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create();
@@ -682,7 +682,7 @@ end;
 procedure TE2ESysUtilsTests.TestRun_GetCurrentDir_ReturnsNonEmpty;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcGetCurrentDir, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('GetCurrentDir non-empty', 'True', Trim(Output));
@@ -695,7 +695,7 @@ var
   TmpFile: string;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   TmpFile := GetTempFileName('', 'blaise_fileage_test');
   Lines := TStringList.Create();
   Lines.Add('x');

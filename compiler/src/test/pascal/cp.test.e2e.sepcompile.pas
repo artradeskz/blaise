@@ -38,7 +38,7 @@ type
   protected
     procedure SetUp; override;
   private
-    function  BlaisePath: string;
+    function  BlaisePath(): string;
     function  RunBlaise(const AArgs: array of string;
                         out AStdout: string): Integer;
     function  RunBinary(const AExe: string; out AStdout: string): Integer;
@@ -55,7 +55,7 @@ begin
   SetUpScratch('compiler/target/test-e2e-sepcompile')
 end;
 
-function TSepCompileTests.BlaisePath: string;
+function TSepCompileTests.BlaisePath(): string;
 var
   Root: string;
 begin
@@ -74,7 +74,7 @@ var
 begin
   Proc := TProcess.Create(nil);
   try
-    Proc.Executable := BlaisePath;
+    Proc.Executable := BlaisePath();
     for I := 0 to High(AArgs) do
       Proc.Parameters.Add(AArgs[I]);
     Proc.Execute();
@@ -141,14 +141,14 @@ var
   Captured: string;
   Rc: Integer;
 begin
-  if not ToolchainAvailable then
+  if not ToolchainAvailable() then
   begin
     Fail('toolchain missing — qbe or RTL not found');
     Exit
   end;
-  if not FileExists(BlaisePath) then
+  if not FileExists(BlaisePath()) then
   begin
-    Fail('blaise binary missing at ' + BlaisePath);
+    Fail('blaise binary missing at ' + BlaisePath());
     Exit
   end;
 
@@ -215,7 +215,7 @@ const
     var B: TBox<Integer>;
     begin
       B := TBox<Integer>.Create(42);
-      WriteLn('Box = ', B.Get);
+      WriteLn('Box = ', B.Get());
       B.Free()
     end.
     ''';
@@ -224,14 +224,14 @@ var
   Captured: string;
   Rc: Integer;
 begin
-  if not ToolchainAvailable then
+  if not ToolchainAvailable() then
   begin
     Fail('toolchain missing — qbe or RTL not found');
     Exit
   end;
-  if not FileExists(BlaisePath) then
+  if not FileExists(BlaisePath()) then
   begin
-    Fail('blaise binary missing at ' + BlaisePath);
+    Fail('blaise binary missing at ' + BlaisePath());
     Exit
   end;
 

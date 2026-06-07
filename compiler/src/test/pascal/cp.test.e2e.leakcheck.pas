@@ -183,7 +183,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcNoLeak, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '99' + LE, Output);
@@ -195,7 +195,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run',
     CompileAndRunWithRTLDebug(SrcExceptionHandlerVar, Output, ExitCode, True));
   { Clean exit (no abort from a negative-refcount free), expected stdout, and
@@ -210,7 +210,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcConstructorWithArgs, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '42' + LE, Output);
@@ -222,7 +222,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcOneLeak, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('leak header present', Pos('Blaise leak report', Output) >= 0);
@@ -235,7 +235,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcTwoLeaks, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('leak header present', Pos('Blaise leak report', Output) >= 0);
@@ -249,7 +249,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcCycleLeak, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('leak header present', Pos('Blaise leak report', Output) >= 0);
@@ -262,7 +262,7 @@ var
   Output: string;
   ExitCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   { Same leaking source but compiled without debug mode — no report expected. }
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcOneLeak, Output, ExitCode, False));
   AssertEquals('exit 0', 0, ExitCode);

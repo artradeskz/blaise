@@ -147,7 +147,7 @@ const
 procedure TE2EControlFlowTests.TestRun_For_Upward_PrintsRange;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcForUp, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
@@ -156,7 +156,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_For_Downto_PrintsRange;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcForDown, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('3 2 1', '3' + LE + '2' + LE + '1' + LE, Output);
@@ -165,7 +165,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_While_PrintsRange;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcWhile, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
@@ -174,7 +174,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_Repeat_PrintsRange;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcRepeat, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
@@ -183,7 +183,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_For_BreakExitsEarly;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcForBreakE2E, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
@@ -192,7 +192,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_For_ContinueSkipsIteration;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcForContinue, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1 2 4 5', '1' + LE + '2' + LE + '4' + LE + '5' + LE, Output);
@@ -201,7 +201,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_Nested_For_Loops;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcNestedFor, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('nested 2x2', '11' + LE + '12' + LE + '21' + LE + '22' + LE, Output);
@@ -210,7 +210,7 @@ end;
 procedure TE2EControlFlowTests.TestRun_ExitValue_ReturnsEarly;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExitValue, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   { Classify: -1, 0, 1; Pick: yes (Exit), no (fall-through). }

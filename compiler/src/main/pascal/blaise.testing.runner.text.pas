@@ -469,7 +469,7 @@ var
   Errs:  TStringList;
   Line:  string;
 begin
-  WriteLn(AResult.Summary);
+  WriteLn(AResult.Summary());
 
   if AResult.NumberOfFailures > 0 then
   begin

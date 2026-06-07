@@ -499,7 +499,7 @@ begin
     if (Self.GlobalType(Name) <> nil) and
        (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray]) then
     begin
-      Sz := Self.GlobalType(Name).RawSize;
+      Sz := Self.GlobalType(Name).RawSize();
       Self.Emit('.balign 8');
       if Copy(Name, 1, 2) <> '.L' then
         Self.Emit('.globl ' + Name);
@@ -557,7 +557,7 @@ begin
       if not Self.IsThreadVarGlobal(Name) then Continue;
       if (Self.GlobalType(Name) <> nil) and
          (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray]) then
-        Sz := Self.GlobalType(Name).RawSize
+        Sz := Self.GlobalType(Name).RawSize()
       else if (Self.GlobalType(Name) <> nil) and
               (Self.GlobalType(Name).Kind = tyDouble) then
         Sz := 8
@@ -803,7 +803,7 @@ begin
     begin
       F := TFieldInfo(ART.Fields.Items[I]);
       if F.TypeDesc = nil then Continue;
-      if not (F.TypeDesc.IsString or (F.TypeDesc.Kind = tyClass)) then
+      if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)) then
         Continue;
       if F.IsUnretained and (F.TypeDesc.Kind = tyClass) then
         Continue;
@@ -820,7 +820,7 @@ begin
         Self.Emit(Format(#9'movq %d(%%rbx), %%rdi', [F.Offset]))
       else
         Self.Emit(#9'movq (%rbx), %rdi');
-      if F.TypeDesc.IsString then
+      if F.TypeDesc.IsString() then
         Self.Emit(#9'callq _StringRelease')
       else
         Self.Emit(#9'callq _ClassRelease');
@@ -945,7 +945,7 @@ begin
       ParentStr := 'typeinfo_' + RT.Parent.Name
     else
       ParentStr := '0';
-    if RT.ImplementsCount > 0 then
+    if RT.ImplementsCount() > 0 then
       ImplStr := 'impllist_' + TD.Name
     else
       ImplStr := '0';
@@ -968,7 +968,7 @@ begin
     Self.Emit(#9'.quad ' + ImplStr);
     Self.Emit(Format(#9'.quad __cn_%s + 12', [NativeMangle(TD.Name)]));
     Self.Emit(#9'.quad ' + MethStr);
-    Self.Emit(Format(#9'.quad %d', [RT.TotalSize]));
+    Self.Emit(Format(#9'.quad %d', [RT.TotalSize()]));
     Self.Emit(#9'.quad _FieldCleanup_' + TD.Name);
     Self.Emit(#9'.quad vtable_' + TD.Name);
     Self.Emit(#9'.quad 0');   { attrs }
@@ -984,7 +984,7 @@ begin
       ParentStr := 'typeinfo_' + NativeMangle(RT.Parent.Name)
     else
       ParentStr := '0';
-    if RT.ImplementsCount > 0 then
+    if RT.ImplementsCount() > 0 then
       ImplStr := 'impllist_' + MName
     else
       ImplStr := '0';
@@ -995,7 +995,7 @@ begin
     Self.Emit(#9'.quad ' + ImplStr);
     Self.Emit(Format(#9'.quad __cn_%s + 12', [MName]));
     Self.Emit(#9'.quad 0');
-    Self.Emit(Format(#9'.quad %d', [RT.TotalSize]));
+    Self.Emit(Format(#9'.quad %d', [RT.TotalSize()]));
     Self.Emit(#9'.quad _FieldCleanup_' + MName);
     Self.Emit(#9'.quad vtable_' + MName);
     Self.Emit(#9'.quad 0');
@@ -1043,13 +1043,13 @@ begin
     TDesc := AProg.SymbolTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
-    if not RT.HasVTable then Continue;
+    if not RT.HasVTable() then Continue;
 
     Self.Emit('.balign 8');
     Self.Emit('.globl vtable_' + TD.Name);
     Self.Emit('vtable_' + TD.Name + ':');
     Self.Emit(#9'.quad typeinfo_' + TD.Name);
-    for S := 0 to RT.VTableCount - 1 do
+    for S := 0 to RT.VTableCount() - 1 do
     begin
       E := RT.VTableEntryAt(S);
       if E.IsAbstract then
@@ -1072,13 +1072,13 @@ begin
   begin
     GI := TGenericInstance(AProg.GenericInstances.Items[I]);
     RT := TRecordTypeDesc(GI.TypeDesc);
-    if not RT.HasVTable then Continue;
+    if not RT.HasVTable() then Continue;
     MName := NativeMangle(GI.TypeName);
     Self.Emit('.balign 8');
     Self.Emit('.globl vtable_' + MName);
     Self.Emit('vtable_' + MName + ':');
     Self.Emit(#9'.quad typeinfo_' + MName);
-    for S := 0 to RT.VTableCount - 1 do
+    for S := 0 to RT.VTableCount() - 1 do
     begin
       E := RT.VTableEntryAt(S);
       if E.IsAbstract then
@@ -1301,17 +1301,17 @@ begin
     TDesc := AProg.SymbolTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     ClassRT := TRecordTypeDesc(TDesc);
-    if ClassRT.ImplementsCount = 0 then Continue;
+    if ClassRT.ImplementsCount() = 0 then Continue;
 
     { One itab per implemented interface — a flat array of method-code ptrs in
       interface declaration order. }
-    for J := 0 to ClassRT.ImplementsCount - 1 do
+    for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
       Self.Emit('.balign 8');
       Self.Emit('.globl itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name));
       Self.Emit('itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name) + ':');
-      for K := 0 to IntfDesc.MethodCount - 1 do
+      for K := 0 to IntfDesc.MethodCount() - 1 do
       begin
         MethName := IntfDesc.MethodName(K);
         if Self.IsAbstractClassMethod(ClassRT, MethName) then
@@ -1326,7 +1326,7 @@ begin
     Self.Emit('.balign 8');
     Self.Emit('.globl impllist_' + NativeMangle(TD.Name));
     Self.Emit('impllist_' + NativeMangle(TD.Name) + ':');
-    for J := 0 to ClassRT.ImplementsCount - 1 do
+    for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
       Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
@@ -1340,16 +1340,16 @@ begin
   begin
     GI := TGenericInstance(AProg.GenericInstances.Items[I]);
     ClassRT := TRecordTypeDesc(GI.TypeDesc);
-    if ClassRT.ImplementsCount = 0 then Continue;
+    if ClassRT.ImplementsCount() = 0 then Continue;
     MName := NativeMangle(GI.TypeName);
 
-    for J := 0 to ClassRT.ImplementsCount - 1 do
+    for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
       Self.Emit('.balign 8');
       Self.Emit('.globl itab_' + MName + '_' + NativeMangle(IntfDesc.Name));
       Self.Emit('itab_' + MName + '_' + NativeMangle(IntfDesc.Name) + ':');
-      for K := 0 to IntfDesc.MethodCount - 1 do
+      for K := 0 to IntfDesc.MethodCount() - 1 do
       begin
         MethName := IntfDesc.MethodName(K);
         if Self.IsAbstractClassMethod(ClassRT, MethName) then
@@ -1369,7 +1369,7 @@ begin
     Self.Emit('.balign 8');
     Self.Emit('.globl impllist_' + MName);
     Self.Emit('impllist_' + MName + ':');
-    for J := 0 to ClassRT.ImplementsCount - 1 do
+    for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
       Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
@@ -1717,7 +1717,7 @@ var
   Sz: Integer;
 begin
   if (AType <> nil) and (AType.Kind in [tyRecord, tyStaticArray]) then
-    Sz := (AType.RawSize + 7) and (-8)
+    Sz := (AType.RawSize() + 7) and (-8)
   else if (AType <> nil) and (AType.Kind = tyInterface) then
     Sz := 16   { fat pointer: obj slot (+0) then itab slot (+8) }
   else
@@ -2538,7 +2538,7 @@ begin
     { Index * elem_size → element address. }
     Self.EmitExprToEax(SAE.IndexExpr);
     Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+      [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'addq %rcx, %rax');
     Self.EmitLoadVar('(%rax)',
       TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
@@ -2558,7 +2558,7 @@ begin
     { Index * elem_size → element address. }
     Self.EmitExprToEax(SAE.IndexExpr);
     Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+      [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'addq %rcx, %rax');
     Self.EmitLoadVar('(%rax)',
       TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
@@ -2581,7 +2581,7 @@ begin
       Self.Emit(Format(#9'subq $%d, %%rax',
         [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
     Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+      [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'addq %rcx, %rax');   { %rax = element address }
     Self.EmitLoadVar('(%rax)',
       TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
@@ -2643,7 +2643,7 @@ begin
       Self.Emit(#9'movq (%rcx), %rcx');
       Self.EmitExprToEax(FAE.PropIndexExpr);
       Self.Emit(Format(#9'imulq $%d, %%rax',
-        [TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+        [TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
       Self.Emit(#9'addq %rcx, %rax');
       if TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
         Exit;
@@ -2658,7 +2658,7 @@ begin
         Self.Emit(Format(#9'subq $%d, %%rax',
           [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound]));
       Self.Emit(Format(#9'imulq $%d, %%rax',
-        [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+        [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
       Self.Emit(#9'popq %rcx');
       Self.Emit(#9'addq %rcx, %rax');
       if TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
@@ -2671,7 +2671,7 @@ begin
       Self.Emit(#9'movq (%rcx), %rcx');
       Self.EmitExprToEax(FAE.PropIndexExpr);
       Self.Emit(Format(#9'imulq $%d, %%rax',
-        [TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+        [TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
       Self.Emit(#9'addq %rcx, %rax');
       if TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
         Exit;
@@ -2856,7 +2856,7 @@ begin
           Self.Emit(Format(#9'subq $%d, %%rax',
             [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
         Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+          [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
       end;
@@ -2873,7 +2873,7 @@ begin
         end;
         Self.EmitExprToEax(SAE.IndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+          [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
       end;
@@ -2884,7 +2884,7 @@ begin
         Self.Emit(#9'movq %rax, %rcx');
         Self.EmitExprToEax(SAE.IndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+          [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
       end;
@@ -2980,7 +2980,7 @@ begin
         Self.Emit(#9'pushq %rcx');
         Self.EmitExprToEax(FAE.PropIndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+          [TDynArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
         Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
       end
@@ -2992,7 +2992,7 @@ begin
           Self.Emit(Format(#9'subq $%d, %%rax',
             [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound]));
         Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+          [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
         Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
       end
@@ -3001,7 +3001,7 @@ begin
         Self.Emit(#9'pushq %rcx');
         Self.EmitExprToEax(FAE.PropIndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize]));
+          [TOpenArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
         Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
       end;
@@ -3120,12 +3120,12 @@ begin
       raise ENativeCodeGenError.Create('native backend: constructor call has no class type');
     { _ClassAlloc(size, fieldcleanup_fn): returns zeroed instance ptr (after header). }
     Self.Emit(Format(#9'movq $%d, %%rdi',
-      [TRecordTypeDesc(FAE.ResolvedType).TotalSize]));
+      [TRecordTypeDesc(FAE.ResolvedType).TotalSize()]));
     Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi',
       [NativeMangle(FAE.ResolvedType.Name)]));
     Self.Emit(#9'callq _ClassAlloc');
     { Store vtable pointer at offset 0 if the class has virtual methods. }
-    if TRecordTypeDesc(FAE.ResolvedType).HasVTable then
+    if TRecordTypeDesc(FAE.ResolvedType).HasVTable() then
     begin
       Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx',
         [NativeMangle(FAE.ResolvedType.Name)]));
@@ -3181,10 +3181,10 @@ begin
   if ACall.IsConstructorCall then
   begin
     RT := TRecordTypeDesc(ACall.ResolvedClassType);
-    Self.Emit(Format(#9'movq $%d, %%rdi', [RT.TotalSize]));
+    Self.Emit(Format(#9'movq $%d, %%rdi', [RT.TotalSize()]));
     Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi', [NativeMangle(RT.Name)]));
     Self.Emit(#9'callq _ClassAlloc');
-    if RT.HasVTable then
+    if RT.HasVTable() then
     begin
       Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx', [NativeMangle(RT.Name)]));
       Self.Emit(#9'movq %rcx, (%rax)');
@@ -3751,7 +3751,7 @@ begin
     VarOp := AStmt.VarName + '(%rip)'
   else
     VarOp := Self.VarOperand(AStmt.VarName);
-  if AStmt.ResolvedVarType.IsString then
+  if AStmt.ResolvedVarType.IsString() then
   begin
     Self.Emit(#9'pushq %rax');
     Self.Emit(#9'movq %rax, %rdi');
@@ -3792,7 +3792,7 @@ begin
       idx runs ArrayLow..ArrayHigh (inclusive).  Element address =
       base + (idx - ArrayLow) * ElemSize. }
     SAT      := TStaticArrayTypeDesc(AStmt.CollExpr.ResolvedType);
-    ElemSize := SAT.ElementType.RawSize;
+    ElemSize := SAT.ElementType.RawSize();
     IdxOp    := Self.VarOperand(AStmt.IdxVarName);
     LCond := Self.NewLabel('ficond');
     LBody := Self.NewLabel('fibody');
@@ -3860,7 +3860,7 @@ begin
       idx runs 0.._DynArrayLength(ptr)-1.  Element address =
       data_ptr + idx * ElemSize. }
     DAT      := TDynArrayTypeDesc(AStmt.CollExpr.ResolvedType);
-    ElemSize := DAT.ElementType.RawSize;
+    ElemSize := DAT.ElementType.RawSize();
     IdxOp    := Self.VarOperand(AStmt.IdxVarName);
     LCond := Self.NewLabel('ficond');
     LBody := Self.NewLabel('fibody');
@@ -4696,7 +4696,7 @@ begin
         if Asgn.IsThreadVar then Self.MarkThreadVar(Asgn.Name);
         Self.Emit(Format(#9'leaq %s(%%rip), %%rdi', [Asgn.Name]));
       end;
-      Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize]));
+      Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
       Self.Emit(#9'callq memcpy');
     end
     else if (Asgn.ImplicitSelfField <> nil) then
@@ -4807,7 +4807,7 @@ begin
       begin
         FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
         FDynElemSz :=
-          TDynArrayTypeDesc(TASTExpr(PC.Args.Items[0]).ResolvedType).ElementType.RawSize;
+          TDynArrayTypeDesc(TASTExpr(PC.Args.Items[0]).ResolvedType).ElementType.RawSize();
         { Load current data ptr into %rdi. }
         if Self.IsLocal(FDynArgName) then
           Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(FDynArgName)]))
@@ -5168,7 +5168,7 @@ begin
         Self.Emit(#9'popq %rax');
         Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
       end
-      else if FA.FieldInfo.TypeDesc.IsString then
+      else if FA.FieldInfo.TypeDesc.IsString() then
       begin
         Self.Emit(#9'pushq %rcx');
         Self.Emit(#9'movq 8(%rsp), %rdi');
@@ -5238,7 +5238,7 @@ begin
       { Index * elem_size. }
       Self.EmitExprToEax(SSA.IndexExpr);
       Self.Emit(Format(#9'imulq $%d, %%rax',
-        [TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize]));
+        [TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize()]));
       { Base pointer into %rcx. }
       if Self.IsLocal(SSA.ArrayName) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
@@ -5265,7 +5265,7 @@ begin
       Self.Emit(Format(#9'subq $%d, %%rax',
         [TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound]));
     Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize]));
+      [TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize()]));
     { Base address into %rcx. }
     if Self.IsLocal(SSA.ArrayName) then
       Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
@@ -5283,7 +5283,7 @@ begin
   if AStmt is TPointerWriteStmt then
   begin
     if (TPointerWriteStmt(AStmt).BaseTy <> nil) and
-       TPointerWriteStmt(AStmt).BaseTy.IsString then
+       TPointerWriteStmt(AStmt).BaseTy.IsString() then
     begin
       Self.EmitExprToEax(TPointerWriteStmt(AStmt).PtrExpr);
       Self.Emit(#9'movq %rax, %rcx');
@@ -5347,7 +5347,7 @@ var
 begin
   OAType   := TOpenArrayTypeDesc(ALit.ResolvedType);
   ElemType := OAType.ElementType;
-  ElemSize := ElemType.RawSize;
+  ElemSize := ElemType.RawSize();
   TotalSz  := ALit.Elements.Count * ElemSize;
   if TotalSz < 1 then TotalSz := 1;
   { Align to 16 bytes for ABI compliance. }
@@ -5736,7 +5736,7 @@ begin
     Self.Emit(#9'movq %r10, %rdi');
     Self.Emit(#9'xorl %esi, %esi');
     Self.Emit(Format(#9'movq $%d, %%rdx',
-      [TRecordTypeDesc(ADecl.ResolvedReturnType).TotalSize]));
+      [TRecordTypeDesc(ADecl.ResolvedReturnType).TotalSize()]));
     Self.Emit(#9'callq memset');
     { Reload %r10 after the call (memset may have clobbered caller-saves). }
     Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));

@@ -442,7 +442,7 @@ const
 procedure TSmallIntWordE2ETests.TestRun_SmallInt_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcSmallIntRoundTrip, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('12345', '12345' + LE, Output);
@@ -451,7 +451,7 @@ end;
 procedure TSmallIntWordE2ETests.TestRun_Word_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcWordRoundTrip, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('60000', '60000' + LE, Output);
@@ -460,7 +460,7 @@ end;
 procedure TSmallIntWordE2ETests.TestRun_SmallInt_Negative;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcSmallIntNegative, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('-1 sign-extended', '-1' + LE, Output);
@@ -469,7 +469,7 @@ end;
 procedure TSmallIntWordE2ETests.TestRun_Word_MaxValue;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcWordMax, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('65535 zero-extended', '65535' + LE, Output);
@@ -478,7 +478,7 @@ end;
 procedure TSmallIntWordE2ETests.TestRun_MixedRecord_RoundTrip;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcMixedRecord, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('Tag, ID, Val, SizeOf',
@@ -488,7 +488,7 @@ end;
 procedure TSmallIntWordE2ETests.TestRun_ImplicitSelf_ByteFields_NoBleed;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcImplicitSelfByteFields, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('per-field bytes, no over-write bleed',
@@ -498,7 +498,7 @@ end;
 procedure TSmallIntWordE2ETests.TestRun_ImplicitSelf_SmallIntWord_Fields;
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcImplicitSelfSmallIntFields, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('SmallInt sign-extend + Word zero-extend',

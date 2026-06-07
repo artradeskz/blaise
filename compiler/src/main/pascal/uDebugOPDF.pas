@@ -331,7 +331,7 @@ begin
   if HasBeenEmitted(CName) then Exit;
   MarkEmitted(CName);
 
-  SzB      := AType.RawSize;
+  SzB      := AType.RawSize();
   case AType.Kind of
     tyBoolean:         begin SubKind := SK_BOOLEAN; IsSigned := 0; end;
     tyInt64, tyInteger, tySmallInt:
@@ -433,7 +433,7 @@ begin
   EmitRecHdr(REC_RECORD, RecSize);
   L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
   L('    .int  ' + IntToStr(AType.Fields.Count) + '  # FieldCount');
-  L('    .int  ' + IntToStr(AType.TotalSize) + '  # TotalSize');
+  L('    .int  ' + IntToStr(AType.TotalSize()) + '  # TotalSize');
   EmitStrField(CName);
   EmitFields(AType);
 end;
@@ -475,11 +475,11 @@ begin
   EmitRecHdr(REC_CLASS, RecSize);
   L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
   L('    .int  ' + IntToStr(ParentID) + '  # ParentTypeID');
-  if AType.HasVTable then
+  if AType.HasVTable() then
     L('    .quad vtable_' + CName + '  # VMTAddress')
   else
     L('    .quad 0  # VMTAddress (no vtable)');
-  L('    .int  ' + IntToStr(AType.TotalSize) + '  # InstanceSize');
+  L('    .int  ' + IntToStr(AType.TotalSize()) + '  # InstanceSize');
   L('    .int  ' + IntToStr(AType.Fields.Count) + '  # FieldCount');
   EmitStrField(CName);
   EmitFields(AType);
@@ -575,7 +575,7 @@ begin
     if V.ResolvedType <> nil then
     begin
       CName  := CanonicalName(V.ResolvedType);
-      RawSz  := V.ResolvedType.RawSize;
+      RawSz  := V.ResolvedType.RawSize();
     end
     else
     begin
@@ -775,7 +775,7 @@ begin
   EmitTypeDesc(AType.BaseType);
   BaseID := GetOrAllocTypeID(AType.BaseType.Name);
 
-  SzB := AType.RawSize;
+  SzB := AType.RawSize();
   RecSize := 15 + Length(CName);  { 4(TypeID)+4(BaseTypeID)+1(SzB)+4(LBound)+2(NameLen) }
 
   L('');
@@ -808,7 +808,7 @@ begin
     ParentID := 0;
 
   MethodRecSize := 0;
-  for I := 0 to AType.MethodCount - 1 do
+  for I := 0 to AType.MethodCount() - 1 do
     MethodRecSize := MethodRecSize + 7 + Length(AType.MethodName(I));
 
   RecSize := 31 + Length(CName) + MethodRecSize;
@@ -821,9 +821,9 @@ begin
   L('    .int  ' + IntToStr(ParentID) + '  # ParentTypeID');
   L('    .byte 0  # IntfType: itfCOM');
   L('    .byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0  # GUID (zeroed)');
-  L('    .int  ' + IntToStr(AType.MethodCount) + '  # MethodCount');
+  L('    .int  ' + IntToStr(AType.MethodCount()) + '  # MethodCount');
   EmitStrField(CName);
-  for I := 0 to AType.MethodCount - 1 do
+  for I := 0 to AType.MethodCount() - 1 do
   begin
     MName := AType.MethodName(I);
     L('    # method: ' + MName);

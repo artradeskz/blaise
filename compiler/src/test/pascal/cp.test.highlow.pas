@@ -394,7 +394,7 @@ const
         ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Integer bounds',
@@ -414,7 +414,7 @@ const
         ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Byte high', '255' + LE, Output);
@@ -433,7 +433,7 @@ const
         ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('enum bounds', '2' + LE + '0' + LE, Output);
@@ -458,7 +458,7 @@ const
         ''';
 var Output: string; RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('loop guard', '15' + LE + 'ok' + LE, Output);

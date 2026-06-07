@@ -635,7 +635,7 @@ begin
       end;
       procedure TPool.CacheIt;
       begin
-        FCached := MakeTarget
+        FCached := MakeTarget()
       end;
       begin
       end.

@@ -152,7 +152,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcPushPopLIFO, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('Pop returns 3 first (LIFO)', Pos('3', Output) >= 0);
@@ -165,7 +165,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcPeekNoRemove, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('Peek returns 42 twice then Count=1',
@@ -177,7 +177,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcCountTracking, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count starts at 0', Pos('0', Output) >= 0);
@@ -189,7 +189,7 @@ var
   Output: string;
   RCode:  Integer;
 begin
-  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcGrowBeyond, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('count=8 after 8 pushes', Pos('8', Output) >= 0);

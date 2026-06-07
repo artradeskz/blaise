@@ -100,20 +100,20 @@ const
 
 procedure TE2ECaseEnumTests.TestRun_Case_IntegerBranch;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcCaseInt, '22' + LineEnding, 0);
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Case_ElseBranch;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcCaseElse, '99' + LineEnding, 0);
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Enum_OrdinalValues;
 var Output: string; RCode: Integer; Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcEnumOrdinal, Output, RCode));
   Lines := TStringList.Create();
   try
@@ -128,7 +128,7 @@ end;
 
 procedure TE2ECaseEnumTests.TestRun_Enum_InCase;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcEnumCase, '2' + LineEnding, 0);
 end;
 
@@ -183,7 +183,7 @@ var
   RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExplicitOrdinals, Output, RCode));
   Lines := TStringList.Create();
   try
@@ -202,7 +202,7 @@ var
   RCode: Integer;
   Lines: TStringList;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcAutoContinue, Output, RCode));
   Lines := TStringList.Create();
   try
@@ -220,7 +220,7 @@ var
   Output: string;
   RCode: Integer;
 begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExplicitInCase, Output, RCode));
   AssertEquals('NotFound=404 matches case 404', 'not found', Trim(Output));
 end;
