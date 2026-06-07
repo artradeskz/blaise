@@ -610,7 +610,7 @@ begin
         Lo := C and 15;
         if Hi < 10 then Hi := 48 + Hi else Hi := 55 + Hi;
         if Lo < 10 then Lo := 48 + Lo else Lo := 55 + Lo;
-        Result := Result + '\' + Chr(Hi) + Chr(Lo)
+        Result := Result + '\x' + Chr(Hi) + Chr(Lo)
       end
       else
         Result := Result + Chr(C);
