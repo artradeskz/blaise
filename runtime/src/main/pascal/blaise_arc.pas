@@ -42,6 +42,8 @@ type
 
 procedure _StringAddRef(Ptr: Pointer);
 procedure _StringRelease(Ptr: Pointer);
+procedure _DynArrayAddRef(Ptr: Pointer);
+procedure _DynArrayRelease(Ptr: Pointer);
 function  _StringEquals(S1, S2: Pointer): Integer;
 function  _StringConcat(S1, S2: Pointer): Pointer;
 procedure TObject_Destroy(Self: Pointer);
@@ -408,6 +410,38 @@ begin
   LN := Base + 4;
   CP := Base + 8;
   _StringReleaseCheck(Ptr, RC^, LN^, CP^);
+  OldRC := _AtomicSubInt32(RC, 1);
+  if OldRC = 1 then _BlaiseFreeMem(Base);
+end;
+
+{ Dynamic-array buffer header is [refcount:4][length:4]; data pointer
+  points at element 0, so the refcount slot lives at Ptr - 8.  Layout
+  is defined by _DynArraySetLength in blaise_str.pas. }
+
+procedure _DynArrayAddRef(Ptr: Pointer);
+const
+  DA_HDR = 8;
+var
+  RC: PInteger;
+begin
+  if Ptr = nil then Exit;
+  RC := PInteger(Ptr - DA_HDR);
+  if RC^ = IMMORTAL then Exit;
+  _AtomicAddInt32(RC, 1);
+end;
+
+procedure _DynArrayRelease(Ptr: Pointer);
+const
+  DA_HDR = 8;
+var
+  Base:  Pointer;
+  RC:    PInteger;
+  OldRC: Integer;
+begin
+  if Ptr = nil then Exit;
+  Base := Ptr - DA_HDR;
+  RC   := PInteger(Base);
+  if RC^ = IMMORTAL then Exit;
   OldRC := _AtomicSubInt32(RC, 1);
   if OldRC = 1 then _BlaiseFreeMem(Base);
 end;

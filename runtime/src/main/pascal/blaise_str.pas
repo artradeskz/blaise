@@ -91,7 +91,9 @@ function _Utf8DecodeAt(S: Pointer; Idx: Integer): Int64;
   Refcount = -1 marks immortal (statically-allocated).
 
   _DynArraySetLength(OldPtr, NewLen, ElemSize) → new data pointer.
-  _DynArrayLength(Ptr) → length (0 for nil). }
+  _DynArrayLength(Ptr) → length (0 for nil).
+  Refcount helpers (_DynArrayAddRef / _DynArrayRelease) live in
+  blaise_arc.pas alongside the other ARC primitives. }
 function _DynArraySetLength(Ptr: Pointer; NewLen, ElemSize: Integer): Pointer;
 function _DynArrayLength(Ptr: Pointer): Integer;
 

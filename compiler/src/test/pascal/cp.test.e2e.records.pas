@@ -36,6 +36,8 @@ type
     procedure TestRun_Record_StmtMethodCall_Result;
     procedure TestRun_Record_AddrOfImplicitSelf;
     procedure TestRun_Record_PointerDerefFieldAccess;
+    procedure TestRun_Record_DynArrayField_ReturnByValue_NoLeak;
+    procedure TestRun_Class_RecordField_NestedClass_FullCleanup;
   end;
 
 implementation
@@ -318,6 +320,125 @@ const
     end.
     ''';
 
+  { Regression: a record whose field is a dynamic array, returned by value
+    in a loop.  Before the dyn-array ARC fix, every iteration leaked the
+    array buffer because EmitRecordCopy/EmitRecordReleaseFields did not
+    refcount tyDynArray fields.  After the fix, the per-iter delta is one
+    AddRef + one Release on the buffer header — net zero — and the final
+    assertion of the buffer contents proves the data was not freed under
+    the function's feet. }
+  { Regression: a class whose field is a record whose field is another class
+    whose field is another record whose field is a leaf class.  Each Create
+    increments a global AliveCount; each Destroy decrements it.  After the
+    outermost instance is released, AliveCount must be 0 — proving that
+    _FieldCleanup for a class with a record field recurses through that
+    record's class sub-fields all the way down.
+
+    Before the fix, _FieldCleanup_<T> skipped record-typed fields entirely,
+    so the chain leaked TMid and TLeaf instances every iteration. }
+  SrcClassRecordFieldNestedCleanup = '''
+    program P;
+    type
+      TLeaf = class
+        Tag: Integer;
+        constructor Create();
+        destructor Destroy(); override;
+      end;
+      TMidRec = record
+        Leaf:  TLeaf;
+        Extra: Integer;
+      end;
+      TMid = class
+        Inner: TMidRec;
+        constructor Create();
+        destructor Destroy(); override;
+      end;
+      TOuterRec = record
+        Mid:  TMid;
+        Note: Integer;
+      end;
+      TOuter = class
+        Wrap: TOuterRec;
+        constructor Create();
+        destructor Destroy(); override;
+      end;
+    var
+      AliveCount: Integer;
+    constructor TLeaf.Create();
+    begin
+      AliveCount := AliveCount + 1;
+      Self.Tag := 1
+    end;
+    destructor TLeaf.Destroy();
+    begin
+      AliveCount := AliveCount - 1
+    end;
+    constructor TMid.Create();
+    begin
+      AliveCount := AliveCount + 1;
+      Self.Inner.Leaf  := TLeaf.Create();
+      Self.Inner.Extra := 7
+    end;
+    destructor TMid.Destroy();
+    begin
+      AliveCount := AliveCount - 1
+    end;
+    constructor TOuter.Create();
+    begin
+      AliveCount := AliveCount + 1;
+      Self.Wrap.Mid  := TMid.Create();
+      Self.Wrap.Note := 99
+    end;
+    destructor TOuter.Destroy();
+    begin
+      AliveCount := AliveCount - 1
+    end;
+    procedure RunOnce();
+    var
+      O: TOuter;
+    begin
+      O := TOuter.Create();
+      if O.Wrap.Mid.Inner.Leaf.Tag <> 1 then
+        WriteLn('chain broken')
+    end;
+    var
+      i: Integer;
+    begin
+      AliveCount := 0;
+      for i := 0 to 99 do
+        RunOnce();
+      WriteLn(AliveCount)
+    end.
+    ''';
+
+  SrcRecordDynArrayReturnByValueNoLeak = '''
+    program P;
+    type
+      TBuf = record
+        Arr: array of Integer;
+      end;
+    function MakeBuf: TBuf;
+    var
+      tmp: TBuf;
+      a:   array of Integer;
+    begin
+      SetLength(a, 8);
+      a[0] := 1;
+      a[7] := 70;
+      tmp.Arr := a;
+      Result := tmp
+    end;
+    var
+      i:   Integer;
+      r:   TBuf;
+    begin
+      for i := 0 to 4999 do
+        r := MakeBuf();
+      WriteLn(r.Arr[0]);
+      WriteLn(r.Arr[7])
+    end.
+    ''';
+
   SrcRecordNestedFieldAssignMethodCall = '''
     program P;
     type
@@ -462,6 +583,28 @@ procedure TE2ERecordsTests.TestRun_Record_PointerDerefFieldAccess;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordPointerDerefFieldAccess, '42' + LE + '99' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_Class_RecordField_NestedClass_FullCleanup;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcClassRecordFieldNestedCleanup, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('all 3 layers fully released across 100 iterations',
+    '0' + LE, Output);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_DynArrayField_ReturnByValue_NoLeak;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcRecordDynArrayReturnByValueNoLeak, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('first and last element survive 5000 iterations',
+    '1' + LE + '70' + LE, Output);
 end;
 
 initialization

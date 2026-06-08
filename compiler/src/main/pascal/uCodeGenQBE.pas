@@ -2161,6 +2161,8 @@ begin
       RelFn := '$_ClassRelease'
     else if IsIntf then
       RelFn := '$_ClassRelease'  { obj slot release; itab is static }
+    else if Decl.ResolvedType.Kind = tyDynArray then
+      RelFn := '$_DynArrayRelease'
     else if Decl.ResolvedType.Kind = tyRecord then
     begin
       { Record local: release each ARC-managed field at scope exit }
@@ -2242,6 +2244,8 @@ begin
       RelFn := '$_ClassRelease'
     else if IsIntf then
       RelFn := '$_ClassRelease'
+    else if Decl.ResolvedType.Kind = tyDynArray then
+      RelFn := '$_DynArrayRelease'
     else if Decl.ResolvedType.Kind = tyRecord then
     begin
       { Record local on exception path: release ARC fields }
@@ -3969,6 +3973,25 @@ begin
       EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
   end
   else if (AAssign.ResolvedLhsType <> nil) and
+          (AAssign.ResolvedLhsType.Kind = tyDynArray) then
+  begin
+    { Dynamic-array variable assignment: same ARC shape as string. The dyn-array
+      data pointer carries a refcount in its header, so b := a must retain the
+      new buffer and release the old before overwriting the slot. }
+    OldTemp := AllocTemp();
+    if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      EmitLine(Format('  %s =l copy %%_var_%s', [OldTemp, AAssign.Name]))
+    else
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    ValTemp := EmitExpr(AAssign.Expr);
+    EmitLine(Format('  call $_DynArrayAddRef(l %s)', [ValTemp]));
+    EmitLine(Format('  call $_DynArrayRelease(l %s)', [OldTemp]));
+    if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+      EmitLine(Format('  %%_var_%s =l copy %s', [AAssign.Name, ValTemp]))
+    else
+      EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+  end
+  else if (AAssign.ResolvedLhsType <> nil) and
           (AAssign.ResolvedLhsType.Kind = tyClass) and
           (AAssign.Expr is TNilLiteral) then
   begin
@@ -4527,6 +4550,36 @@ begin
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
     end
+    else if F.TypeDesc.Kind = tyDynArray then
+    begin
+      ValTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [ValTemp, SrcField]));
+      OldTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, DstField]));
+      EmitLine(Format('  call $_DynArrayAddRef(l %s)', [ValTemp]));
+      EmitLine(Format('  call $_DynArrayRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
+    end
+    else if F.TypeDesc.Kind = tyInterface then
+    begin
+      { Interface field: 16-byte fat pointer (obj at +0, itab at +8). Only the
+        obj slot is refcounted; the itab slot is static rodata. }
+      ValTemp := AllocTemp();              { src obj }
+      EmitLine(Format('  %s =l loadl %s', [ValTemp, SrcField]));
+      OldTemp := AllocTemp();              { dst obj (to release) }
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, DstField]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
+      { Copy itab slot (src+8 → dst+8). }
+      ValTemp := AllocTemp();
+      EmitLine(Format('  %s =l add %s, 8', [ValTemp, SrcField]));
+      OldTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, ValTemp]));
+      ValTemp := AllocTemp();
+      EmitLine(Format('  %s =l add %s, 8', [ValTemp, DstField]));
+      EmitLine(Format('  storel %s, %s', [OldTemp, ValTemp]));
+    end
     else if F.TypeDesc.Kind = tyRecord then
       { Nested record field: recurse into sub-fields }
       Self.EmitRecordCopy(TRecordTypeDesc(F.TypeDesc), DstField, SrcField)
@@ -4700,7 +4753,24 @@ begin
   begin
     F := TFieldInfo(ARec.Fields.Items[I]);
     if F.TypeDesc = nil then Continue;
-    if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)) then Continue;
+    if F.TypeDesc.Kind = tyRecord then
+    begin
+      { Nested record field: recurse so its managed sub-fields are released.
+        EmitRecordCopy already recurses on copy — without this, every nested
+        managed sub-field leaks one ref per copy. }
+      if F.Offset > 0 then
+      begin
+        FldAddr := AllocTemp();
+        EmitLine(Format('  %s =l add %s, %d', [FldAddr, AAddr, F.Offset]));
+      end
+      else
+        FldAddr := AAddr;
+      EmitRecordReleaseFields(TRecordTypeDesc(F.TypeDesc), FldAddr);
+      Continue;
+    end;
+    if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)
+            or (F.TypeDesc.Kind = tyDynArray)
+            or (F.TypeDesc.Kind = tyInterface)) then Continue;
     if F.Offset > 0 then
     begin
       FldAddr := AllocTemp();
@@ -4712,7 +4782,12 @@ begin
     EmitLine(Format('  %s =l loadl %s', [ValT, FldAddr]));
     if F.TypeDesc.IsString() then
       EmitLine(Format('  call $_StringRelease(l %s)', [ValT]))
+    else if F.TypeDesc.Kind = tyDynArray then
+      EmitLine(Format('  call $_DynArrayRelease(l %s)', [ValT]))
     else
+      { tyClass and tyInterface both release the obj slot via _ClassRelease.
+        For an interface field the itab slot lives at +8 and is static rodata,
+        so no extra release is needed. }
       EmitLine(Format('  call $_ClassRelease(l %s)', [ValT]));
   end;
 end;
@@ -4877,7 +4952,8 @@ begin
   end;
 
   IsStr := AAssign.FieldInfo.TypeDesc.IsString();
-  IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass);
+  IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass)
+                 or (AAssign.FieldInfo.TypeDesc.Kind = tyDynArray);
   if AAssign.FieldInfo.IsUnretained and (AAssign.FieldInfo.TypeDesc.Kind = tyClass) then
   begin
     { Unretained class field: non-owning — store the pointer with no addref
@@ -4903,6 +4979,11 @@ begin
     begin
       EmitLine(Format('  call $_StringAddRef(l %s)',  [ValTemp]));
       EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
+    end
+    else if AAssign.FieldInfo.TypeDesc.Kind = tyDynArray then
+    begin
+      EmitLine(Format('  call $_DynArrayAddRef(l %s)',  [ValTemp]));
+      EmitLine(Format('  call $_DynArrayRelease(l %s)', [OldTemp]));
     end
     else
     begin
@@ -6192,7 +6273,24 @@ begin
   begin
     F := TFieldInfo(ARec.Fields.Items[I]);
     if F.TypeDesc = nil then Continue;
-    if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)) then
+    { Nested record field: delegate to the shared per-field walker so its
+      managed sub-fields (strings, classes, dyn-arrays, interfaces, deeper
+      records) are released too. }
+    if F.TypeDesc.Kind = tyRecord then
+    begin
+      if F.Offset > 0 then
+      begin
+        PtrT := AllocTemp();
+        EmitLine(Format('  %s =l add %%self, %d', [PtrT, F.Offset]));
+      end
+      else
+        PtrT := '%self';
+      EmitRecordReleaseFields(TRecordTypeDesc(F.TypeDesc), PtrT);
+      Continue;
+    end;
+    if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)
+            or (F.TypeDesc.Kind = tyDynArray)
+            or (F.TypeDesc.Kind = tyInterface)) then
       Continue;
     { Unretained class field: non-owning — nothing to release or clear. }
     if F.IsUnretained and (F.TypeDesc.Kind = tyClass) then
@@ -6215,7 +6313,11 @@ begin
     EmitLine(Format('  %s =l loadl %s', [Temp, PtrT]));
     if F.TypeDesc.IsString() then
       EmitLine(Format('  call $_StringRelease(l %s)', [Temp]))
+    else if F.TypeDesc.Kind = tyDynArray then
+      EmitLine(Format('  call $_DynArrayRelease(l %s)', [Temp]))
     else
+      { tyClass and tyInterface both release the obj slot via _ClassRelease;
+        an interface's itab slot is static rodata so no release is needed. }
       EmitLine(Format('  call $_ClassRelease(l %s)', [Temp]));
     EmitLine(Format('  storel 0, %s', [PtrT]));
   end;
