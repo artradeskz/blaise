@@ -106,6 +106,12 @@ type
     function GlobalType(const AName: string): TTypeDesc;
     { Emit the accumulated .data section (one slot per registered global). }
     procedure EmitDataSection;
+    { Release every ARC-managed program global at program exit (string, class,
+      interface obj-slot, dyn-array, and record globals' managed fields), so a
+      global object's _FieldCleanup runs at program end.  Mirrors the QBE
+      backend's @main_exit release pass.  Called from EmitProgram after the
+      exit label. }
+    procedure EmitGlobalReleases;
     { Emit all class-related data: class-name strings, published-method tables,
       typeinfo blocks, vtables, itab/impllist blocks.  Mirrors QBE backend's
       EmitTypeInfoDefs + EmitVTableDefs.  Called from EmitProgram. }
@@ -124,6 +130,15 @@ type
       destructor (if any), releases ARC-managed fields, then returns. }
     procedure EmitFieldCleanupFn(const AMangledName: string;
                                  ART: TRecordTypeDesc);
+    { Release every ARC-managed field of ART whose storage starts at the address
+      in the callee-saved register ABaseReg (an AT&T operand such as '%rbx').
+      Strings, classes, dyn-arrays and interface obj-slots are released; weak
+      fields cleared; unretained fields skipped; nested record fields are
+      recursed into at their offset.  ABaseReg must survive callq (caller picks
+      a callee-saved register).  Used by both _FieldCleanup_<T> and record-local
+      scope-exit cleanup. }
+    procedure EmitRecordFieldReleases(ART: TRecordTypeDesc;
+                                      const ABaseReg: string);
     { Emit all class method definitions (OwnerTypeName <> ''). }
     procedure EmitClassMethods(AProg: TProgram);
 
@@ -154,6 +169,16 @@ type
       itab), interface->interface copy, and := nil.  Strong references only;
       weak interface refs are deferred. }
     procedure EmitInterfaceAssign(AAsgn: TAssignment);
+    { Store an interface expression into a record/class field's contiguous
+      16-byte fat pointer (obj at ABaseReg+AOffset, itab at +8).  ABaseReg is an
+      AT&T register operand (e.g. '%rcx') holding the record/object base address;
+      it is copied into a callee-saved register internally so it survives the
+      ARC calls.  AIntfType is the destination's declared interface type, needed
+      to name the static itab when the source is a class.  Handles a class source
+      (obj + static $itab_<Class>_<Interface>) and an interface source (copy
+      obj+itab), retaining the new obj and releasing the old. }
+    procedure EmitInterfaceToFieldSlotsAt(AExpr: TASTExpr;
+      const ABaseReg: string; AOffset: Integer; AIntfType: TTypeDesc);
     { True when AMethName resolves to an abstract slot on ARec (the itab entry
       must then point at _AbstractMethodError). }
     function IsAbstractClassMethod(ARec: TRecordTypeDesc;
@@ -618,6 +643,52 @@ begin
   end;
 end;
 
+procedure TX86_64Backend.EmitGlobalReleases;
+var
+  I:     Integer;
+  Name:  string;
+  Ty:    TTypeDesc;
+begin
+  for I := 0 to FDataGlobals.Count - 1 do
+  begin
+    Name := FDataGlobals.Keys[I];
+    Ty   := Self.GlobalType(Name);
+    if Ty = nil then Continue;
+    { Thread-var globals live in TLS and are not released here (matches the
+      data-section split; their lifetime is per-thread, not program-global). }
+    if Self.IsThreadVarGlobal(Name) then Continue;
+    if Ty.IsString() then
+    begin
+      Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [Name]));
+      Self.Emit(#9'callq _StringRelease');
+    end
+    else if Ty.Kind = tyClass then
+    begin
+      Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [Name]));
+      Self.Emit(#9'callq _ClassRelease');
+    end
+    else if Ty.Kind = tyDynArray then
+    begin
+      Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [Name]));
+      Self.Emit(#9'callq _DynArrayRelease');
+    end
+    else if Ty.Kind = tyInterface then
+    begin
+      { Release the obj half of the fat pointer; the itab slot is static. }
+      Self.Emit(Format(#9'movq %s_obj(%%rip), %%rdi', [Name]));
+      Self.Emit(#9'callq _ClassRelease');
+    end
+    else if Ty.Kind = tyRecord then
+    begin
+      { Record global with managed fields: release each at exit. }
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rbx', [Name]));
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(Ty), '%rbx');
+      Self.Emit(#9'popq %rbx');
+    end;
+  end;
+end;
+
 { Evaluate a string literal: register it in the pool if new, then emit
   leaq __sN+12(%rip), %rax so %rax holds the Blaise data pointer. }
 procedure TX86_64Backend.EmitStrLitAddr(const AValue: string);
@@ -718,7 +789,16 @@ begin
   Result := False;
   if AExpr = nil then Exit;
   if AExpr.ResolvedType = nil then Exit;
-  if AExpr.ResolvedType.Kind <> tyClass then Exit;
+  { Ownership transfer applies to every ARC-managed return value, not just
+    classes: a function/method returning a String or dynamic array leaves its
+    Result at refcount +1 (the callee AddRef'd on `Result := x` and did not
+    release Result at scope exit).  The caller's assignment site must therefore
+    NOT AddRef again — it consumes that transferred reference.  Without covering
+    tyString/tyDynArray here the assignment branches below emit a spurious
+    _StringAddRef/_DynArrayAddRef on the call result, which is never balanced
+    and leaks one buffer per call. }
+  if not (AExpr.ResolvedType.Kind in [tyClass, tyDynArray])
+     and not AExpr.ResolvedType.IsString() then Exit;
   if AExpr is TIdentExpr then
   begin
     IE := TIdentExpr(AExpr);
@@ -776,8 +856,6 @@ procedure TX86_64Backend.EmitFieldCleanupFn(const AMangledName: string;
                                             ART: TRecordTypeDesc);
 var
   Walk: TRecordTypeDesc;
-  I:    Integer;
-  F:    TFieldInfo;
   DestroyName: string;
 begin
   Self.Emit('.text');
@@ -804,42 +882,77 @@ begin
       end;
       Walk := Walk.Parent;
     end;
-    for I := 0 to ART.Fields.Count - 1 do
-    begin
-      F := TFieldInfo(ART.Fields.Items[I]);
-      if F.TypeDesc = nil then Continue;
-      if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)) then
-        Continue;
-      if F.IsUnretained and (F.TypeDesc.Kind = tyClass) then
-        Continue;
-      if F.IsWeak then
-      begin
-        if F.Offset > 0 then
-          Self.Emit(Format(#9'leaq %d(%%rbx), %%rdi', [F.Offset]))
-        else
-          Self.Emit(#9'movq %rbx, %rdi');
-        Self.Emit(#9'callq _WeakClear');
-        Continue;
-      end;
-      if F.Offset > 0 then
-        Self.Emit(Format(#9'movq %d(%%rbx), %%rdi', [F.Offset]))
-      else
-        Self.Emit(#9'movq (%rbx), %rdi');
-      if F.TypeDesc.IsString() then
-        Self.Emit(#9'callq _StringRelease')
-      else
-        Self.Emit(#9'callq _ClassRelease');
-      if F.Offset > 0 then
-        Self.Emit(Format(#9'movq $0, %d(%%rbx)', [F.Offset]))
-      else
-        Self.Emit(#9'movq $0, (%rbx)');
-    end;
+    { %rbx holds the object base and is callee-saved, so it survives the release
+      calls. }
+    Self.EmitRecordFieldReleases(ART, '%rbx');
   end;
   Self.Emit(#9'popq %rbx');
   Self.Emit(#9'movq %rbp, %rsp');
   Self.Emit(#9'popq %rbp');
   Self.Emit(#9'ret');
   Self.Emit('.type _FieldCleanup_' + AMangledName + ', @function');
+end;
+
+procedure TX86_64Backend.EmitRecordFieldReleases(ART: TRecordTypeDesc;
+  const ABaseReg: string);
+var
+  I:    Integer;
+  F:    TFieldInfo;
+begin
+  if ART = nil then Exit;
+  for I := 0 to ART.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ART.Fields.Items[I]);
+    if F.TypeDesc = nil then Continue;
+    { Nested record field: recurse into its managed sub-fields.  ABaseReg must
+      stay pointed at the parent record (each iteration derives field addresses
+      from it), so the recursion uses its own callee-saved register (%r14). }
+    if F.TypeDesc.Kind = tyRecord then
+    begin
+      { Derive the nested record base into %r14 (callee-saved) so the recursive
+        releases survive their own calls without disturbing ABaseReg. }
+      Self.Emit(#9'pushq %r14');
+      if F.Offset > 0 then
+        Self.Emit(Format(#9'leaq %d(%s), %%r14', [F.Offset, ABaseReg]))
+      else
+        Self.Emit(Format(#9'movq %s, %%r14', [ABaseReg]));
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(F.TypeDesc), '%r14');
+      Self.Emit(#9'popq %r14');
+      Continue;
+    end;
+    if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)
+            or (F.TypeDesc.Kind = tyDynArray)
+            or (F.TypeDesc.Kind = tyInterface)) then
+      Continue;
+    if F.IsUnretained and (F.TypeDesc.Kind = tyClass) then
+      Continue;
+    if F.IsWeak then
+    begin
+      if F.Offset > 0 then
+        Self.Emit(Format(#9'leaq %d(%s), %%rdi', [F.Offset, ABaseReg]))
+      else
+        Self.Emit(Format(#9'movq %s, %%rdi', [ABaseReg]));
+      Self.Emit(#9'callq _WeakClear');
+      Continue;
+    end;
+    { Load the field's obj/data pointer (interface: the obj slot at +0). }
+    if F.Offset > 0 then
+      Self.Emit(Format(#9'movq %d(%s), %%rdi', [F.Offset, ABaseReg]))
+    else
+      Self.Emit(Format(#9'movq (%s), %%rdi', [ABaseReg]));
+    if F.TypeDesc.IsString() then
+      Self.Emit(#9'callq _StringRelease')
+    else if F.TypeDesc.Kind = tyDynArray then
+      Self.Emit(#9'callq _DynArrayRelease')
+    else
+      { tyClass and tyInterface both release the obj slot via _ClassRelease; an
+        interface's itab slot at +8 is static rodata and needs no release. }
+      Self.Emit(#9'callq _ClassRelease');
+    if F.Offset > 0 then
+      Self.Emit(Format(#9'movq $0, %d(%s)', [F.Offset, ABaseReg]))
+    else
+      Self.Emit(Format(#9'movq $0, (%s)', [ABaseReg]));
+  end;
 end;
 
 procedure TX86_64Backend.EmitClassSection(AProg: TProgram);
@@ -1551,6 +1664,83 @@ begin
 
   raise ENativeCodeGenError.Create(
     'native backend: unsupported interface assignment RHS');
+end;
+
+procedure TX86_64Backend.EmitInterfaceToFieldSlotsAt(AExpr: TASTExpr;
+  const ABaseReg: string; AOffset: Integer; AIntfType: TTypeDesc);
+{ Store an interface RHS into a contiguous fat-pointer field.  The destination
+  base address is taken from ABaseReg into the callee-saved %r15 so it survives
+  the ARC calls; obj slot is (%r15), itab slot is 8(%r15). }
+var
+  Intf:    TInterfaceTypeDesc;
+  ClassRT: TRecordTypeDesc;
+  ItabSym: string;
+begin
+  if (AIntfType = nil) or (AIntfType.Kind <> tyInterface) then
+    raise ENativeCodeGenError.Create(
+      'native backend: interface-field store needs a destination interface type');
+  Intf := TInterfaceTypeDesc(AIntfType);
+
+  { Capture the destination base address in a callee-saved register. }
+  Self.Emit(#9'pushq %r15');
+  Self.Emit(Format(#9'movq %s, %%r15', [ABaseReg]));
+  if AOffset > 0 then
+    Self.Emit(Format(#9'addq $%d, %%r15', [AOffset]));
+  { Now (%r15) = obj slot, 8(%r15) = itab slot. }
+
+  if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
+  begin
+    { Class source: emit obj, reference the static itab for the (concrete class,
+      destination interface) pair — the same symbol the direct class->interface
+      assignment path uses. }
+    ClassRT := TRecordTypeDesc(AExpr.ResolvedType);
+    ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(Intf.Name);
+    Self.EmitExprToEax(AExpr);
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(#9'movq (%r15), %rdi');
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');
+    Self.Emit(#9'movq %rax, (%r15)');
+    Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ItabSym]));
+    Self.Emit(#9'movq %rax, 8(%r15)');
+  end
+  else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyInterface) then
+  begin
+    { Interface source: copy obj+itab from the source's fat pointer.  A named
+      interface local/global uses split _obj/_itab slots; an interface stored in
+      a record/class field uses a contiguous fat pointer (obj / obj+8). }
+    if AExpr is TIdentExpr then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfItabOperand(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
+      Self.Emit(#9'pushq %rax');             { itab }
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfObjOperand(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
+      Self.Emit(#9'pushq %rax');             { obj; stack now (obj, itab) }
+    end
+    else
+      { An interface stored in another record/class field (a TFieldAccessExpr
+        source) would need its contiguous fat pointer read from memory.  That
+        receiver-shape resolution is only implemented in the QBE backend; the
+        native backend handles the common ident and class sources. }
+      raise ENativeCodeGenError.Create(
+        'native backend: unsupported interface source for interface-field store');
+    Self.Emit(#9'movq (%rsp), %rdi');        { new obj }
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(#9'movq (%r15), %rdi');        { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');                { new obj }
+    Self.Emit(#9'movq %rax, (%r15)');
+    Self.Emit(#9'popq %rax');                { itab }
+    Self.Emit(#9'movq %rax, 8(%r15)');
+  end
+  else
+    raise ENativeCodeGenError.Create(
+      'native backend: unsupported interface-field store RHS');
+
+  Self.Emit(#9'popq %r15');
 end;
 
 procedure TX86_64Backend.EmitClassMethods(AProg: TProgram);
@@ -4646,6 +4836,94 @@ begin
   if AStmt is TAssignment then
   begin
     Asgn := TAssignment(AStmt);
+    { Implicit-Self field assignment (bare `FName := x` inside a method) must be
+      resolved as a field of Self, NOT as a variable named FName — otherwise the
+      managed-type branches below would treat it as a global/local and write to
+      the wrong slot.  Interface fields are excluded here: EmitInterfaceAssign
+      (reached via the tyInterface branch) already handles ImplicitSelfField. }
+    if (Asgn.ImplicitSelfField <> nil) and
+       (Asgn.ResolvedLhsType <> nil) and
+       (Asgn.ResolvedLhsType.Kind <> tyInterface) then
+    begin
+      ISFld := TFieldInfo(Asgn.ImplicitSelfField);
+      { ARC-managed implicit-Self field: retain the new value (unless the RHS
+        already owns +1) and release the old before overwriting.  %r15
+        (callee-saved) holds the slot address across the ARC calls. }
+      if ISFld.IsUnretained or ISFld.IsWeak then
+      begin
+        { Non-owning fields keep plain/weak store semantics. }
+        Self.EmitExprToEax(Asgn.Expr);
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
+        if ISFld.IsWeak then
+        begin
+          Self.Emit(#9'movq %rax, %rsi');
+          Self.Emit(#9'movq %rcx, %rdi');
+          Self.Emit(#9'callq _WeakAssign');
+        end
+        else
+          Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
+      end
+      else if Asgn.ResolvedLhsType.IsString()
+           or (Asgn.ResolvedLhsType.Kind = tyClass)
+           or (Asgn.ResolvedLhsType.Kind = tyDynArray) then
+      begin
+        Self.EmitExprToEax(Asgn.Expr);
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(Format(#9'movq %s, %%r15', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%r15', [ISFld.Offset]));
+        Self.Emit(#9'pushq %rax');
+        { String/dyn-array: elide the retain when the RHS already owns +1 (a
+          call result), else the buffer leaks one ref per store.  Class: the
+          retain stays unconditional — some method calls return a borrowed class
+          reference that NativeExprOwnsRef reports as owning, so eliding it would
+          release a reference the field never acquired (a use-after-free).  This
+          mirrors the deliberate asymmetry in the QBE backend (96514ee). }
+        if (Asgn.ResolvedLhsType.Kind = tyClass) or not NativeExprOwnsRef(Asgn.Expr) then
+        begin
+          Self.Emit(#9'movq %rax, %rdi');
+          if Asgn.ResolvedLhsType.IsString() then
+            Self.Emit(#9'callq _StringAddRef')
+          else if Asgn.ResolvedLhsType.Kind = tyDynArray then
+            Self.Emit(#9'callq _DynArrayAddRef')
+          else
+            Self.Emit(#9'callq _ClassAddRef');
+        end;
+        Self.Emit(#9'movq (%r15), %rdi');     { old value }
+        if Asgn.ResolvedLhsType.IsString() then
+          Self.Emit(#9'callq _StringRelease')
+        else if Asgn.ResolvedLhsType.Kind = tyDynArray then
+          Self.Emit(#9'callq _DynArrayRelease')
+        else
+          Self.Emit(#9'callq _ClassRelease');
+        Self.Emit(#9'popq %rax');
+        Self.Emit(#9'movq %rax, (%r15)');
+        Self.Emit(#9'popq %r15');
+      end
+      else
+      begin
+        { Non-managed implicit-Self field (integer, float, record, etc.). }
+        if IsFloatFamily(Asgn.ResolvedLhsType) then
+        begin
+          Self.EmitExprToXmm0(Asgn.Expr);
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+          if ISFld.Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
+          Self.EmitStoreFloat('(%rcx)', Asgn.ResolvedLhsType);
+        end
+        else
+        begin
+          Self.EmitExprToEax(Asgn.Expr);
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+          if ISFld.Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
+          Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
+        end;
+      end;
+      Exit;
+    end;
     { Method-pointer assignment from @Obj.Method: directly store the
       [CodePtr, ObjPtr] pair into the destination's 16-byte slot. }
     if (Asgn.ResolvedLhsType <> nil) and
@@ -4766,11 +5044,43 @@ begin
     begin
       Self.EmitExprToEax(Asgn.Expr);
       Self.Emit(#9'pushq %rax');
-      Self.Emit(#9'movq %rax, %rdi');
-      Self.Emit(#9'callq _StringAddRef');
+      { When the RHS already owns +1 (a function/method/property-getter call
+        result), this assignment consumes that transferred reference and must
+        NOT AddRef again — otherwise the buffer leaks one ref per assignment.
+        The old slot contents are released unconditionally. }
+      if not NativeExprOwnsRef(Asgn.Expr) then
+      begin
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'callq _StringAddRef');
+      end;
       Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(Asgn.Name)]));
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(#9'callq _StringRelease');
+      Self.Emit(#9'popq %rax');
+      if not Self.IsLocal(Asgn.Name) then
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        if Asgn.IsThreadVar then Self.MarkThreadVar(Asgn.Name);
+      end;
+      Self.Emit(Format(#9'movq %%rax, %s', [Self.VarOperand(Asgn.Name)]));
+    end
+    else if (Asgn.ResolvedLhsType <> nil) and
+            (Asgn.ResolvedLhsType.Kind = tyDynArray) then
+    begin
+      { Dynamic-array variable assignment: same ARC shape as String.  The data
+        pointer carries a refcount in its header, so b := a must retain the new
+        buffer and release the old before overwriting the slot.  Skip the retain
+        when the RHS already owns +1 (a call result). }
+      Self.EmitExprToEax(Asgn.Expr);
+      Self.Emit(#9'pushq %rax');
+      if not NativeExprOwnsRef(Asgn.Expr) then
+      begin
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'callq _DynArrayAddRef');
+      end;
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(Asgn.Name)]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _DynArrayRelease');
       Self.Emit(#9'popq %rax');
       if not Self.IsLocal(Asgn.Name) then
       begin
@@ -4835,15 +5145,6 @@ begin
       end;
       Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
       Self.Emit(#9'callq memcpy');
-    end
-    else if (Asgn.ImplicitSelfField <> nil) then
-    begin
-      Self.EmitExprToEax(Asgn.Expr);
-      ISFld := TFieldInfo(Asgn.ImplicitSelfField);
-      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
-      if ISFld.Offset > 0 then
-        Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
-      Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
     end
     else
     begin
@@ -5297,17 +5598,101 @@ begin
     if FA.FieldInfo = nil then
       raise ENativeCodeGenError.Create(
         'native backend: field assignment has no resolved field info');
+    { Interface-typed field: store a two-slot fat pointer (obj + itab), not a
+      single value.  Compute the destination record/object base into %rcx for
+      each receiver shape, then hand off to EmitInterfaceToFieldSlotsAt (which
+      evaluates the RHS itself and applies ARC on the obj slot). }
+    if FA.FieldInfo.TypeDesc.Kind = tyInterface then
+    begin
+      if FA.ObjExpr <> nil then
+      begin
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rcx');
+      end
+      else if FSretFunc and (FA.RecordName = 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]))
+      else if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
+      else if FA.IsClassAccess then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+      end
+      else if FA.IsVarParam then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+      end
+      else if Self.IsLocal(FA.RecordName) then
+        Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+      Self.EmitInterfaceToFieldSlotsAt(FA.Expr, '%rcx', FA.FieldInfo.Offset,
+        FA.FieldInfo.TypeDesc);
+      Exit;
+    end;
     Self.EmitExprToEax(FA.Expr);
-    { Chained field assignment: ObjExpr is the receiver expression (e.g. DT.Date).
-      Emit the receiver to get the base address, then store at offset. }
+    { Chained field assignment: ObjExpr is the receiver expression (e.g. DT.Date
+      or H.R.Obj).  Emit the receiver to get the base address, then store at the
+      field offset — with ARC for managed fields (interface fields are handled by
+      the unified block above and never reach here). }
     if FA.ObjExpr <> nil then
     begin
-      Self.Emit(#9'pushq %rax');
-      Self.EmitExprToEax(FA.ObjExpr);
-      Self.Emit(#9'movq %rax, %rcx');
-      Self.Emit(#9'popq %rax');
-      Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
-        FA.FieldInfo.TypeDesc);
+      if FA.FieldInfo.TypeDesc.IsString()
+         or (FA.FieldInfo.TypeDesc.Kind = tyClass)
+         or (FA.FieldInfo.TypeDesc.Kind = tyDynArray) then
+      begin
+        { Managed field: retain new (string/dyn-array only when the RHS does not
+          already own +1; class stays unconditional — see the IsClassAccess
+          branch), release old, store.  %r15 (callee-saved, preserved) holds the
+          receiver base across the ARC calls; the new value sits on the stack. }
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(#9'pushq %rax');            { new value }
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %r15');       { receiver base }
+        if (FA.FieldInfo.TypeDesc.Kind = tyClass)
+           or not NativeExprOwnsRef(FA.Expr) then
+        begin
+          Self.Emit(#9'movq (%rsp), %rdi');   { new value }
+          if FA.FieldInfo.TypeDesc.IsString() then
+            Self.Emit(#9'callq _StringAddRef')
+          else if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+            Self.Emit(#9'callq _DynArrayAddRef')
+          else
+            Self.Emit(#9'callq _ClassAddRef');
+        end;
+        Self.Emit(Format(#9'movq %d(%%r15), %%rdi', [FA.FieldInfo.Offset]));
+        if FA.FieldInfo.TypeDesc.IsString() then
+          Self.Emit(#9'callq _StringRelease')
+        else if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+          Self.Emit(#9'callq _DynArrayRelease')
+        else
+          Self.Emit(#9'callq _ClassRelease');
+        Self.Emit(#9'popq %rax');             { new value }
+        Self.Emit(#9'movq %r15, %rcx');
+        Self.Emit(#9'popq %r15');             { restore caller's %r15 }
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+          FA.FieldInfo.TypeDesc);
+      end
+      else
+      begin
+        Self.Emit(#9'pushq %rax');
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rcx');
+        Self.Emit(#9'popq %rax');
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+          FA.FieldInfo.TypeDesc);
+      end;
     end
     else if FSretFunc and (FA.RecordName = 'Result') then
     begin
@@ -5365,13 +5750,38 @@ begin
       end
       else if FA.FieldInfo.TypeDesc.IsString() then
       begin
-        Self.Emit(#9'pushq %rcx');
-        Self.Emit(#9'movq 8(%rsp), %rdi');
-        Self.Emit(#9'callq _StringAddRef');
-        Self.Emit(#9'popq %rcx');
+        { When the RHS already owns +1 (a call result), the field consumes that
+          transferred reference and must NOT AddRef again — otherwise the buffer
+          leaks one ref per store.  The old field contents are released
+          unconditionally. }
+        if not NativeExprOwnsRef(FA.Expr) then
+        begin
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'movq 8(%rsp), %rdi');
+          Self.Emit(#9'callq _StringAddRef');
+          Self.Emit(#9'popq %rcx');
+        end;
         Self.Emit(Format(#9'movq %d(%%rcx), %%rdi', [FA.FieldInfo.Offset]));
         Self.Emit(#9'pushq %rcx');
         Self.Emit(#9'callq _StringRelease');
+        Self.Emit(#9'popq %rcx');
+        Self.Emit(#9'popq %rax');
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
+      end
+      else if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+      begin
+        { Dynamic-array field: same ARC shape as String — retain new buffer,
+          release the old, store.  Skip the retain when the RHS already owns +1. }
+        if not NativeExprOwnsRef(FA.Expr) then
+        begin
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'movq 8(%rsp), %rdi');
+          Self.Emit(#9'callq _DynArrayAddRef');
+          Self.Emit(#9'popq %rcx');
+        end;
+        Self.Emit(Format(#9'movq %d(%%rcx), %%rdi', [FA.FieldInfo.Offset]));
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'callq _DynArrayRelease');
         Self.Emit(#9'popq %rcx');
         Self.Emit(#9'popq %rax');
         Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
@@ -6314,6 +6724,28 @@ begin
           Self.Emit(Format(#9'movq %s, %%rdi',
             [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
           Self.Emit(#9'callq _ClassRelease');
+        end
+      { Dyn-array locals: release the data buffer; balances the first-assignment
+        retain (a dyn-array var assignment retains the new buffer). }
+      else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyDynArray then
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+        begin
+          Self.Emit(Format(#9'movq %s, %%rdi',
+            [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
+          Self.Emit(#9'callq _DynArrayRelease');
+        end
+      { Record locals with managed fields: release each ARC-managed field at
+        scope exit.  The record block lives in the frame; its address goes into
+        %rbx (callee-saved) so it survives the per-field release calls. }
+      else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyRecord then
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+        begin
+          Self.Emit(#9'pushq %rbx');
+          Self.Emit(Format(#9'leaq %s, %%rbx',
+            [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
+          Self.EmitRecordFieldReleases(
+            TRecordTypeDesc(TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType), '%rbx');
+          Self.Emit(#9'popq %rbx');
         end;
     end;
   end;
@@ -6427,9 +6859,13 @@ begin
   FExitLabel := Self.NewLabel('main_exit');
   for I := 0 to AProg.Block.Stmts.Count - 1 do
     Self.EmitStmt(TASTStmt(AProg.Block.Stmts.Items[I]));
-  { Epilogue: Exit lands here; return 0. }
+  { Epilogue: Exit lands here; release ARC-managed globals, then return 0.
+    Mirrors the QBE backend, which releases each managed global at @main_exit so
+    a global object's _FieldCleanup (and hence its destructor) runs at program
+    end. }
   Self.Emit(FExitLabel + ':');
   FExitLabel := '';
+  Self.EmitGlobalReleases();
   Self.Emit(#9'movl $0, %eax');
   Self.Emit(#9'leave');
   Self.Emit(#9'ret');

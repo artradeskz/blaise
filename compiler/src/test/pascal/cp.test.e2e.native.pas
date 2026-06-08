@@ -174,6 +174,13 @@ type
     procedure TestRun_Native_ArcClassField_StoreAndRead;
     procedure TestRun_Native_ArcStringField_StoreAndRead;
     procedure TestRun_Native_ArcClassAssignNil_Destroys;
+    { ARC for dyn-array / interface / nested-record fields, owned-return stores,
+      and implicit-Self managed-field stores (native-backend parity with QBE). }
+    procedure TestRun_Native_ArcDynArrayField_StoreAndRead;
+    procedure TestRun_Native_ArcInterfaceField_AssignAndDispatch;
+    procedure TestRun_Native_ArcNestedRecordField_FullCleanup;
+    procedure TestRun_Native_ArcStringReturnToField_NoDoubleRetain;
+    procedure TestRun_Native_ArcImplicitSelfStringField_Reassign;
 
     { ARC value param retain/release }
     procedure TestRun_Native_ArcValueParam_String;
@@ -2551,6 +2558,152 @@ const
     end.
     ''';
 
+  { Dyn-array field inside a class: the field must be ARC-refcounted on store
+    and released when the holder is destroyed (f74e5cc).  Observed by reading an
+    element back after the field assignment — a dropped/garbled buffer would
+    diverge from the QBE backend's output. }
+  SrcArcDynArrayField = '''
+    program P;
+    type
+      THolder = class
+        Data: array of Integer;
+      end;
+    var
+      H: THolder;
+      A: array of Integer;
+    begin
+      H := THolder.Create();
+      SetLength(A, 3);
+      A[0] := 11;
+      A[1] := 22;
+      A[2] := 33;
+      H.Data := A;
+      WriteLn(H.Data[1])
+    end.
+    ''';
+
+  { Interface field inside a class: assign a class instance into the field
+    (935bd52).  The fat pointer (obj+itab) must be stored whole with ARC on the
+    obj slot, and released when the holder is destroyed.  Observed via the
+    implementing class's destructor, which must fire exactly once when the holder
+    is released — proving the field stored a refcounted obj and that field
+    cleanup releases it.  (Dispatch directly through a non-Self interface field
+    is a separate, pre-existing native gap not covered here.) }
+  SrcArcInterfaceField = '''
+    program P;
+    type
+      IGreeter = interface
+        function Greet: Integer;
+      end;
+      TGreeter = class(TObject, IGreeter)
+        function Greet: Integer;
+        destructor Destroy; override;
+      end;
+      THolder = class
+        G: IGreeter;
+      end;
+    function TGreeter.Greet: Integer;
+    begin
+      Result := 77
+    end;
+    destructor TGreeter.Destroy;
+    begin
+      WriteLn('greeter-gone');
+      inherited Destroy
+    end;
+    var
+      H: THolder;
+      G: IGreeter;
+    begin
+      H := THolder.Create();
+      G := TGreeter.Create();
+      H.G := G;
+      G := nil;
+      WriteLn('mid');
+      H := nil;
+      WriteLn('end')
+    end.
+    ''';
+
+  { Nested record field whose own field is a managed class reference.  When the
+    parent class is destroyed, _FieldCleanup must recurse through the record
+    field and release the inner class — firing its destructor exactly once
+    (f74e5cc nested-record recursion). }
+  SrcArcNestedRecordField = '''
+    program P;
+    type
+      TInner = class
+        destructor Destroy; override;
+      end;
+      TRec = record
+        Obj: TInner;
+      end;
+      THolder = class
+        R: TRec;
+      end;
+    destructor TInner.Destroy;
+    begin
+      WriteLn('inner-gone');
+      inherited Destroy
+    end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.R.Obj := TInner.Create();
+      WriteLn('before');
+      H := nil;
+      WriteLn('after')
+    end.
+    ''';
+
+  { A function returning a String, its +1 result assigned straight into a class
+    field.  The field store must consume the transferred reference (no extra
+    AddRef), so the buffer is freed exactly once — observed indirectly by the
+    program completing and printing the value identically on both backends
+    (96514ee).  A double-retain would leak; a missing retain would free early
+    and corrupt the read-back. }
+  SrcArcStringReturnToField = '''
+    program P;
+    type
+      THolder = class
+        S: string;
+      end;
+    function MakeMsg: string;
+    begin
+      Result := 'built'
+    end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.S := MakeMsg();
+      WriteLn(H.S);
+      WriteLn(H.S)
+    end.
+    ''';
+
+  { Implicit-Self string field assigned inside a method: FName := value must
+    retain the new value and release the old, so reassigning the field does not
+    leak or use-after-free (ARC on the ImplicitSelfField path). }
+  SrcArcImplicitSelfStringField = '''
+    program P;
+    type
+      THolder = class
+        Name: string;
+        procedure SetName(const V: string);
+      end;
+    procedure THolder.SetName(const V: string);
+    begin
+      Name := V
+    end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.SetName('first');
+      H.SetName('second');
+      WriteLn(H.Name)
+    end.
+    ''';
+
   SrcAddrOfLocalVar = '''
     program P;
     var
@@ -2902,6 +3055,38 @@ procedure TE2ENativeTests.TestRun_Native_ArcClassAssignNil_Destroys;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcClassAssignNil, 'destroyed' + LE + 'done' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcDynArrayField_StoreAndRead;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcDynArrayField, '22' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcInterfaceField_AssignAndDispatch;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcInterfaceField,
+    'mid' + LE + 'greeter-gone' + LE + 'end' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcNestedRecordField_FullCleanup;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcNestedRecordField,
+    'before' + LE + 'inner-gone' + LE + 'after' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcStringReturnToField_NoDoubleRetain;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcStringReturnToField, 'built' + LE + 'built' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcImplicitSelfStringField_Reassign;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcImplicitSelfStringField, 'second' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcValueParam_String;

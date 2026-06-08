@@ -18,7 +18,17 @@ unit blaise.codegen.native.backend;
   A concrete subclass implements instruction selection, register allocation,
   ABI lowering, and assembly printing for one target CPU.  Shared, non-abstract
   helpers (the naive stack-slot allocator, cross-target emit utilities) will be
-  added here as the backend grows. }
+  added here as the backend grows.
+
+  ARC lowering note (for the coming i386 / arm64 backends): the *decision* logic
+  for ARC is already target-independent — `NativeExprOwnsRef` (a free function
+  over the AST) decides whether a value owns +1, and the field-kind walk in the
+  x86-64 backend's EmitRecordFieldReleases / EmitGlobalReleases decides *which*
+  fields/globals need a release.  Only the leaf emission (which register holds
+  the base, which mnemonic loads/stores it) is CPU-specific.  When a second
+  backend lands, lift those walkers here as template methods whose leaf steps
+  (load-field-ptr, call-release, store-zero) are abstract per-CPU primitives,
+  rather than duplicating the field-kind dispatch in each subclass. }
 
 interface
 
