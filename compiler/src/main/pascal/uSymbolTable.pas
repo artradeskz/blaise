@@ -623,6 +623,7 @@ begin
     tyProcedural:
       if TProceduralTypeDesc(Self).IsMethodPtr then Result := 16
       else Result := 8;
+    tyInterface: Result := 16;  { fat pointer: obj@+0, itab@+8 }
   else
     Result := 8;
   end;
@@ -648,6 +649,7 @@ begin
     tyProcedural:
       if TProceduralTypeDesc(Self).IsMethodPtr then Result := 16
       else Result := 8;
+    tyInterface: Result := 16;  { fat pointer: obj@+0, itab@+8 }
   else
     Result := 8;
   end;

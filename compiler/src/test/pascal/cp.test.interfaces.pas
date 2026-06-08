@@ -64,6 +64,8 @@ type
     procedure TestCodegen_Itab_ContainsMethodPointer;
     procedure TestCodegen_InterfaceVar_AllocsTwoSlots;
     procedure TestCodegen_InterfaceMethodCall_IndirectDispatch;
+    procedure TestCodegen_InterfaceField_InRecord_NoUndefObjTemp;
+    procedure TestCodegen_InterfaceField_InRecord_SizedSixteen;
     procedure TestCodegen_Typeinfo_ClassHasImpllistField;
     procedure TestCodegen_Impllist_Emitted;
     procedure TestCodegen_IsExpr_Interface_CallsImplementsInterface;
@@ -281,6 +283,42 @@ const
           T := TFoo.Create();
           F := T;
           F.DoIt()
+        end.
+        ''';
+
+  { Interface field inside a record, with a method called through it and a
+    trailing Integer field.  Pins the codegen fix: dispatch reads the field's
+    contiguous fat pointer (never an undefined %_var__obj split slot), and the
+    interface field occupies 16 bytes so Tag lands at offset 16. }
+  SrcInterfaceFieldInRecord =
+    '''
+        program P;
+        type
+          IFoo = interface
+            function GetVal: Integer;
+          end;
+          TFoo = class(TObject, IFoo)
+            V: Integer;
+            function GetVal: Integer;
+          end;
+          TRec = record
+            Foo: IFoo;
+            Tag: Integer;
+          end;
+        function TFoo.GetVal: Integer;
+        begin
+          Result := Self.V
+        end;
+        var
+          r: TRec;
+          f: TFoo;
+        begin
+          f := TFoo.Create();
+          f.V := 42;
+          r.Foo := f;
+          r.Tag := 7;
+          WriteLn(r.Foo.GetVal());
+          WriteLn(r.Tag)
         end.
         ''';
 
@@ -1128,6 +1166,31 @@ procedure TInterfaceTests.TestSemantic_InterfaceField_ShadowsGlobal_OK;
 begin
   { Must not raise ESemanticError }
   AnalyseSrc(SrcInterfaceFieldShadowsGlobal).Free();
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceField_InRecord_NoUndefObjTemp;
+var
+  IR: string;
+begin
+  { Calling a method through an interface record field must resolve the field's
+    fat pointer, not emit the undefined %_var__obj / %_var__itab split-slot
+    temps that QBE rejects (the pre-fix bug). }
+  IR := GenIR(SrcInterfaceFieldInRecord);
+  AssertTrue('no undefined obj split-slot temp', Pos('%_var__obj', IR) <= 0);
+  AssertTrue('no undefined itab split-slot temp', Pos('%_var__itab', IR) <= 0);
+  AssertTrue('uses the static itab for the field store',
+    Pos('$itab_TFoo_IFoo', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceField_InRecord_SizedSixteen;
+var
+  IR: string;
+begin
+  { The interface field is a 16-byte fat pointer, so the following Integer
+    field Tag sits at offset 16 — the store to Tag adds 16 to the record base. }
+  IR := GenIR(SrcInterfaceFieldInRecord);
+  AssertTrue('Tag field lives at offset 16 (interface field is 16 bytes)',
+    Pos('add $r, 16', IR) > 0);
 end;
 
 initialization

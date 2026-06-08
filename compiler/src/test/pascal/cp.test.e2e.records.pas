@@ -38,6 +38,7 @@ type
     procedure TestRun_Record_PointerDerefFieldAccess;
     procedure TestRun_Record_DynArrayField_ReturnByValue_NoLeak;
     procedure TestRun_Class_RecordField_NestedClass_FullCleanup;
+    procedure TestRun_Record_InterfaceField_AssignCallAndCopy;
   end;
 
 implementation
@@ -439,6 +440,54 @@ const
     end.
     ''';
 
+  { Interface-typed field inside a record: exercises (1) assigning a class into
+    an interface record field (r.Foo := f → obj+itab fat-pointer store with
+    ARC), (2) calling a method through an interface record field
+    (r.Foo.GetVal() → dispatch via the field's contiguous fat pointer), (3)
+    record copy carrying the interface field (b := a) and (4) the 16-byte field
+    size so Tag sits at offset 16, not 8.  Before the fix the field was sized 8
+    bytes and the method dispatch emitted an undefined %_var__obj temp that QBE
+    rejected. }
+  SrcRecordInterfaceFieldAssignCallCopy = '''
+    program P;
+    type
+      IFoo = interface
+        function GetVal: Integer;
+      end;
+      TFoo = class(TObject, IFoo)
+        V: Integer;
+        function GetVal: Integer;
+      end;
+      TRec = record
+        Foo: IFoo;
+        Tag: Integer;
+      end;
+    function TFoo.GetVal: Integer;
+    begin
+      Result := Self.V
+    end;
+    function MakeRec(n: Integer): TRec;
+    var
+      r: TRec;
+      f: TFoo;
+    begin
+      f := TFoo.Create();
+      f.V := n;
+      r.Foo := f;
+      r.Tag := n * 10;
+      Result := r
+    end;
+    var
+      a: TRec;
+      b: TRec;
+    begin
+      a := MakeRec(5);
+      b := a;
+      WriteLn(b.Foo.GetVal());
+      WriteLn(a.Tag)
+    end.
+    ''';
+
   SrcRecordNestedFieldAssignMethodCall = '''
     program P;
     type
@@ -605,6 +654,17 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('first and last element survive 5000 iterations',
     '1' + LE + '70' + LE, Output);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_InterfaceField_AssignCallAndCopy;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcRecordInterfaceFieldAssignCallCopy, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('method dispatch through interface field + 16-byte field layout',
+    '5' + LE + '50' + LE, Output);
 end;
 
 initialization

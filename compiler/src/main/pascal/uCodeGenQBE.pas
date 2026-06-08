@@ -278,7 +278,7 @@ type
       pointed to by AObjSlotPtr (obj) and AItabSlotPtr (itab).  Handles ARC
       for strong interface fields (addref new obj, release old obj). }
     procedure EmitInterfaceToFieldSlots(AExpr: TASTExpr;
-      const AObjSlotPtr, AItabSlotPtr: string);
+      const AObjSlotPtr, AItabSlotPtr: string; AIntfType: TTypeDesc);
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
     function  EmitSupportsExpr(AExpr: TSupportsExpr): string;
@@ -3730,7 +3730,7 @@ begin
     begin
       ISAddrT := AllocTemp();
       EmitLine(Format('  %s =l add %s, 8', [ISAddrT, ObjTemp]));
-      EmitInterfaceToFieldSlots(AAssign.Expr, ObjTemp, ISAddrT);
+      EmitInterfaceToFieldSlots(AAssign.Expr, ObjTemp, ISAddrT, ISFld.TypeDesc);
       Exit;
     end;
     ValTemp := EmitExpr(AAssign.Expr);
@@ -4891,7 +4891,12 @@ begin
       'Field assignment ''%s.%s'' has no resolved field info',
       [AAssign.RecordName, AAssign.FieldName]));
 
-  ValTemp := EmitExpr(AAssign.Expr);
+  { Interface-typed field: the RHS must be stored as a two-slot fat pointer
+    (obj + itab), not a single value.  EmitInterfaceToFieldSlots evaluates the
+    RHS itself, so the generic single-value EmitExpr below must be skipped for
+    this case (re-evaluating would double any side effects). }
+  if AAssign.FieldInfo.TypeDesc.Kind <> tyInterface then
+    ValTemp := EmitExpr(AAssign.Expr);
 
   if AAssign.ObjExpr <> nil then
   begin
@@ -4967,6 +4972,19 @@ begin
   end
   else
     Ptr := FieldPtr(AAssign.RecordName, AAssign.FieldInfo.Offset, AAssign.IsGlobal);
+
+  { Interface-typed field: store the fat pointer (obj at Ptr, itab at Ptr+8)
+    with ARC on the obj slot.  EmitInterfaceToFieldSlots handles both an
+    interface-typed RHS (copy obj+itab) and a class-typed RHS (obj + static
+    itab via _GetItab), retaining the new obj and releasing the old. }
+  if AAssign.FieldInfo.TypeDesc.Kind = tyInterface then
+  begin
+    PtrTemp := AllocTemp();
+    EmitLine(Format('  %s =l add %s, 8', [PtrTemp, Ptr]));
+    EmitInterfaceToFieldSlots(AAssign.Expr, Ptr, PtrTemp,
+      AAssign.FieldInfo.TypeDesc);
+    Exit;
+  end;
 
   { Record-typed field: copy all subfields recursively (ValTemp is the source
     record address; Ptr is the destination field address inside the parent). }
@@ -5122,6 +5140,14 @@ begin
       ArgTemp := AllocTemp();
       EmitLine(Format('  %s =l add %s, 8', [ArgTemp, FPtrTemp]));
       EmitLine(Format('  %s =l loadl %s', [VTblTemp, ArgTemp]));
+    end
+    else if ACall.ObjExpr <> nil then
+    begin
+      { Receiver is an expression (e.g. a record/class field r.Foo, or an
+        as-cast).  Its fat pointer is not in split _obj/_itab slots — let
+        EmitInterfaceExprPair resolve obj/itab from the expression (it loads
+        a field's contiguous fat pointer at addr / addr+8). }
+      EmitInterfaceExprPair(ACall.ObjExpr, SelfTemp, VTblTemp);
     end
     else
     begin
@@ -8834,12 +8860,20 @@ begin
        (MCallExpr.ResolvedClassType.Kind = tyInterface) then
     begin
       IntfDesc := TInterfaceTypeDesc(MCallExpr.ResolvedClassType);
-      SelfTemp := AllocTemp();
-      EmitLine(Format('  %s =l loadl %s_obj',
-        [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
-      VTblTemp := AllocTemp();
-      EmitLine(Format('  %s =l loadl %s_itab',
-        [VTblTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+      if MCallExpr.ObjExpr <> nil then
+        { Receiver is an expression (record/class field, as-cast, implicit
+          Self field) — resolve its fat pointer rather than the split
+          _obj/_itab slots that only a named interface local/global has. }
+        EmitInterfaceExprPair(MCallExpr.ObjExpr, SelfTemp, VTblTemp)
+      else
+      begin
+        SelfTemp := AllocTemp();
+        EmitLine(Format('  %s =l loadl %s_obj',
+          [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+        VTblTemp := AllocTemp();
+        EmitLine(Format('  %s =l loadl %s_itab',
+          [VTblTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+      end;
       SlotOff := IntfDesc.MethodIndex(MCallExpr.Name) * 8;
       FPtrTemp := AllocTemp();
       if SlotOff = 0 then
@@ -10610,13 +10644,14 @@ begin
 end;
 
 procedure TCodeGenQBE.EmitInterfaceToFieldSlots(AExpr: TASTExpr;
-  const AObjSlotPtr, AItabSlotPtr: string);
+  const AObjSlotPtr, AItabSlotPtr: string; AIntfType: TTypeDesc);
 { Assign an interface expression into two memory slots (obj pointer and itab
   pointer) that live at known addresses in the object layout (e.g. a class
-  field).  Handles all source expression shapes:
-    - TIdentExpr (interface var/param) → load from %_var_Name_obj/_itab
-    - TAsExpr    (T as IFoo cast)      → runtime itab lookup via _GetItab
-    - class expr (TIdentExpr/call with ResolvedType=tyClass) → static itab
+  field).  AIntfType is the declared interface type of the destination slot,
+  needed to name the static itab when the source is a class.  Handles all
+  source expression shapes:
+    - interface source → load obj/itab from the source's fat-pointer slots
+    - class source → emit obj + the static $itab_<Class>_<Interface> symbol
   ARC: retains the incoming obj and releases whatever was in the field. }
 var
   IntfDesc: TInterfaceTypeDesc;
@@ -10630,15 +10665,19 @@ begin
   end
   else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
   begin
-    { Class source: emit obj, look up static itab }
-    IntfDesc := nil;
+    { Class source: emit obj and reference the static itab for the
+      (concrete class, destination interface) pair — the same symbol the
+      interface direct-assignment path uses.  _GetItab is a runtime lookup
+      keyed by interface typeinfo and is for as-casts; here both types are
+      known statically, so the constant itab symbol is correct and cheaper. }
+    if (AIntfType = nil) or (AIntfType.Kind <> tyInterface) then
+      raise ECodeGenError.Create(
+        'EmitInterfaceToFieldSlots: class source needs a destination interface type');
+    IntfDesc := TInterfaceTypeDesc(AIntfType);
     ClassRT  := TRecordTypeDesc(AExpr.ResolvedType);
     NewObj   := EmitExpr(AExpr);
-    { There is only one interface candidate if the field has a single interface
-      type; use it as the itab key.  The itab name mirrors the global-assign path. }
-    NewItab  := AllocTemp();
-    EmitLine(Format('  %s =l call $_GetItab(l %s, l $typeinfo_%s)',
-      [NewItab, NewObj, ClassSymName(ClassRT.Name)]));
+    NewItab  := '$itab_' + QBEMangle(ClassSymName(ClassRT.Name)) + '_' +
+                QBEMangle(IntfDesc.Name);
   end
   else
     raise ECodeGenError.Create('EmitInterfaceToFieldSlots: unsupported source type');
@@ -10714,6 +10753,20 @@ begin
     EmitLine('@' + LblEnd);
     AObjTemp  := ObjT;
     AItabTemp := ItabT;
+  end
+  else if AExpr is TFieldAccessExpr then
+  begin
+    { Interface stored in a record/class field: the fat pointer is contiguous
+      in the field's memory — obj at the field address, itab at +8.  (Plain
+      interface locals/globals use split _obj/_itab slots, handled above; a
+      record field never does.)  EmitLValueAddr resolves the field address. }
+    ObjT := EmitLValueAddr(AExpr);
+    AObjTemp  := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [AObjTemp, ObjT]));
+    ItabT := AllocTemp();
+    EmitLine(Format('  %s =l add %s, 8', [ItabT, ObjT]));
+    AItabTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [AItabTemp, ItabT]));
   end
   else
     raise ECodeGenError.Create(
