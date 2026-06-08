@@ -432,8 +432,16 @@ type
     { Optional hook into uses-chain lookup.  Set by TSemanticAnalyser
       so Lookup() can consult per-unit visibility after exhausting the
       pushed scopes but BEFORE falling back to the global scope.
-      Task #44 step 7. }
-    FUsesChainProvider: TUsesChainProvider;
+      Task #44 step 7.
+
+      [Unretained]: the provider is the TSemanticAnalyser that OWNS this
+      symbol table (TSemanticAnalyser.FTable).  A strong reference here
+      would form an analyser<->table cycle that refcount ARC cannot
+      collect, so Semantic.Free() would never run the analyser destructor
+      and the whole AST + symbol-table graph (~325 objects) would leak.
+      The analyser always outlives the table — its destructor is what
+      frees the table — so a non-owning reference is safe. }
+    [Unretained] FUsesChainProvider: TUsesChainProvider;
 
     { Recursion guard.  TSemanticAnalyser.LookupViaUsesChain (which
       sits behind FUsesChainLookup) calls FTable.Lookup itself to
