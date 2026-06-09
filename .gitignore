@@ -78,3 +78,6 @@ CLAUDE.md
 bugs.txt
 .gstack/
 progress-native-backend.txt
+
+# Local design/FYI notes — kept untracked
+docs/opdf-emission-design.adoc
