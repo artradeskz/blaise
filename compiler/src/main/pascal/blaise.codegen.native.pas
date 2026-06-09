@@ -57,6 +57,7 @@ type
     procedure GenerateUnit(AUnit: TUnit);
     procedure SetSymbolTable(ASymTable: TSymbolTable);
     procedure SetDebugMode(AEnabled: Boolean);
+    procedure SetOpdfMode(AEnabled: Boolean);
     procedure AppendUnit(AUnit: TUnit);
     procedure AppendProgram(AProg: TProgram);
     function  GetOutput: string;
@@ -123,6 +124,13 @@ end;
 procedure TCodeGenNative.SetDebugMode(AEnabled: Boolean);
 begin
   FDebugMode := AEnabled;
+end;
+
+procedure TCodeGenNative.SetOpdfMode(AEnabled: Boolean);
+begin
+  { No-op: OPDF debug info is not yet wired through the native backend.  Its
+    own vtables are already emitted .globl (see EmitClassSection), so there is
+    nothing to toggle here. }
 end;
 
 procedure TCodeGenNative.Generate(AProg: TProgram);

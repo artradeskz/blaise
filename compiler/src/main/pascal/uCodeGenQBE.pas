@@ -154,6 +154,9 @@ type
     procedure EmitMainHeader;
     procedure EmitMainFooter;
     procedure EmitTypeInfoDefs(AProg: TProgram);
+    { 'export data ' when OPDF-debug mode is on (so the .opdf section can
+      reference the vtable across object files), else plain 'data '. }
+    function  VTableDataPrefix: string;
     procedure EmitVTableDefs(AProg: TProgram);
     procedure EmitMethodDefs(AProg: TProgram);
     procedure EmitInterfaceDefs(AProg: TProgram);
@@ -373,6 +376,7 @@ type
   public
     FDebugMode: Boolean;
     FExportAll: Boolean;
+    FOpdfMode:  Boolean;
     constructor Create;
     destructor Destroy; override;
     procedure Generate(AProg: TProgram);
@@ -386,6 +390,7 @@ type
       the units contain class type definitions.  Prog.SymbolTable is correct. }
     procedure SetSymbolTable(ASymTable: TSymbolTable);
     procedure SetDebugMode(AEnabled: Boolean);
+    procedure SetOpdfMode(AEnabled: Boolean);
     procedure SetExportAll(AEnabled: Boolean);
     procedure AppendUnit(AUnit: TUnit);
     { Append program IR to existing output (companion to AppendUnit).
@@ -6098,8 +6103,11 @@ begin
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
     if not RT.HasVTable() then Continue;
-    { TypeInfo pointer is always the first vtable entry }
-    Line := 'data $vtable_' + ClassSymName(TD.Name) +
+    { TypeInfo pointer is always the first vtable entry.  In OPDF-debug mode the
+      vtable is exported so the separately-assembled .opdf section can reference
+      it (the OPDF class record stores each class's VMTAddress); otherwise it
+      stays a local symbol, keeping non-debug output unchanged. }
+    Line := VTableDataPrefix() + '$vtable_' + ClassSymName(TD.Name) +
             ' = { l $typeinfo_' + ClassSymName(TD.Name);
     for S := 0 to RT.VTableCount() - 1 do
     begin
@@ -6123,7 +6131,7 @@ begin
     RT    := TRecordTypeDesc(GI.TypeDesc);
     if not RT.HasVTable() then Continue;
     MName := QBEMangle(GI.TypeName);
-    Line  := 'data $vtable_' + MName + ' = { l $typeinfo_' + MName;
+    Line  := VTableDataPrefix() + '$vtable_' + MName + ' = { l $typeinfo_' + MName;
     for S := 0 to RT.VTableCount() - 1 do
     begin
       E := RT.VTableEntryAt(S);
@@ -11189,6 +11197,19 @@ end;
 procedure TCodeGenQBE.SetDebugMode(AEnabled: Boolean);
 begin
   FDebugMode := AEnabled;
+end;
+
+procedure TCodeGenQBE.SetOpdfMode(AEnabled: Boolean);
+begin
+  FOpdfMode := AEnabled;
+end;
+
+function TCodeGenQBE.VTableDataPrefix: string;
+begin
+  if FOpdfMode then
+    Result := 'export data '
+  else
+    Result := 'data ';
 end;
 
 procedure TCodeGenQBE.SetExportAll(AEnabled: Boolean);

@@ -44,6 +44,13 @@ type
     { Enable backend debug/leak-tracking behaviour. }
     procedure SetDebugMode(AEnabled: Boolean);
 
+    { Enable OPDF-debug code shaping.  When on, the backend emits class vtables
+      as exported (global) symbols so the separately-assembled .opdf section can
+      reference them across object files (the OPDF class record stores each
+      class's VMTAddress for runtime dynamic-type resolution).  Off by default,
+      so normal builds are byte-for-byte unchanged. }
+    procedure SetOpdfMode(AEnabled: Boolean);
+
     { Multi-unit compilation: append unit IR to existing output without
       resetting the output buffer or string-literal table. }
     procedure AppendUnit(AUnit: TUnit);

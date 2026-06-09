@@ -941,6 +941,7 @@ begin
       else
         CG := TCodeGenQBE.Create();
       CG.SetDebugMode(DebugMode);
+      CG.SetOpdfMode(OPDFEnabled);
       if IsUnitMode then
       begin
         { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }
