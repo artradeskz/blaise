@@ -2541,6 +2541,7 @@ var
   SetMask: Int64;
   SetI: Integer;
   SetElem: TASTExpr;
+  ScEndLbl: string;
 begin
   if AExpr is TNilLiteral then
   begin
@@ -2985,6 +2986,24 @@ begin
           Self.Emit(#9'movzbl %al, %eax');
         end;
       end;
+      Exit;
+    end;
+    { Short-circuit boolean and/or: evaluate LHS; skip RHS when the result
+      is already determined.  For `and`, LHS=0 means result=0 (skip).
+      For `or`, LHS<>0 means result=1 (skip).  When we don't skip, RHS
+      is evaluated and its 0/1 value becomes the final result in %eax. }
+    if ((BE.Op = boAnd) or (BE.Op = boOr)) and
+       ((BE.ResolvedType = nil) or not BE.ResolvedType.IsNumeric()) then
+    begin
+      ScEndLbl := Self.NewLabel('sc_end');
+      Self.EmitExprToEax(BE.Left);
+      Self.Emit(#9'testl %eax, %eax');
+      if BE.Op = boAnd then
+        Self.Emit(#9'jz ' + ScEndLbl)
+      else
+        Self.Emit(#9'jnz ' + ScEndLbl);
+      Self.EmitExprToEax(BE.Right);
+      Self.Emit(ScEndLbl + ':');
       Exit;
     end;
     { left -> %rax, save; right -> %rax; left -> %rcx; combine in 64 bits. }

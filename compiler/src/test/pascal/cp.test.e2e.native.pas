@@ -226,6 +226,9 @@ type
     procedure TestRun_Native_RecordParam_IntOnly;
     procedure TestRun_Native_RecordParam_InlineSretArg;
     procedure TestRun_Native_RecordParam_ConstSkipsArc;
+    procedure TestRun_Native_ShortCircuit_AndSkipsRhs;
+    procedure TestRun_Native_ShortCircuit_OrSkipsRhs;
+    procedure TestRun_Native_ShortCircuit_AndNilGuard;
   end;
 
 implementation
@@ -3635,6 +3638,74 @@ begin
     + '  WriteLn(W.S)'
     + 'end.',
     'heap-text' + LE + 'heap-text' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ShortCircuit_AndSkipsRhs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'var X: Integer;'
+    + 'begin'
+    + '  X := 5;'
+    + '  if (X > 3) and (X < 10) then'
+    + '    WriteLn(''both'')'
+    + '  else'
+    + '    WriteLn(''nope'');'
+    + '  if (X > 100) and (X < 200) then'
+    + '    WriteLn(''bad'')'
+    + '  else'
+    + '    WriteLn(''skipped'')'
+    + 'end.',
+    'both' + LE + 'skipped' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ShortCircuit_OrSkipsRhs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'var X: Integer;'
+    + 'begin'
+    + '  X := 5;'
+    + '  if (X = 5) or (X = 99) then'
+    + '    WriteLn(''first-true'')'
+    + '  else'
+    + '    WriteLn(''nope'');'
+    + '  if (X = 99) or (X = 5) then'
+    + '    WriteLn(''second-true'')'
+    + '  else'
+    + '    WriteLn(''nope'')'
+    + 'end.',
+    'first-true' + LE + 'second-true' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ShortCircuit_AndNilGuard;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TFoo = class'
+    + '  public'
+    + '    N: Integer;'
+    + '    constructor Create(AVal: Integer);'
+    + '  end;'
+    + 'constructor TFoo.Create(AVal: Integer);'
+    + 'begin N := AVal end;'
+    + 'var Obj: TFoo;'
+    + 'begin'
+    + '  Obj := nil;'
+    + '  if (Obj <> nil) and (Obj.N = 42) then'
+    + '    WriteLn(''bad'')'
+    + '  else'
+    + '    WriteLn(''nil-guarded'');'
+    + '  Obj := TFoo.Create(42);'
+    + '  if (Obj <> nil) and (Obj.N = 42) then'
+    + '    WriteLn(''found'')'
+    + '  else'
+    + '    WriteLn(''bad'')'
+    + 'end.',
+    'nil-guarded' + LE + 'found' + LE, 0);
 end;
 
 initialization
