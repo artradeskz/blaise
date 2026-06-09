@@ -3745,6 +3745,27 @@ begin
     Exit;
   end;
 
+  { Indirect function call expression: FuncPtrExpr(args) returning a value.
+    Evaluate the callee expression, save the function pointer on the stack
+    (arg evaluation may invoke callq which clobbers caller-saved regs), push
+    args, pop them into registers, load the saved func ptr into %r10, and
+    dispatch via callq *%r10. }
+  if AExpr is TIndirectFuncCallExpr then
+  begin
+    Self.EmitExprToEax(TIndirectFuncCallExpr(AExpr).CalleeExpr);
+    Self.Emit(#9'pushq %rax');
+    for SetI := 0 to TIndirectFuncCallExpr(AExpr).Args.Count - 1 do
+    begin
+      Self.EmitExprToEax(TASTExpr(TIndirectFuncCallExpr(AExpr).Args.Items[SetI]));
+      Self.Emit(#9'pushq %rax');
+    end;
+    for SetI := TIndirectFuncCallExpr(AExpr).Args.Count - 1 downto 0 do
+      Self.Emit(Format(#9'popq %s', [SysVArgRegs64[SetI]]));
+    Self.Emit(#9'popq %r10');
+    Self.Emit(#9'callq *%r10');
+    Exit;
+  end;
+
   { X is TFoo — class type test via _IsInstance / _ImplementsInterface.
     Result: 0/1 in %eax. }
   if AExpr is TIsExpr then

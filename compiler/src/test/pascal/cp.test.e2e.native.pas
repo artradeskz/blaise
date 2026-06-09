@@ -233,6 +233,7 @@ type
     procedure TestRun_Native_IsExpr_Class;
     procedure TestRun_Native_AsExpr_Class;
     procedure TestRun_Native_SupportsExpr;
+    procedure TestRun_Native_IndirectFuncCallExpr;
   end;
 
 implementation
@@ -3780,6 +3781,22 @@ begin
     + '  if Supports(Obj, IGreet) then WriteLn(''supports'') else WriteLn(''no'')'
     + 'end.',
     'supports' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IndirectFuncCallExpr;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TMapper = function(X: Integer): Integer;'
+    + 'function Triple(X: Integer): Integer;'
+    + 'begin Result := X * 3 end;'
+    + 'var Fns: array[0..0] of TMapper;'
+    + 'begin'
+    + '  Fns[0] := @Triple;'
+    + '  WriteLn(Fns[0](7))'
+    + 'end.',
+    '21' + LE, 0);
 end;
 
 initialization
