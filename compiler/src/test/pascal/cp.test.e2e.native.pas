@@ -229,6 +229,7 @@ type
     procedure TestRun_Native_ShortCircuit_AndSkipsRhs;
     procedure TestRun_Native_ShortCircuit_OrSkipsRhs;
     procedure TestRun_Native_ShortCircuit_AndNilGuard;
+    procedure TestRun_Native_ProceduralParam;
   end;
 
 implementation
@@ -3706,6 +3707,22 @@ begin
     + '    WriteLn(''bad'')'
     + 'end.',
     'nil-guarded' + LE + 'found' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ProceduralParam;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TIntFunc = function(X: Integer): Integer;'
+    + 'function Twice(X: Integer): Integer;'
+    + 'begin Result := X * 2 end;'
+    + 'function Apply(F: TIntFunc; V: Integer): Integer;'
+    + 'begin Result := F(V) end;'
+    + 'begin'
+    + '  WriteLn(Apply(@Twice, 21))'
+    + 'end.',
+    '42' + LE, 0);
 end;
 
 initialization

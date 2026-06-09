@@ -6914,14 +6914,17 @@ begin
         not (P.ResolvedType.Kind in [tyString, tyPChar, tyPointer,
                                      tyClass, tyInterface,
                                      tyOpenArray, tyDynArray,
-                                     tyRecord, tyStaticArray])) then
+                                     tyRecord, tyStaticArray,
+                                     tyProcedural])) then
       raise ENativeCodeGenError.Create(
         'native backend: unsupported parameter type (param ' + P.ParamName + ')');
   end;
   if (ADecl.ResolvedReturnType <> nil) and
      not IsIntFamily(ADecl.ResolvedReturnType) and
      not IsFloatFamily(ADecl.ResolvedReturnType) and
-     not (ADecl.ResolvedReturnType.Kind in [tyRecord, tyString, tyPChar, tyPointer, tyClass]) then
+     not (ADecl.ResolvedReturnType.Kind in [tyRecord, tyString, tyPChar, tyPointer,
+                                          tyClass, tyDynArray, tyInterface,
+                                          tyProcedural]) then
     raise ENativeCodeGenError.Create(
       'native backend: unsupported return type (function ' + ADecl.Name + ')');
 
