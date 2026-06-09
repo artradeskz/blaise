@@ -78,6 +78,13 @@ type
       through it; the epilogue emits a plain ret. }
     FSretFunc: Boolean;
 
+    { Captured outer-scope variables: when emitting a nested function, this
+      holds the names of variables captured from the enclosing scope.  Each
+      captured var is passed as an implicit leading pointer param and
+      reads/writes are transparently redirected through that pointer.
+      Nil when not inside a nested function. }
+    FCapturedVars: TStringList;
+
     { Exception-frame accounting (per-function, reset in ClearFrame):
       FExcDepth    — number of exc frames currently live (pushed − popped).
       FExcFrameNext — index of the next pre-allocated frame slot to consume.
@@ -164,6 +171,9 @@ type
       unit prefix when the type is defined in a non-system unit.  Mirrors the
       QBE backend's ClassSymName logic. }
     function ClassSymName(const AClassName: string): string;
+    { True when AName is a captured outer-scope variable in the current
+      nested function (accessed via an implicit pointer param). }
+    function IsCaptured(const AName: string): Boolean;
     { True when AName is a slot in the current function frame. }
     function IsLocal(const AName: string): Boolean;
     { The AT&T operand addressing AName: "-N(%rbp)" for a frame local,
@@ -2046,6 +2056,11 @@ end;
 { Frame model                                                          }
 { ------------------------------------------------------------------ }
 
+function TX86_64Backend.IsCaptured(const AName: string): Boolean;
+begin
+  Result := (FCapturedVars <> nil) and (FCapturedVars.IndexOf(AName) >= 0);
+end;
+
 function TX86_64Backend.IsLocal(const AName: string): Boolean;
 begin
   Result := (FFrame <> nil) and FFrame.ContainsKey(AName);
@@ -2174,6 +2189,14 @@ begin
   FFrameTypes := TDictionary<string, TTypeDesc>.Create();
   Offset   := 0;
   StackOff := 16;  { first stack arg: +16(%rbp) — above saved %rbp and ret addr }
+
+  { Captured outer-scope variables are prepended as implicit leading pointer
+    params before Self and normal params.  Each captured var gets a pointer-size
+    slot named '_cap_<VarName>' in the frame. }
+  if (ADecl.CapturedVars <> nil) and (ADecl.CapturedVars.Count > 0) then
+    for I := 0 to ADecl.CapturedVars.Count - 1 do
+      Self.AddSlot('_cap_' + ADecl.CapturedVars.Strings[I], nil, Offset);
+
   { For class methods, Self is the implicit first integer param (%rdi).
     Allocate a pointer-size slot for it; normal params start at IntIdx=1. }
   if ADecl.OwnerTypeName <> '' then
@@ -2185,6 +2208,9 @@ begin
     high index.  Track IntIdx2 separately from the logical param index I. }
   begin
     IntIdx2 := 0;
+    { Captured vars, Self and sret each consume one integer register slot. }
+    if (ADecl.CapturedVars <> nil) then
+      Inc(IntIdx2, ADecl.CapturedVars.Count);
     if (ADecl.OwnerTypeName <> '') or FSretFunc then
       Inc(IntIdx2);  { Self / sret already consumed one register }
     for I := 0 to ADecl.Params.Count - 1 do
@@ -2636,6 +2662,12 @@ begin
     begin
       Self.Emit(Format(#9'movq %s, %%rcx',
         [Self.VarOperand(TIdentExpr(AExpr).Name)]));
+      Self.EmitLoadVar('(%rcx)', Self.IntExprType(AExpr));
+    end
+    else if Self.IsCaptured(TIdentExpr(AExpr).Name) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rcx',
+        [Self.VarOperand('_cap_' + TIdentExpr(AExpr).Name)]));
       Self.EmitLoadVar('(%rcx)', Self.IntExprType(AExpr));
     end
     else
@@ -5715,6 +5747,12 @@ begin
           [Self.VarOperand(Asgn.Name)]));
         Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
       end
+      else if Self.IsCaptured(Asgn.Name) then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx',
+          [Self.VarOperand('_cap_' + Asgn.Name)]));
+        Self.EmitStoreVar('(%rcx)', Asgn.ResolvedLhsType);
+      end
       else
       begin
         if not Self.IsLocal(Asgn.Name) then
@@ -6712,6 +6750,10 @@ begin
       Inc(SlotCount);
   end;
 
+  { Count implicit captured-var pointer args (prepended before normal args). }
+  if (ADecl <> nil) and (ADecl.CapturedVars <> nil) then
+    Inc(SlotCount, ADecl.CapturedVars.Count);
+
   ExtraStackBytes := 0;
 
   if not HasFloat then
@@ -6719,6 +6761,29 @@ begin
     { Pure integer (or var-param/open-array) call: push/pop strategy.
       Open-array arg A pushes: data ptr first, then high index.
       SlotCount counts register slots after expansion. }
+
+    { Push captured-var addresses as implicit leading args. }
+    if (ADecl <> nil) and (ADecl.CapturedVars <> nil) and
+       (ADecl.CapturedVars.Count > 0) then
+      for I := 0 to ADecl.CapturedVars.Count - 1 do
+      begin
+        if Self.IsCaptured(ADecl.CapturedVars.Strings[I]) then
+          Self.Emit(Format(#9'pushq %s',
+            [Self.VarOperand('_cap_' + ADecl.CapturedVars.Strings[I])]))
+        else if Self.IsLocal(ADecl.CapturedVars.Strings[I]) then
+        begin
+          Self.Emit(Format(#9'leaq %s, %%rax',
+            [Self.VarOperand(ADecl.CapturedVars.Strings[I])]));
+          Self.Emit(#9'pushq %rax');
+        end
+        else
+        begin
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [ADecl.CapturedVars.Strings[I]]));
+          Self.Emit(#9'pushq %rax');
+        end;
+      end;
+
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
@@ -7181,7 +7246,20 @@ var
   Sym:         string;
   IntIdx:      Integer;
   XmmIdx:      Integer;
+  NestedDecl:  TMethodDecl;
 begin
+  { Emit any nested procedures declared inside this function's body before
+    emitting this function itself.  Each nested proc gets a mangled name
+    OuterName_InnerName to avoid global symbol collisions. }
+  if ADecl.Body <> nil then
+    for I := 0 to ADecl.Body.ProcDecls.Count - 1 do
+    begin
+      NestedDecl := TMethodDecl(ADecl.Body.ProcDecls.Items[I]);
+      if NestedDecl.Body = nil then Continue;
+      NestedDecl.ResolvedQbeName := ADecl.Name + '_' + NestedDecl.Name;
+      Self.EmitFunctionDef(NestedDecl);
+    end;
+
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
@@ -7206,6 +7284,10 @@ begin
     raise ENativeCodeGenError.Create(
       'native backend: unsupported return type (function ' + ADecl.Name + ')');
 
+  { Set FCapturedVars for the duration of this function's emission so that
+    variable-access paths redirect through the capture pointers. }
+  FCapturedVars := ADecl.CapturedVars;
+
   Sym := FuncSymbolFromDecl(ADecl);
   Self.BuildFrame(ADecl);
 
@@ -7224,6 +7306,15 @@ begin
     the normal params starting at IntIdx=1. }
   IntIdx := 0;
   XmmIdx := 0;
+  { Spill captured-var pointer params into their _cap_ slots. }
+  if (ADecl.CapturedVars <> nil) and (ADecl.CapturedVars.Count > 0) then
+    for I := 0 to ADecl.CapturedVars.Count - 1 do
+    begin
+      Self.Emit(Format(#9'movq %s, %s',
+        [SysVArgRegs64[IntIdx],
+         Self.VarOperand('_cap_' + ADecl.CapturedVars.Strings[I])]));
+      Inc(IntIdx);
+    end;
   if FSretFunc then
   begin
     { Save the sret buffer pointer from %rdi into the Result slot. }
@@ -7511,7 +7602,8 @@ begin
   Self.Emit(#9'ret');
   Self.Emit('.type ' + Sym + ', @function');
 
-  FExitLabel := '';
+  FExitLabel    := '';
+  FCapturedVars := nil;
   Self.ClearFrame();
 end;
 

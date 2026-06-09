@@ -244,6 +244,10 @@ type
     procedure TestRun_Native_Builtin_CompareStr;
     procedure TestRun_Native_Builtin_UpCase;
     procedure TestRun_Native_Builtin_Int64ToStr;
+
+    { Gap #5 — nested (local) procedures }
+    procedure TestRun_Native_NestedProc_ReadCapture;
+    procedure TestRun_Native_NestedProc_WriteCapture;
   end;
 
 implementation
@@ -3915,6 +3919,45 @@ begin
     + '  WriteLn(Int64ToStr(N))'
     + 'end.',
     '9876543210' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_NestedProc_ReadCapture;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'procedure Outer;'
+    + 'var X: Integer;'
+    + '  procedure Inner;'
+    + '  begin WriteLn(X) end;'
+    + 'begin'
+    + '  X := 42;'
+    + '  Inner()'
+    + 'end;'
+    + 'begin'
+    + '  Outer()'
+    + 'end.',
+    '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_NestedProc_WriteCapture;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'procedure Outer;'
+    + 'var X: Integer;'
+    + '  procedure Inner;'
+    + '  begin X := 99 end;'
+    + 'begin'
+    + '  X := 0;'
+    + '  Inner();'
+    + '  WriteLn(X)'
+    + 'end;'
+    + 'begin'
+    + '  Outer()'
+    + 'end.',
+    '99' + LE, 0);
 end;
 
 initialization
