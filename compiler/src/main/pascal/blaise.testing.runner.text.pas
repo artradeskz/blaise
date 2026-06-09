@@ -392,6 +392,7 @@ var
   MethName:  string;
   Inst:      TTestCase;
   Procs:     array[0..63] of TProcess;
+  ProcNames: array[0..63] of string;
   ProcCount: Integer;
   Proc:      TProcess;
   Output:    string;
@@ -399,6 +400,8 @@ var
   SubResult: TTestResult;
   I:         Integer;
   HasFilter: Boolean;
+  ExitCode:  Integer;
+  HasSummary: Boolean;
 begin
   Result := TTestResult.Create();
   Result.Verbose := AVerbose;
@@ -418,7 +421,8 @@ begin
       Proc.Parameters.Add(CName);
       Proc.Parameters.Add('--verbose');
       Proc.Execute();
-      Procs[ProcCount] := Proc;
+      Procs[ProcCount]     := Proc;
+      ProcNames[ProcCount] := CName;
       ProcCount := ProcCount + 1;
     end
     else
@@ -445,9 +449,29 @@ begin
       Output := Output + Chunk;
     until (Chunk = '') and not Proc.Running;
     Proc.WaitOnExit();
+    ExitCode := Proc.ExitCode;
     SubResult := TTestResult.Create();
     ParseSubprocessOutput(Output, SubResult);
     Result.MergeFrom(SubResult);
+    { Crash / truncation guard.  A healthy suite subprocess always ends with a
+      summary line ("OK (...)" or "FAIL (...)").  If that is missing the process
+      was killed (e.g. SIGSEGV) or died mid-suite, so its parsed test count is
+      silently short — exactly the failure mode that lets a crash masquerade as
+      a green run.  Record it as a loud error so RunAll exits non-zero and the
+      crash is named under "Errors:".  ProcessExitCode maps a signal death to 1
+      and a clean exit to its real code, so a missing summary is the reliable
+      signal regardless of exit code. }
+    HasSummary := (Pos('OK (', Output) >= 0) or (Pos('FAIL (', Output) >= 0);
+    if not HasSummary then
+      Result.AddError(ProcNames[I],
+        'suite subprocess crashed or was killed before finishing (no summary' +
+        ' line; exit code ' + IntToStr(ExitCode) +
+        ') — its test count is incomplete')
+    else if ExitCode > 1 then
+      { Exit > 1 with a summary present is unexpected (RunAll returns 0 or 1);
+        surface it rather than trust the partial parse. }
+      Result.AddError(ProcNames[I],
+        'suite subprocess exited abnormally (code ' + IntToStr(ExitCode) + ')');
     if AVerbose then
       Write(Output);
   end;
