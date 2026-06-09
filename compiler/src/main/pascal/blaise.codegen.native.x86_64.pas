@@ -2917,6 +2917,144 @@ begin
       Self.EmitFormatCall(FC.Args);
       Exit;
     end;
+    if SameText(FC.Name, 'Ord') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+         (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyString) then
+      begin
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'xorl %esi, %esi');
+        Self.Emit(#9'callq _OrdAt');
+      end;
+      Exit;
+    end;
+    if SameText(FC.Name, 'Assigned') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'testq %rax, %rax');
+      Self.Emit(#9'setne %al');
+      Self.Emit(#9'movzbl %al, %eax');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Int64ToStr') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _Int64ToStr');
+      Exit;
+    end;
+    if SameText(FC.Name, 'UInt64ToStr') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _UInt64ToStr');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Abs') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+         (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind in [tyInt64, tyUInt64]) then
+      begin
+        Self.Emit(#9'cqto');
+        Self.Emit(#9'xorq %rdx, %rax');
+        Self.Emit(#9'subq %rdx, %rax');
+      end
+      else
+      begin
+        Self.Emit(#9'cltd');
+        Self.Emit(#9'xorl %edx, %eax');
+        Self.Emit(#9'subl %edx, %eax');
+      end;
+      Exit;
+    end;
+    if SameText(FC.Name, 'DoubleToStr') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'callq _DoubleToStr');
+      Exit;
+    end;
+    if SameText(FC.Name, 'SingleToStr') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'cvtss2sd %xmm0, %xmm0');
+      Self.Emit(#9'callq _DoubleToStr');
+      Exit;
+    end;
+    if SameText(FC.Name, 'StrToDouble') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _StrToDouble');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Round') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'cvtsd2si %xmm0, %rax');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Trunc') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'cvttsd2si %xmm0, %rax');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Sqrt') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'sqrtsd %xmm0, %xmm0');
+      Self.Emit(#9'movq %xmm0, %rax');
+      Exit;
+    end;
+    if SameText(FC.Name, 'CompareStr') and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _StringCompare');
+      Exit;
+    end;
+    if SameText(FC.Name, 'CompareText') and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _StringCompareText');
+      Exit;
+    end;
+    if SameText(FC.Name, 'PosEx') and (FC.Args.Count = 3) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[2]));
+      Self.Emit(#9'movl %eax, %edx');
+      Self.Emit(#9'popq %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _StringPosEx');
+      Exit;
+    end;
+    if SameText(FC.Name, 'UpCase') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+         TASTExpr(FC.Args.Items[0]).ResolvedType.IsString() then
+      begin
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'xorl %esi, %esi');
+        Self.Emit(#9'callq _OrdAt');
+      end;
+      Self.Emit(#9'movl %eax, %edi');
+      Self.Emit(#9'callq _UpCase');
+      Exit;
+    end;
     if FC.IsIndirectCall then
     begin
       { Bare function-pointer call: load the pointer from the variable slot
@@ -3082,7 +3220,12 @@ begin
       boShr: Self.Emit(#9'shrq %cl, %rax');
       boEQ, boNE, boLT, boGT, boLE, boGE:
         begin
-          Self.Emit(#9'cmpq %rcx, %rax');
+          if (BE.Left.ResolvedType <> nil) and
+             (BE.Left.ResolvedType.Kind in [tyInt64, tyUInt64, tyClass,
+                tyPointer, tyInterface, tyString, tyDynArray, tyProcedural]) then
+            Self.Emit(#9'cmpq %rcx, %rax')
+          else
+            Self.Emit(#9'cmpl %ecx, %eax');
           case BE.Op of
             boEQ: Self.Emit(#9'sete %al');
             boNE: Self.Emit(#9'setne %al');
@@ -5854,6 +5997,31 @@ begin
         else
           Self.Emit(Format(#9'andl %%eax, %s(%%rip)', [FDynArgName]));
       end;
+      Exit;
+    end;
+    if SameText(PC.Name, 'Halt') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movl %eax, %edi');
+      Self.Emit(#9'callq exit');
+      Exit;
+    end;
+    if SameText(PC.Name, 'ZeroMem') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rdx');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'xorl %esi, %esi');
+      Self.Emit(#9'callq memset');
+      Exit;
+    end;
+    if SameText(PC.Name, 'Sleep') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movl %eax, %edi');
+      Self.Emit(#9'callq _Sleep');
       Exit;
     end;
     if PC.IsIndirectCall then

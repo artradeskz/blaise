@@ -234,6 +234,16 @@ type
     procedure TestRun_Native_AsExpr_Class;
     procedure TestRun_Native_SupportsExpr;
     procedure TestRun_Native_IndirectFuncCallExpr;
+
+    { Gap #6 — builtins }
+    procedure TestRun_Native_Builtin_Ord;
+    procedure TestRun_Native_Builtin_Assigned;
+    procedure TestRun_Native_Builtin_Abs;
+    procedure TestRun_Native_Builtin_Halt;
+    procedure TestRun_Native_Builtin_RoundTrunc;
+    procedure TestRun_Native_Builtin_CompareStr;
+    procedure TestRun_Native_Builtin_UpCase;
+    procedure TestRun_Native_Builtin_Int64ToStr;
   end;
 
 implementation
@@ -3797,6 +3807,114 @@ begin
     + '  WriteLn(Fns[0](7))'
     + 'end.',
     '21' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_Ord;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TColor = (Red, Green, Blue);'
+    + 'var C: TColor;'
+    + 'begin'
+    + '  C := Blue;'
+    + '  WriteLn(Ord(C));'
+    + '  WriteLn(Ord(''A''))'
+    + 'end.',
+    '2' + LE + '65' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_Assigned;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TObj = class end;'
+    + 'var O: TObj;'
+    + 'begin'
+    + '  O := nil;'
+    + '  if Assigned(O) then WriteLn(''yes'') else WriteLn(''no'');'
+    + '  O := TObj.Create();'
+    + '  if Assigned(O) then WriteLn(''yes'') else WriteLn(''no'')'
+    + 'end.',
+    'no' + LE + 'yes' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_Abs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'begin'
+    + '  WriteLn(Abs(-42));'
+    + '  WriteLn(Abs(7));'
+    + '  WriteLn(Abs(0))'
+    + 'end.',
+    '42' + LE + '7' + LE + '0' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_Halt;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'begin'
+    + '  WriteLn(''before'');'
+    + '  Halt(42);'
+    + '  WriteLn(''after'')'
+    + 'end.',
+    'before' + LE, 42);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_RoundTrunc;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'var D: Double;'
+    + 'begin'
+    + '  D := 3.7;'
+    + '  WriteLn(Round(D));'
+    + '  WriteLn(Trunc(D))'
+    + 'end.',
+    '4' + LE + '3' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_CompareStr;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'begin'
+    + '  if CompareStr(''abc'', ''abc'') = 0 then WriteLn(''eq'') else WriteLn(''ne'');'
+    + '  if CompareStr(''abc'', ''abd'') < 0 then WriteLn(''lt'') else WriteLn(''ge'')'
+    + 'end.',
+    'eq' + LE + 'lt' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_UpCase;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'begin'
+    + '  WriteLn(UpCase(97));'
+    + '  WriteLn(UpCase(90))'
+    + 'end.',
+    'A' + LE + 'Z' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Builtin_Int64ToStr;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'var N: Int64;'
+    + 'begin'
+    + '  N := 9876543210;'
+    + '  WriteLn(Int64ToStr(N))'
+    + 'end.',
+    '9876543210' + LE, 0);
 end;
 
 initialization
