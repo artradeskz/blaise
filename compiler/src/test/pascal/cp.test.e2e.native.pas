@@ -329,6 +329,8 @@ type
     procedure TestRun_Native_DynArrayElemArc_String;
     { M8b — function returning interface: sret convention, obj+itab propagated. }
     procedure TestRun_Native_IntfFuncReturn;
+    { M8b — interface-field := function-returning-interface (sret into field). }
+    procedure TestRun_Native_IntfFieldFromFunc;
   end;
 
 implementation
@@ -2908,6 +2910,45 @@ const
     end.
     ''';
 
+  SrcIntfFieldFromFunc = '''
+    program P;
+    type
+      IVal = interface
+        function Get(): Integer;
+      end;
+      TVal = class(TObject, IVal)
+        V: Integer;
+        function Get(): Integer;
+      end;
+      THolder = class
+        F: IVal;
+        procedure SetVal(N: Integer);
+      end;
+    function TVal.Get(): Integer;
+    begin
+      Result := V
+    end;
+    function MakeVal(N: Integer): IVal;
+    var T: TVal;
+    begin
+      T := TVal.Create();
+      T.V := N;
+      Result := T
+    end;
+    procedure THolder.SetVal(N: Integer);
+    begin
+      F := MakeVal(N)
+    end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.F := MakeVal(10);
+      WriteLn(H.F.Get());
+      H.SetVal(20);
+      WriteLn(H.F.Get())
+    end.
+    ''';
+
   { Dyn-array field inside a class: the field must be ARC-refcounted on store
     and released when the holder is destroyed (f74e5cc).  Observed by reading an
     element back after the field assignment — a dropped/garbled buffer would
@@ -4850,6 +4891,12 @@ procedure TE2ENativeTests.TestRun_Native_IntfFuncReturn;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfFuncReturn, '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntfFieldFromFunc;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfFieldFromFunc, '10' + LE + '20' + LE, 0);
 end;
 
 initialization

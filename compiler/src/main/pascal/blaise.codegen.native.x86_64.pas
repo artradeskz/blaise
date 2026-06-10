@@ -2001,6 +2001,20 @@ begin
       Self.Emit(#9'popq %rax');
       Self.Emit(#9'movq %rax, 8(%r15)');
     end
+    else if (AAsgn.Expr is TFuncCallExpr) and
+            (TFuncCallExpr(AAsgn.Expr).ResolvedDecl <> nil) and
+            (TMethodDecl(TFuncCallExpr(AAsgn.Expr).ResolvedDecl).ResolvedReturnType <> nil) and
+            (TMethodDecl(TFuncCallExpr(AAsgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyInterface) then
+    begin
+      Self.EmitIntfSretCall(TFuncCallExpr(AAsgn.Expr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
+    end
     else
       raise ENativeCodeGenError.Create(
         'native backend: unsupported interface-field assignment RHS');
@@ -2288,6 +2302,20 @@ begin
       Self.Emit(#9'pushq %rcx');
       Self.Emit(#9'movq (%rax), %rcx');
       Self.Emit(#9'pushq %rcx');
+    end
+    else if (AExpr is TFuncCallExpr) and
+            (TFuncCallExpr(AExpr).ResolvedDecl <> nil) then
+    begin
+      Self.EmitIntfSretCall(TFuncCallExpr(AExpr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
+      Self.Emit(#9'popq %r15');
+      Exit;
     end
     else
       raise ENativeCodeGenError.Create(

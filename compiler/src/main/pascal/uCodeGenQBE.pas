@@ -10919,6 +10919,29 @@ begin
     Exit;
   end;
 
+  if IsInterfaceCall(AExpr) then
+  begin
+    { Sret convention: allocate a 16-byte buffer, call the function with
+      it as a hidden first arg, then load obj+itab from the buffer.  The
+      callee already AddRef'd into the buffer, so no caller-side AddRef. }
+    NewItab := AllocTemp();
+    EmitLine(Format('  %s =l alloc8 16', [NewItab]));
+    EmitLine(Format('  call $memset(l %s, w 0, l 16)', [NewItab]));
+    EmitRecordCallSret(AExpr, NewItab);
+    NewObj := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [NewObj, NewItab]));
+    OldObj := AllocTemp();
+    EmitLine(Format('  %s =l add %s, 8', [OldObj, NewItab]));
+    NewItab := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [NewItab, OldObj]));
+    OldObj := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [OldObj, AObjSlotPtr]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldObj]));
+    EmitLine(Format('  storel %s, %s', [NewObj, AObjSlotPtr]));
+    EmitLine(Format('  storel %s, %s', [NewItab, AItabSlotPtr]));
+    Exit;
+  end;
+
   if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyInterface) then
   begin
     { Interface source: load obj/itab from the source's fat-pointer slots }
