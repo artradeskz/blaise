@@ -175,10 +175,10 @@ type
     FHashCap:       Integer;    { power of two; 0 = index not built }
     FHashUsed:      Integer;    { occupied slots (excludes duplicate keys) }
     procedure Grow;
-    function  Compare(S1: string; S2: string): Integer;
-    function  FindSorted(S: string; var Idx: Integer): Boolean;
-    function  HashOf(S: string): Integer;
-    function  KeyEquals(S1: string; S2: string): Boolean;
+    function  Compare(const S1: string; const S2: string): Integer;
+    function  FindSorted(const S: string; var Idx: Integer): Boolean;
+    function  HashOf(const S: string): Integer;
+    function  KeyEquals(const S1: string; const S2: string): Boolean;
     procedure HashInvalidate;
     procedure HashInsertIdx(AIdx: Integer);
     procedure HashRebuild;
@@ -188,8 +188,8 @@ type
     procedure   Destroy;
     function    Add(S: string): Integer;
     procedure   AddObject(S: string; AObject: Pointer);
-    function    Find(S: string; var Index: Integer): Boolean;
-    function    IndexOf(S: string): Integer;
+    function    Find(const S: string; var Index: Integer): Boolean;
+    function    IndexOf(const S: string): Integer;
     function    Get(AIndex: Integer): string;
     procedure   Put(AIndex: Integer; S: string);
     function    GetObject(AIndex: Integer): Pointer;
@@ -387,7 +387,7 @@ begin
   Self.FCapacity := NewCap
 end;
 
-function TStringList.Compare(S1: string; S2: string): Integer;
+function TStringList.Compare(const S1: string; const S2: string): Integer;
 begin
   if Self.FCaseSensitive then
     Result := CompareStr(S1, S2)
@@ -397,7 +397,7 @@ end;
 
 { Equality-only comparison for hash probing.  Cheaper than Compare: both
   RTL helpers reject on length before touching the bytes. }
-function TStringList.KeyEquals(S1: string; S2: string): Boolean;
+function TStringList.KeyEquals(const S1: string; const S2: string): Boolean;
 begin
   if Self.FCaseSensitive then
     Result := S1 = S2
@@ -407,7 +407,7 @@ end;
 
 { FNV-1a over the string bytes, folding A..Z to a..z when the list is
   case-insensitive so equal-modulo-case keys land in the same bucket. }
-function TStringList.HashOf(S: string): Integer;
+function TStringList.HashOf(const S: string): Integer;
 var
   I: Integer;
   C: Integer;
@@ -504,7 +504,7 @@ begin
   end;
 end;
 
-function TStringList.FindSorted(S: string; var Idx: Integer): Boolean;
+function TStringList.FindSorted(const S: string; var Idx: Integer): Boolean;
 var
   Lo:   Integer;
   Hi:   Integer;
@@ -620,7 +620,7 @@ begin
   ObjP^ := AObject
 end;
 
-function TStringList.Find(S: string; var Index: Integer): Boolean;
+function TStringList.Find(const S: string; var Index: Integer): Boolean;
 const
   cHashThreshold = 16;   { below this a linear scan beats building a table }
 var
@@ -676,7 +676,7 @@ begin
   end
 end;
 
-function TStringList.IndexOf(S: string): Integer;
+function TStringList.IndexOf(const S: string): Integer;
 var
   Idx: Integer;
 begin

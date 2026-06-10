@@ -26,6 +26,10 @@ procedure _ir_memcpy(Dst, Src: Pointer; N: Int64); external name 'memcpy';
 type
   ECodeGenError = class(Exception);
 
+  { Caller-side protection mode for a const-string argument — see
+    ConstArgMode for the classification rules. }
+  TConstArgMode = (camPin, camBorrowed, camConsume);
+
   { Growable byte buffer for QBE IR output.  Replaces TStringList + .Text:
     AppendLine writes bytes directly — no per-line string allocation.
     AppendBuffer bulk-copies another buffer in one memcpy.
@@ -250,12 +254,25 @@ type
       AArgs.Items[i], or '' if that arg was not a value temp (e.g. var param). }
     procedure EmitOwnedArgReleases(AArgs: TObjectList; AArgTemps: TStringList;
       AParams: TObjectList);
-    { Caller-side retain/release for a const-string param.  A const param skips
-      the callee-side _StringAddRef/_StringRelease pair (see 5a5b5d4), so a
-      fresh transient (rc=0 from _StringConcat or a function returning string)
-      would be unowned for the duration of the call.  Variables/fields/literals
-      already have a live owner — the AddRef/Release pair nets to zero on them. }
-    procedure EnsureConstStringRef(const AArgTemp: string; APar: TMethodParam);
+    { Caller-side protection for const-string params.  A const param skips
+      the callee-side _StringAddRef/_StringRelease pair (5a5b5d4), so the
+      caller must keep the argument alive for the duration of the call.
+      ConstArgMode classifies by argument shape:
+
+        camBorrowed — string literals and named string consts: immortal
+                      data, no ARC ops are emitted at all.
+        camConsume  — +1 owned temps (function/method/getter returns): no
+                      AddRef; the single post-call Release consumes the
+                      transferred reference (these previously leaked).
+        camPin      — everything else, including plain local variables —
+                      AddRef before the call, Release after.  Locals would
+                      be safe to borrow in principle (the frame's own
+                      reference outlives the call), but eliding their pin
+                      exposes a latent uninitialised-register miscompile
+                      (bugs.txt 2026-06-10) — revisit once that is fixed. }
+    function  ConstArgMode(AArg: TASTExpr; AParams: TObjectList): TConstArgMode;
+    procedure EnsureConstStringRef(const AArgTemp: string; APar: TMethodParam;
+      AArg: TASTExpr; AParams: TObjectList);
     procedure ReleaseConstStringArgs(AArgs: TObjectList;
       AArgTemps: TStringList; AParams: TObjectList);
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
@@ -3675,16 +3692,48 @@ begin
 end;
 
 { call $_StringAddRef(l <ArgTemp>) }
+function TCodeGenQBE.ConstArgMode(AArg: TASTExpr;
+  AParams: TObjectList): TConstArgMode;
+var
+  IE: TIdentExpr;
+begin
+  Result := camPin;
+  if AArg = nil then Exit;
+  if AArg is TStringLiteral then
+    Exit(camBorrowed);
+  if AArg is TIdentExpr then
+  begin
+    IE := TIdentExpr(AArg);
+    if IE.IsImplicitSelfMethod then
+      Exit(camConsume);   { bare zero-arg method call — +1 owned return }
+    if IE.IsConstant then
+      Exit(camBorrowed);  { named string const — immortal literal data }
+    { Plain non-captured locals/params would also be safe to borrow, but
+      eliding their pin currently exposes a latent uninitialised-register
+      miscompile downstream (see bugs.txt 2026-06-10, 'borrowed-local
+      elision exposes EmitInterfaceCall register corruption') — keep them
+      pinned until that is fixed. }
+    Exit(camPin);         { variable of any kind — pin }
+  end;
+  if ExprOwnsRef(AArg) then
+    Exit(camConsume);     { function/method/getter return — +1 owned temp }
+end;
+
 procedure TCodeGenQBE.EnsureConstStringRef(const AArgTemp: string;
-  APar: TMethodParam);
+  APar: TMethodParam; AArg: TASTExpr; AParams: TObjectList);
 begin
   if (APar = nil) or (AArgTemp = '') then Exit;
   if APar.IsConstParam and (APar.ResolvedType <> nil) and
      (APar.ResolvedType.Kind = tyString) then
-    EmitLine(Format('  call $_StringAddRef(l %s)', [AArgTemp]));
+  begin
+    if ConstArgMode(AArg, AParams) = camPin then
+      EmitLine(Format('  call $_StringAddRef(l %s)', [AArgTemp]));
+  end;
 end;
 
-{ call $_StringRelease(l <ArgTemps[I]>) for each const-string param. }
+{ call $_StringRelease(l <ArgTemps[I]>) for each pinned or consumed
+  const-string argument (borrowed args emitted no AddRef and need no
+  Release; consumed args take ownership of the +1 temp here). }
 procedure TCodeGenQBE.ReleaseConstStringArgs(AArgs: TObjectList;
   AArgTemps: TStringList; AParams: TObjectList);
 var
@@ -3700,8 +3749,11 @@ begin
     Par := TMethodParam(AParams.Items[I]);
     if Par.IsConstParam and (Par.ResolvedType <> nil) and
        (Par.ResolvedType.Kind = tyString) then
-      EmitLine(Format('  call $_StringRelease(l %s)',
-        [AArgTemps.Strings[I]]));
+    begin
+      if ConstArgMode(TASTExpr(AArgs.Items[I]), AParams) <> camBorrowed then
+        EmitLine(Format('  call $_StringRelease(l %s)',
+          [AArgTemps.Strings[I]]));
+    end;
   end;
 end;
 
@@ -5785,7 +5837,7 @@ begin
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
         ArgTemps.Add(ArgTemp);
-        EnsureConstStringRef(ArgTemp, Par);
+        EnsureConstStringRef(ArgTemp, Par, TASTExpr(ACall.Args.Items[I]), MDecl.Params);
         QType   := QbeTypeOf(Par.ResolvedType);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
         ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
@@ -5979,7 +6031,7 @@ begin
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
         ArgTemps.Add(ArgTemp);
-        EnsureConstStringRef(ArgTemp, Par);
+        EnsureConstStringRef(ArgTemp, Par, TASTExpr(ACall.Args.Items[I]), MDecl.Params);
         QType   := QbeTypeOf(Par.ResolvedType);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
         ArgLine := ArgLine + Format(', %s %s',
@@ -7554,7 +7606,7 @@ begin
             ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
             while ArgTemps.Count < I do ArgTemps.Add('');
             ArgTemps.Add(ArgTemp);
-            EnsureConstStringRef(ArgTemp, Par);
+            EnsureConstStringRef(ArgTemp, Par, TASTExpr(ACall.Args.Items[I]), MDecl.Params);
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
             ArgLine := ArgLine + Format(', %s %s',
               [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
@@ -7647,7 +7699,7 @@ begin
         begin
           ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
           ArgTemps.Add(ArgTemp);
-          EnsureConstStringRef(ArgTemp, Par);
+          EnsureConstStringRef(ArgTemp, Par, TASTExpr(ACall.Args.Items[I]), MDecl.Params);
           ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
           ArgLine := ArgLine + Format('%s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
         end;
@@ -9341,7 +9393,7 @@ begin
               ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
               while ArgTemps.Count < I do ArgTemps.Add('');
               ArgTemps.Add(ArgTemp);
-              EnsureConstStringRef(ArgTemp, Par);
+              EnsureConstStringRef(ArgTemp, Par, TASTExpr(FC.Args.Items[I]), MDecl.Params);
               ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
               ArgLine := ArgLine + Format(', %s %s',
                 [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
@@ -9413,7 +9465,7 @@ begin
           begin
             ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
             ArgTemps.Add(ArgTemp);
-            EnsureConstStringRef(ArgTemp, Par);
+            EnsureConstStringRef(ArgTemp, Par, TASTExpr(FC.Args.Items[I]), MDecl.Params);
             ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
             ArgLine := ArgLine + Format('%s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
@@ -9603,7 +9655,7 @@ begin
             begin
               ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
               if Par.IsVarParam then ArgTemps.Add('') else ArgTemps.Add(ArgTemp);
-              EnsureConstStringRef(ArgTemp, Par);
+              EnsureConstStringRef(ArgTemp, Par, TASTExpr(MCallExpr.Args.Items[I]), MDecl.Params);
               ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
                 QbeTypeOf(Par.ResolvedType));
               ArgLine := ArgLine + Format(', %s %s',
@@ -9772,7 +9824,7 @@ begin
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
         ArgTemps.Add(ArgTemp);
-        EnsureConstStringRef(ArgTemp, Par);
+        EnsureConstStringRef(ArgTemp, Par, TASTExpr(MCallExpr.Args.Items[I]), MDecl.Params);
         ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
           QbeTypeOf(Par.ResolvedType));
         ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
