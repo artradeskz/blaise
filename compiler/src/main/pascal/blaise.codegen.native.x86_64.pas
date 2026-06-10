@@ -2815,8 +2815,11 @@ procedure TX86_64Backend.EmitExprToXmm0(AExpr: TASTExpr);
 var
   FL:  TFloatLiteral;
   BE:  TBinaryExpr;
+  FC:  TFuncCallExpr;
+  MD:  TMethodDecl;
   Ty:  TTypeDesc;
   IsS: Boolean;
+  I:   Integer;
 begin
   if AExpr is TFloatLiteral then
   begin
@@ -2951,12 +2954,24 @@ begin
 
   if AExpr is TFuncCallExpr then
   begin
-    if Self.EmitFloatBuiltin(TFuncCallExpr(AExpr)) then
+    FC := TFuncCallExpr(AExpr);
+    if Self.EmitFloatBuiltin(FC) then
       Exit;
+    if FC.IsImplicitSelfMethod and (FC.ResolvedDecl <> nil) then
+    begin
+      MD := TMethodDecl(FC.ResolvedDecl);
+      for I := 0 to FC.Args.Count - 1 do
+        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
+          TASTExpr(FC.Args.Items[I]));
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+      for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
+        Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+      Self.Emit(#9'movq %r10, %rdi');
+      Self.Emit(#9'callq ' + FuncSymbolOf(FC));
+      Exit;
+    end;
     { User function call whose return type is float. }
-    Self.EmitCall(FuncSymbolOf(TFuncCallExpr(AExpr)),
-      TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl),
-      TFuncCallExpr(AExpr).Args);
+    Self.EmitCall(FuncSymbolOf(FC), TMethodDecl(FC.ResolvedDecl), FC.Args);
     { Return value is in %xmm0 per SysV ABI. }
     Exit;
   end;
@@ -3167,6 +3182,7 @@ var
   AOE: TAddrOfExpr;
   SetMask: Int64;
   SetI: Integer;
+  I:   Integer;
   SetElem: TASTExpr;
   ScEndLbl: string;
   IsS: Boolean;
@@ -4161,8 +4177,43 @@ begin
       MD := TMethodDecl(FC.ResolvedDecl);
       Self.Emit(Format(#9'subq $%d, %%rsp',
         [(TRecordTypeDesc(MD.ResolvedReturnType).TotalSize() + 15) and (-16)]));
-      Self.EmitSretCall(FuncSymbolOf(FC), MD, FC.Args, '(%rsp)');
+      if FC.IsImplicitSelfMethod then
+      begin
+        Self.Emit(#9'leaq (%rsp), %r10');
+        Self.Emit(#9'movq %r10, %rdi');
+        Self.Emit(#9'xorl %esi, %esi');
+        Self.Emit(Format(#9'movq $%d, %%rdx',
+          [TRecordTypeDesc(MD.ResolvedReturnType).TotalSize()]));
+        Self.Emit(#9'callq memset');
+        Self.Emit(#9'leaq (%rsp), %r10');
+        for I := 0 to FC.Args.Count - 1 do
+          Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
+            TASTExpr(FC.Args.Items[I]));
+        Self.Emit(Format(#9'movq %s, %%r11', [Self.VarOperand('Self')]));
+        for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
+          Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
+        Self.Emit(#9'movq %r11, %rsi');
+        Self.Emit(#9'movq %r10, %rdi');
+        Self.Emit(#9'callq ' + FuncSymbolOf(FC));
+      end
+      else
+        Self.EmitSretCall(FuncSymbolOf(FC), MD, FC.Args, '(%rsp)');
       Self.Emit(#9'leaq (%rsp), %rax');
+      Exit;
+    end;
+    if FC.IsImplicitSelfMethod then
+    begin
+      MD := TMethodDecl(FC.ResolvedDecl);
+      for I := 0 to FC.Args.Count - 1 do
+        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
+          TASTExpr(FC.Args.Items[I]));
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+      for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
+        Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+      Self.Emit(#9'movq %r10, %rdi');
+      Self.Emit(#9'callq ' + FuncSymbolOf(FC));
+      if FC.ResolvedType <> nil then
+        Self.EmitNarrowToType(FC.ResolvedType);
       Exit;
     end;
     Self.EmitCall(FuncSymbolOf(FC), TMethodDecl(FC.ResolvedDecl), FC.Args);
@@ -6903,9 +6954,27 @@ begin
           '(%rbx)');
         Self.Emit(#9'popq %rbx');
       end
+      else if (Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) then
+      begin
+        Self.EmitExprToEax(Asgn.Expr);
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'movq %rax, %rbx');
+        Self.Emit(Format(#9'movq %s, %%r15', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%r15', [ISFld.Offset]));
+        Self.EmitRecordFieldRetains(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%r15');
+        Self.Emit(#9'movq %r15, %rdi');
+        Self.Emit(#9'movq %rbx, %rsi');
+        Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
+        Self.Emit(#9'callq memcpy');
+        Self.Emit(#9'popq %rbx');
+        Self.Emit(#9'popq %r15');
+      end
       else
       begin
-        { Non-managed implicit-Self field (integer, float, record, etc.). }
+        { Non-managed implicit-Self field (integer, float, enum, etc.). }
         if IsFloatFamily(Asgn.ResolvedLhsType) then
         begin
           Self.EmitExprToXmm0(Asgn.Expr);
@@ -7187,10 +7256,9 @@ begin
       Self.EmitExprToEax(Asgn.Expr);
       Self.Emit(#9'movq %rax, %rsi');
       if Asgn.IsVarParam then
-      begin
-        Self.Emit(Format(#9'movq %s, %%rdi',
-          [Self.VarOperand(Asgn.Name)]));
-      end
+        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(Asgn.Name)]))
+      else if FSretFunc and SameText(Asgn.Name, 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand('Result')]))
       else if Self.IsLocal(Asgn.Name) then
         Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(Asgn.Name)]))
       else
@@ -7546,6 +7614,19 @@ begin
           Self.VarOperand(PC.Name),
           TProceduralTypeDesc(PC.ResolvedProcType),
           PC.Args);
+      Exit;
+    end;
+    if PC.IsImplicitSelfMethod and (PC.ResolvedDecl <> nil) then
+    begin
+      MD := TMethodDecl(PC.ResolvedDecl);
+      for I := 0 to PC.Args.Count - 1 do
+        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
+          TASTExpr(PC.Args.Items[I]));
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+      for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
+        Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+      Self.Emit(#9'movq %r10, %rdi');
+      Self.Emit(#9'callq ' + FuncSymbolFromDecl(MD));
       Exit;
     end;
     { User procedure call (result, if any, ignored in statement position). }
@@ -7934,11 +8015,43 @@ begin
     end
     else if FSretFunc and (FA.RecordName = 'Result') then
     begin
-      { In a sret function, Result holds a pointer to the caller's buffer.
-        Load the pointer, then write through it. }
-      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]));
-      Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
-        FA.FieldInfo.TypeDesc);
+      if FA.FieldInfo.TypeDesc.IsString()
+         or (FA.FieldInfo.TypeDesc.Kind = tyClass)
+         or (FA.FieldInfo.TypeDesc.Kind = tyDynArray) then
+      begin
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(#9'pushq %rax');
+        Self.Emit(Format(#9'movq %s, %%r15', [Self.VarOperand('Result')]));
+        if (FA.FieldInfo.TypeDesc.Kind = tyClass)
+           or not NativeExprOwnsRef(FA.Expr) then
+        begin
+          Self.Emit(#9'movq %rax, %rdi');
+          if FA.FieldInfo.TypeDesc.IsString() then
+            Self.Emit(#9'callq _StringAddRef')
+          else if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+            Self.Emit(#9'callq _DynArrayAddRef')
+          else
+            Self.Emit(#9'callq _ClassAddRef');
+        end;
+        Self.Emit(Format(#9'movq %d(%%r15), %%rdi', [FA.FieldInfo.Offset]));
+        if FA.FieldInfo.TypeDesc.IsString() then
+          Self.Emit(#9'callq _StringRelease')
+        else if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+          Self.Emit(#9'callq _DynArrayRelease')
+        else
+          Self.Emit(#9'callq _ClassRelease');
+        Self.Emit(#9'popq %rax');
+        Self.Emit(#9'movq %r15, %rcx');
+        Self.Emit(#9'popq %r15');
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+          FA.FieldInfo.TypeDesc);
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]));
+        Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
+          FA.FieldInfo.TypeDesc);
+      end;
     end
     else if FA.IsClassAccess or FA.IsImplicitSelf then
     begin

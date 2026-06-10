@@ -304,6 +304,9 @@ type
     { Method call returning a record (sret convention) }
     procedure TestRun_Native_MethodSretReturn;
     procedure TestRun_Native_FieldSretReturn;
+    procedure TestRun_Native_ImplicitSelfMethodCall;
+    procedure TestRun_Native_RecordFieldCopy;
+    procedure TestRun_Native_SretFieldARC;
   end;
 
 implementation
@@ -4483,6 +4486,97 @@ begin
     + '  H.Free(); G.Free() '
     + 'end.',
     '5' + LE + 'hi' + LE + '10' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ImplicitSelfMethodCall;
+begin
+  AssertRunsOnBoth(
+    'program T;'
+    + 'type '
+    + '  TCalc = class '
+    + '    FVal: Integer; '
+    + '    procedure Step; '
+    + '    function Double: Integer; '
+    + '    procedure Run; '
+    + '  end; '
+    + 'procedure TCalc.Step; '
+    + 'begin FVal := FVal + 10 end; '
+    + 'function TCalc.Double: Integer; '
+    + 'begin Result := FVal * 2 end; '
+    + 'procedure TCalc.Run; '
+    + 'begin '
+    + '  FVal := 5; '
+    + '  Step; '
+    + '  WriteLn(FVal); '
+    + '  WriteLn(Double()) '
+    + 'end; '
+    + 'var C: TCalc; '
+    + 'begin '
+    + '  C := TCalc.Create(); '
+    + '  C.Run(); '
+    + '  C.Free() '
+    + 'end.',
+    '15' + LE + '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_RecordFieldCopy;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program test_rec_field_copy; '
+    + 'type '
+    + '  TToken = record Kind: Integer; Value: string; Line: Integer; Col: Integer; end; '
+    + '  TParser = class '
+    + '  private FA: TToken; FB: TToken; FC: TToken; '
+    + '  public '
+    + '    procedure Setup; '
+    + '    procedure Advance; '
+    + '  end; '
+    + 'procedure TParser.Setup; '
+    + 'begin '
+    + '  FA.Kind := 1; FA.Value := ''first''; FA.Line := 10; FA.Col := 20; '
+    + '  FB.Kind := 2; FB.Value := ''second''; FB.Line := 30; FB.Col := 40; '
+    + '  FC.Kind := 3; FC.Value := ''third''; FC.Line := 50; FC.Col := 60 '
+    + 'end; '
+    + 'procedure TParser.Advance; '
+    + 'begin FA := FB; FB := FC end; '
+    + 'var P: TParser; '
+    + 'begin '
+    + '  P := TParser.Create(); '
+    + '  P.Setup; '
+    + '  P.Advance; '
+    + '  WriteLn(P.FA.Kind, '':'', P.FA.Value, '':'', P.FA.Line, '':'', P.FA.Col); '
+    + '  WriteLn(P.FB.Kind, '':'', P.FB.Value, '':'', P.FB.Line, '':'', P.FB.Col); '
+    + '  P.Free() '
+    + 'end.',
+    '2:second:30:40' + LE + '3:third:50:60' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SretFieldARC;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program test_sret_field_arc; '
+    + 'type '
+    + '  TRec = record Kind: Integer; Value: string; end; '
+    + '  TFactory = class '
+    + '  public '
+    + '    function Make(AKind: Integer; const AVal: string): TRec; '
+    + '  end; '
+    + 'function TFactory.Make(AKind: Integer; const AVal: string): TRec; '
+    + 'begin Result.Kind := AKind; Result.Value := AVal end; '
+    + 'var '
+    + '  F: TFactory; '
+    + '  R: TRec; '
+    + 'begin '
+    + '  F := TFactory.Create(); '
+    + '  R := F.Make(42, ''hello''); '
+    + '  WriteLn(R.Kind, '':'', R.Value); '
+    + '  R := F.Make(99, ''world''); '
+    + '  WriteLn(R.Kind, '':'', R.Value); '
+    + '  F.Free() '
+    + 'end.',
+    '42:hello' + LE + '99:world' + LE, 0);
 end;
 
 initialization
