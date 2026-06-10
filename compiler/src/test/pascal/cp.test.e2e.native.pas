@@ -317,6 +317,8 @@ type
 
     { M8b — sret forwarding: outer function assigns Result from inner sret call. }
     procedure TestRun_Native_SretForward;
+    { M8b — for-loop with recursive call in body (end-bound must be frame-local). }
+    procedure TestRun_Native_ForLoop_RecursiveBody;
   end;
 
 implementation
@@ -4675,6 +4677,24 @@ begin
     + '  WriteLn(P.B); '
     + 'end.',
     '10' + LE + '14' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ForLoop_RecursiveBody;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  Self.AssertRunsOnBoth(
+    'program TestForRec; '
+    + 'procedure Walk(Depth: Integer); '
+    + 'var I: Integer; '
+    + 'begin '
+    + '  if Depth <= 0 then begin WriteLn(''leaf''); Exit; end; '
+    + '  for I := 0 to Depth - 1 do '
+    + '    Walk(I); '
+    + 'end; '
+    + 'begin '
+    + '  Walk(3); '
+    + 'end.',
+    'leaf' + LE + 'leaf' + LE + 'leaf' + LE + 'leaf' + LE, 0);
 end;
 
 initialization

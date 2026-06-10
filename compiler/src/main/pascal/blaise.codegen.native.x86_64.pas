@@ -95,6 +95,7 @@ type
     FExcDepth:     Integer;
     FExcFrameNext: Integer;
     FFinallyStack: TList<TCompoundStmt>;
+    FForEndNext: Integer;
     { Number of exc frame global slots to emit for the program main body.
       Zero when no try stmts appear in the top-level program statements. }
     FProgExcFrameCount: Integer;
@@ -275,6 +276,7 @@ type
     { Count all try/finally and try/except statements nested inside AStmt
       (recursively) to pre-allocate exc frame slots in BuildFrame. }
     function CountTryStmts(AStmt: TASTStmt): Integer;
+    function CountForStmts(AStmt: TASTStmt): Integer;
     { Unwind exception frames from FExcDepth down to ATargetDepth+1.
       For try/finally frames, emits the finally body inline.
       For try/except frames, only calls _PopExcFrame. }
@@ -487,6 +489,7 @@ begin
   FSretFunc       := False;
   FExcDepth           := 0;
   FExcFrameNext       := 0;
+  FForEndNext         := 0;
   FProgExcFrameCount  := 0;
   FSystemDefsEmitted  := False;
   FUnitInitNames      := TStringList.Create();
@@ -2528,6 +2531,14 @@ begin
       FFrameTypes.Add('_exc_frame_' + IntToStr(K), nil);
     end;
   end;
+  if ADecl.Body <> nil then
+  begin
+    TryCount := 0;
+    for K := 0 to ADecl.Body.Stmts.Count - 1 do
+      TryCount := TryCount + Self.CountForStmts(TASTStmt(ADecl.Body.Stmts.Items[K]));
+    for K := 0 to TryCount - 1 do
+      Self.AddSlot('_for_end_' + IntToStr(K), nil, Offset);
+  end;
   { Round the reserved size up to a 16-byte multiple (SysV alignment).
     -16 is the bitmask not(15) in two's complement (Blaise `not` is Boolean). }
   FFrameSize := (Offset + 15) and (-16);
@@ -2549,6 +2560,7 @@ begin
   FSretFunc     := False;
   FExcDepth     := 0;
   FExcFrameNext := 0;
+  FForEndNext   := 0;
   FFinallyStack.Free();
   FFinallyStack := TList<TCompoundStmt>.Create();
 end;
@@ -6006,8 +6018,17 @@ begin
     Self.AddGlobal(AFor.VarName, VarType);
   end;
   VarOp   := Self.VarOperand(AFor.VarName);
-  EndSlot := Self.NewLabel('forend');
-  Self.AddGlobal(EndSlot, VarType);
+  if (FFrame <> nil) and FFrame.ContainsKey('_for_end_' + IntToStr(FForEndNext)) then
+  begin
+    EndSlot := Self.VarOperand('_for_end_' + IntToStr(FForEndNext));
+    Inc(FForEndNext);
+  end
+  else
+  begin
+    EndSlot := Self.NewLabel('forend');
+    Self.AddGlobal(EndSlot, VarType);
+    EndSlot := EndSlot + '(%rip)';
+  end;
   LCond := Self.NewLabel('fcond');
   LBody := Self.NewLabel('fbody');
   LNext := Self.NewLabel('fnext');
@@ -6016,12 +6037,12 @@ begin
   Self.EmitExprToEax(AFor.StartExpr);
   Self.EmitStoreVar(VarOp, VarType);
   Self.EmitExprToEax(AFor.EndExpr);
-  Self.EmitStoreVar(EndSlot + '(%rip)', VarType);
+  Self.EmitStoreVar(EndSlot, VarType);
 
   Self.Emit(LCond + ':');
   Self.EmitLoadVar(VarOp, VarType);
   Self.Emit(#9'pushq %rax');
-  Self.EmitLoadVar(EndSlot + '(%rip)', VarType);
+  Self.EmitLoadVar(EndSlot, VarType);
   Self.Emit(#9'movq %rax, %rcx');
   Self.Emit(#9'popq %rax');
   Self.Emit(#9'cmpq %rcx, %rax');
@@ -6661,6 +6682,84 @@ begin
     for I := 0 to TCaseStmt(AStmt).Branches.Count - 1 do
       Result := Result + Self.CountTryStmts(TCaseBranch(TCaseStmt(AStmt).Branches.Items[I]).Stmt);
     Result := Result + Self.CountTryStmts(TCaseStmt(AStmt).ElseStmt);
+    Exit;
+  end;
+end;
+
+function TX86_64Backend.CountForStmts(AStmt: TASTStmt): Integer;
+var
+  I:    Integer;
+  TFS:  TTryFinallyStmt;
+  TES:  TTryExceptStmt;
+  Cmp:  TCompoundStmt;
+  IfS:  TIfStmt;
+  WhS:  TWhileStmt;
+  ForS: TForStmt;
+  RepS: TRepeatStmt;
+  H:    TExceptHandlerClause;
+begin
+  Result := 0;
+  if AStmt = nil then Exit;
+  if AStmt is TTryFinallyStmt then
+  begin
+    TFS := TTryFinallyStmt(AStmt);
+    for I := 0 to TFS.TryBody.Stmts.Count - 1 do
+      Result := Result + Self.CountForStmts(TASTStmt(TFS.TryBody.Stmts.Items[I]));
+    for I := 0 to TFS.FinallyBody.Stmts.Count - 1 do
+      Result := Result + Self.CountForStmts(TASTStmt(TFS.FinallyBody.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TTryExceptStmt then
+  begin
+    TES := TTryExceptStmt(AStmt);
+    for I := 0 to TES.TryBody.Stmts.Count - 1 do
+      Result := Result + Self.CountForStmts(TASTStmt(TES.TryBody.Stmts.Items[I]));
+    for I := 0 to TES.Handlers.Count - 1 do
+    begin
+      H := TExceptHandlerClause(TES.Handlers.Items[I]);
+      Result := Result + Self.CountForStmts(H.Body);
+    end;
+    if TES.ElseBody <> nil then
+      for I := 0 to TES.ElseBody.Stmts.Count - 1 do
+        Result := Result + Self.CountForStmts(TASTStmt(TES.ElseBody.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TCompoundStmt then
+  begin
+    Cmp := TCompoundStmt(AStmt);
+    for I := 0 to Cmp.Stmts.Count - 1 do
+      Result := Result + Self.CountForStmts(TASTStmt(Cmp.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TIfStmt then
+  begin
+    IfS := TIfStmt(AStmt);
+    Exit(Self.CountForStmts(IfS.ThenStmt) + Self.CountForStmts(IfS.ElseStmt));
+  end;
+  if AStmt is TWhileStmt then
+  begin
+    WhS := TWhileStmt(AStmt);
+    Exit(Self.CountForStmts(WhS.Body));
+  end;
+  if AStmt is TForStmt then
+  begin
+    ForS := TForStmt(AStmt);
+    Exit(1 + Self.CountForStmts(ForS.Body));
+  end;
+  if AStmt is TRepeatStmt then
+  begin
+    RepS := TRepeatStmt(AStmt);
+    for I := 0 to RepS.Body.Stmts.Count - 1 do
+      Result := Result + Self.CountForStmts(TASTStmt(RepS.Body.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TForInStmt then
+    Exit(Self.CountForStmts(TForInStmt(AStmt).Body));
+  if AStmt is TCaseStmt then
+  begin
+    for I := 0 to TCaseStmt(AStmt).Branches.Count - 1 do
+      Result := Result + Self.CountForStmts(TCaseBranch(TCaseStmt(AStmt).Branches.Items[I]).Stmt);
+    Result := Result + Self.CountForStmts(TCaseStmt(AStmt).ElseStmt);
     Exit;
   end;
 end;
@@ -9857,9 +9956,10 @@ begin
   for I := 0 to AProg.Block.Stmts.Count - 1 do
     FProgExcFrameCount := FProgExcFrameCount +
       Self.CountTryStmts(TASTStmt(AProg.Block.Stmts.Items[I]));
-  { Reset exc-frame state before emitting the program body. }
+  { Reset per-function state before emitting the program body. }
   FExcDepth     := 0;
   FExcFrameNext := 0;
+  FForEndNext   := 0;
   FFinallyStack.Free();
   FFinallyStack := TList<TCompoundStmt>.Create();
 
@@ -9988,6 +10088,7 @@ begin
     FExitLabel := '';
     FExcDepth     := 0;
     FExcFrameNext := 0;
+    FForEndNext   := 0;
     FFinallyStack.Free();
   FFinallyStack := TList<TCompoundStmt>.Create();
     Self.Emit('.text');
