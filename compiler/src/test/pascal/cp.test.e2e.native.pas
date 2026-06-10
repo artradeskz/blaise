@@ -268,6 +268,10 @@ type
     { Property reads via getter methods }
     procedure TestRun_Native_PropertyRead_Simple;
     procedure TestRun_Native_PropertyRead_Indexed;
+
+    { Property writes via setter methods }
+    procedure TestRun_Native_PropertyWrite_Simple;
+    procedure TestRun_Native_PropertyWrite_Indexed;
   end;
 
 implementation
@@ -4150,6 +4154,58 @@ begin
     + 'var A: TArr;'
     + 'begin'
     + '  A := TArr.Create;'
+    + '  WriteLn(A.Items[0]);'
+    + '  WriteLn(A.Items[1]);'
+    + '  A.Free '
+    + 'end.',
+    '10' + LE + '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_PropertyWrite_Simple;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TBox = class'
+    + ' FVal: Integer;'
+    + ' procedure SetVal(V: Integer);'
+    + ' function GetVal: Integer;'
+    + ' property Val: Integer read GetVal write SetVal;'
+    + 'end;'
+    + 'procedure TBox.SetVal(V: Integer);'
+    + 'begin FVal := V end;'
+    + 'function TBox.GetVal: Integer;'
+    + 'begin Result := FVal end;'
+    + 'var B: TBox;'
+    + 'begin'
+    + '  B := TBox.Create;'
+    + '  B.Val := 42;'
+    + '  WriteLn(B.Val);'
+    + '  B.Free '
+    + 'end.',
+    '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_PropertyWrite_Indexed;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TArr = class'
+    + ' FA: Integer; FB: Integer;'
+    + ' procedure SetItem(I: Integer; V: Integer);'
+    + ' function GetItem(I: Integer): Integer;'
+    + ' property Items[I: Integer]: Integer read GetItem write SetItem;'
+    + 'end;'
+    + 'procedure TArr.SetItem(I: Integer; V: Integer);'
+    + 'begin if I = 0 then FA := V else FB := V end;'
+    + 'function TArr.GetItem(I: Integer): Integer;'
+    + 'begin if I = 0 then Result := FA else Result := FB end;'
+    + 'var A: TArr;'
+    + 'begin'
+    + '  A := TArr.Create;'
+    + '  A.Items[0] := 10;'
+    + '  A.Items[1] := 30;'
     + '  WriteLn(A.Items[0]);'
     + '  WriteLn(A.Items[1]);'
     + '  A.Free '

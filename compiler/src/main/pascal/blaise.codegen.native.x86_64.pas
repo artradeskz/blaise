@@ -2366,7 +2366,8 @@ begin
   FSretFunc     := False;
   FExcDepth     := 0;
   FExcFrameNext := 0;
-  FFinallyStack.Clear();
+  FFinallyStack.Free();
+  FFinallyStack := TList<TCompoundStmt>.Create();
 end;
 
 { ------------------------------------------------------------------ }
@@ -6164,12 +6165,18 @@ begin
     Self.EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
   Self.Emit(#9'jmp ' + LblEnd);
 
-  { Exception path: capture exception, pop frame, run finally, re-raise. }
+  { Exception path: capture exception, pop frame, run finally, re-raise.
+    Restore FExcDepth to the try-entry level so the exception-path codegen
+    sees the same depth as the normal path (both paths execute at codegen time
+    even though only one runs at runtime). }
+  Inc(FExcDepth);
+  FFinallyStack.Add(AStmt.FinallyBody);
   Self.Emit(LblFinExc + ':');
   Self.Emit(#9'callq _CurrentException');
   Self.Emit(#9'pushq %rax');   { save exception pointer across finally body }
   Self.Emit(#9'callq _PopExcFrame');
   Dec(FExcDepth);
+  FFinallyStack.Delete(FFinallyStack.Count - 1);
   for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
     Self.EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
   Self.Emit(#9'popq %rdi');    { restore saved exception }
@@ -6219,7 +6226,12 @@ begin
   FFinallyStack.Delete(FFinallyStack.Count - 1);
   Self.Emit(#9'jmp ' + LblEnd);
 
-  { Exception path: dispatch handlers. }
+  { Exception path: dispatch handlers.
+    Restore codegen-time FExcDepth/FFinallyStack to the try-entry level so
+    the exception path sees the same bookkeeping state (both paths execute at
+    codegen time even though only one runs at runtime). }
+  Inc(FExcDepth);
+  FFinallyStack.Add(nil);
   Self.Emit(LblExcept + ':');
 
   if AStmt.Handlers.Count > 0 then
@@ -7141,6 +7153,39 @@ begin
   if AStmt is TFieldAssignment then
   begin
     FA := TFieldAssignment(AStmt);
+    if FA.PropWriteInfo <> nil then
+    begin
+      Self.EmitExprToEax(FA.Expr);
+      Self.Emit(#9'pushq %rax');
+      if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rdi', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rdi), %rdi');
+      end
+      else
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [FA.RecordName]));
+      end;
+      if FA.PropIndexExpr <> nil then
+      begin
+        Self.Emit(#9'pushq %rdi');
+        Self.EmitExprToEax(FA.PropIndexExpr);
+        Self.Emit(#9'popq %rdi');
+        Self.Emit(#9'movq %rax, %rsi');
+        Self.Emit(#9'popq %rdx');
+      end
+      else
+        Self.Emit(#9'popq %rsi');
+      Self.Emit(#9'callq ' + Self.ClassSymName(FA.PropOwnerType) + '_'
+        + NativeMangle(FA.PropWriteInfo.WriteMethod));
+      Exit;
+    end;
     if FA.FieldInfo = nil then
       raise ENativeCodeGenError.Create(
         'native backend: field assignment has no resolved field info');
@@ -8804,7 +8849,8 @@ begin
   { Reset exc-frame state before emitting the program body. }
   FExcDepth     := 0;
   FExcFrameNext := 0;
-  FFinallyStack.Clear();
+  FFinallyStack.Free();
+  FFinallyStack := TList<TCompoundStmt>.Create();
 
   Self.Emit('.text');
   Self.Emit('.globl main');
@@ -8927,7 +8973,8 @@ begin
     FExitLabel := '';
     FExcDepth     := 0;
     FExcFrameNext := 0;
-    FFinallyStack.Clear();
+    FFinallyStack.Free();
+  FFinallyStack := TList<TCompoundStmt>.Create();
     Self.Emit('.text');
     Self.Emit('.globl ' + NativeMangle(AUnit.Name) + '_init');
     Self.Emit(NativeMangle(AUnit.Name) + '_init:');
