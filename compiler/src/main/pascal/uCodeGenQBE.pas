@@ -325,10 +325,13 @@ type
     function  EightbyteIsSSE(ARec: TRecordTypeDesc;
                              AStartByte: Integer): Boolean;
     procedure EmitRecordReturnSignature(var ASig: string;
-                                        ARetRec: TRecordTypeDesc);
-    procedure EmitRecordReturnPrologue(ARetRec: TRecordTypeDesc);
-    procedure EmitRecordReturnEpilogue(ARetRec: TRecordTypeDesc);
-    function  EmitRecordReturnDeclType(ARetRec: TRecordTypeDesc): string;
+                                        AClass: TRecReturnClass);
+    procedure EmitRecordReturnPrologue(ARetRec: TRecordTypeDesc;
+                                       AClass: TRecReturnClass);
+    procedure EmitRecordReturnEpilogue(ARetRec: TRecordTypeDesc;
+                                       AClass: TRecReturnClass);
+    function  EmitRecordReturnDeclType(ARetRec: TRecordTypeDesc;
+                                       AClass: TRecReturnClass): string;
     { Emit a field-by-field ARC-aware copy from ASrcAddr to ADestAddr for a
       record described by ARec.  String fields use AddRef/Release; class fields
       use ClassAddRef/ClassRelease; other fields are copied with a plain store. }
@@ -4933,9 +4936,9 @@ begin
 end;
 
 procedure TCodeGenQBE.EmitRecordReturnSignature(var ASig: string;
-  ARetRec: TRecordTypeDesc);
+  AClass: TRecReturnClass);
 begin
-  case Self.ClassifyRecordReturn(ARetRec) of
+  case AClass of
     rcSret:
       begin
         if ASig <> '' then
@@ -4946,9 +4949,10 @@ begin
   end;
 end;
 
-procedure TCodeGenQBE.EmitRecordReturnPrologue(ARetRec: TRecordTypeDesc);
+procedure TCodeGenQBE.EmitRecordReturnPrologue(ARetRec: TRecordTypeDesc;
+  AClass: TRecReturnClass);
 begin
-  case Self.ClassifyRecordReturn(ARetRec) of
+  case AClass of
     rcSret:
       EmitLine('  %_var_Result =l copy %_par__sret');
     rcInt1, rcInt2, rcSSE1, rcSSE2, rcIntSSE, rcSSEInt, rcWin64Agg:
@@ -4993,12 +4997,13 @@ begin
   if ASize = 8 then Result := 'l' else Result := 'w';
 end;
 
-procedure TCodeGenQBE.EmitRecordReturnEpilogue(ARetRec: TRecordTypeDesc);
+procedure TCodeGenQBE.EmitRecordReturnEpilogue(ARetRec: TRecordTypeDesc;
+  AClass: TRecReturnClass);
 var
   RetT, RetTy, LoadOp: string;
   Sz: Integer;
 begin
-  case Self.ClassifyRecordReturn(ARetRec) of
+  case AClass of
     rcSret:
       EmitLine('  ret');
     rcInt1:
@@ -5036,10 +5041,11 @@ begin
   end;
 end;
 
-function TCodeGenQBE.EmitRecordReturnDeclType(ARetRec: TRecordTypeDesc): string;
+function TCodeGenQBE.EmitRecordReturnDeclType(ARetRec: TRecordTypeDesc;
+  AClass: TRecReturnClass): string;
 begin
   Result := '';
-  case Self.ClassifyRecordReturn(ARetRec) of
+  case AClass of
     rcInt1:                                Result := RecInt1RetType(ARetRec.TotalSize());
     rcInt2, rcSSE2, rcIntSSE, rcSSEInt:    Result := FFIRecordTypeRef(ARetRec);
     rcSSE1:
@@ -6259,6 +6265,7 @@ var
   RetTemp:       string;
   SavedExitLbl:  string;
   ValTemp:       string;
+  RC:            TRecReturnClass;
 begin
   if AMethod.ResolvedQbeName <> '' then
     FuncName := '$' + QBEMangle(AMethod.ResolvedQbeName)
@@ -6266,12 +6273,15 @@ begin
     FuncName := '$' + QBEMangle(ATypeName + '_' + AMethod.Name);
   IsFunc   := AMethod.ResolvedReturnType <> nil;
 
+  RC := rcSret;
+  if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
+    RC := Self.ClassifyRecordReturn(TRecordTypeDesc(AMethod.ResolvedReturnType));
+
   Sig := 'l %_par_Self';
   if IsFunc and (AMethod.ResolvedReturnType.Kind = tyInterface) then
     Sig := 'l %_par__sret, l %_par_Self'
   else if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
-    EmitRecordReturnSignature(Sig,
-      TRecordTypeDesc(AMethod.ResolvedReturnType));
+    EmitRecordReturnSignature(Sig, RC);
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params.Items[I]);
@@ -6301,7 +6311,7 @@ begin
     else if AMethod.ResolvedReturnType.Kind = tyRecord then
     begin
       RetDeclType := EmitRecordReturnDeclType(
-        TRecordTypeDesc(AMethod.ResolvedReturnType));
+        TRecordTypeDesc(AMethod.ResolvedReturnType), RC);
       if RetDeclType = '' then
         EmitLine(Format('%sfunction %s(%s) {', [ExportPrefix(), FuncName, Sig]))
       else
@@ -6362,7 +6372,7 @@ begin
   if IsFunc then
   begin
     if AMethod.ResolvedReturnType.Kind = tyRecord then
-      EmitRecordReturnPrologue(TRecordTypeDesc(AMethod.ResolvedReturnType))
+      EmitRecordReturnPrologue(TRecordTypeDesc(AMethod.ResolvedReturnType), RC)
     else if AMethod.ResolvedReturnType.Kind = tyInterface then
     begin
       { sret: interface Result is a 16-byte fat pointer (obj+itab) in the
@@ -6438,7 +6448,7 @@ begin
   if IsFunc then
   begin
     if AMethod.ResolvedReturnType.Kind = tyRecord then
-      EmitRecordReturnEpilogue(TRecordTypeDesc(AMethod.ResolvedReturnType))
+      EmitRecordReturnEpilogue(TRecordTypeDesc(AMethod.ResolvedReturnType), RC)
     else if AMethod.ResolvedReturnType.Kind = tyInterface then
       EmitLine('  ret')
     else
@@ -7075,6 +7085,7 @@ var
   NestedDecl:      TMethodDecl;
   CapName:         string;
   NestedFuncName:  string;
+  RC:              TRecReturnClass;
 begin
   if ADecl.IsExternal then Exit;  { no body to emit for external declarations }
   if ADecl.Body = nil then Exit;  { forward declaration — impl appears elsewhere }
@@ -7099,6 +7110,9 @@ begin
   else
     FuncName := '$' + QBEMangle(ADecl.Name);
   IsFunc   := ADecl.ResolvedReturnType <> nil;
+  RC := rcSret;
+  if IsFunc and (ADecl.ResolvedReturnType.Kind = tyRecord) then
+    RC := Self.ClassifyRecordReturn(TRecordTypeDesc(ADecl.ResolvedReturnType));
   if AExported or FExportAll then Prefix := 'export ' else Prefix := '';
 
   { Captured outer-scope variables are prepended as implicit pointer params.
@@ -7143,10 +7157,9 @@ begin
     end
     else if ADecl.ResolvedReturnType.Kind = tyRecord then
     begin
-      EmitRecordReturnSignature(Sig,
-        TRecordTypeDesc(ADecl.ResolvedReturnType));
+      EmitRecordReturnSignature(Sig, RC);
       RetDeclType := EmitRecordReturnDeclType(
-        TRecordTypeDesc(ADecl.ResolvedReturnType));
+        TRecordTypeDesc(ADecl.ResolvedReturnType), RC);
       if RetDeclType = '' then
         EmitLine(Format('%sfunction %s(%s) {', [Prefix, FuncName, Sig]))
       else
@@ -7280,7 +7293,7 @@ begin
   if IsFunc then
   begin
     if ADecl.ResolvedReturnType.Kind = tyRecord then
-      EmitRecordReturnPrologue(TRecordTypeDesc(ADecl.ResolvedReturnType))
+      EmitRecordReturnPrologue(TRecordTypeDesc(ADecl.ResolvedReturnType), RC)
     else if ADecl.ResolvedReturnType.Kind = tyInterface then
     begin
       { sret: interface Result is a 16-byte fat pointer (obj+itab) in the
@@ -7363,7 +7376,7 @@ begin
   if IsFunc then
   begin
     if ADecl.ResolvedReturnType.Kind = tyRecord then
-      EmitRecordReturnEpilogue(TRecordTypeDesc(ADecl.ResolvedReturnType))
+      EmitRecordReturnEpilogue(TRecordTypeDesc(ADecl.ResolvedReturnType), RC)
     else if ADecl.ResolvedReturnType.Kind = tyInterface then
       EmitLine('  ret')
     else
