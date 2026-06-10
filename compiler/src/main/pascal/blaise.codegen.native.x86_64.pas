@@ -5160,11 +5160,17 @@ var
 begin
   if (APar <> nil) and APar.IsVarParam then
   begin
-    { Pass the argument's address.  If the arg is itself a var param the slot
-      already holds a pointer; otherwise take the address of the local/global. }
     if (AArg is TIdentExpr) and (TIdentExpr(AArg).ParamMode <> pmNone) then
       Self.Emit(Format(#9'movq %s, %%rax',
         [Self.VarOperand(TIdentExpr(AArg).Name)]))
+    else if (AArg is TIdentExpr) and TIdentExpr(AArg).IsImplicitSelf
+            and (TIdentExpr(AArg).ImplicitFieldInfo <> nil) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+      if TFieldInfo(TIdentExpr(AArg).ImplicitFieldInfo).Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rax',
+          [TFieldInfo(TIdentExpr(AArg).ImplicitFieldInfo).Offset]));
+    end
     else if (AArg is TIdentExpr) and Self.IsLocal(TIdentExpr(AArg).Name) then
       Self.Emit(Format(#9'leaq %s, %%rax',
         [Self.VarOperand(TIdentExpr(AArg).Name)]))
@@ -8034,6 +8040,14 @@ begin
         if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
           Self.Emit(Format(#9'movq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
+                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+        end
         else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
           Self.Emit(Format(#9'leaq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]))
@@ -8170,6 +8184,14 @@ begin
         if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
           Self.Emit(Format(#9'movq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
+                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+        end
         else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
           Self.Emit(Format(#9'leaq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]))
