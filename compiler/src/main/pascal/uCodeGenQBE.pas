@@ -8812,7 +8812,17 @@ begin
       { Type cast TypeName(Expr) — ResolvedDecl is nil; copy/extend/truncate to target QBE type }
       if FC.ResolvedDecl = nil then
       begin
-        ArgTemp  := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+           (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyInterface) and
+           (TASTExpr(FC.Args.Items[0]) is TIdentExpr) then
+        begin
+          ArgTemp := AllocTemp();
+          EmitLine(Format('  %s =l loadl %s_obj',
+            [ArgTemp, VarRef(TIdentExpr(TASTExpr(FC.Args.Items[0])).Name,
+                             TIdentExpr(TASTExpr(FC.Args.Items[0])).IsGlobal)]));
+        end
+        else
+          ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T        := AllocTemp();
         QType    := QbeTypeOf(FC.ResolvedType);
         if FC.ResolvedType.Kind = tyByte then

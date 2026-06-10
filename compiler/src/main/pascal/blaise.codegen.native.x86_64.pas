@@ -40,6 +40,7 @@ type
       pick the right width and signedness. }
     FDataGlobals: TOrderedDictionary<string, TTypeDesc>;
     FThreadVarGlobals: TDictionary<string, Boolean>;
+    FWeakGlobals:      TDictionary<string, Boolean>;
     { Class-name string blobs already emitted to avoid duplicate label errors.
       Keyed by mangled name. }
     FClassNameEmitted: TDictionary<string, Boolean>;
@@ -119,7 +120,9 @@ type
       .data directive and every load/store of the slot. }
     procedure AddGlobal(const AName: string; AType: TTypeDesc);
     procedure MarkThreadVar(const AName: string);
+    procedure MarkWeakGlobal(const AName: string);
     function IsThreadVarGlobal(const AName: string): Boolean;
+    function IsWeakGlobal(const AName: string): Boolean;
     { The static type of a frame-local slot, or nil if AName is not a local. }
     function LocalType(const AName: string): TTypeDesc;
     { The static type of a program global, or nil if AName is not registered. }
@@ -480,6 +483,7 @@ begin
   FLabelCount          := 0;
   FDataGlobals         := TOrderedDictionary<string, TTypeDesc>.Create();
   FThreadVarGlobals    := TDictionary<string, Boolean>.Create();
+  FWeakGlobals         := TDictionary<string, Boolean>.Create();
   FClassNameEmitted    := TDictionary<string, Boolean>.Create();
   FStrLits             := TStringList.Create();
   FBreakLabels        := TStack<string>.Create();
@@ -511,6 +515,7 @@ begin
   FBreakLabels.Free();
   FClassNameEmitted.Free();
   FStrLits.Free();
+  FWeakGlobals.Free();
   FThreadVarGlobals.Free();
   FDataGlobals.Free();
   inherited Destroy();
@@ -534,11 +539,24 @@ begin
     FThreadVarGlobals.Add(AName, True);
 end;
 
+procedure TX86_64Backend.MarkWeakGlobal(const AName: string);
+begin
+  if not FWeakGlobals.ContainsKey(AName) then
+    FWeakGlobals.Add(AName, True);
+end;
+
 function TX86_64Backend.IsThreadVarGlobal(const AName: string): Boolean;
 var
   Dummy: Boolean;
 begin
   Result := FThreadVarGlobals.TryGetValue(AName, Dummy);
+end;
+
+function TX86_64Backend.IsWeakGlobal(const AName: string): Boolean;
+var
+  Dummy: Boolean;
+begin
+  Result := FWeakGlobals.TryGetValue(AName, Dummy);
 end;
 
 function TX86_64Backend.GlobalType(const AName: string): TTypeDesc;
@@ -744,8 +762,16 @@ begin
     end
     else if Ty.Kind = tyClass then
     begin
-      Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [Name]));
-      Self.Emit(#9'callq _ClassRelease');
+      if Self.IsWeakGlobal(Name) then
+      begin
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rdi', [Name]));
+        Self.Emit(#9'callq _WeakClear');
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [Name]));
+        Self.Emit(#9'callq _ClassRelease');
+      end;
     end
     else if Ty.Kind = tyDynArray then
     begin
@@ -754,9 +780,16 @@ begin
     end
     else if Ty.Kind = tyInterface then
     begin
-      { Release the obj half of the fat pointer; the itab slot is static. }
-      Self.Emit(Format(#9'movq %s_obj(%%rip), %%rdi', [Name]));
-      Self.Emit(#9'callq _ClassRelease');
+      if Self.IsWeakGlobal(Name) then
+      begin
+        Self.Emit(Format(#9'leaq %s_obj(%%rip), %%rdi', [Name]));
+        Self.Emit(#9'callq _WeakClear');
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movq %s_obj(%%rip), %%rdi', [Name]));
+        Self.Emit(#9'callq _ClassRelease');
+      end;
     end
     else if Ty.Kind = tyRecord then
     begin
@@ -2081,6 +2114,7 @@ begin
   begin
     Self.AddGlobal(AAsgn.Name, AAsgn.ResolvedLhsType);
     if AAsgn.IsThreadVar then Self.MarkThreadVar(AAsgn.Name);
+    if AAsgn.IsWeakLhs then Self.MarkWeakGlobal(AAsgn.Name);
   end;
   ObjOp  := Self.IntfObjOperand(AAsgn.Name, AAsgn.IsGlobal);
   ItabOp := Self.IntfItabOperand(AAsgn.Name, AAsgn.IsGlobal);
@@ -2088,8 +2122,14 @@ begin
   { F := nil — release old obj, zero both slots. }
   if AAsgn.Expr is TNilLiteral then
   begin
-    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));
-    Self.Emit(#9'callq _ClassRelease');
+    if AAsgn.IsWeakLhs then
+      Self.Emit(Format(#9'leaq %s, %%rdi', [ObjOp]))
+    else
+      Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));
+    if AAsgn.IsWeakLhs then
+      Self.Emit(#9'callq _WeakClear')
+    else
+      Self.Emit(#9'callq _ClassRelease');
     Self.Emit(Format(#9'movq $0, %s', [ObjOp]));
     Self.Emit(Format(#9'movq $0, %s', [ItabOp]));
     Exit;
@@ -2153,21 +2193,34 @@ begin
      (AAsgn.Expr.ResolvedType.Kind = tyInterface) and
      (AAsgn.Expr is TIdentExpr) then
   begin
-    { Load src obj+itab; addref new obj; release old obj; store both. }
-    Self.Emit(Format(#9'movq %s, %%rax',
-      [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-    Self.Emit(#9'pushq %rax');             { itab }
-    Self.Emit(Format(#9'movq %s, %%rax',
-      [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-    Self.Emit(#9'pushq %rax');             { obj; stack now (obj, itab) }
-    Self.Emit(#9'movq %rax, %rdi');
-    Self.Emit(#9'callq _ClassAddRef');
-    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
-    Self.Emit(#9'callq _ClassRelease');
-    Self.Emit(#9'popq %rax');              { new obj }
-    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
-    Self.Emit(#9'popq %rax');              { itab }
-    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    if AAsgn.IsWeakLhs then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rsi',
+        [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+      Self.Emit(Format(#9'leaq %s, %%rdi', [ObjOp]));
+      Self.Emit(#9'callq _WeakAssign');
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+      Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    end
+    else
+    begin
+      { Load src obj+itab; addref new obj; release old obj; store both. }
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+      Self.Emit(#9'pushq %rax');             { itab }
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+      Self.Emit(#9'pushq %rax');             { obj; stack now (obj, itab) }
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassAddRef');
+      Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');              { new obj }
+      Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+      Self.Emit(#9'popq %rax');              { itab }
+      Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    end;
     Exit;
   end;
 
@@ -4387,7 +4440,14 @@ begin
       backend's cast lowering. }
     if FC.ResolvedDecl = nil then
     begin
-      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+         (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyInterface) and
+         (TASTExpr(FC.Args.Items[0]) is TIdentExpr) then
+        Self.Emit(Format(#9'movq %s, %%rax',
+          [Self.IntfObjOperand(TIdentExpr(TASTExpr(FC.Args.Items[0])).Name,
+                               TIdentExpr(TASTExpr(FC.Args.Items[0])).IsGlobal)]))
+      else
+        Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
       Self.EmitNarrowToType(FC.ResolvedType);
       Exit;
     end;
@@ -10173,18 +10233,36 @@ begin
       else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyClass then
         for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
         begin
-          Self.Emit(Format(#9'movq %s, %%rdi',
-            [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
-          Self.Emit(#9'callq _ClassRelease');
+          if TVarDecl(ADecl.Body.Decls.Items[I]).IsWeak then
+          begin
+            Self.Emit(Format(#9'leaq %s, %%rdi',
+              [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
+            Self.Emit(#9'callq _WeakClear');
+          end
+          else
+          begin
+            Self.Emit(Format(#9'movq %s, %%rdi',
+              [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
+            Self.Emit(#9'callq _ClassRelease');
+          end;
         end
       { Interface locals: release the obj half of the fat pointer; the itab is
         static rodata and is not refcounted. }
       else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyInterface then
         for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
         begin
-          Self.Emit(Format(#9'movq %s, %%rdi',
-            [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
-          Self.Emit(#9'callq _ClassRelease');
+          if TVarDecl(ADecl.Body.Decls.Items[I]).IsWeak then
+          begin
+            Self.Emit(Format(#9'leaq %s, %%rdi',
+              [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
+            Self.Emit(#9'callq _WeakClear');
+          end
+          else
+          begin
+            Self.Emit(Format(#9'movq %s, %%rdi',
+              [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
+            Self.Emit(#9'callq _ClassRelease');
+          end;
         end
       { Dyn-array locals: release the data buffer; balances the first-assignment
         retain (a dyn-array var assignment retains the new buffer). }
@@ -10292,6 +10370,8 @@ begin
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
         if VD.IsThreadVar then
           Self.MarkThreadVar(VD.Names.Strings[J]);
+        if VD.IsWeak then
+          Self.MarkWeakGlobal(VD.Names.Strings[J]);
       end;
   end;
 

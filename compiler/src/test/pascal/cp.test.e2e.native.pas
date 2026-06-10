@@ -331,6 +331,8 @@ type
     procedure TestRun_Native_IntfFuncReturn;
     { M8b — interface-field := function-returning-interface (sret into field). }
     procedure TestRun_Native_IntfFieldFromFunc;
+    { M8b — weak interface variable: _WeakAssign/_WeakClear instead of ARC. }
+    procedure TestRun_Native_WeakInterfaceVar;
   end;
 
 implementation
@@ -2949,6 +2951,39 @@ const
     end.
     ''';
 
+  SrcWeakInterfaceVar = '''
+    program P;
+    type
+      IVal = interface
+        function Get(): Integer;
+      end;
+      TVal = class(TObject, IVal)
+        V: Integer;
+        function Get(): Integer;
+        destructor Destroy; override;
+      end;
+    function TVal.Get(): Integer;
+    begin
+      Result := V
+    end;
+    destructor TVal.Destroy;
+    begin
+      WriteLn('destroyed');
+      inherited Destroy
+    end;
+    var
+      S: IVal;
+      [Weak] W: IVal;
+    begin
+      S := TVal.Create();
+      TVal(S).V := 77;
+      W := S;
+      WriteLn(W.Get());
+      S := nil;
+      WriteLn('done')
+    end.
+    ''';
+
   { Dyn-array field inside a class: the field must be ARC-refcounted on store
     and released when the holder is destroyed (f74e5cc).  Observed by reading an
     element back after the field assignment — a dropped/garbled buffer would
@@ -4897,6 +4932,13 @@ procedure TE2ENativeTests.TestRun_Native_IntfFieldFromFunc;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfFieldFromFunc, '10' + LE + '20' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_WeakInterfaceVar;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcWeakInterfaceVar,
+    '77' + LE + 'destroyed' + LE + 'done' + LE, 0);
 end;
 
 initialization
