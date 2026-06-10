@@ -278,6 +278,9 @@ type
 
     { Method call >5 user args }
     procedure TestRun_Native_MethodCall_ManyArgs;
+
+    { Implicit-Self class field access — FInner.FVal inside a method }
+    procedure TestRun_Native_ImplicitSelf_ClassField;
   end;
 
 implementation
@@ -4253,6 +4256,31 @@ begin
     + '  Obj.Free '
     + 'end.',
     '21' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ImplicitSelf_ClassField;
+begin
+  AssertRunsOnBoth(
+    'program T;'
+    + 'type '
+    + '  TInner = class FVal: Integer; end; '
+    + '  TOuter = class '
+    + '    FInner: TInner; '
+    + '    function GetVal(): Integer; '
+    + '  end; '
+    + 'function TOuter.GetVal(): Integer; '
+    + 'begin Result := FInner.FVal end; '
+    + 'var I: TInner; O: TOuter; '
+    + 'begin '
+    + '  I := TInner.Create; '
+    + '  I.FVal := 42; '
+    + '  O := TOuter.Create; '
+    + '  O.FInner := I; '
+    + '  WriteLn(O.GetVal()); '
+    + '  O.Free; '
+    + '  I.Free '
+    + 'end.',
+    '42' + LE, 0);
 end;
 
 initialization
