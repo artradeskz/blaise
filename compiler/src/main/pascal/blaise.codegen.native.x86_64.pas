@@ -4766,12 +4766,19 @@ begin
       Self.EmitExprToEax(FAE.Base);
       Self.Emit(#9'movq %rax, %rdi');
     end
+    else if MD.IsRecordMethod and FAE.IsVarParam then
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(FAE.RecordName)]))
     else if MD.IsRecordMethod then
     begin
       if Self.IsLocal(FAE.RecordName) then
         Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FAE.RecordName)]))
       else
         Self.Emit(Format(#9'leaq %s(%%rip), %%rdi', [FAE.RecordName]));
+    end
+    else if FAE.IsVarParam then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(FAE.RecordName)]));
+      Self.Emit(#9'movq (%rdi), %rdi');
     end
     else
     begin
@@ -5325,12 +5332,19 @@ begin
 
     if ACall.ObjectName <> '' then
     begin
-      if MD.IsRecordMethod then
+      if MD.IsRecordMethod and ACall.IsVarParam then
+        Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+      else if MD.IsRecordMethod then
       begin
         if Self.IsLocal(ACall.ObjectName) then
           Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
         else
           Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+      end
+      else if ACall.IsVarParam then
+      begin
+        Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
+        Self.Emit(#9'movq (%r10), %r10');
       end
       else
       begin
@@ -5394,12 +5408,19 @@ begin
 
     if ACall.ObjectName <> '' then
     begin
-      if MD.IsRecordMethod then
+      if MD.IsRecordMethod and ACall.IsVarParam then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+      else if MD.IsRecordMethod then
       begin
         if Self.IsLocal(ACall.ObjectName) then
           Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
         else
           Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ACall.ObjectName]));
+      end
+      else if ACall.IsVarParam then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]));
+        Self.Emit(#9'movq (%rax), %rax');
       end
       else
       begin
@@ -5598,6 +5619,15 @@ begin
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(#9'callq _ClassRelease');
     end
+    else if ACall.IsVarParam then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]));
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'movq (%rax), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+      Self.Emit(#9'movq $0, (%rax)');
+    end
     else
     begin
       if Self.IsLocal(ACall.ObjectName) then
@@ -5649,6 +5679,11 @@ begin
         Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
       else
         Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+    end
+    else if ACall.IsVarParam then
+    begin
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
+      Self.Emit(#9'movq (%r10), %r10');
     end
     else if ACall.ObjectName <> '' then
     begin
@@ -5718,6 +5753,11 @@ begin
         Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
       else
         Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ACall.ObjectName]));
+    end
+    else if ACall.IsVarParam then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]));
+      Self.Emit(#9'movq (%rax), %rax');
     end
     else if ACall.ObjectName <> '' then
     begin
@@ -9106,12 +9146,19 @@ begin
 
     if ACall.ObjectName <> '' then
     begin
-      if MD.IsRecordMethod then
+      if MD.IsRecordMethod and ACall.IsVarParam then
+        Self.Emit(Format(#9'movq %s, %%rsi', [Self.VarOperand(ACall.ObjectName)]))
+      else if MD.IsRecordMethod then
       begin
         if Self.IsLocal(ACall.ObjectName) then
           Self.Emit(Format(#9'leaq %s, %%rsi', [Self.VarOperand(ACall.ObjectName)]))
         else
           Self.Emit(Format(#9'leaq %s(%%rip), %%rsi', [ACall.ObjectName]));
+      end
+      else if ACall.IsVarParam then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rsi', [Self.VarOperand(ACall.ObjectName)]));
+        Self.Emit(#9'movq (%rsi), %rsi');
       end
       else
       begin

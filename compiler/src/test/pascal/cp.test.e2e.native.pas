@@ -307,6 +307,9 @@ type
     procedure TestRun_Native_ImplicitSelfMethodCall;
     procedure TestRun_Native_RecordFieldCopy;
     procedure TestRun_Native_SretFieldARC;
+
+    { M8b — method call on a var-param class receiver (double dereference). }
+    procedure TestRun_Native_VarParam_MethodCall;
   end;
 
 implementation
@@ -4577,6 +4580,35 @@ begin
     + '  F.Free() '
     + 'end.',
     '42:hello' + LE + '99:world' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_VarParam_MethodCall;
+begin
+  Self.AssertRunsOnBoth(
+    'program TestVarParamMethodCall; '
+    + 'type '
+    + '  TBox = class '
+    + '  public '
+    + '    FValue: Integer; '
+    + '    procedure SetVal(AV: Integer); '
+    + '    function GetVal(): Integer; '
+    + '  end; '
+    + 'procedure TBox.SetVal(AV: Integer); '
+    + 'begin FValue := AV end; '
+    + 'function TBox.GetVal(): Integer; '
+    + 'begin Result := FValue end; '
+    + 'procedure Bump(var B: TBox); '
+    + 'begin B.SetVal(B.GetVal() + 10) end; '
+    + 'var '
+    + '  X: TBox; '
+    + 'begin '
+    + '  X := TBox.Create(); '
+    + '  X.SetVal(5); '
+    + '  Bump(X); '
+    + '  WriteLn(X.GetVal()); '
+    + '  X.Free() '
+    + 'end.',
+    '15' + LE, 0);
 end;
 
 initialization
