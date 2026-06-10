@@ -120,6 +120,7 @@ type
     procedure TestRun_Native_String_Format_IntArg;
     procedure TestRun_Native_String_Format_StrArg;
     procedure TestRun_Native_String_Format_MixedArgs;
+    procedure TestRun_Native_String_Format_FuncCallArg;
     procedure TestRun_Native_String_ConcatWithInt;
     procedure TestRun_Native_String_ChrConcat;
 
@@ -1776,6 +1777,21 @@ const
     end.
     ''';
 
+  SrcFormatFuncCallArg = '''
+    program P;
+    function GetName: string;
+    begin
+      Result := 'Bob'
+    end;
+    function GetAge: Integer;
+    begin
+      Result := 25
+    end;
+    begin
+      WriteLn(Format('%s is %d', GetName(), GetAge()))
+    end.
+    ''';
+
   SrcConcatWithInt = '''
     program P;
     begin
@@ -1805,6 +1821,12 @@ procedure TE2ENativeTests.TestRun_Native_String_Format_MixedArgs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcFormatMixedArgs, 'Alice=30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_String_Format_FuncCallArg;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcFormatFuncCallArg, 'Bob is 25' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_String_ConcatWithInt;

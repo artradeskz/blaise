@@ -9370,8 +9370,9 @@ begin
   if FmtCount > 0 then
   begin
     TotalSize := ((FmtCount * 16) + 15) and (-16);
+    Self.Emit(#9'pushq %rbx');
     Self.Emit(Format(#9'subq $%d, %%rsp', [TotalSize]));
-    Self.Emit(#9'movq %rsp, %r11');
+    Self.Emit(#9'movq %rsp, %rbx');
     for I := 0 to FmtCount - 1 do
     begin
       if UseArray then
@@ -9382,17 +9383,19 @@ begin
         (Arg.ResolvedType.Kind in [tyInteger, tyBoolean, tyByte, tyUInt32,
                                     tyInt64, tyUInt64, tySmallInt, tyWord, tyEnum]);
       if IsIntArg then
-        Self.Emit(Format(#9'movq $0, %d(%%r11)', [I * 16]))
+        Self.Emit(Format(#9'movq $0, %d(%%rbx)', [I * 16]))
       else
-        Self.Emit(Format(#9'movq $1, %d(%%r11)', [I * 16]));
+        Self.Emit(Format(#9'movq $1, %d(%%rbx)', [I * 16]));
       Self.EmitExprToEax(Arg);
-      Self.Emit(Format(#9'movq %%rax, %d(%%r11)', [I * 16 + 8]));
+      Self.Emit(Format(#9'movq %%rax, %d(%%rbx)', [I * 16 + 8]));
     end;
-    Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [TotalSize]));
-    Self.Emit(#9'movq %r11, %rsi');
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [TotalSize + 8]));
+    Self.Emit(#9'movq %rbx, %rsi');
     Self.Emit(Format(#9'movl $%d, %%edx', [FmtCount]));
     Self.Emit(#9'callq _StringFormatN');
-    Self.Emit(Format(#9'addq $%d, %%rsp', [TotalSize + 8]));
+    Self.Emit(Format(#9'addq $%d, %%rsp', [TotalSize]));
+    Self.Emit(#9'popq %rbx');
+    Self.Emit(#9'addq $8, %rsp');
   end
   else
   begin
