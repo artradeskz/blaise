@@ -3087,6 +3087,229 @@ begin
       Self.Emit(#9'callq _UpCase');
       Exit;
     end;
+    if SameText(FC.Name, 'OrdAt') and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'movl %eax, %esi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _OrdAt');
+      Exit;
+    end;
+    if SameText(FC.Name, 'FileExists') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _FileExists');
+      Exit;
+    end;
+    if SameText(FC.Name, 'DirectoryExists') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _DirectoryExists');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ReadFile') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ReadFile');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ExtractFilePath') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ExtractFilePath');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ExtractFileName') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ExtractFileName');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ExtractFileDir') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ExtractFileDir');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ExtractFileExt') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ExtractFileExt');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ChangeFileExt') and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _ChangeFileExt');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ForceDirectories') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ForceDirectories');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ExcludeTrailingPathDelimiter') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ExcludeTrailingPathDelimiter');
+      Exit;
+    end;
+    if SameText(FC.Name, 'IncludeTrailingPathDelimiter') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _IncludeTrailingPathDelimiter');
+      Exit;
+    end;
+    if SameText(FC.Name, 'RenameFile') and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _RenameFile');
+      Exit;
+    end;
+    if SameText(FC.Name, 'SetCurrentDir') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _SetCurrentDir');
+      Exit;
+    end;
+    if SameText(FC.Name, 'GetCurrentDir') and (FC.Args.Count = 0) then
+    begin
+      Self.Emit(#9'callq _GetCurrentDir');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ParamStr') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movl %eax, %edi');
+      Self.Emit(#9'callq _ParamStr');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ParamCount') and (FC.Args.Count = 0) then
+    begin
+      Self.Emit(#9'callq _ParamCount');
+      Exit;
+    end;
+    if (SameText(FC.Name, 'GetEnvVar') or SameText(FC.Name, 'GetEnvironmentVariable'))
+       and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _GetEnvVar');
+      Exit;
+    end;
+    if SameText(FC.Name, 'GetProcessID') and (FC.Args.Count = 0) then
+    begin
+      Self.Emit(#9'callq _GetProcessID');
+      Exit;
+    end;
+    if SameText(FC.Name, 'GetTempDir') and (FC.Args.Count = 0) then
+    begin
+      Self.Emit(#9'callq _GetTempDir');
+      Exit;
+    end;
+    if SameText(FC.Name, 'GetTempFileName') and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _GetTempFileName');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Exec') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _Exec');
+      Exit;
+    end;
+    if SameText(FC.Name, 'CurrentExceptionMessage') and (FC.Args.Count = 0) then
+    begin
+      Self.Emit(#9'callq _CurrentExceptionMessage');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ProcessCreate') and (FC.Args.Count = 0) then
+    begin
+      Self.Emit(#9'callq _ProcessCreate');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ProcessRunning') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ProcessRunning');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ProcessReadOutput') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ProcessReadOutput');
+      Exit;
+    end;
+    if SameText(FC.Name, 'ProcessExitCode') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ProcessExitCode');
+      Exit;
+    end;
+    if SameText(FC.Name, 'FileAge') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _FileAge');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Floor') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'callq floor');
+      Self.Emit(#9'cvttsd2si %xmm0, %rax');
+      Exit;
+    end;
+    if SameText(FC.Name, 'Ceil') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'callq ceil');
+      Self.Emit(#9'cvttsd2si %xmm0, %rax');
+      Exit;
+    end;
+    if SameText(FC.Name, 'IsNaN') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'callq __isnan');
+      Exit;
+    end;
+    if SameText(FC.Name, 'IsInfinite') and (FC.Args.Count = 1) then
+    begin
+      Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'callq __isinf');
+      Exit;
+    end;
     if FC.IsIndirectCall then
     begin
       { Bare function-pointer call: load the pointer from the variable slot
@@ -6060,6 +6283,81 @@ begin
       Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
       Self.Emit(#9'movl %eax, %edi');
       Self.Emit(#9'callq _Sleep');
+      Exit;
+    end;
+    if SameText(PC.Name, 'DeleteFile') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _DeleteFile');
+      Exit;
+    end;
+    if SameText(PC.Name, 'RemoveDir') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _RemoveDir');
+      Exit;
+    end;
+    if SameText(PC.Name, 'WriteFile') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _WriteFile');
+      Exit;
+    end;
+    if SameText(PC.Name, 'AppendFile') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _AppendFile');
+      Exit;
+    end;
+    if SameText(PC.Name, 'ProcessSetExe') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _ProcessSetExe');
+      Exit;
+    end;
+    if SameText(PC.Name, 'ProcessAddArg') and (PC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _ProcessAddArg');
+      Exit;
+    end;
+    if SameText(PC.Name, 'ProcessExecute') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ProcessExecute');
+      Exit;
+    end;
+    if SameText(PC.Name, 'ProcessWaitOnExit') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ProcessWaitOnExit');
+      Exit;
+    end;
+    if SameText(PC.Name, 'ProcessFree') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ProcessFree');
       Exit;
     end;
     if PC.IsIndirectCall then
