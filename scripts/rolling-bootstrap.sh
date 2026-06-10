@@ -289,8 +289,8 @@ echo "REACHED $TO_REF — rolling bootstrap succeeded through ${#COMMITS[@]} com
 # ---------------------------------------------------------------------------
 VER="$(grep -m1 -oE "Version = '[^']+'" "$WT/compiler/src/main/pascal/Blaise.pas" \
         | sed "s/Version = '//; s/'//")"
-# 0.10.0-dev -> v0.10.0-pre ; 0.10.0 -> v0.10.0-pre
-PRE="v${VER%-dev}"
+# 0.11.0-SNAPSHOT -> v0.11.0-pre ; 0.11.0 -> v0.11.0-pre
+PRE="v${VER%-SNAPSHOT}"
 case "$PRE" in *-pre) ;; *) PRE="${PRE}-pre" ;; esac
 
 if [ "$DO_INSTALL" -eq 1 ]; then

@@ -821,8 +821,8 @@ begin
   end;
   Tail := Copy(CompId, Length(COMPILER_ID_PREFIX),
                Length(CompId) - Length(COMPILER_ID_PREFIX));
-  { Strip -SNAPSHOT or -dev suffix from project version for comparison.
-    Convention: project.xml uses X.Y.Z-SNAPSHOT, COMPILER_ID uses X.Y.Z-dev+suffix. }
+  { Strip -SNAPSHOT suffix from project version for comparison.
+    Convention: both project.xml and COMPILER_ID use X.Y.Z-SNAPSHOT. }
   BaseVer := ProjVer;
   DashPos := Pos('-', BaseVer);
   if DashPos >= 0 then

@@ -32,7 +32,7 @@ type
   TBackend = (bkQBE, bkNative);
 
 const
-  Version = '0.11.0-dev';
+  Version = '0.11.0-SNAPSHOT';
   CompilerName = 'Blaise';
 
 procedure PrintUsage;

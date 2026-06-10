@@ -29,17 +29,19 @@ This compiler takes a different approach:
 See link:docs/design.adoc[docs/design.adoc] for the full architecture and
 implementation plan.
 
-The result — A modern, cross-platform Object Pascal compiler targeting native code via
-https://c9x.me/compile/[QBE] (and eventually LLVM). Single language mode,
-single string type, zero-GUID interfaces, reified generics, and first-class
+The result — A modern, cross-platform Object Pascal compiler targeting native code
+via two backends: https://c9x.me/compile/[QBE] (the default, production-proven
+backend) and a direct native x86-64 code generator (in active development,
+approaching feature parity). Single language mode, single string type,
+zero-GUID interfaces, reified generics, and first-class
 https://github.com/graemeg/opdebugger[OPDF] debug format support.
 
 
 == 🚀 Project Status
 
 * **Self-Hosting:** Yes. Blaise bootstraps and recompiles itself with byte-for-byte fixpoint. FPC is no longer required — the entire toolchain runs on Blaise alone.
-* **Testing:** 2627 tests and growing (Test-Driven Development from day one). The test suite itself compiles under Blaise.
-* **Backends:** Currently utilising a QBE backend, with an LLVM backend in active development.
+* **Testing:** 2768 tests and growing (Test-Driven Development from day one). The test suite itself compiles under Blaise.
+* **Backends:** Two code-generation backends — QBE (default, production) and a direct native x86-64 backend (in active development, approaching feature parity with QBE).
 
 
 [cols="1,3,1", options="header"]
@@ -71,8 +73,8 @@ https://github.com/graemeg/opdebugger[OPDF] debug format support.
 | In-Progress
 
 | 7
-| LLVM + Windows + macOS ARM64
-| Planned
+| Native backend feature parity + Windows + macOS ARM64
+| In-Progress
 
 | 8
 | LSP + VS Code extension
@@ -131,14 +133,14 @@ project.xml                       Root aggregator (packaging=pom)
 ├── compiler/                     The compiler binary (packaging=application)
 │   ├── project.xml
 │   └── src/
-│       ├── main/pascal/          uLexer, uParser, uAST, uCodeGenQBE, ...
+│       ├── main/pascal/          uLexer, uParser, uAST, uCodeGenQBE, blaise.codegen.native.*, ...
 │       └── test/pascal/          Test suite (blaise.testing, compiled by Blaise)
 │
 ├── runtime/                      Always-linked runtime (packaging=library)
 │   ├── project.xml
 │   ├── Makefile
 │   └── src/
-│       ├── main/c/               C shims (blaise_exc.c, blaise_io.c, ...)
+│       ├── main/asm/              Platform assembly (setjmp, atomics, UTF-8)
 │       ├── main/pascal/          system.pas, blaise_str.pas, blaise_arc.pas, ...
 │       └── test/pascal/          Runtime tests (punit, compiled by Blaise)
 │
@@ -253,10 +255,13 @@ Once built, the compiler binary is at `compiler/target/blaise`.
 
 [source,shell]
 ----
-# Compile a single-file program
+# Compile a single-file program (QBE backend — default)
 compiler/target/blaise --source Hello.pas --emit-ir > Hello.ssa
 vendor/qbe/qbe -o Hello.s Hello.ssa
 gcc -o Hello Hello.s compiler/target/blaise_rtl.a
+
+# Compile via the native x86-64 backend (no QBE step)
+compiler/target/blaise --source Hello.pas --backend native --output Hello
 
 # Compile with unit search paths
 compiler/target/blaise --source MyApp.pas \
