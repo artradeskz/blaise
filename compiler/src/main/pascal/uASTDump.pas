@@ -144,7 +144,7 @@ begin
     end;
     if TIdentExpr(AExpr).IsImplicitSelfMethod then
       Flags := Flags + ' ImplicitSelfMethod';
-    if TIdentExpr(AExpr).IsVarParam then
+    if TIdentExpr(AExpr).ParamMode <> pmNone then
       Flags := Flags + ' VarParam';
     if TIdentExpr(AExpr).IsGlobal then
       Flags := Flags + ' Global';

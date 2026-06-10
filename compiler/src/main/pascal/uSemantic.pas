@@ -7938,10 +7938,16 @@ begin
       the QBE ABI level: the local slot holds a pointer, not the aggregate
       bytes.  Codegen must dereference the slot before reading fields. }
     TIdentExpr(AExpr).Name      := Sym.Name;  { normalise to declared casing }
-    TIdentExpr(AExpr).IsVarParam :=
-      (Sym.Kind = skVarParameter) or
-      ((Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
-       (Sym.TypeDesc.Kind in [tyRecord, tyStaticArray]));
+    if Sym.Kind = skVarParameter then
+      TIdentExpr(AExpr).ParamMode := pmVar
+    else if (Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
+            (Sym.TypeDesc.Kind = tyRecord) then
+      TIdentExpr(AExpr).ParamMode := pmRecordValue
+    else if (Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
+            (Sym.TypeDesc.Kind = tyStaticArray) then
+      TIdentExpr(AExpr).ParamMode := pmStaticArrayValue
+    else
+      TIdentExpr(AExpr).ParamMode := pmNone;
     TIdentExpr(AExpr).IsGlobal    := Sym.IsGlobal;
     TIdentExpr(AExpr).IsThreadVar := Sym.IsThreadVar;
     if Sym.Kind = skConstant then

@@ -4322,7 +4322,7 @@ begin
       EmitLine(Format('  %s =l loadl %s', [Loaded, VarRef(Id.Name, Id.IsGlobal)]));
       Result := Loaded;
     end
-    else if Id.IsVarParam then
+    else if Id.ParamMode <> pmNone then
     begin
       { Var-record param: dereference the param slot to get the actual record
         address. }
@@ -4449,7 +4449,7 @@ var
   SelfT: string;
   ImplFld: TFieldInfo;
 begin
-  if AIdent.IsVarParam then
+  if AIdent.ParamMode <> pmNone then
   begin
     // The local slot holds the caller's pointer — load it so we pass the
     // original address, not the address of the local slot.
@@ -10216,7 +10216,7 @@ begin
         EmitLine(Format('  %s =w loadw %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
       end;
     end
-    else if TIdentExpr(AExpr).IsVarParam and
+    else if (TIdentExpr(AExpr).ParamMode <> pmNone) and
             (AExpr.ResolvedType <> nil) and
             (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
     begin
@@ -10225,7 +10225,7 @@ begin
       EmitLine(Format('  %s =l loadl %%_var_%s', [T, TIdentExpr(AExpr).Name]));
       Exit(T);
     end
-    else if TIdentExpr(AExpr).IsVarParam then
+    else if TIdentExpr(AExpr).ParamMode <> pmNone then
     begin
       { Var param of scalar type: load pointer, then dereference to get value }
       Ptr := AllocTemp();

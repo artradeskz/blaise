@@ -69,10 +69,17 @@ type
 
   TNilLiteral = class(TASTExpr);  { nil keyword — type is tyNil }
 
+  TParamMode = (
+    pmNone,
+    pmVar,
+    pmRecordValue,
+    pmStaticArrayValue
+  );
+
   TIdentExpr = class(TASTExpr)
   public
     Name:              string;
-    IsVarParam:        Boolean;  { set by uSemantic — True if this ident is a var parameter }
+    ParamMode:         TParamMode; { set by uSemantic — how the param slot is laid out }
     IsConstant:        Boolean;  { set by uSemantic — True if this ident is a skConstant symbol }
     ConstValue:        Int64;    { valid when IsConstant = True; integer/bool/enum value }
     ConstString:       string;   { valid when IsConstant = True and type is tyString }
@@ -1690,7 +1697,7 @@ begin
   begin
     IE := TIdentExpr.Create();
     IE.Name := TIdentExpr(AExpr).Name;
-    { Note: leave IsConstant/IsVarParam/IsImplicitSelf/etc. nil/false —
+    { Note: leave IsConstant/ParamMode/IsImplicitSelf/etc. nil/false —
       semantic analyser must re-resolve in the new instance's scope. }
     Result := IE;
   end

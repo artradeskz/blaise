@@ -2846,7 +2846,7 @@ begin
     if TIdentExpr(AExpr).IsConstant then
       Self.Emit(Format(#9'movabsq $%s, %%rax',
         [IntToStr(TIdentExpr(AExpr).ConstValue)]))
-    else if TIdentExpr(AExpr).IsVarParam then
+    else if TIdentExpr(AExpr).ParamMode <> pmNone then
     begin
       Self.Emit(Format(#9'movq %s, %%rcx',
         [Self.VarOperand(TIdentExpr(AExpr).Name)]));
@@ -4327,7 +4327,7 @@ begin
 
     { @VarParam — the variable's slot holds a pointer to the caller's data;
       load that pointer value (not the slot address). }
-    if (AOE.Expr is TIdentExpr) and TIdentExpr(AOE.Expr).IsVarParam then
+    if (AOE.Expr is TIdentExpr) and (TIdentExpr(AOE.Expr).ParamMode <> pmNone) then
     begin
       Self.Emit(Format(#9'movq %s, %%rax',
         [Self.VarOperand(TIdentExpr(AOE.Expr).Name)]));
@@ -4770,7 +4770,7 @@ begin
   begin
     { Pass the argument's address.  If the arg is itself a var param the slot
       already holds a pointer; otherwise take the address of the local/global. }
-    if (AArg is TIdentExpr) and TIdentExpr(AArg).IsVarParam then
+    if (AArg is TIdentExpr) and (TIdentExpr(AArg).ParamMode <> pmNone) then
       Self.Emit(Format(#9'movq %s, %%rax',
         [Self.VarOperand(TIdentExpr(AArg).Name)]))
     else if (AArg is TIdentExpr) and Self.IsLocal(TIdentExpr(AArg).Name) then
@@ -7589,7 +7589,7 @@ begin
       end
       else if IsVar then
       begin
-        if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
+        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
           Self.Emit(Format(#9'movq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]))
         else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
@@ -7692,7 +7692,7 @@ begin
       end
       else if IsVar then
       begin
-        if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
+        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
           Self.Emit(Format(#9'movq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]))
         else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
@@ -7798,7 +7798,7 @@ begin
              TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
     if IsVar then
     begin
-      if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
+      if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
         Self.Emit(Format(#9'movq %s, %%rax',
           [Self.VarOperand(TIdentExpr(Arg).Name)]))
       else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
