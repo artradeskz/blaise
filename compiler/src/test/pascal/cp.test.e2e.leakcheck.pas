@@ -33,6 +33,8 @@ type
     procedure TestRelease_NoReport_WhenDebugOff;
     procedure TestDebug_LeakReport_IncludesUnitAndLine;
     procedure TestDebug_LeakReport_IncludesUnitAndLine_Native;
+    procedure TestDebug_StringLeak_Reported;
+    procedure TestDebug_StringClean_NoReport;
   end;
 
 implementation
@@ -196,6 +198,32 @@ const
     end.
     ''';
 
+  { Leaked string: concatenation produces a heap-allocated string (non-immortal).
+    Extra AddRef prevents scope-exit release from freeing it. }
+  SrcStringLeak = '''
+    program P;
+    uses blaise_arc;
+    var
+      S: string;
+    begin
+      S := 'hel' + 'lo';
+      _StringAddRef(Pointer(S));
+      WriteLn('done')
+    end.
+    ''';
+
+  { Clean string usage: no leak expected — scope-exit ARC releases properly. }
+  SrcStringClean = '''
+    program P;
+    uses blaise_arc;
+    var
+      S: string;
+    begin
+      S := 'hello';
+      WriteLn(S)
+    end.
+    ''';
+
 { ------------------------------------------------------------------ }
 
 procedure TE2ELeakCheckTests.TestDebug_NoLeak_NoReport;
@@ -246,7 +274,7 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcOneLeak, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('leak header present', Pos('Blaise leak report', Output) >= 0);
-  AssertTrue('count 1', Pos('1 object(s)', Output) >= 0);
+  AssertTrue('count 1', Pos('1 leak(s)', Output) >= 0);
   AssertTrue('class name', Pos('TBox', Output) >= 0);
 end;
 
@@ -259,7 +287,7 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcTwoLeaks, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('leak header present', Pos('Blaise leak report', Output) >= 0);
-  AssertTrue('count 2', Pos('2 object(s)', Output) >= 0);
+  AssertTrue('count 2', Pos('2 leak(s)', Output) >= 0);
   AssertTrue('TAlpha reported', Pos('TAlpha', Output) >= 0);
   AssertTrue('TBeta reported', Pos('TBeta', Output) >= 0);
 end;
@@ -273,7 +301,7 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTLDebug(SrcCycleLeak, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('leak header present', Pos('Blaise leak report', Output) >= 0);
-  AssertTrue('count 2', Pos('2 object(s)', Output) >= 0);
+  AssertTrue('count 2', Pos('2 leak(s)', Output) >= 0);
   AssertTrue('TNode reported', Pos('TNode', Output) >= 0);
 end;
 
@@ -317,6 +345,31 @@ begin
   AssertTrue('class name', Pos('TBox', Output) >= 0);
   AssertTrue('unit name in report', Pos('LeakSite', Output) >= 0);
   AssertTrue('at separator', Pos(' at ', Output) >= 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_StringLeak_Reported;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebug(SrcStringLeak, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertTrue('leak header', Pos('Blaise leak report', Output) >= 0);
+  AssertTrue('string tag', Pos('string', Output) >= 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_StringClean_NoReport;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebug(SrcStringClean, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertTrue('no leak report', Pos('Blaise leak report', Output) < 0);
 end;
 
 initialization

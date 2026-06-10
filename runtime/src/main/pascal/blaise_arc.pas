@@ -148,7 +148,7 @@ end;
 }
 
 const
-  LT_BUCKETS   = 1024;   { must be power of two }
+  LT_BUCKETS   = 4096;   { must be power of two; larger for string/dynarray tracking }
   LT_BUCKET_SZ = 32;     { 4 × 8-byte slots: key, classname, unitname, line }
 
 var
@@ -156,6 +156,8 @@ var
   GLTTable:     PChar;    { raw bucket array, LT_BUCKETS * LT_BUCKET_SZ bytes }
   GLTCount:     Integer;
   GLTTombstone: Pointer;  { sentinel for deleted slots, set to Pointer(1) at init }
+  GLTTagString:  Pointer; { sentinel classname tag for leaked strings, Pointer(2) }
+  GLTTagDynArray: Pointer; { sentinel classname tag for leaked dyn-arrays, Pointer(3) }
 
 function LTHash(P: Pointer): Integer;
 var
@@ -300,7 +302,7 @@ begin
   WriteNL();
   WriteStr('  ', 2);
   WriteInt(GLTCount);
-  WriteStr(' object(s) not released:', 24);
+  WriteStr(' leak(s) not released:', 22);
   WriteNL();
   for I := 0 to LT_BUCKETS - 1 do
   begin
@@ -314,9 +316,24 @@ begin
       LineSlot  := Pointer(Pointer(Slot) + 24);
       Line      := LineSlot^;
       WriteStr('  - ', 4);
-      WriteStrSlot(ClassName);
-      RCSlot := Slot^ - CLASS_HDR;
-      RC     := RCSlot^;
+      if ClassName = GLTTagString then
+      begin
+        WriteStr('string', 6);
+        RCSlot := Slot^ - HDR_SIZE;
+        RC := RCSlot^;
+      end
+      else if ClassName = GLTTagDynArray then
+      begin
+        WriteStr('dynarray', 8);
+        RCSlot := Slot^ - 8;
+        RC := RCSlot^;
+      end
+      else
+      begin
+        WriteStrSlot(ClassName);
+        RCSlot := Slot^ - CLASS_HDR;
+        RC := RCSlot^;
+      end;
       WriteStr(' (rc=', 5);
       WriteSignedInt(RC);
       WriteStr(')', 1);
@@ -352,6 +369,10 @@ begin
     well above page 0, and address 1 is in the unmapped zero page). }
   Sentinel := 1;
   GLTTombstone := Pointer(Sentinel);
+  Sentinel := 2;
+  GLTTagString := Pointer(Sentinel);
+  Sentinel := 3;
+  GLTTagDynArray := Pointer(Sentinel);
   TableSize := LT_BUCKETS * LT_BUCKET_SZ;
   GLTTable := PChar(_BlaiseGetMem(TableSize));
   if GLTTable = nil then begin GLTEnabled := False; Exit end;
@@ -410,11 +431,14 @@ end;
 procedure _StringAddRef(Ptr: Pointer);
 var
   RC: PInteger;
+  OldRC: Integer;
 begin
   if Ptr = nil then Exit;
   RC := PInteger(Ptr - HDR_SIZE);
   if RC^ = IMMORTAL then Exit;
-  _AtomicAddInt32(RC, 1);
+  OldRC := _AtomicAddInt32(RC, 1);
+  if (OldRC = 0) and GLTEnabled then
+    LTInsert(Ptr, GLTTagString, nil, 0);
 end;
 
 procedure _StringRelease(Ptr: Pointer);
@@ -432,7 +456,11 @@ begin
   CP := Base + 8;
   _StringReleaseCheck(Ptr, RC^, LN^, CP^);
   OldRC := _AtomicSubInt32(RC, 1);
-  if OldRC = 1 then _BlaiseFreeMem(Base);
+  if OldRC = 1 then
+  begin
+    if GLTEnabled then LTDelete(Ptr);
+    _BlaiseFreeMem(Base);
+  end;
 end;
 
 { Dynamic-array buffer header is [refcount:4][length:4]; data pointer
@@ -444,11 +472,14 @@ const
   DA_HDR = 8;
 var
   RC: PInteger;
+  OldRC: Integer;
 begin
   if Ptr = nil then Exit;
   RC := PInteger(Ptr - DA_HDR);
   if RC^ = IMMORTAL then Exit;
-  _AtomicAddInt32(RC, 1);
+  OldRC := _AtomicAddInt32(RC, 1);
+  if (OldRC = 0) and GLTEnabled then
+    LTInsert(Ptr, GLTTagDynArray, nil, 0);
 end;
 
 procedure _DynArrayRelease(Ptr: Pointer);
@@ -464,7 +495,11 @@ begin
   RC   := PInteger(Base);
   if RC^ = IMMORTAL then Exit;
   OldRC := _AtomicSubInt32(RC, 1);
-  if OldRC = 1 then _BlaiseFreeMem(Base);
+  if OldRC = 1 then
+  begin
+    if GLTEnabled then LTDelete(Ptr);
+    _BlaiseFreeMem(Base);
+  end;
 end;
 
 function _StringEquals(S1, S2: Pointer): Integer;
