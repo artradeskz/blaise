@@ -3250,8 +3250,14 @@ begin
       Exit;
     end;
     if TIdentExpr(AExpr).IsConstant then
-      Self.Emit(Format(#9'movabsq $%s, %%rax',
-        [IntToStr(TIdentExpr(AExpr).ConstValue)]))
+    begin
+      if (TIdentExpr(AExpr).ResolvedType <> nil) and
+         TIdentExpr(AExpr).ResolvedType.IsString() then
+        Self.EmitStrLitAddr(TIdentExpr(AExpr).ConstString)
+      else
+        Self.Emit(Format(#9'movabsq $%s, %%rax',
+          [IntToStr(TIdentExpr(AExpr).ConstValue)]));
+    end
     else if TIdentExpr(AExpr).ParamMode <> pmNone then
     begin
       Self.Emit(Format(#9'movq %s, %%rcx',

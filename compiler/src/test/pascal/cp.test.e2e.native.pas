@@ -310,6 +310,9 @@ type
 
     { M8b — method call on a var-param class receiver (double dereference). }
     procedure TestRun_Native_VarParam_MethodCall;
+
+    { M8b — named string constant used in assignment and as argument. }
+    procedure TestRun_Native_StringConst;
   end;
 
 implementation
@@ -4609,6 +4612,24 @@ begin
     + '  X.Free() '
     + 'end.',
     '15' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StringConst;
+begin
+  Self.AssertRunsOnBoth(
+    'program TestStringConst; '
+    + 'const '
+    + '  NL = #10; '
+    + '  GREETING = ''hello''; '
+    + 'var '
+    + '  S: string; '
+    + 'begin '
+    + '  S := GREETING; '
+    + '  Write(S); '
+    + '  Write(NL); '
+    + '  WriteLn(''done'') '
+    + 'end.',
+    'hello' + LE + 'done' + LE, 0);
 end;
 
 initialization
