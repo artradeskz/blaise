@@ -899,6 +899,29 @@ end;
 { _StringFormat                                                        }
 { ------------------------------------------------------------------ }
 
+{ Number of characters WriteDecimal will produce for N — used by
+  _StringFormatN's sizing pass so it doesn't render the digits twice. }
+function DecimalWidth(N: Int64): Integer;
+var
+  AbsN: Int64;
+begin
+  if N = 0 then
+    Exit(1);
+  Result := 0;
+  if N < 0 then
+  begin
+    Result := 1;   { '-' }
+    AbsN := -N;
+  end
+  else
+    AbsN := N;
+  while AbsN > 0 do
+  begin
+    Result := Result + 1;
+    AbsN := AbsN div 10;
+  end;
+end;
+
 function _StringFormatN(Fmt: Pointer; Args: Pointer; Count: Integer): Pointer;
 var
   F, Dst: PChar;
@@ -931,11 +954,7 @@ begin
           Tag := Integer(TagPtr^);
           Val := ValPtr^;
           if Tag = 0 then
-          begin
-            IBP := PChar(@IntBuf[0]);
-            Written := WriteDecimal(Val, IBP);
-            OutLen := OutLen + Written;
-          end
+            OutLen := OutLen + DecimalWidth(Val)
           else
           begin
             SLen := StrLen(Pointer(Val));
@@ -960,11 +979,7 @@ begin
             OutLen := OutLen + SLen;
           end
           else
-          begin
-            IBP := PChar(@IntBuf[0]);
-            Written := WriteDecimal(Val, IBP);
-            OutLen := OutLen + Written;
-          end;
+            OutLen := OutLen + DecimalWidth(Val);
         end;
         Inc(ArgIdx);
         Inc(I);

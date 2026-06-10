@@ -96,6 +96,12 @@ type
       Cleared at the start of each function by EmitVarAllocs. }
     FPromotedLocals: TStringList;
     FPromotedTypes:  TStringList;
+    { Locals/params of the function being emitted that are NOT safe to pass
+      borrowed to a const-string param: their address escapes (explicit @,
+      passed to a var/out param, or captured by a nested procedure), so a
+      callee could release the buffer through the alias mid-call.  Rebuilt
+      by EmitVarAllocs for every function; consulted by ConstArgMode. }
+    FConstArgUnsafe: TStringList;
 
     { Nested-proc capture: when emitting a nested function, this holds the
       names of variables captured from the enclosing scope.  Each captured
@@ -264,12 +270,13 @@ type
         camConsume  — +1 owned temps (function/method/getter returns): no
                       AddRef; the single post-call Release consumes the
                       transferred reference (these previously leaked).
-        camPin      — everything else, including plain local variables —
-                      AddRef before the call, Release after.  Locals would
-                      be safe to borrow in principle (the frame's own
-                      reference outlives the call), but eliding their pin
-                      exposes a latent uninitialised-register miscompile
-                      (bugs.txt 2026-06-10) — revisit once that is fixed. }
+        camBorrowed — also plain non-captured, non-address-taken local and
+                      by-value/const parameter variables: the frame's own
+                      reference outlives the call (unless the signature has
+                      a var/out string param that could alias — then pin).
+        camPin      — everything aliasable or unowned: globals, fields,
+                      var-param reads, captured or address-taken locals,
+                      rc=0 concat results — AddRef before, Release after. }
     function  ConstArgMode(AArg: TASTExpr; AParams: TObjectList): TConstArgMode;
     procedure EnsureConstStringRef(const AArgTemp: string; APar: TMethodParam;
       AArg: TASTExpr; AParams: TObjectList);
@@ -543,6 +550,10 @@ begin
   FUnitInitNames   := TStringList.Create();
   FPromotedLocals  := TStringList.Create();
   FPromotedLocals.CaseSensitive := True;
+  FConstArgUnsafe  := TStringList.Create();
+  FConstArgUnsafe.CaseSensitive := True;
+  FConstArgUnsafe.Sorted := True;
+  FConstArgUnsafe.Duplicates := dupIgnore;
   FPromotedTypes   := TStringList.Create();
   FArcSlotWritten  := TStringList.Create();
   FArcSlotWritten.CaseSensitive := True;
@@ -573,6 +584,7 @@ begin
   FThreadVarNames.Free();
   FUnitInitNames.Free();
   FPromotedLocals.Free();
+  FConstArgUnsafe.Free();
   FPromotedTypes.Free();
   FArcSlotWritten.Free();
   FFFIRecordTypes.Free();
@@ -1739,6 +1751,21 @@ begin
     the setjmp/longjmp used by the exception frame. }
   FPromotedLocals.Clear();
   FPromotedTypes.Clear();
+  { Rebuild the borrowed-arg blocklist for this function: address-taken
+    locals (explicit @, var/out args) plus anything captured by a nested
+    procedure.  Computed unconditionally — ConstArgMode needs it even when
+    the try-block guard below skips mem2reg promotion. }
+  FConstArgUnsafe.Clear();
+  AddrTaken := CollectAddressTaken(ABlock);
+  for I := 0 to AddrTaken.Count - 1 do
+    FConstArgUnsafe.Add(AddrTaken.Strings[I]);
+  AddrTaken.Free();
+  if ABlock <> nil then
+    for I := 0 to ABlock.ProcDecls.Count - 1 do
+      if TMethodDecl(ABlock.ProcDecls.Items[I]).CapturedVars <> nil then
+        for J := 0 to TMethodDecl(ABlock.ProcDecls.Items[I]).CapturedVars.Count - 1 do
+          FConstArgUnsafe.Add(
+            TMethodDecl(ABlock.ProcDecls.Items[I]).CapturedVars.Strings[J]);
   { Reset nil-slot tracking: every class/string slot starts zero because
     EmitVarAllocs below emits `storel 0, ...` for them. }
   FArcSlotWritten.Clear();
@@ -3695,6 +3722,8 @@ end;
 function TCodeGenQBE.ConstArgMode(AArg: TASTExpr;
   AParams: TObjectList): TConstArgMode;
 var
+  I:  Integer;
+  P:  TMethodParam;
   IE: TIdentExpr;
 begin
   Result := camPin;
@@ -3708,12 +3737,27 @@ begin
       Exit(camConsume);   { bare zero-arg method call — +1 owned return }
     if IE.IsConstant then
       Exit(camBorrowed);  { named string const — immortal literal data }
-    { Plain non-captured locals/params would also be safe to borrow, but
-      eliding their pin currently exposes a latent uninitialised-register
-      miscompile downstream (see bugs.txt 2026-06-10, 'borrowed-local
-      elision exposes EmitInterfaceCall register corruption') — keep them
-      pinned until that is fixed. }
-    Exit(camPin);         { variable of any kind — pin }
+    if (not IE.IsGlobal) and (IE.ParamMode = pmNone) and
+       (IE.ImplicitFieldInfo = nil) and not IsCaptured(IE.Name) and
+       (FConstArgUnsafe.IndexOf(IE.Name) < 0) then
+    begin
+      { Plain local / by-value or const param: the frame's own reference
+        outlives the call.  One alias can still defeat that — a var/out
+        STRING param in the same signature, F(const A: string; var B:
+        string) called as F(L, L): the callee's write to B releases L's
+        buffer while A borrows it.  Pin when the signature has one. }
+      if AParams <> nil then
+        for I := 0 to AParams.Count - 1 do
+        begin
+          P := TMethodParam(AParams.Items[I]);
+          if P.IsVarParam and (P.ResolvedType <> nil) and
+             P.ResolvedType.IsString() then
+            Exit(camPin);
+        end;
+      Exit(camBorrowed);
+    end;
+    Exit(camPin);         { global, var-param read, implicit-Self field,
+                            address-taken or nested-captured local }
   end;
   if ExprOwnsRef(AArg) then
     Exit(camConsume);     { function/method/getter return — +1 owned temp }
@@ -11642,7 +11686,24 @@ function TCodeGenQBE.QBEMangle(const AName: string): string;
 var
   I: Integer;
   C: Integer;
+  Clean: Boolean;
 begin
+  { Fast path: the overwhelming majority of names contain none of the
+    mangled characters — return the input unchanged instead of rebuilding
+    it with one concat (and its ARC churn) per character. }
+  Clean := True;
+  for I := 0 to Length(AName) - 1 do
+  begin
+    C := StrAt(AName, I);
+    if (C = 60) or (C = 62) or (C = 44) or (C = 36) or (C = 64) or
+       (C = 94) then
+    begin
+      Clean := False;
+      break;
+    end;
+  end;
+  if Clean then
+    Exit(AName);
   Result := '';
   for I := 0 to Length(AName) - 1 do
   begin

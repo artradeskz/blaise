@@ -14,17 +14,16 @@ unit cp.test.constarg;
   the caller protects the argument for the duration of the call.  The
   protection depends on the argument's shape:
 
-    borrowed  — string literals and named string consts (immortal data):
-                NO AddRef/Release pair is emitted at all.
+    borrowed  — string literals, named string consts (immortal data) and
+                plain non-captured, non-address-taken local/param
+                variables: NO AddRef/Release pair is emitted at all.
     consume   — function/method/getter returns (+1 owned temps): no
                 AddRef, ONE Release after the call consumes the temp
                 (previously these leaked).
-    pin       — everything else, including plain local variables —
-                AddRef before the call, Release after.  Locals would be
-                borrowable in principle, but eliding their pin exposes a
-                latent uninitialised-register miscompile (bugs.txt
-                2026-06-10); these tests pin the CURRENT contract and
-                should be revisited when local borrowing lands. }
+    pin       — everything aliasable or unowned: globals, fields, concat
+                results (rc=0), captured or address-taken locals, and any
+                local in a call whose signature has a var/out string
+                param (F(L, L) aliasing) — AddRef before, Release after. }
 
 interface
 
@@ -41,8 +40,10 @@ type
       functions' codegen. }
     function FuncRegion(const AIR, AName: string): string;
   published
-    procedure TestConstArg_ParamForward_Pins;
-    procedure TestConstArg_LocalVar_Pins;
+    procedure TestConstArg_ParamForward_NoArcOps;
+    procedure TestConstArg_LocalVar_NoPin;
+    procedure TestConstArg_AddrTakenLocal_Pins;
+    procedure TestConstArg_CapturedLocal_Pins;
     procedure TestConstArg_Literal_NoPin;
     procedure TestConstArg_GlobalVar_Pins;
     procedure TestConstArg_OwnedReturn_ConsumeOnly;
@@ -99,7 +100,7 @@ begin
   Result := StrCopyFrom(AIR, StartP, EndP);
 end;
 
-procedure TConstArgTests.TestConstArg_ParamForward_Pins;
+procedure TConstArgTests.TestConstArg_ParamForward_NoArcOps;
 const
   Src = '''
       program P;
@@ -119,15 +120,14 @@ const
 var
   Region: string;
 begin
-  { Forwarding a const param to a const param would be borrowable, but
-    variable shapes currently pin (see unit comment). }
+  { Forwarding a const param to a const param: borrowed all the way —
+    the Caller body must contain no string ARC ops at all. }
   Region := FuncRegion(GenIR(Src), 'Caller');
-  AssertTrue('AddRef pins forwarded param', Pos('_StringAddRef', Region) >= 0);
-  AssertTrue('Release unpins forwarded param',
-    Pos('_StringRelease', Region) >= 0);
+  AssertEquals('no AddRef in Caller', -1, Pos('_StringAddRef', Region));
+  AssertEquals('no Release in Caller', -1, Pos('_StringRelease', Region));
 end;
 
-procedure TConstArgTests.TestConstArg_LocalVar_Pins;
+procedure TConstArgTests.TestConstArg_LocalVar_NoPin;
 const
   Src = '''
       program P;
@@ -154,11 +154,11 @@ var
   RelCount, I: Integer;
 begin
   { L := Mk() consumes the owned return (no AddRef) but still releases L's
-    previous value; Sink(L) pins L (variable shape, see unit comment).
-    Releases in Caller: assignment release-old + call unpin + L's
-    scope-exit release. }
+    previous value; Sink(L) borrows L (no pin).  Releases in Caller:
+    assignment release-old + L's scope-exit release.  A pinned call would
+    make it three. }
   Region := FuncRegion(GenIR(Src), 'Caller');
-  AssertTrue('pin AddRef present', Pos('_StringAddRef', Region) >= 0);
+  AssertEquals('no AddRef in Caller', -1, Pos('_StringAddRef', Region));
   RelCount := 0;
   I := Pos('_StringRelease', Region);
   while I >= 0 do
@@ -166,8 +166,8 @@ begin
     RelCount := RelCount + 1;
     I := PosEx('_StringRelease', Region, I + 1);
   end;
-  AssertEquals('three Releases (assign old + call unpin + scope exit)',
-    3, RelCount);
+  AssertEquals('two Releases (assign old + scope exit), no call pin',
+    2, RelCount);
 end;
 
 procedure TConstArgTests.TestConstArg_Literal_NoPin;
@@ -304,6 +304,70 @@ begin
     A still borrows it — A must be pinned (variable shapes always pin). }
   Region := FuncRegion(GenIR(Src), 'Caller');
   AssertTrue('AddRef pins despite local shape',
+    Pos('_StringAddRef', Region) >= 0);
+end;
+
+procedure TConstArgTests.TestConstArg_AddrTakenLocal_Pins;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller;
+      var
+        L: string;
+        PS: ^string;
+      begin
+        L := IntToStr(7);
+        PS := @L;
+        Sink(L);
+        PS^ := 'x'
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { @L escapes: a callee could release L's buffer through the pointer
+    while the argument borrows it — address-taken locals must pin. }
+  Region := FuncRegion(GenIR(Src), 'Caller');
+  AssertTrue('AddRef pins address-taken local',
+    Pos('_StringAddRef', Region) >= 0);
+end;
+
+procedure TConstArgTests.TestConstArg_CapturedLocal_Pins;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller;
+      var
+        L: string;
+        procedure Nested;
+        begin
+          L := 'changed'
+        end;
+      begin
+        L := IntToStr(7);
+        Sink(L);
+        Nested()
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { L is captured by Nested, which can reassign it — a callee reachable
+    from Sink could do the same through the capture; must pin. }
+  Region := FuncRegion(GenIR(Src), 'Caller');
+  AssertTrue('AddRef pins captured local',
     Pos('_StringAddRef', Region) >= 0);
 end;
 

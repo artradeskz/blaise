@@ -511,16 +511,21 @@ var
   Mid:  Integer;
   Cmp:  Integer;
   Ptr:  ^string;
-  MStr: string;
 begin
+  { Compare against the slot in place via the CompareStr/CompareText
+    builtins (raw-pointer RTL calls, no ARC): copying the probe string
+    into a local and dispatching through Compare cost several ARC
+    operations per binary-search step on the hottest lookup path. }
   Lo := 0;
   Hi := Self.FCount - 1;
   while Lo <= Hi do
   begin
-    Mid  := (Lo + Hi) div 2;
-    Ptr  := Self.FStrings + Mid * SizeOf(string);
-    MStr := Ptr^;
-    Cmp  := Self.Compare(S, MStr);
+    Mid := (Lo + Hi) div 2;
+    Ptr := Self.FStrings + Mid * SizeOf(string);
+    if Self.FCaseSensitive then
+      Cmp := CompareStr(S, Ptr^)
+    else
+      Cmp := CompareText(S, Ptr^);
     if Cmp = 0 then
     begin
       Idx    := Mid;
