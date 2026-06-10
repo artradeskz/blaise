@@ -77,15 +77,20 @@ type
     property Count: Integer read FCount;
   end;
 
-  { Generic unordered set backed by a dynamic array with linear-scan membership.
-    Include adds an element only if not already present; Exclude removes it.
-    Contains tests membership.  Suitable for small-to-medium sets where the
-    element type supports '=' equality. }
+  { Generic unordered set backed by a dynamic array.  Membership tests use a
+    lazy hash index once the set is large enough (see GCHashOf); small sets
+    keep the linear scan.  Include adds an element only if not already
+    present; Exclude removes it. }
   TSet<T> = class
-    FData:     ^T;
-    FCount:    Integer;
-    FCapacity: Integer;
+    FData:      ^T;
+    FCount:     Integer;
+    FCapacity:  Integer;
+    FHashSlots: ^Integer;
+    FHashCap:   Integer;
     procedure Grow;
+    procedure HashInvalidate;
+    procedure HashInsertIdx(AIdx: Integer);
+    procedure HashRebuild;
     function  IndexOf(Value: T): Integer;
     procedure Include(Value: T);
     procedure Exclude(Value: T);
@@ -104,16 +109,23 @@ type
     function  GetCount: Integer;
   end;
 
-  { Generic dictionary: linear-scan key table backed by two parallel arrays.
-    Key equality uses the '=' operator on the monomorphized type, so integer,
-    boolean and pointer key types work out of the box.  String keys require
-    content-aware equality which is deferred. }
+  { Generic dictionary backed by two parallel arrays (insertion-ordered
+    storage).  Key lookup uses a lazy open-addressing hash index once the
+    dictionary is large enough; small dictionaries keep the linear scan.
+    Key equality uses the '=' operator on the monomorphized type (content
+    equality for string keys); hashing dispatches through the GCHashOf
+    overloads, so a key type needs a matching GCHashOf to instantiate. }
   TDictionary<K, V> = class(IMap<K, V>)
-    FKeys:     ^K;
-    FValues:   ^V;
-    FCount:    Integer;
-    FCapacity: Integer;
+    FKeys:      ^K;
+    FValues:    ^V;
+    FCount:     Integer;
+    FCapacity:  Integer;
+    FHashSlots: ^Integer;
+    FHashCap:   Integer;
     procedure Grow;
+    procedure HashInvalidate;
+    procedure HashInsertIdx(AIdx: Integer);
+    procedure HashRebuild;
     function  FindKey(Key: K): Integer;
     procedure Add(Key: K; Value: V);
     function  TryGetValue(Key: K; var Value: V): Boolean;
@@ -130,11 +142,16 @@ type
     where insertion order matters (e.g. preserving configuration file order,
     deterministic output). }
   TOrderedDictionary<K, V> = class(IMap<K, V>)
-    FKeys:     ^K;
-    FValues:   ^V;
-    FCount:    Integer;
-    FCapacity: Integer;
+    FKeys:      ^K;
+    FValues:    ^V;
+    FCount:     Integer;
+    FCapacity:  Integer;
+    FHashSlots: ^Integer;
+    FHashCap:   Integer;
     procedure Grow;
+    procedure HashInvalidate;
+    procedure HashInsertIdx(AIdx: Integer);
+    procedure HashRebuild;
     function  FindKey(Key: K): Integer;
     procedure Add(Key: K; Value: V);
     function  TryGetValue(Key: K; var Value: V): Boolean;
@@ -149,7 +166,63 @@ type
     property Values[Index: Integer]: V read GetValue;
   end;
 
+{ Key hashing for the generic containers.  Monomorphisation resolves
+  GCHashOf(Key) against these overloads per instantiation, so each key type
+  gets a content-appropriate hash: strings hash their bytes (matching the
+  content semantics of '=' on strings), integers and pointers mix their
+  value.  Instantiating a keyed container with a type that has no matching
+  overload is a compile-time error — add an overload here for new key types. }
+function GCHashOf(AValue: string): Integer; overload;
+function GCHashOf(AValue: Integer): Integer; overload;
+function GCHashOf(AValue: Int64): Integer; overload;
+function GCHashOf(AValue: Pointer): Integer; overload;
+function GCHashOf(AValue: Boolean): Integer; overload;
+
+const
+  { Below this size a linear scan beats building a hash table.  Interface
+    visibility because generic bodies are analysed at their instantiation
+    site. }
+  GCHashThreshold = 16;
+
 implementation
+
+{ ------------------------------------------------------------------ }
+{ GCHashOf — key hashing overloads                                     }
+{ ------------------------------------------------------------------ }
+
+function GCHashOf(AValue: string): Integer; overload;
+var
+  I: Integer;
+begin
+  { FNV-1a over the bytes; case-sensitive to match '=' on strings. }
+  Result := -2128831035;   { FNV offset basis 2166136261 as signed 32-bit }
+  for I := 0 to Length(AValue) - 1 do
+    Result := (Result xor Ord(AValue[I])) * 16777619;
+end;
+
+function GCHashOf(AValue: Integer): Integer; overload;
+begin
+  { Knuth multiplicative mix (2654435761 as signed 32-bit). }
+  Result := AValue * -1640531527;
+end;
+
+function GCHashOf(AValue: Int64): Integer; overload;
+begin
+  Result := Integer(AValue xor (AValue shr 32)) * -1640531527;
+end;
+
+function GCHashOf(AValue: Pointer): Integer; overload;
+begin
+  Result := GCHashOf(Int64(AValue));
+end;
+
+function GCHashOf(AValue: Boolean): Integer; overload;
+begin
+  if AValue then
+    Result := 1
+  else
+    Result := 0;
+end;
 
 { ------------------------------------------------------------------ }
 { TList<T>                                                             }
@@ -429,11 +502,81 @@ begin
   Self.FCapacity := NewCap
 end;
 
+procedure TSet<T>.HashInvalidate;
+begin
+  if Self.FHashSlots <> nil then
+  begin
+    FreeMem(Self.FHashSlots);
+    Self.FHashSlots := nil;
+  end;
+  Self.FHashCap := 0;
+end;
+
+procedure TSet<T>.HashInsertIdx(AIdx: Integer);
+var
+  Slot:  Integer;
+  SlotP: ^Integer;
+  EPtr:  ^T;
+begin
+  EPtr := Self.FData + AIdx * SizeOf(T);
+  Slot := GCHashOf(EPtr^) and (Self.FHashCap - 1);
+  while True do
+  begin
+    SlotP := Self.FHashSlots + Slot * SizeOf(Integer);
+    if SlotP^ = -1 then
+    begin
+      SlotP^ := AIdx;
+      Exit;
+    end;
+    Slot := (Slot + 1) and (Self.FHashCap - 1);
+  end;
+end;
+
+procedure TSet<T>.HashRebuild;
+var
+  Cap: Integer;
+  I:   Integer;
+  P:   ^Integer;
+begin
+  Cap := 16;
+  while Cap < Self.FCount * 2 do
+    Cap := Cap * 2;
+  if Self.FHashSlots <> nil then
+    FreeMem(Self.FHashSlots);
+  Self.FHashSlots := GetMem(Cap * SizeOf(Integer));
+  Self.FHashCap   := Cap;
+  for I := 0 to Cap - 1 do
+  begin
+    P  := Self.FHashSlots + I * SizeOf(Integer);
+    P^ := -1;
+  end;
+  for I := 0 to Self.FCount - 1 do
+    Self.HashInsertIdx(I);
+end;
+
 function TSet<T>.IndexOf(Value: T): Integer;
 var
-  I:   Integer;
-  Ptr: ^T;
+  I:     Integer;
+  Ptr:   ^T;
+  Slot:  Integer;
+  SlotP: ^Integer;
 begin
+  if Self.FCount >= GCHashThreshold then
+  begin
+    if Self.FHashCap = 0 then
+      Self.HashRebuild();
+    Slot := GCHashOf(Value) and (Self.FHashCap - 1);
+    while True do
+    begin
+      SlotP := Self.FHashSlots + Slot * SizeOf(Integer);
+      if SlotP^ = -1 then
+        Exit(-1);
+      Ptr := Self.FData + SlotP^ * SizeOf(T);
+      if Ptr^ = Value then
+        Exit(SlotP^);
+      Slot := (Slot + 1) and (Self.FHashCap - 1);
+    end;
+  end;
   Result := -1;
   I      := 0;
   while I < Self.FCount do
@@ -458,7 +601,14 @@ begin
     Self.Grow();
   Dest        := Self.FData + Self.FCount * SizeOf(T);
   Dest^       := Value;
-  Self.FCount := Self.FCount + 1
+  Self.FCount := Self.FCount + 1;
+  if Self.FHashCap > 0 then
+  begin
+    if Self.FCount * 2 > Self.FHashCap then
+      Self.HashInvalidate()
+    else
+      Self.HashInsertIdx(Self.FCount - 1);
+  end;
 end;
 
 procedure TSet<T>.Exclude(Value: T);
@@ -479,7 +629,9 @@ begin
     Dst^ := Src^;
     I    := I + 1
   end;
-  Self.FCount := Self.FCount - 1
+  Self.FCount := Self.FCount - 1;
+  { Indexes shifted — rebuild lazily on the next lookup. }
+  Self.HashInvalidate()
 end;
 
 function TSet<T>.Contains(Value: T): Boolean;
@@ -489,11 +641,13 @@ end;
 
 procedure TSet<T>.Clear;
 begin
-  Self.FCount := 0
+  Self.FCount := 0;
+  Self.HashInvalidate()
 end;
 
 procedure TSet<T>.Destroy;
 begin
+  Self.HashInvalidate();
   FreeMem(Self.FData);
   Self.FData     := nil;
   Self.FCount    := 0;
@@ -521,11 +675,83 @@ begin
   Self.FCapacity := NewCap
 end;
 
+procedure TDictionary<K, V>.HashInvalidate;
+begin
+  if Self.FHashSlots <> nil then
+  begin
+    FreeMem(Self.FHashSlots);
+    Self.FHashSlots := nil;
+  end;
+  Self.FHashCap := 0;
+end;
+
+procedure TDictionary<K, V>.HashInsertIdx(AIdx: Integer);
+var
+  Slot:  Integer;
+  SlotP: ^Integer;
+  KPtr:  ^K;
+begin
+  KPtr := Self.FKeys + AIdx * SizeOf(K);
+  Slot := GCHashOf(KPtr^) and (Self.FHashCap - 1);
+  while True do
+  begin
+    SlotP := Self.FHashSlots + Slot * SizeOf(Integer);
+    if SlotP^ = -1 then
+    begin
+      SlotP^ := AIdx;
+      Exit;
+    end;
+    Slot := (Slot + 1) and (Self.FHashCap - 1);
+  end;
+end;
+
+{ Keys are unique, so occupancy equals FCount; rebuilt at <= 50% load so
+  an empty slot terminates every probe chain. }
+procedure TDictionary<K, V>.HashRebuild;
+var
+  Cap: Integer;
+  I:   Integer;
+  P:   ^Integer;
+begin
+  Cap := 16;
+  while Cap < Self.FCount * 2 do
+    Cap := Cap * 2;
+  if Self.FHashSlots <> nil then
+    FreeMem(Self.FHashSlots);
+  Self.FHashSlots := GetMem(Cap * SizeOf(Integer));
+  Self.FHashCap   := Cap;
+  for I := 0 to Cap - 1 do
+  begin
+    P  := Self.FHashSlots + I * SizeOf(Integer);
+    P^ := -1;
+  end;
+  for I := 0 to Self.FCount - 1 do
+    Self.HashInsertIdx(I);
+end;
+
 function TDictionary<K, V>.FindKey(Key: K): Integer;
 var
-  I:   Integer;
-  Ptr: ^K;
+  I:     Integer;
+  Ptr:   ^K;
+  Slot:  Integer;
+  SlotP: ^Integer;
 begin
+  if Self.FCount >= GCHashThreshold then
+  begin
+    if Self.FHashCap = 0 then
+      Self.HashRebuild();
+    Slot := GCHashOf(Key) and (Self.FHashCap - 1);
+    while True do
+    begin
+      SlotP := Self.FHashSlots + Slot * SizeOf(Integer);
+      if SlotP^ = -1 then
+        Exit(-1);
+      Ptr := Self.FKeys + SlotP^ * SizeOf(K);
+      if Ptr^ = Key then
+        Exit(SlotP^);
+      Slot := (Slot + 1) and (Self.FHashCap - 1);
+    end;
+  end;
   Result := -1;
   I      := 0;
   while I < Self.FCount do
@@ -562,7 +788,16 @@ begin
     VPtr  := Self.FValues + Self.FCount * SizeOf(V);
     KPtr^ := Key;
     VPtr^ := Value;
-    Self.FCount := Self.FCount + 1
+    Self.FCount := Self.FCount + 1;
+    { Keep the hash live across appends; past 50% load drop it and let the
+      next lookup rebuild at double size. }
+    if Self.FHashCap > 0 then
+    begin
+      if Self.FCount * 2 > Self.FHashCap then
+        Self.HashInvalidate()
+      else
+        Self.HashInsertIdx(Self.FCount - 1);
+    end;
   end
 end;
 
@@ -611,7 +846,9 @@ begin
       VDst^ := VSrc^;
       I     := I + 1
     end;
-    Self.FCount := Self.FCount - 1
+    Self.FCount := Self.FCount - 1;
+    { Indexes shifted — rebuild lazily on the next lookup. }
+    Self.HashInvalidate()
   end
 end;
 
@@ -622,6 +859,7 @@ end;
 
 procedure TDictionary<K, V>.Destroy;
 begin
+  Self.HashInvalidate();
   FreeMem(Self.FKeys);
   FreeMem(Self.FValues);
   Self.FKeys     := nil;
@@ -651,11 +889,81 @@ begin
   Self.FCapacity := NewCap
 end;
 
+procedure TOrderedDictionary<K, V>.HashInvalidate;
+begin
+  if Self.FHashSlots <> nil then
+  begin
+    FreeMem(Self.FHashSlots);
+    Self.FHashSlots := nil;
+  end;
+  Self.FHashCap := 0;
+end;
+
+procedure TOrderedDictionary<K, V>.HashInsertIdx(AIdx: Integer);
+var
+  Slot:  Integer;
+  SlotP: ^Integer;
+  KPtr:  ^K;
+begin
+  KPtr := Self.FKeys + AIdx * SizeOf(K);
+  Slot := GCHashOf(KPtr^) and (Self.FHashCap - 1);
+  while True do
+  begin
+    SlotP := Self.FHashSlots + Slot * SizeOf(Integer);
+    if SlotP^ = -1 then
+    begin
+      SlotP^ := AIdx;
+      Exit;
+    end;
+    Slot := (Slot + 1) and (Self.FHashCap - 1);
+  end;
+end;
+
+procedure TOrderedDictionary<K, V>.HashRebuild;
+var
+  Cap: Integer;
+  I:   Integer;
+  P:   ^Integer;
+begin
+  Cap := 16;
+  while Cap < Self.FCount * 2 do
+    Cap := Cap * 2;
+  if Self.FHashSlots <> nil then
+    FreeMem(Self.FHashSlots);
+  Self.FHashSlots := GetMem(Cap * SizeOf(Integer));
+  Self.FHashCap   := Cap;
+  for I := 0 to Cap - 1 do
+  begin
+    P  := Self.FHashSlots + I * SizeOf(Integer);
+    P^ := -1;
+  end;
+  for I := 0 to Self.FCount - 1 do
+    Self.HashInsertIdx(I);
+end;
+
 function TOrderedDictionary<K, V>.FindKey(Key: K): Integer;
 var
-  I:   Integer;
-  Ptr: ^K;
+  I:     Integer;
+  Ptr:   ^K;
+  Slot:  Integer;
+  SlotP: ^Integer;
 begin
+  if Self.FCount >= GCHashThreshold then
+  begin
+    if Self.FHashCap = 0 then
+      Self.HashRebuild();
+    Slot := GCHashOf(Key) and (Self.FHashCap - 1);
+    while True do
+    begin
+      SlotP := Self.FHashSlots + Slot * SizeOf(Integer);
+      if SlotP^ = -1 then
+        Exit(-1);
+      Ptr := Self.FKeys + SlotP^ * SizeOf(K);
+      if Ptr^ = Key then
+        Exit(SlotP^);
+      Slot := (Slot + 1) and (Self.FHashCap - 1);
+    end;
+  end;
   Result := -1;
   I      := 0;
   while I < Self.FCount do
@@ -690,7 +998,14 @@ begin
     VPtr  := Self.FValues + Self.FCount * SizeOf(V);
     KPtr^ := Key;
     VPtr^ := Value;
-    Self.FCount := Self.FCount + 1
+    Self.FCount := Self.FCount + 1;
+    if Self.FHashCap > 0 then
+    begin
+      if Self.FCount * 2 > Self.FHashCap then
+        Self.HashInvalidate()
+      else
+        Self.HashInsertIdx(Self.FCount - 1);
+    end;
   end
 end;
 
@@ -738,7 +1053,9 @@ begin
       VDst^ := VSrc^;
       I     := I + 1
     end;
-    Self.FCount := Self.FCount - 1
+    Self.FCount := Self.FCount - 1;
+    { Indexes shifted — rebuild lazily on the next lookup. }
+    Self.HashInvalidate()
   end
 end;
 
@@ -765,6 +1082,7 @@ end;
 
 procedure TOrderedDictionary<K, V>.Destroy;
 begin
+  Self.HashInvalidate();
   FreeMem(Self.FKeys);
   FreeMem(Self.FValues);
   Self.FKeys     := nil;
