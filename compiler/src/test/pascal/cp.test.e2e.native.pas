@@ -287,6 +287,9 @@ type
 
     { Const array data emission + ConstArraySymbol reference }
     procedure TestRun_Native_ConstArray_StringElements;
+
+    { Virtual method dispatch in expression context }
+    procedure TestRun_Native_VirtualDispatch_Expr;
   end;
 
 implementation
@@ -4328,6 +4331,28 @@ begin
     + '    WriteLn(Regs[I]) '
     + 'end.',
     'ax' + LE + 'bx' + LE + 'cx' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_VirtualDispatch_Expr;
+begin
+  AssertRunsOnBoth(
+    'program T;'
+    + 'type '
+    + '  TBase = class '
+    + '    function GetVal(): Integer; virtual; abstract; '
+    + '  end; '
+    + '  TChild = class(TBase) '
+    + '    function GetVal(): Integer; override; '
+    + '  end; '
+    + 'function TChild.GetVal(): Integer; '
+    + 'begin Result := 42 end; '
+    + 'var B: TBase; '
+    + 'begin '
+    + '  B := TChild.Create; '
+    + '  WriteLn(B.GetVal()); '
+    + '  B.Free '
+    + 'end.',
+    '42' + LE, 0);
 end;
 
 initialization

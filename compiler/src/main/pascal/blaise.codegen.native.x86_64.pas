@@ -5282,7 +5282,14 @@ begin
     for I := UserSlots - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
     Self.Emit(#9'movq %r10, %rdi');
-    Self.Emit(#9'callq ' + Sym);
+    if MD.VTableSlot >= 0 then
+    begin
+      Self.Emit(#9'movq (%rdi), %rax');
+      Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+      Self.Emit(#9'callq *%rax');
+    end
+    else
+      Self.Emit(#9'callq ' + Sym);
   end
   else
   begin
@@ -5343,7 +5350,14 @@ begin
       Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
 
     Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
-    Self.Emit(#9'callq ' + Sym);
+    if MD.VTableSlot >= 0 then
+    begin
+      Self.Emit(#9'movq (%rdi), %rax');
+      Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+      Self.Emit(#9'callq *%rax');
+    end
+    else
+      Self.Emit(#9'callq ' + Sym);
     Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
 end;
