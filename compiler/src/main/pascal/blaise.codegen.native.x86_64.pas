@@ -27,7 +27,7 @@ interface
 
 uses
   SysUtils, Classes, contnrs, Generics.Collections, uAST, uSymbolTable, uStrCompat,
-  blaise.codegen.arcshapes,
+  blaise.codegen.arcshapes, uDebugFacts,
   blaise.codegen.native.backend, blaise.codegen.target;
 
 const
@@ -61,6 +61,13 @@ type
   TX86_64Backend = class(TNativeBackend)
   protected
     FLabelCount: Integer;       { monotonic source of unique local labels }
+    { OPDF debug facts (nil unless --debug-opdf): the backend records each
+      function's symbol, end label, real frame-slot offsets and per-statement
+      line labels here; the OPDF emitter consumes them for exact debug info.
+      Owned by TCodeGenNative. }
+    [Unretained] FDbgFacts: TDbgFacts;
+    [Unretained] FDbgCur: TDbgFunc;   { facts entry for the function being emitted }
+    FDbgSeq: Integer;                 { .Ldbg_N label counter }
     { Global slots to define in the .data section: program-level variables plus
       hidden for-loop end-value slots.  Insertion-ordered so EmitDataSection
       emits them in declaration order; ContainsKey gives O(1) dedup.  The value
@@ -412,6 +419,13 @@ type
     { Inc(x)/Dec(x) with support for simple variables, implicit-Self fields,
       var params, and field-access expressions. }
     procedure EmitLValueSlotAddr(AExpr: TASTExpr);
+    { --- OPDF debug-fact hooks (no-ops when facts collection is off) --- }
+    procedure SetDebugFacts(AFacts: TDbgFacts); override;
+    procedure DbgBeginFunc(const ASymbol: string);
+    procedure DbgRecordSlot(const AName: string; AType: TTypeDesc; AOffset: Integer);
+    procedure DbgMarkParams(ADecl: TMethodDecl);
+    procedure DbgStmtLabel(AStmt: TASTStmt);
+    procedure DbgEndFunc;
     procedure EmitIncDec(ACall: TProcCall);
     procedure EmitIncDecAddrOp(IsInc, IsWide, HasStep: Boolean);
     { Evaluate a boolean condition and branch: if true jump ATrueLabel, else
@@ -2844,6 +2858,7 @@ begin
   Inc(AOffset, Sz);
   FFrame.Add(AName, -AOffset);
   FFrameTypes.Add(AName, AType);
+  Self.DbgRecordSlot(AName, AType, -AOffset);
 end;
 
 procedure TX86_64Backend.BuildFrame(ADecl: TMethodDecl);
@@ -2893,6 +2908,7 @@ begin
         begin
           FFrame.Add(P.ParamName, StackOff);
           FFrameTypes.Add(P.ParamName, nil);
+          Self.DbgRecordSlot(P.ParamName, nil, StackOff);
           Inc(StackOff, 8);
         end;
         Inc(IntIdx2);
@@ -2918,6 +2934,7 @@ begin
         begin
           FFrame.Add(P.ParamName, StackOff);
           FFrameTypes.Add(P.ParamName, P.ResolvedType);
+          Self.DbgRecordSlot(P.ParamName, P.ResolvedType, StackOff);
           Inc(StackOff, 16);
         end;
         Inc(IntIdx2);
@@ -2939,6 +2956,7 @@ begin
         begin
           FFrame.Add(P.ParamName, StackOff);
           FFrameTypes.Add(P.ParamName, nil);
+          Self.DbgRecordSlot(P.ParamName, nil, StackOff);
           Inc(StackOff, 8);
           Self.AddSlot(P.ParamName + '_data', P.ResolvedType, Offset);
         end;
@@ -2953,6 +2971,7 @@ begin
           { Stack-passed param: lives at +StackOff(%rbp), pushed by caller. }
           FFrame.Add(P.ParamName, StackOff);
           FFrameTypes.Add(P.ParamName, P.ResolvedType);
+          Self.DbgRecordSlot(P.ParamName, P.ResolvedType, StackOff);
           Inc(StackOff, 8);
         end;
         Inc(IntIdx2);
@@ -3184,6 +3203,81 @@ begin
   end;
   raise ENativeCodeGenError.Create(
     'native backend: unsupported L-value form');
+end;
+
+procedure TX86_64Backend.SetDebugFacts(AFacts: TDbgFacts);
+begin
+  FDbgFacts := AFacts;
+end;
+
+procedure TX86_64Backend.DbgBeginFunc(const ASymbol: string);
+begin
+  if FDbgFacts = nil then Exit;
+  FDbgCur := FDbgFacts.BeginFunc(ASymbol);
+end;
+
+procedure TX86_64Backend.DbgRecordSlot(const AName: string; AType: TTypeDesc;
+  AOffset: Integer);
+begin
+  if FDbgCur = nil then Exit;
+  { Skip internal companion/bookkeeping slots: capture pointers, exception
+    frames, open-array highs, record-param data shadows. }
+  if AName = '' then Exit;
+  if AName[0] = '_' then Exit;
+  if (Length(AName) > 5) and (Copy(AName, Length(AName) - 5, 5) = '_high') then Exit;
+  if (Length(AName) > 5) and (Copy(AName, Length(AName) - 5, 5) = '_data') then Exit;
+  FDbgCur.AddVar(AName, AType, AOffset);
+end;
+
+procedure TX86_64Backend.DbgMarkParams(ADecl: TMethodDecl);
+var
+  I: Integer;
+  P: TMethodParam;
+  V: TDbgVar;
+begin
+  if (FDbgCur = nil) or (ADecl = nil) then Exit;
+  V := FDbgCur.FindVar('Self');
+  if V <> nil then
+    V.IsParam := True;
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    V := FDbgCur.FindVar(P.ParamName);
+    if V = nil then Continue;
+    V.IsParam := True;
+    V.IsVarParam := P.IsVarParam;
+    V.IsConstParam := P.IsConstParam;
+  end;
+end;
+
+procedure TX86_64Backend.DbgStmtLabel(AStmt: TASTStmt);
+var
+  L: TDbgLine;
+begin
+  if (FDbgCur = nil) or (AStmt = nil) then Exit;
+  if AStmt.Line <= 0 then Exit;
+  { Structural containers re-dispatch to their children; labelling them would
+    duplicate the first child's line. }
+  if AStmt is TCompoundStmt then Exit;
+  L := TDbgLine.Create();
+  L.LabelName := Format('.Ldbg_%d', [FDbgSeq]);
+  L.Line := AStmt.Line;
+  L.Col := AStmt.Col;
+  Inc(FDbgSeq);
+  FDbgCur.Lines.Add(L);
+  Self.Emit(L.LabelName + ':');
+end;
+
+procedure TX86_64Backend.DbgEndFunc;
+var
+  EndLbl: string;
+begin
+  if FDbgCur = nil then Exit;
+  EndLbl := Format('.Ldbg_end_%d', [FDbgSeq]);
+  Inc(FDbgSeq);
+  Self.Emit(EndLbl + ':');
+  FDbgCur.EndLabel := EndLbl;
+  FDbgCur := nil;
 end;
 
 function TX86_64Backend.IsNativeRecordCall(AExpr: TASTExpr): Boolean;
@@ -7955,6 +8049,7 @@ var
   ISFld:   TFieldInfo;
   IntfArgs: TObjectList;
 begin
+  Self.DbgStmtLabel(AStmt);
   if AStmt is TAssignment then
   begin
     Asgn := TAssignment(AStmt);
@@ -11757,7 +11852,9 @@ begin
   end;
 
   Sym := FuncSymbolFromDecl(ADecl);
+  Self.DbgBeginFunc(Sym);
   Self.BuildFrame(ADecl);
+  Self.DbgMarkParams(ADecl);
 
   Self.Emit('.text');
   Self.Emit('.globl ' + Sym);
@@ -12135,6 +12232,7 @@ begin
   Self.Emit(#9'movq %rbp, %rsp');
   Self.Emit(#9'popq %rbp');
   Self.Emit(#9'ret');
+  Self.DbgEndFunc();
   Self.Emit('.type ' + Sym + ', @function');
 
   FExitLabel    := '';
@@ -12224,6 +12322,7 @@ begin
 
   Self.Emit('.text');
   Self.Emit('.globl main');
+  Self.DbgBeginFunc('main');
   Self.Emit('main:');
   { Prologue: establish a frame.  argc is in %edi, argv in %rsi per SysV. }
   Self.Emit(#9'pushq %rbp');
@@ -12249,6 +12348,7 @@ begin
   Self.Emit(#9'movl $0, %eax');
   Self.Emit(#9'leave');
   Self.Emit(#9'ret');
+  Self.DbgEndFunc();
   Self.Emit('.type main, @function');
   { Mark the stack non-executable (matches QBE output). }
   Self.Emit('.section .note.GNU-stack,"",@progbits');

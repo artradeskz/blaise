@@ -33,7 +33,7 @@ unit blaise.codegen.native.backend;
 interface
 
 uses
-  SysUtils, uAST, uSymbolTable, blaise.codegen, strutils, blaise.codegen.target;
+  SysUtils, uAST, uSymbolTable, blaise.codegen, strutils, blaise.codegen.target, uDebugFacts;
 
 type
   ENativeCodeGenError = class(Exception);
@@ -81,6 +81,9 @@ type
     function  GetOutput: string;
 
     procedure SetSymbolTable(ASymTable: TSymbolTable);
+    { OPDF debug-facts sink — concrete backends that support exact debug
+      info override this; the default ignores the facts object. }
+    procedure SetDebugFacts(AFacts: TDbgFacts); virtual;
     procedure SetDebugMode(AEnabled: Boolean);
 
     { Lower a whole program to assembly text and return it. }
@@ -92,6 +95,11 @@ type
   TNativeBackendClass = class of TNativeBackend;
 
 implementation
+
+procedure TNativeBackend.SetDebugFacts(AFacts: TDbgFacts);
+begin
+  { Default: backend does not collect debug facts. }
+end;
 
 constructor TNativeBackend.Create(const ATarget: TTargetDesc);
 begin

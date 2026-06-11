@@ -18,7 +18,7 @@ interface
 uses
   SysUtils, StrUtils, Classes, uAST, uSymbolTable, uStrCompat, blaise.codegen,
   blaise.codegen.arcshapes,
-  blaise.codegen.target;
+  blaise.codegen.target, uDebugFacts;
 
 // Raw byte copy used by TIRBuffer — maps to libc memcpy.
 // Blaise links blaise_rtl.a which already pulls in libc.
@@ -448,6 +448,7 @@ type
     procedure SetSymbolTable(ASymTable: TSymbolTable);
     procedure SetDebugMode(AEnabled: Boolean);
     procedure SetOpdfMode(AEnabled: Boolean);
+    function  GetDebugFacts: TDbgFacts;
     procedure SetExportAll(AEnabled: Boolean);
     procedure AppendUnit(AUnit: TUnit);
     { Append program IR to existing output (companion to AppendUnit).
@@ -12015,6 +12016,12 @@ end;
 procedure TCodeGenQBE.SetOpdfMode(AEnabled: Boolean);
 begin
   FOpdfMode := AEnabled;
+end;
+
+function TCodeGenQBE.GetDebugFacts: TDbgFacts;
+begin
+  { QBE assigns frames and addresses itself — no exact facts available. }
+  Result := nil;
 end;
 
 function TCodeGenQBE.VTableDataPrefix: string;

@@ -27,7 +27,7 @@ unit blaise.codegen;
 interface
 
 uses
-  uAST, uSymbolTable;
+  uAST, uSymbolTable, uDebugFacts;
 
 type
   TRecReturnClass = (
@@ -61,6 +61,12 @@ type
       class's VMTAddress for runtime dynamic-type resolution).  Off by default,
       so normal builds are byte-for-byte unchanged. }
     procedure SetOpdfMode(AEnabled: Boolean);
+
+    { Codegen-collected debug facts for the OPDF emitter (exact frame
+      offsets, per-statement line labels, function extents).  Only the
+      native backend produces them; the QBE backend returns nil and the
+      OPDF emitter falls back to its approximate AST walk. }
+    function  GetDebugFacts: TDbgFacts;
 
     { Multi-unit compilation: append unit IR to existing output without
       resetting the output buffer or string-literal table. }

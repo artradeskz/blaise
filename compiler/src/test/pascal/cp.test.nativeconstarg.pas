@@ -27,7 +27,7 @@ interface
 uses
   Classes, SysUtils, blaise.testing, uStrCompat,
   uLexer, uParser, uAST, uSymbolTable, uSemantic,
-  blaise.codegen.native, blaise.codegen.target;
+  blaise.codegen.native, blaise.codegen.target, uDebugFacts;
 
 type
   TNativeConstArgTests = class(TTestCase)
@@ -54,6 +54,10 @@ type
     { Free on a chained field receiver must nil the slot after the release —
       a stale pointer aliases the next allocation (UAF regression). }
     procedure TestFree_FieldReceiver_NilsSlot;
+    { --debug-opdf facts: the backend emits per-statement .Ldbg labels and
+      records exact frame offsets; normal builds stay label-free. }
+    procedure TestOpdf_StatementLabels_AndFacts;
+    procedure TestOpdf_Off_NoDbgLabels;
   end;
 
 implementation
@@ -488,6 +492,76 @@ begin
     CountOccurrences('callq _ClassRelease', Region) >= 1);
   AssertTrue('nils the field slot after the release',
     CountOccurrences('movq $0, (%rdx)', Region) >= 1);
+end;
+
+procedure TNativeConstArgTests.TestOpdf_StatementLabels_AndFacts;
+var
+  L:    TLexer;
+  P:    TParser;
+  Prog: TProgram;
+  A:    TSemanticAnalyser;
+  CG:   TCodeGenNative;
+  Asm_: string;
+  F:    TDbgFunc;
+  V:    TDbgVar;
+begin
+  L := TLexer.Create('''
+      program P;
+      function Twice(X: Integer): Integer;
+      var H: Integer;
+      begin
+        H := X * 2;
+        Result := H;
+      end;
+      begin
+        WriteLn(Twice(4));
+      end.
+      ''');
+  P := TParser.Create(L);
+  Prog := P.Parse();
+  P.Free(); L.Free();
+  A := TSemanticAnalyser.Create();
+  A.Analyse(Prog);
+  A.Free();
+  CG := TCodeGenNative.Create();
+  CG.SetTarget(HostTarget());
+  CG.SetOpdfMode(True);
+  CG.Generate(Prog);
+  Asm_ := CG.GetOutput();
+  AssertTrue('statement labels emitted', Pos('.Ldbg_0:', Asm_) > 0);
+  AssertTrue('end label emitted', Pos('.Ldbg_end_', Asm_) > 0);
+  AssertNotNil('facts collected', CG.GetDebugFacts());
+  AssertEquals('two functions recorded (Twice + main)',
+    2, CG.GetDebugFacts().Funcs.Count);
+  F := TDbgFunc(CG.GetDebugFacts().Funcs.Items[0]);
+  AssertEquals('symbol', 'Twice', F.SymbolName);
+  AssertTrue('end label recorded', F.EndLabel <> '');
+  V := F.FindVar('X');
+  AssertNotNil('param X recorded', V);
+  AssertTrue('X marked as param', V.IsParam);
+  AssertEquals('X at first slot', -8, V.RbpOffset);
+  V := F.FindVar('H');
+  AssertNotNil('local H recorded', V);
+  AssertTrue('H not a param', not V.IsParam);
+  Prog.Free();
+  CG.Free();
+end;
+
+procedure TNativeConstArgTests.TestOpdf_Off_NoDbgLabels;
+var
+  Asm_: string;
+begin
+  Asm_ := GenAsm('''
+      program P;
+      function Twice(X: Integer): Integer;
+      begin
+        Result := X * 2;
+      end;
+      begin
+        WriteLn(Twice(4));
+      end.
+      ''');
+  AssertTrue('no debug labels in a normal build', Pos('.Ldbg_', Asm_) < 0);
 end;
 
 initialization

@@ -31,7 +31,7 @@ unit blaise.codegen.native;
 interface
 
 uses
-  SysUtils, uAST, uSymbolTable, blaise.codegen,
+  SysUtils, uAST, uSymbolTable, blaise.codegen, uDebugFacts,
   blaise.codegen.target, blaise.codegen.native.backend;
 
 type
@@ -43,6 +43,7 @@ type
     FDebugMode: Boolean;
     FBackend:   TNativeBackend;
     FOutput:    string;
+    FDbgFacts:  TDbgFacts;   { owned; created by SetOpdfMode(True) }
     procedure EnsureBackend;
   public
     constructor Create;
@@ -58,6 +59,7 @@ type
     procedure SetSymbolTable(ASymTable: TSymbolTable);
     procedure SetDebugMode(AEnabled: Boolean);
     procedure SetOpdfMode(AEnabled: Boolean);
+    function  GetDebugFacts: TDbgFacts;
     procedure AppendUnit(AUnit: TUnit);
     procedure AppendProgram(AProg: TProgram);
     function  GetOutput: string;
@@ -128,9 +130,16 @@ end;
 
 procedure TCodeGenNative.SetOpdfMode(AEnabled: Boolean);
 begin
-  { No-op: OPDF debug info is not yet wired through the native backend.  Its
-    own vtables are already emitted .globl (see EmitClassSection), so there is
-    nothing to toggle here. }
+  { OPDF mode: collect exact debug facts during codegen (frame offsets,
+    per-statement line labels, function extents).  The driver appends the
+    OPDF section to the same assembly file, so no symbol exports are needed. }
+  if AEnabled and (FDbgFacts = nil) then
+    FDbgFacts := TDbgFacts.Create();
+end;
+
+function TCodeGenNative.GetDebugFacts: TDbgFacts;
+begin
+  Result := FDbgFacts;
 end;
 
 procedure TCodeGenNative.Generate(AProg: TProgram);
@@ -138,6 +147,7 @@ begin
   Self.EnsureBackend();
   FBackend.SetSymbolTable(FSymTable);
   FBackend.SetDebugMode(FDebugMode);
+  FBackend.SetDebugFacts(FDbgFacts);
   FOutput := FBackend.GenerateProgram(AProg);
 end;
 
@@ -154,6 +164,7 @@ begin
   Self.EnsureBackend();
   FBackend.SetSymbolTable(FSymTable);
   FBackend.SetDebugMode(FDebugMode);
+  FBackend.SetDebugFacts(FDbgFacts);
   FBackend.AppendUnit(AUnit);
   FOutput := FBackend.GetOutput();
 end;
@@ -163,6 +174,7 @@ begin
   Self.EnsureBackend();
   FBackend.SetSymbolTable(FSymTable);
   FBackend.SetDebugMode(FDebugMode);
+  FBackend.SetDebugFacts(FDbgFacts);
   FBackend.AppendProgram(AProg);
   FOutput := FBackend.GetOutput();
 end;

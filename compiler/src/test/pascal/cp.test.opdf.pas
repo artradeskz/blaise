@@ -12,7 +12,7 @@ interface
 
 uses
   Classes, SysUtils, blaise.testing,
-  uLexer, uParser, uAST, uSemantic, uDebugOPDF;
+  uLexer, uParser, uAST, uSemantic, uDebugOPDF, uDebugFacts;
 
 type
   TOPDFTests = class(TTestCase)
@@ -37,6 +37,10 @@ type
     procedure TestOPDF_FunctionScope_RecType;
     procedure TestOPDF_MethodScope_Emitted;
     procedure TestOPDF_DestructorScope_Emitted;
+    { Facts-driven emission (native backend): exact HighPC end labels, real
+      RBP offsets, per-statement line records. }
+    procedure TestOPDF_Facts_ExactScopeAndLocals;
+    procedure TestOPDF_Facts_PerStatementLines;
     procedure TestOPDF_FunctionScope_LowPC;
     procedure TestOPDF_Parameter_RecType;
     procedure TestOPDF_LocalVar_RecType;
@@ -629,6 +633,107 @@ begin
       ''');
   AssertTrue('destructor gets a function scope record',
     Pos('recFunctionScope: TThing_Destroy', O) > 0);
+end;
+
+function BuildSampleFacts: TDbgFacts;
+var
+  F: TDbgFunc;
+  LineRec: TDbgLine;
+  V: TDbgVar;
+begin
+  Result := TDbgFacts.Create();
+  F := Result.BeginFunc('TThing_Bump');
+  F.EndLabel := '.Ldbg_end_7';
+  V := F.AddVar('Self', nil, -8);
+  V.IsParam := True;
+  V := F.AddVar('By', nil, -16);
+  V.IsParam := True;
+  F.AddVar('Tmp', nil, -24);
+  LineRec := TDbgLine.Create();
+  LineRec.LabelName := '.Ldbg_3';
+  LineRec.Line := 10;
+  LineRec.Col := 3;
+  F.Lines.Add(LineRec);
+  LineRec := TDbgLine.Create();
+  LineRec.LabelName := '.Ldbg_4';
+  LineRec.Line := 11;
+  LineRec.Col := 3;
+  F.Lines.Add(LineRec);
+end;
+
+procedure TOPDFTests.TestOPDF_Facts_ExactScopeAndLocals;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  A:  TSemanticAnalyser;
+  E:  TOPDFEmitter;
+  Facts: TDbgFacts;
+  O: string;
+begin
+  L  := TLexer.Create('program P; begin end.');
+  P  := TParser.Create(L);
+  Pr := P.Parse();
+  A  := TSemanticAnalyser.Create();
+  Facts := BuildSampleFacts();
+  try
+    A.Analyse(Pr);
+    E := TOPDFEmitter.Create(Pr, 'test.pas');
+    try
+      E.SetFacts(Facts);
+      O := E.GetOutput();
+    finally
+      E.Free();
+    end;
+    AssertTrue('scope record present', Pos('recFunctionScope: TThing_Bump', O) > 0);
+    AssertTrue('exact HighPC end label', Pos('.quad .Ldbg_end_7  # HighPC', O) > 0);
+    AssertTrue('param record for By', Pos('recParameter: By', O) > 0);
+    AssertTrue('local with real offset', Pos('.word -24  # LocationData', O) > 0);
+    AssertTrue('param locatable too (Self at -8)', Pos('.word -8  # LocationData', O) > 0);
+  finally
+    Facts.Free();
+    A.Free();
+    Pr.Free();
+    P.Free();
+    L.Free();
+  end;
+end;
+
+procedure TOPDFTests.TestOPDF_Facts_PerStatementLines;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  A:  TSemanticAnalyser;
+  E:  TOPDFEmitter;
+  Facts: TDbgFacts;
+  O: string;
+begin
+  L  := TLexer.Create('program P; begin end.');
+  P  := TParser.Create(L);
+  Pr := P.Parse();
+  A  := TSemanticAnalyser.Create();
+  Facts := BuildSampleFacts();
+  try
+    A.Analyse(Pr);
+    E := TOPDFEmitter.Create(Pr, 'test.pas');
+    try
+      E.SetFacts(Facts);
+      O := E.GetOutput();
+    finally
+      E.Free();
+    end;
+    AssertTrue('line 10 record uses statement label',
+      Pos('.quad .Ldbg_3  # Address (statement label)', O) > 0);
+    AssertTrue('line 11 record uses statement label',
+      Pos('.quad .Ldbg_4  # Address (statement label)', O) > 0);
+  finally
+    Facts.Free();
+    A.Free();
+    Pr.Free();
+    P.Free();
+    L.Free();
+  end;
 end;
 
 initialization

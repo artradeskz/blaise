@@ -451,7 +451,8 @@ begin
 end;
 
 procedure CompileToNative(const AIRFile, AOutputFile, AOPDFAsmFile: string;
-                          AExtraObjects: TStringList = nil);
+                          AExtraObjects: TStringList = nil;
+                          AOpdfDebug: Boolean = False);
 var
   AsmFile, RTLPath: string;
   Msg:              string;
@@ -482,7 +483,7 @@ begin
   try
     Args.Add('-o');
     Args.Add(AOutputFile);
-    if AOPDFAsmFile <> '' then
+    if (AOPDFAsmFile <> '') or AOpdfDebug then
       Args.Add('-no-pie');  { OPDF addresses are absolute; PIE relocation breaks them }
     Args.Add(AsmFile);
     if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
@@ -517,7 +518,8 @@ end;
   cc link, reusing the same link line as CompileToNative.  Tool + RTL paths are
   resolved through uToolchain so env-var overrides and target awareness apply. }
 procedure CompileToNativeDirect(const AAsmFile, AOutputFile: string;
-  const ATarget: TTargetDesc; const AOPDFAsmFile: string);
+  const ATarget: TTargetDesc; const AOPDFAsmFile: string;
+  AOpdfDebug: Boolean = False);
 var
   TC:       TToolchain;
   Msg:      string;
@@ -530,7 +532,7 @@ begin
   try
     Args.Add('-o');
     Args.Add(AOutputFile);
-    if AOPDFAsmFile <> '' then
+    if (AOPDFAsmFile <> '') or AOpdfDebug then
       Args.Add('-no-pie');  { OPDF addresses are absolute; PIE relocation breaks them }
     Args.Add(AAsmFile);
     if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
@@ -971,10 +973,23 @@ begin
 
       if OPDFEnabled then
       begin
-        OPDFAsmFile := ChangeFileExt(OutputFile, '.opdf.s');
         OE := TOPDFEmitter.Create(Prog, SourceFile);
         try
-          OE.EmitToFile(OPDFAsmFile);
+          { Native backend: codegen collected exact debug facts (frame
+            offsets, per-statement labels, function end labels).  Append the
+            OPDF section to the SAME assembly text — local labels resolve in
+            one object file, no symbol exports needed, and line records get
+            statement granularity.  QBE backend: no facts are available (QBE
+            assigns frames/addresses itself), keep the separate .opdf.s with
+            the approximate AST-walk records. }
+          OE.SetFacts(CG.GetDebugFacts());
+          if CG.GetDebugFacts() <> nil then
+            IR := IR + LineEnding + OE.GetOutput()
+          else
+          begin
+            OPDFAsmFile := ChangeFileExt(OutputFile, '.opdf.s');
+            OE.EmitToFile(OPDFAsmFile);
+          end;
         finally
           OE.Free();
         end;
@@ -1036,7 +1051,7 @@ begin
       end;
     end;
 
-    CompileToNativeDirect(AsmFile, OutputFile, Target, OPDFAsmFile);
+    CompileToNativeDirect(AsmFile, OutputFile, Target, OPDFAsmFile, OPDFEnabled);
     DeleteFile(AsmFile);
     if OPDFAsmFile <> '' then
       DeleteFile(OPDFAsmFile);
@@ -1070,9 +1085,9 @@ begin
     begin
       { Auto-discovered prebuilt dep object paths feed straight into the cc command line. }
       if PrebuiltObjPaths.Count > 0 then
-        CompileToNative(IRFile, OutputFile, OPDFAsmFile, PrebuiltObjPaths)
+        CompileToNative(IRFile, OutputFile, OPDFAsmFile, PrebuiltObjPaths, OPDFEnabled)
       else
-        CompileToNative(IRFile, OutputFile, OPDFAsmFile);
+        CompileToNative(IRFile, OutputFile, OPDFAsmFile, nil, OPDFEnabled);
     end;
     PrebuiltObjPaths.Free();
     DeleteFile(IRFile);

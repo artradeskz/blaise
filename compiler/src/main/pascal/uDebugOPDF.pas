@@ -20,13 +20,14 @@ unit uDebugOPDF;
 interface
 
 uses
-  SysUtils, Classes, contnrs, uAST, uSymbolTable;
+  SysUtils, Classes, contnrs, uAST, uSymbolTable, uDebugFacts;
 
 type
   TOPDFEmitter = class
   private
     FProgram:    TProgram;
     FSourceFile: string;
+    [Unretained] FFacts: TDbgFacts;  { non-owned — provided by the driver }
     FOutput:     TStringList;
     FTypeNames:  TStringList;   { sorted; Objects[i] = Pointer(PtrUInt(TypeID)) }
     FEmitted:    TStringList;   { sorted canonical names already written }
@@ -69,6 +70,10 @@ type
     procedure EmitAllTypes;
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
+    procedure EmitFunctionScopesFromFacts;
+    procedure EmitFactParameter(AVar: TDbgVar; var ADeclIdx: Integer);
+    procedure EmitFactLocalVar(AVar: TDbgVar; AScopeID: Integer;
+      var ADeclIdx: Integer);
     procedure CollectStmtLines(AStmt: TASTStmt; ALines: TStringList);
     procedure EmitLineInfoForBlock(ABlock: TBlock; const AFuncLabel, AFuncName: string);
     procedure EmitLineInfoForScope(AMethod: TMethodDecl);
@@ -81,6 +86,9 @@ type
     procedure EmitFields(ARec: TRecordTypeDesc);
   public
     constructor Create(AProgram: TProgram; const ASourceFile: string);
+    { Optional codegen facts: when set, scopes/locals/lines are emitted
+      from exact backend data instead of the approximate AST walk. }
+    procedure SetFacts(AFacts: TDbgFacts);
     destructor Destroy; override;
     procedure EmitToFile(const AFileName: string);
     function  GetOutput: string;
@@ -1004,6 +1012,126 @@ begin
   end;
 end;
 
+procedure TOPDFEmitter.SetFacts(AFacts: TDbgFacts);
+begin
+  FFacts := AFacts;
+end;
+
+procedure TOPDFEmitter.EmitFactParameter(AVar: TDbgVar; var ADeclIdx: Integer);
+var
+  CName: string;
+  RecSize: Integer;
+begin
+  if AVar.TypeDesc <> nil then
+    CName := CanonicalName(AVar.TypeDesc)
+  else
+    CName := 'Pointer';
+  RecSize := 9 + Length(AVar.Name);
+  L('');
+  L('    # recParameter: ' + AVar.Name);
+  EmitRecHdr(REC_PARAMETER, RecSize);
+  L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+  if AVar.IsVarParam then
+    L('    .byte 1  # IsVar')
+  else
+    L('    .byte 0  # IsVar');
+  if AVar.IsConstParam then
+    L('    .byte 1  # IsConst')
+  else
+    L('    .byte 0  # IsConst');
+  L('    .byte 0  # IsOut');
+  EmitNameLen(AVar.Name);
+  EmitNameData(AVar.Name);
+  ADeclIdx := ADeclIdx + 1;
+end;
+
+procedure TOPDFEmitter.EmitFactLocalVar(AVar: TDbgVar; AScopeID: Integer;
+  var ADeclIdx: Integer);
+var
+  CName: string;
+  RecSize: Integer;
+begin
+  if AVar.TypeDesc <> nil then
+    CName := CanonicalName(AVar.TypeDesc)
+  else
+    CName := 'Pointer';
+  RecSize := 15 + Length(AVar.Name);
+  L('');
+  L('    # recLocalVar: ' + AVar.Name + ' (rbp' +
+    IntToStr(AVar.RbpOffset) + ')');
+  EmitRecHdr(REC_LOCALVAR, RecSize);
+  L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
+  L('    .int  ' + IntToStr(AScopeID) + '  # ScopeID');
+  L('    .byte ' + IntToStr(LOC_RBP) + '  # LocationExpr (RBP-relative)');
+  L('    .word ' + IntToStr(ADeclIdx) + '  # DeclIndex');
+  EmitNameLen(AVar.Name);
+  L('    .word ' + IntToStr(AVar.RbpOffset) + '  # LocationData (RBP offset)');
+  EmitNameData(AVar.Name);
+  ADeclIdx := ADeclIdx + 1;
+end;
+
+{ Facts-driven scopes: exact LowPC/HighPC from codegen labels, every frame
+  slot with its real %rbp offset (parameters get BOTH a recParameter for
+  signature info and a recLocalVar so the debugger can locate the value),
+  and one recLineInfo per STATEMENT label — line breakpoints and stepping
+  work at statement granularity. }
+procedure TOPDFEmitter.EmitFunctionScopesFromFacts;
+var
+  I, J, ScopeID, DeclIdx, ParamIdx, RecSize: Integer;
+  F: TDbgFunc;
+  V: TDbgVar;
+  LineF: TDbgLine;
+begin
+  ScopeID := 0;
+  DeclIdx := 0;
+  for I := 0 to FFacts.Funcs.Count - 1 do
+  begin
+    F := TDbgFunc(FFacts.Funcs.Items[I]);
+    ScopeID := ScopeID + 1;
+
+    RecSize := 24 + Length(F.SymbolName);
+    L('');
+    L('    # recFunctionScope: ' + F.SymbolName);
+    EmitRecHdr(REC_FUNCSCOPE, RecSize);
+    L('    .int  ' + IntToStr(ScopeID) + '  # ScopeID');
+    L('    .quad ' + F.SymbolName + '  # LowPC');
+    if F.EndLabel <> '' then
+      L('    .quad ' + F.EndLabel + '  # HighPC (exact end label)')
+    else
+      L('    .quad 0  # HighPC (no end label recorded)');
+    L('    .word ' + IntToStr(DeclIdx) + '  # DeclIndex');
+    EmitStrField(F.SymbolName);
+    DeclIdx := DeclIdx + 1;
+
+    ParamIdx := 0;
+    for J := 0 to F.Vars.Count - 1 do
+    begin
+      V := TDbgVar(F.Vars.Items[J]);
+      if V.IsParam then
+        EmitFactParameter(V, ParamIdx);
+    end;
+    ParamIdx := 0;
+    for J := 0 to F.Vars.Count - 1 do
+    begin
+      V := TDbgVar(F.Vars.Items[J]);
+      EmitFactLocalVar(V, ScopeID, ParamIdx);
+    end;
+
+    RecSize := 16 + Length(FSourceFile);
+    for J := 0 to F.Lines.Count - 1 do
+    begin
+      LineF := TDbgLine(F.Lines.Items[J]);
+      L('');
+      L('    # recLineInfo: line ' + IntToStr(LineF.Line) + ' in ' + F.SymbolName);
+      EmitRecHdr(REC_LINEINFO, RecSize);
+      L('    .quad ' + LineF.LabelName + '  # Address (statement label)');
+      L('    .int  ' + IntToStr(LineF.Line) + '  # LineNumber');
+      L('    .word ' + IntToStr(LineF.Col) + '  # ColumnNumber');
+      EmitStrField(FSourceFile);
+    end;
+  end;
+end;
+
 procedure TOPDFEmitter.EmitFunctionScopes;
 var
   I, J, ScopeID, DeclIdx: Integer;
@@ -1020,6 +1148,11 @@ begin
     implementation bodies live on the type declarations' method lists (the
     ProcDecls impl entries are body-less matching stubs).  Without this walk
     no method — destructors included — ever got a scope record. }
+  if FFacts <> nil then
+  begin
+    EmitFunctionScopesFromFacts();
+    Exit;
+  end;
   Decls  := TObjectList.Create(False);
   Labels := TStringList.Create();
   try
