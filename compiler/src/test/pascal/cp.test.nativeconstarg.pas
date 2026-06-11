@@ -1,0 +1,467 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: Apache-2.0 WITH Swift-exception
+  Licensed under the Apache License v2.0 with Runtime Library Exception.
+  See LICENSE file in the project root for full license terms.
+}
+
+unit cp.test.nativeconstarg;
+
+{ Assembly-level tests for shape-aware const-string argument handling in the
+  NATIVE x86-64 backend — the port of the QBE backend's convention (see
+  cp.test.constarg.pas for the QBE twins and the full classification table).
+
+  Native convention after the port:
+
+    callee    — const params of ANY kind (including string) emit no
+                entry-retain/exit-release pair.
+    caller    — protects const-string arguments by shape:
+                borrowed (literals, named consts, plain safe locals) → no ops;
+                consume (owned +1 returns) → one post-call release;
+                pin (globals, fields, concat transients, aliasable locals)
+                → AddRef before the call, release after. }
+
+interface
+
+uses
+  Classes, SysUtils, blaise.testing, uStrCompat,
+  uLexer, uParser, uAST, uSymbolTable, uSemantic,
+  blaise.codegen.native, blaise.codegen.target;
+
+type
+  TNativeConstArgTests = class(TTestCase)
+  private
+    function GenAsm(const ASrc: string): string;
+    { Extract one emitted function's assembly (from 'Name:' to its
+      '.type Name, @function' trailer) so assertions are not polluted by
+      other functions' code. }
+    function FuncRegion(const AAsm, AName: string): string;
+    function CountOccurrences(const ANeedle, AHaystack: string): Integer;
+  published
+    procedure TestCallee_ConstStringParam_NoEntryExitPair;
+    procedure TestCallee_ValueStringParam_KeepsEntryExitPair;
+    procedure TestConstArg_ParamForward_NoArcOps;
+    procedure TestConstArg_Literal_NoPin;
+    procedure TestConstArg_LocalVar_NoPin;
+    procedure TestConstArg_GlobalVar_Pins;
+    procedure TestConstArg_OwnedReturn_ConsumeOnly;
+    procedure TestConstArg_Concat_Pins;
+    procedure TestConstArg_VarStringSibling_Pins;
+    procedure TestConstArg_AddrTakenLocal_Pins;
+    procedure TestConstArg_CapturedLocal_Pins;
+    procedure TestConstArg_InterfaceDispatch_ConcatPins;
+  end;
+
+implementation
+
+function TNativeConstArgTests.GenAsm(const ASrc: string): string;
+var
+  L:    TLexer;
+  P:    TParser;
+  Prog: TProgram;
+  A:    TSemanticAnalyser;
+  CG:   TCodeGenNative;
+begin
+  L := TLexer.Create(ASrc);
+  P := TParser.Create(L);
+  try
+    Prog := P.Parse();
+  finally
+    P.Free(); L.Free();
+  end;
+  try
+    A := TSemanticAnalyser.Create();
+    try
+      A.Analyse(Prog);
+    finally
+      A.Free();
+    end;
+    CG := TCodeGenNative.Create();
+    try
+      CG.SetTarget(HostTarget());
+      CG.Generate(Prog);
+      Result := CG.GetOutput();
+    finally
+      CG.Free();
+    end;
+  finally
+    Prog.Free();
+  end;
+end;
+
+function TNativeConstArgTests.FuncRegion(const AAsm, AName: string): string;
+var
+  StartP, EndP: Integer;
+begin
+  StartP := Pos(AName + ':', AAsm);
+  AssertTrue('function ' + AName + ' present in asm', StartP >= 0);
+  EndP := StrPos('.type ' + AName, StrCopyTail(AAsm, StartP));
+  AssertTrue('function ' + AName + ' closed', EndP >= 0);
+  Result := StrCopyFrom(AAsm, StartP, EndP);
+end;
+
+function TNativeConstArgTests.CountOccurrences(const ANeedle,
+  AHaystack: string): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  I := Pos(ANeedle, AHaystack);
+  while I >= 0 do
+  begin
+    Result := Result + 1;
+    I := PosEx(ANeedle, AHaystack, I + 1);
+  end;
+end;
+
+procedure TNativeConstArgTests.TestCallee_ConstStringParam_NoEntryExitPair;
+const
+  Src = '''
+      program P;
+      procedure SinkC(const S: string);
+      begin
+      end;
+      begin
+        SinkC('x')
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { The callee must not retain/release a const string param — the caller
+    protects the argument now (matches the QBE convention since 5a5b5d4). }
+  Region := FuncRegion(GenAsm(Src), 'SinkC');
+  AssertEquals('no entry AddRef in const-param callee', -1,
+    Pos('_StringAddRef', Region));
+  AssertEquals('no exit Release in const-param callee', -1,
+    Pos('_StringRelease', Region));
+end;
+
+procedure TNativeConstArgTests.TestCallee_ValueStringParam_KeepsEntryExitPair;
+const
+  Src = '''
+      program P;
+      procedure SinkV(S: string);
+      begin
+      end;
+      begin
+        SinkV('x')
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { Value string params keep the callee entry/exit pair — only const params
+    moved to caller-side protection. }
+  Region := FuncRegion(GenAsm(Src), 'SinkV');
+  AssertTrue('entry AddRef kept for value param',
+    Pos('_StringAddRef', Region) >= 0);
+  AssertTrue('exit Release kept for value param',
+    Pos('_StringRelease', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_ParamForward_NoArcOps;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller(const T: string);
+      begin
+        Sink(T)
+      end;
+      var L: string;
+      begin
+        L := 'x';
+        Caller(L)
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { Forwarding a const param to a const param: borrowed all the way. }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertEquals('no AddRef in Caller', -1, Pos('_StringAddRef', Region));
+  AssertEquals('no Release in Caller', -1, Pos('_StringRelease', Region));
+end;
+
+procedure TNativeConstArgTests.TestConstArg_Literal_NoPin;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller;
+      begin
+        Sink('hello')
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertEquals('no AddRef for literal arg', -1, Pos('_StringAddRef', Region));
+  AssertEquals('no Release for literal arg', -1, Pos('_StringRelease', Region));
+end;
+
+procedure TNativeConstArgTests.TestConstArg_LocalVar_NoPin;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      function Mk: string;
+      begin
+        Result := IntToStr(7)
+      end;
+      procedure Caller;
+      var
+        L: string;
+      begin
+        L := Mk();
+        Sink(L)
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { L := Mk() consumes the owned return; Sink(L) borrows L (no pin pair).
+    The only releases allowed are the assignment release-old and L's
+    scope-exit release — a pinned call would add a third. }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertEquals('no AddRef in Caller', -1, Pos('_StringAddRef', Region));
+  AssertTrue('at most two Releases (assign old + scope exit), no call pin',
+    CountOccurrences('_StringRelease', Region) <= 2);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_GlobalVar_Pins;
+const
+  Src = '''
+      program P;
+      var G: string;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller;
+      begin
+        Sink(G)
+      end;
+      begin
+        G := 'x';
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { A global can be reassigned by the callee through its own name — pin. }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertTrue('AddRef pins global arg', Pos('_StringAddRef', Region) >= 0);
+  AssertTrue('Release unpins global arg', Pos('_StringRelease', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_OwnedReturn_ConsumeOnly;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      function Mk: string;
+      begin
+        Result := IntToStr(7)
+      end;
+      procedure Caller;
+      begin
+        Sink(Mk())
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { Mk() hands over a +1 temp; the post-call release consumes it (without
+    this the temp leaks — the callee no longer frees it for us). }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertEquals('no AddRef for owned-return arg', -1,
+    Pos('_StringAddRef', Region));
+  AssertTrue('Release consumes the owned temp',
+    Pos('_StringRelease', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_Concat_Pins;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller(const T: string);
+      begin
+        Sink('a' + T)
+      end;
+      var L: string;
+      begin
+        L := 'x';
+        Caller(L)
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { _StringConcat returns an rc=0 transient: the pin pair both protects it
+    during the call and frees it afterwards. }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertTrue('AddRef pins concat temp', Pos('_StringAddRef', Region) >= 0);
+  AssertTrue('Release frees concat temp', Pos('_StringRelease', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_VarStringSibling_Pins;
+const
+  Src = '''
+      program P;
+      procedure Swapish(const A: string; var B: string);
+      begin
+        B := 'new'
+      end;
+      procedure Caller;
+      var
+        L: string;
+      begin
+        L := IntToStr(7);
+        Swapish(L, L)
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { B aliases L: the callee's write to B releases L's buffer while A still
+    borrows it — a var/out string sibling param forces a pin. }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertTrue('AddRef pins despite local shape',
+    Pos('_StringAddRef', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_AddrTakenLocal_Pins;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller;
+      var
+        L: string;
+        PS: ^string;
+      begin
+        L := IntToStr(7);
+        PS := @L;
+        Sink(L);
+        PS^ := 'x'
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertTrue('AddRef pins address-taken local',
+    Pos('_StringAddRef', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_CapturedLocal_Pins;
+const
+  Src = '''
+      program P;
+      procedure Sink(const S: string);
+      begin
+      end;
+      procedure Caller;
+      var
+        L: string;
+        procedure Nested;
+        begin
+          L := 'changed'
+        end;
+      begin
+        L := IntToStr(7);
+        Sink(L);
+        Nested()
+      end;
+      begin
+        Caller()
+      end.
+      ''';
+var
+  Region: string;
+begin
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertTrue('AddRef pins captured local',
+    Pos('_StringAddRef', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestConstArg_InterfaceDispatch_ConcatPins;
+const
+  Src = '''
+      program P;
+      type
+        ISink = interface
+          procedure Put(const S: string);
+        end;
+        TSink = class(TObject, ISink)
+        public
+          procedure Put(const S: string);
+        end;
+      procedure TSink.Put(const S: string);
+      begin
+      end;
+      procedure Caller(V: ISink; const T: string);
+      begin
+        V.Put('a' + T)
+      end;
+      var
+        O: TSink;
+        I: ISink;
+        L: string;
+      begin
+        O := TSink.Create();
+        I := O;
+        L := 'x';
+        Caller(I, L)
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { Interface dispatch cannot see the implementing method's const-ness, so
+    the caller must protect every string argument by shape: the concat
+    transient pins.  Without this, a const-param implementor receives an
+    unprotected rc=0 transient. }
+  Region := FuncRegion(GenAsm(Src), 'Caller');
+  AssertTrue('AddRef pins concat temp at interface call site',
+    Pos('_StringAddRef', Region) >= 0);
+  AssertTrue('Release frees concat temp at interface call site',
+    Pos('_StringRelease', Region) >= 0);
+end;
+
+initialization
+  RegisterTest(TNativeConstArgTests);
+
+end.

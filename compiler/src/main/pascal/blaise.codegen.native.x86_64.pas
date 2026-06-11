@@ -27,17 +27,33 @@ interface
 
 uses
   SysUtils, Classes, contnrs, Generics.Collections, uAST, uSymbolTable, uStrCompat,
+  blaise.codegen.arcshapes,
   blaise.codegen.native.backend, blaise.codegen.target;
 
+const
+  { Per-argument hoist kinds recorded by EmitArgHoist, parallel to the
+    depth list.  Kinds >= akRecCall reload a single saved 8-byte value in
+    the arg loop; akOALit reloads the saved data pointer and pushes the
+    high index as a second slot. }
+  akNone = 0;        { not hoisted — evaluated in the normal arg loop }
+  akOALit = 1;       { open-array literal: element block + saved data ptr }
+  akRecCall = 2;     { record-returning call arg: sret buffer + saved ptr }
+  akStrPin = 3;      { const-string pin: saved value, AddRef'd; released after }
+  akStrConsume = 4;  { const-string consume: saved +1 value; released after }
+
 type
-  { Per-call bookkeeping for hoisted open-array literal arguments — see
-    HoistOALitArgs.  Frames nest: a call emitted while evaluating another
-    call's arguments pushes its own frame. }
+  { Per-call bookkeeping for hoisted call arguments — see EmitArgHoist.
+    Frames nest: a call emitted while evaluating another call's arguments
+    pushes its own frame. }
   TOALCallFrame = class
   public
-    Depths: TList<Integer>;   { per-arg saved-pointer depth; -1 = not hoisted }
-    Total: Integer;           { bytes of blocks + saved pointers on the stack }
+    Depths: TList<Integer>;   { per-arg saved-slot depth; -1 = not hoisted }
+    Kinds: TList<Integer>;    { per-arg hoist kind (akXxx), parallel to Depths }
+    Total: Integer;           { bytes of blocks, buffers + saved slots on the stack }
     Pushed: Integer;          { bytes pushed since the hoist pre-pass }
+    { The call's argument list — read by the EndCallArgs epilogue for
+      record-temp field releases.  Owned by the AST, not by the frame. }
+    [Unretained] Args: TObjectList;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -101,6 +117,12 @@ type
       reads/writes are transparently redirected through that pointer.
       Nil when not inside a nested function. }
     FCapturedVars: TStringList;
+    { Locals of the current function that may not be borrowed as const-string
+      arguments: address-taken (explicit @ or var/out arg) plus anything
+      captured by a nested procedure.  Rebuilt per function in
+      EmitFunctionDef; consulted by ConstStrShape.  Mirrors the QBE
+      backend's FConstArgUnsafe. }
+    FConstArgUnsafe: TStringList;
 
     { Exception-frame accounting (per-function, reset in ClearFrame):
       FExcDepth    — number of exc frames currently live (pushed − popped).
@@ -319,12 +341,6 @@ type
       nil for type-cast calls. }
     procedure EmitCall(const AFuncSym: string; ADecl: TMethodDecl;
                        AArgs: TObjectList);
-    { After a call whose args may contain record-returning function calls
-      (sret temps), release each managed field of every sret temp buffer
-      and reclaim its stack space.  Iterates AArgs in reverse (last sret
-      buffer is nearest to %rsp).  Safe to call even when no sret args
-      exist — it simply does nothing. }
-    procedure EmitSretArgReleases(AArgs: TObjectList);
     { Emit a call to a record-returning function using the sret convention:
       ASretAddr is the AT&T operand for the destination buffer (already allocated
       by the caller), passed as the hidden first integer argument in %rdi.
@@ -406,31 +422,72 @@ type
       var/out params push one value; interface params push two (itab first, then
       obj — reversed so the pop loop restores them in the correct register order). }
     procedure EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
-    { Pre-pass for open-array literal arguments (phase A of the two-phase call
-      protocol).  EmitOpenArrayLiteral moves %rsp, so a literal emitted between
-      two argument-slot pushes leaves its element block in the middle of the
-      pushed slots and the popq sequence that loads the argument registers pops
-      from inside the block.  HoistOALitArgs emits every literal block before
-      any slot push and pushes each block's data pointer right behind it.
-      ADepths gets one entry per argument: the stack depth of the saved data
-      pointer for hoisted literals, -1 otherwise.  Returns the total bytes
-      added (blocks + saved pointers); the call site reclaims them with addq
-      AFTER the call.  Element expressions of hoisted literals are evaluated
-      before all other arguments. }
-    function HoistOALitArgs(AParams: TObjectList; AArgs: TObjectList;
-                            ADepths: TList<Integer>): Integer;
-    { Phase B — push the slot(s) for one argument.  Hoisted literals reload
-      their data pointer from the phase-A region: the saved pointer sits
-      (AOALTotal - AOALDepth + APushed) bytes above the current %rsp, where
-      APushed counts every byte pushed since HoistOALitArgs returned. }
+    { Pre-pass for call arguments (phase A of the call protocol).  Hoists
+      three argument kinds into a stack region BELOW the argument slots,
+      recording one (depth, kind) pair per argument (-1/akNone when not
+      hoisted):
+
+        akOALit      — open-array literals: EmitOpenArrayLiteral moves %rsp,
+                       so the element block is emitted here and its data
+                       pointer saved behind it.
+        akRecCall    — record-returning call arguments: the callee's sret
+                       buffer is materialised here (EmitExprToEax leaves it
+                       at %rsp) and the buffer pointer saved.  Without the
+                       hoist the buffer lands between pushed argument slots
+                       and the popq sequence reads buffer words.
+        akStrPin /
+        akStrConsume — const-string arguments needing caller protection
+                       (see blaise.codegen.arcshapes.TConstArgMode): the
+                       value is evaluated and saved; pin mode AddRefs it.
+                       Param const-ness comes from AParams (TMethodParam) or
+                       AProcParams (TProcParamInfo); when AKnownSig is False
+                       (interface dispatch) every string-typed argument is
+                       protected by shape, with AVarFlags ('1'/'0' comma
+                       list) marking var positions to skip.
+
+      Returns the region bytes.  The call site reloads hoisted values in its
+      arg loop and finishes with EmitHoistEpilogue AFTER the call. }
+    function EmitArgHoist(AParams: TObjectList; AProcParams: TObjectList;
+                          AKnownSig: Boolean; const AVarFlags: string;
+                          AArgs: TObjectList;
+                          ADepths: TList<Integer>; AKinds: TList<Integer>): Integer;
+    { Phase C — post-call epilogue: releases pinned/consumed const-string
+      values and the managed fields of hoisted record temporaries, preserving
+      the call's return registers (%rax/%rdx/%xmm0/%xmm1), then reclaims
+      ATotal + ABase bytes when AReclaim is True.  ABase = extra bytes (e.g.
+      overflow-arg cleanup) between %rsp and the hoist region at this point. }
+    procedure EmitHoistEpilogue(AArgs: TObjectList; ADepths: TList<Integer>;
+                                AKinds: TList<Integer>; ATotal, ABase: Integer;
+                                AReclaim: Boolean);
+    { Shape classification for a const-string argument — mirror of the QBE
+      backend's ConstArgMode.  APinPlainLocals forces plain locals to pin
+      (var/out string sibling param, or unknown parameter types). }
+    function  ConstStrShape(AArg: TASTExpr; APinPlainLocals: Boolean): TConstArgMode;
+    { True when AArg is a record-returning function/method call (its
+      evaluation materialises an sret buffer on the stack). }
+    function  IsRecCallArg(AArg: TASTExpr): Boolean;
+    { Stack bytes the sret buffer of a hoisted record-call argument occupies. }
+    function  RecArgBufBytes(AArg: TASTExpr): Integer;
+    function  ParamsHaveVarString(AParams: TObjectList): Boolean;
+    function  ProcParamsHaveVarString(AProcParams: TObjectList): Boolean;
+    { Reads the AIndex'th flag of a MethodParamVarFlagsStr-style '1'/'0'
+      comma list; False when out of range or empty. }
+    function  VarFlagAt(const AFlags: string; AIndex: Integer): Boolean;
+    { Total of the innermost open call frame — used by sret call paths to
+      address a dest pointer saved just below the hoist region. }
+    function  TopFrameTotal: Integer;
+    { Phase B — push the slot(s) for one argument.  Hoisted arguments reload
+      their saved value from the phase-A region: the saved slot sits
+      (ATotal - ADepth + APushed) bytes above the current %rsp, where
+      APushed counts every byte pushed since EmitArgHoist returned. }
     procedure EmitArgPush(APar: TMethodParam; AArg: TASTExpr;
-                          AOALTotal, AOALDepth: Integer; var APushed: Integer);
-    { Frame-stack wrappers around HoistOALitArgs/EmitArgPush for the standard
+                          ATotal, ADepth, AKind: Integer; var APushed: Integer);
+    { Frame-stack wrappers around EmitArgHoist/EmitArgPush for the standard
       push-loop call sites.  BeginCallArgs runs the hoist pre-pass and pushes
       a frame; PushCallArg pushes one argument's slot(s) (AIndex = position in
-      the original argument list); EndCallArgs emits the addq that reclaims
-      the hoisted blocks (place it where the post-call stack cleanup belongs)
-      and pops the frame. }
+      the original argument list); EndCallArgs emits the post-call epilogue
+      (string releases, record-temp field releases, region reclaim — place it
+      where the post-call stack cleanup belongs) and pops the frame. }
     procedure BeginCallArgs(AParams: TObjectList; AArgs: TObjectList);
     procedure PushCallArg(APar: TMethodParam; AArg: TASTExpr; AIndex: Integer);
     procedure EndCallArgs;
@@ -474,13 +531,16 @@ constructor TOALCallFrame.Create;
 begin
   inherited Create();
   Depths := TList<Integer>.Create();
+  Kinds := TList<Integer>.Create();
   Total := 0;
   Pushed := 0;
+  Args := nil;
 end;
 
 destructor TOALCallFrame.Destroy;
 begin
   Depths.Free();
+  Kinds.Free();
   inherited Destroy();
 end;
 
@@ -491,9 +551,13 @@ end;
 { Byte width (1/2/4/8) of an integer-family type. Defaults to 4. }
 function IntByteSize(AType: TTypeDesc): Integer;
 begin
+  { nil / unmapped kinds default to pointer width, mirroring the QBE
+    backend's 'l' default (QbeTypeOf / PromotedQType).  A nil TypeDesc
+    is typically an unresolved forward class reference — loading such a
+    field with 4-byte width truncates the pointer. }
   if AType = nil then
   begin
-    Exit(4);
+    Exit(8);
   end;
   case AType.Kind of
     tyByte, tyBoolean:                          Result := 1;
@@ -511,7 +575,7 @@ begin
       else
         Result := 4;
   else
-    Result := 4;
+    Result := 8;
   end;
 end;
 
@@ -590,11 +654,16 @@ begin
   FProgExcFrameCount  := 0;
   FSystemDefsEmitted  := False;
   FUnitInitNames      := TStringList.Create();
+  FConstArgUnsafe     := TStringList.Create();
+  FConstArgUnsafe.CaseSensitive := True;
+  FConstArgUnsafe.Sorted := True;
+  FConstArgUnsafe.Duplicates := dupIgnore;
 end;
 
 destructor TX86_64Backend.Destroy;
 begin
   Self.ClearFrame();
+  FConstArgUnsafe.Free();
   FUnitInitNames.Free();
   FOALFrames.Free();
   FFinallyStack.Free();
@@ -1707,19 +1776,38 @@ procedure TX86_64Backend.EmitInterfaceCall(const AObjName: string;
 var
   I, SlotOff, Ps, ArgN: Integer;
   Arg: TASTExpr;
+  HD: TList<Integer>;
+  HK: TList<Integer>;
+  HTotal, Pushed: Integer;
+  VFlags: string;
 begin
   { x86_64: pointers are 8 bytes (this backend's invariant, like the rest of the
     file).  i386/arm64 backends will be separate TNativeBackend subclasses. }
   Ps := 8;
   ArgN := 0;
   if AArgs <> nil then ArgN := AArgs.Count;
+  { Hoist record-call args and (shape-classified) string args — the
+    implementing method's const-ness is invisible at an interface call site,
+    so every string-typed value argument is protected by shape.  The var
+    flags recorded on the interface type mark by-reference positions. }
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  VFlags := AIntf.MethodParamVarFlagsStr(AIntf.MethodIndex(AMethName));
+  HTotal := Self.EmitArgHoist(nil, nil, False, VFlags, AArgs, HD, HK);
+  Pushed := 0;
   { Evaluate args left-to-right and push them.  Interface args push two values
     (obj then itab); all other args push one.  Pass nil as the TMethodParam so
     EmitMethodArgPush falls through to scalar for non-interface args. }
   for I := 0 to ArgN - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
-    if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    if HK.Get(I) >= akRecCall then
+    begin
+      { Hoisted record-call or string argument — reload the saved value. }
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
     begin
       if Arg is TIdentExpr then
       begin
@@ -1762,6 +1850,12 @@ begin
       Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
     end;
+    { Track bytes pushed so far — hoisted-value reloads are %rsp-relative. }
+    if (HK.Get(I) < akRecCall) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
+      Pushed := Pushed + 16
+    else
+      Pushed := Pushed + 8;
   end;
   { Load obj (Self) into %r10 and the itab into %rax, then index the itab.
     For a field receiver the fat pointer is contiguous (obj at the field
@@ -1800,8 +1894,9 @@ begin
     Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
   Self.Emit(#9'movq %r10, %rdi');
   Self.Emit(#9'callq *%r11');
-  if AArgs <> nil then
-    Self.EmitSretArgReleases(AArgs);
+  Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
+  HD.Free();
+  HK.Free();
 end;
 
 procedure TX86_64Backend.EmitInterfaceFieldCall(AFld: TFieldInfo;
@@ -1811,14 +1906,30 @@ procedure TX86_64Backend.EmitInterfaceFieldCall(AFld: TFieldInfo;
 var
   I, SlotOff, ArgN: Integer;
   Arg: TASTExpr;
+  HD: TList<Integer>;
+  HK: TList<Integer>;
+  HTotal, Pushed: Integer;
+  VFlags: string;
 begin
   ArgN := 0;
   if AArgs <> nil then ArgN := AArgs.Count;
+  { Same unknown-signature hoist as EmitInterfaceCall. }
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  VFlags := AIntf.MethodParamVarFlagsStr(AIntf.MethodIndex(AMethName));
+  HTotal := Self.EmitArgHoist(nil, nil, False, VFlags, AArgs, HD, HK);
+  Pushed := 0;
   { Push args left-to-right; interface args push obj then itab (2 slots). }
   for I := 0 to ArgN - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
-    if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    if HK.Get(I) >= akRecCall then
+    begin
+      { Hoisted record-call or string argument — reload the saved value. }
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
     begin
       if Arg is TIdentExpr then
       begin
@@ -1861,6 +1972,12 @@ begin
       Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
     end;
+    { Track bytes pushed so far — hoisted-value reloads are %rsp-relative. }
+    if (HK.Get(I) < akRecCall) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
+      Pushed := Pushed + 16
+    else
+      Pushed := Pushed + 8;
   end;
   { Load Self and compute field base; use %r11 for base pointer. }
   Self.Emit(Format(#9'movq %s, %%r11', [Self.VarOperand('Self')]));
@@ -1888,8 +2005,9 @@ begin
     Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
   Self.Emit(#9'movq %r10, %rdi');
   Self.Emit(#9'callq *%r11');
-  if AArgs <> nil then
-    Self.EmitSretArgReleases(AArgs);
+  Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
+  HD.Free();
+  HK.Free();
 end;
 
 { An interface method maps to one of ARec's vtable slots.  When that slot is
@@ -2954,6 +3072,14 @@ end;
   consistent with a 4- or 8-byte type, but harmless to apply. }
 procedure TX86_64Backend.EmitNarrowToType(AType: TTypeDesc);
 begin
+  if AType = nil then Exit;
+  { Pointer-shaped values are full 64-bit addresses — "narrowing" one (e.g.
+    after a class cast TFoo(X), which routes through the type-cast call
+    path) truncates the pointer to its low 32 bits. }
+  if AType.Kind in [tyClass, tyMetaClass, tyInterface, tyString, tyPChar,
+                    tyPointer, tyDynArray, tyOpenArray, tyRecord,
+                    tyStaticArray, tyProcedural] then
+    Exit;
   case IntByteSize(AType) of
     1: if IsUnsignedInt(AType) then
          Self.Emit(#9'movzbq %al, %rax')
@@ -3367,7 +3493,6 @@ begin
       Self.Emit(#9'movq %r10, %rdi');
       Self.Emit(#9'callq ' + FuncSymbolOf(FC));
       Self.EndCallArgs();
-      Self.EmitSretArgReleases(FC.Args);
       Exit;
     end;
     { User function call whose return type is float. }
@@ -3603,7 +3728,14 @@ begin
 
   if AExpr is TStringLiteral then
   begin
-    Self.EmitStrLitAddr(TStringLiteral(AExpr).Value);
+    if TStringLiteral(AExpr).IsCharCoerce then
+      { Char context (e.g. S[I] = ','): the semantic pass marked this
+        single-char literal for ordinal coercion — emitting the data
+        pointer here would compare an address against a byte. }
+      Self.Emit(Format(#9'movl $%d, %%eax',
+        [TStringLiteral(AExpr).CharOrdValue]))
+    else
+      Self.EmitStrLitAddr(TStringLiteral(AExpr).Value);
     Exit;
   end;
 
@@ -4659,7 +4791,6 @@ begin
       Self.Emit(#9'movq %r10, %rdi');
       Self.Emit(#9'callq ' + FuncSymbolOf(FC));
       Self.EndCallArgs();
-      Self.EmitSretArgReleases(FC.Args);
       if FC.ResolvedType <> nil then
         Self.EmitNarrowToType(FC.ResolvedType);
       Exit;
@@ -5682,6 +5813,9 @@ var
   CleanUp:       Integer;
   OverflowSlots: Integer;
   Dest:          Integer;
+  HD:            TList<Integer>;
+  HK:            TList<Integer>;
+  HTotal:        Integer;
 begin
   { Interface method dispatch: receiver is an interface fat pointer; route
     through the itab rather than a static method symbol. }
@@ -5754,6 +5888,9 @@ begin
       begin
         Self.Emit(#9'pushq %rbx');
         Self.Emit(#9'movq %rax, %rbx');
+        HD := TList<Integer>.Create();
+        HK := TList<Integer>.Create();
+        HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
         OverflowSlots := TotalSlots - 6;
         AllocSz := (((6 * 8 + OverflowSlots * 8) + 15) and (-16)) + 8;
         CleanUp := AllocSz - 6 * 8;
@@ -5765,9 +5902,24 @@ begin
             Dest := I * 8 + 8
           else
             Dest := 6 * 8 + (I + 1 - 6) * 8;
-          if TMethodParam(MD.Params.Items[I]).IsVarParam then
+          if HK.Get(I) >= akRecCall then
+            Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+              [AllocSz + HTotal - HD.Get(I)]))
+          else if TMethodParam(MD.Params.Items[I]).IsVarParam then
           begin
-            if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+            { Forwarding a var/out param: the slot already holds the pointer —
+              pass the VALUE, not the slot's address. }
+            if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
+              Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
+            else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
+                    and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+            begin
+              Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+              if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+                Self.Emit(Format(#9'addq $%d, %%rax',
+                  [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+            end
+            else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
               Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
             else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
               Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
@@ -5786,11 +5938,12 @@ begin
           Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
         Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
         Self.Emit(#9'callq ' + Sym);
-        Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+        Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
+        HD.Free();
+        HK.Free();
         Self.Emit(#9'movq %rbx, %rax');
         Self.Emit(#9'popq %rbx');
       end;
-      Self.EmitSretArgReleases(ACall.Args);
     end;
     Exit;
   end;
@@ -5863,6 +6016,9 @@ begin
     OverflowSlots := TotalSlots - 6;
     CleanUp := ((OverflowSlots * 8 + 15) and (-16));
     AllocSz := 6 * 8 + CleanUp;
+    HD := TList<Integer>.Create();
+    HK := TList<Integer>.Create();
+    HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
 
     SlotOff := 8;
@@ -5873,9 +6029,24 @@ begin
         Dest := I * 8 + 8
       else
         Dest := 6 * 8 + (I + 1 - 6) * 8;
-      if TMethodParam(MD.Params.Items[I]).IsVarParam then
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else if TMethodParam(MD.Params.Items[I]).IsVarParam then
       begin
-        if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+        { Forwarding a var/out param: the slot already holds the pointer —
+          pass the VALUE, not the slot's address. }
+        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
+                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+        end
+        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
           Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
         else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
           Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
@@ -5932,9 +6103,10 @@ begin
     end
     else
       Self.Emit(#9'callq ' + Sym);
-    Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
+    HD.Free();
+    HK.Free();
   end;
-  Self.EmitSretArgReleases(ACall.Args);
 end;
 
 procedure TX86_64Backend.EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
@@ -6117,6 +6289,9 @@ var
   Arg:      TASTExpr;
   UserSlots, TotalSlots, AllocSz, SlotOff, CleanUp: Integer;
   OverflowSlots, Dest: Integer;
+  HD:       TList<Integer>;
+  HK:       TList<Integer>;
+  HTotal:   Integer;
 begin
   { Interface method dispatch (statement position): route through the itab. }
   if (ACall.ResolvedClassType <> nil) and
@@ -6241,6 +6416,9 @@ begin
     OverflowSlots := TotalSlots - 6;
     CleanUp := ((OverflowSlots * 8 + 15) and (-16));
     AllocSz := 6 * 8 + CleanUp;
+    HD := TList<Integer>.Create();
+    HK := TList<Integer>.Create();
+    HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
 
     for I := 0 to ACall.Args.Count - 1 do
@@ -6250,9 +6428,24 @@ begin
         Dest := I * 8 + 8
       else
         Dest := 6 * 8 + (I + 1 - 6) * 8;
-      if TMethodParam(MD.Params.Items[I]).IsVarParam then
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else if TMethodParam(MD.Params.Items[I]).IsVarParam then
       begin
-        if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+        { Forwarding a var/out param: the slot already holds the pointer —
+          pass the VALUE, not the slot's address. }
+        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
+                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+        end
+        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
           Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
         else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
           Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
@@ -6320,10 +6513,13 @@ begin
     Self.Emit(#9'callq ' + Sym);
 
   if TotalSlots > 6 then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]))
+  begin
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
+    HD.Free();
+    HK.Free();
+  end
   else
     Self.EndCallArgs();
-  Self.EmitSretArgReleases(ACall.Args);
 end;
 
 procedure TX86_64Backend.EmitInheritedCall(ACall: TInheritedCallStmt);
@@ -6365,7 +6561,6 @@ begin
     else
       Self.EmitStoreVar(Self.VarOperand('Result'), MD.ResolvedReturnType);
   end;
-  Self.EmitSretArgReleases(ACall.Args);
 end;
 
 procedure TX86_64Backend.EmitCondBranch(AExpr: TASTExpr;
@@ -8336,7 +8531,6 @@ begin
       Self.Emit(#9'movq %r10, %rdi');
       Self.Emit(#9'callq ' + FuncSymbolFromDecl(MD));
       Self.EndCallArgs();
-      Self.EmitSretArgReleases(PC.Args);
       Exit;
     end;
     { User procedure call (result, if any, ignored in statement position). }
@@ -9250,43 +9444,284 @@ begin
   Exit(TotalSz);
 end;
 
-function TX86_64Backend.HoistOALitArgs(AParams: TObjectList;
-  AArgs: TObjectList; ADepths: TList<Integer>): Integer;
+function TX86_64Backend.ConstStrShape(AArg: TASTExpr;
+  APinPlainLocals: Boolean): TConstArgMode;
+var
+  IE: TIdentExpr;
+begin
+  Result := camPin;
+  if AArg = nil then Exit;
+  if AArg is TStringLiteral then
+    Exit(camBorrowed);
+  if AArg is TIdentExpr then
+  begin
+    IE := TIdentExpr(AArg);
+    if IE.IsImplicitSelfMethod then
+      Exit(camConsume);   { bare zero-arg method call — +1 owned return }
+    if IE.IsConstant then
+      Exit(camBorrowed);  { named string const — immortal literal data }
+    if (not IE.IsGlobal) and (IE.ParamMode = pmNone) and
+       (IE.ImplicitFieldInfo = nil) and not Self.IsCaptured(IE.Name) and
+       (FConstArgUnsafe.IndexOf(IE.Name) < 0) then
+    begin
+      { Plain local / by-value or const param: the frame's own reference
+        outlives the call — unless an alias can defeat that (var/out string
+        sibling param in the same signature, or unknown parameter types). }
+      if APinPlainLocals then
+        Exit(camPin);
+      Exit(camBorrowed);
+    end;
+    Exit(camPin);         { global, var-param read, implicit-Self field,
+                            address-taken or nested-captured local }
+  end;
+  if NativeExprOwnsRef(AArg) then
+    Exit(camConsume);     { function/method/getter return — +1 owned temp }
+end;
+
+function TX86_64Backend.IsRecCallArg(AArg: TASTExpr): Boolean;
+begin
+  Result := False;
+  if (AArg = nil) or (AArg.ResolvedType = nil) then Exit;
+  if AArg.ResolvedType.Kind <> tyRecord then Exit;
+  if (AArg is TFuncCallExpr) and (TFuncCallExpr(AArg).ResolvedDecl <> nil) then
+    Exit(True);
+  if (AArg is TMethodCallExpr) and
+     not TMethodCallExpr(AArg).IsConstructorCall then
+    Exit(True);
+end;
+
+function TX86_64Backend.RecArgBufBytes(AArg: TASTExpr): Integer;
+begin
+  Result := (TRecordTypeDesc(AArg.ResolvedType).TotalSize() + 15) and (-16);
+end;
+
+function TX86_64Backend.ParamsHaveVarString(AParams: TObjectList): Boolean;
 var
   I: Integer;
   P: TMethodParam;
-  Arg: TASTExpr;
 begin
-  Result := 0;
-  if AArgs = nil then Exit;
-  for I := 0 to AArgs.Count - 1 do
+  Result := False;
+  if AParams = nil then Exit;
+  for I := 0 to AParams.Count - 1 do
   begin
-    if (AParams = nil) or (I >= AParams.Count) or
-       not TMethodParam(AParams.Items[I]).IsOpenArray or
-       not (TASTExpr(AArgs.Items[I]) is TArrayLiteralExpr) then
-    begin
-      ADepths.Add(-1);
-      Continue;
-    end;
-    Arg := TASTExpr(AArgs.Items[I]);
-    Result := Result + Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
-    Self.Emit(#9'pushq %rax');
-    Result := Result + 8;
-    ADepths.Add(Result);
+    P := TMethodParam(AParams.Items[I]);
+    if P.IsVarParam and (P.ResolvedType <> nil) and
+       P.ResolvedType.IsString() then
+      Exit(True);
   end;
 end;
 
-procedure TX86_64Backend.EmitArgPush(APar: TMethodParam; AArg: TASTExpr;
-  AOALTotal, AOALDepth: Integer; var APushed: Integer);
+function TX86_64Backend.ProcParamsHaveVarString(AProcParams: TObjectList): Boolean;
+var
+  I: Integer;
+  P: TProcParamInfo;
 begin
-  if AOALDepth >= 0 then
+  Result := False;
+  if AProcParams = nil then Exit;
+  for I := 0 to AProcParams.Count - 1 do
+  begin
+    P := TProcParamInfo(AProcParams.Items[I]);
+    if P.IsVarParam and (P.TypeDesc <> nil) and P.TypeDesc.IsString() then
+      Exit(True);
+  end;
+end;
+
+function TX86_64Backend.VarFlagAt(const AFlags: string; AIndex: Integer): Boolean;
+var
+  I, Idx: Integer;
+begin
+  Result := False;
+  if AFlags = '' then Exit;
+  Idx := 0;
+  for I := 0 to Length(AFlags) - 1 do
+  begin
+    if AFlags[I] = ',' then
+      Idx := Idx + 1
+    else if Idx = AIndex then
+      Exit(AFlags[I] = '1');
+  end;
+end;
+
+function TX86_64Backend.TopFrameTotal: Integer;
+begin
+  Result := TOALCallFrame(FOALFrames.Get(FOALFrames.Count - 1)).Total;
+end;
+
+function TX86_64Backend.EmitArgHoist(AParams: TObjectList;
+  AProcParams: TObjectList; AKnownSig: Boolean; const AVarFlags: string;
+  AArgs: TObjectList;
+  ADepths: TList<Integer>; AKinds: TList<Integer>): Integer;
+var
+  I: Integer;
+  Par: TMethodParam;
+  PP: TProcParamInfo;
+  Arg: TASTExpr;
+  IsVarPos: Boolean;
+  ConstStr: Boolean;
+  PinPlain: Boolean;
+  Mode: TConstArgMode;
+begin
+  Result := 0;
+  if AArgs = nil then Exit;
+  { One var/out string sibling param pins plain locals; unknown parameter
+    types (interface dispatch) pin them too unless the var flags prove the
+    signature has no var params at all. }
+  if AParams <> nil then
+    PinPlain := Self.ParamsHaveVarString(AParams)
+  else if AProcParams <> nil then
+    PinPlain := Self.ProcParamsHaveVarString(AProcParams)
+  else
+    PinPlain := Pos('1', AVarFlags) >= 0;
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    Par := nil;
+    PP := nil;
+    if (AParams <> nil) and (I < AParams.Count) then
+      Par := TMethodParam(AParams.Items[I]);
+    if (AProcParams <> nil) and (I < AProcParams.Count) then
+      PP := TProcParamInfo(AProcParams.Items[I]);
+    IsVarPos := ((Par <> nil) and Par.IsVarParam) or
+                ((PP <> nil) and PP.IsVarParam) or
+                Self.VarFlagAt(AVarFlags, I);
+
+    { Open-array literal: element block + saved data pointer. }
+    if (Par <> nil) and Par.IsOpenArray and (Arg is TArrayLiteralExpr) then
+    begin
+      Result := Result + Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
+      Self.Emit(#9'pushq %rax');
+      Result := Result + 8;
+      ADepths.Add(Result);
+      AKinds.Add(akOALit);
+      Continue;
+    end;
+
+    { Record-returning call: materialise the sret buffer here and save the
+      buffer pointer.  Evaluated mid-loop it would land between pushed
+      argument slots and corrupt the popq sequence. }
+    if (not IsVarPos) and Self.IsRecCallArg(Arg) then
+    begin
+      Self.EmitExprToEax(Arg);          { buffer at %rsp, pointer in %rax }
+      Self.Emit(#9'pushq %rax');
+      Result := Result + Self.RecArgBufBytes(Arg) + 8;
+      ADepths.Add(Result);
+      AKinds.Add(akRecCall);
+      Continue;
+    end;
+
+    { Const-string argument needing caller protection. }
+    ConstStr := False;
+    if Par <> nil then
+      ConstStr := Par.IsConstParam and (Par.ResolvedType <> nil) and
+                  (Par.ResolvedType.Kind = tyString)
+    else if PP <> nil then
+      ConstStr := PP.IsConstParam and (PP.TypeDesc <> nil) and
+                  (PP.TypeDesc.Kind = tyString)
+    else if not AKnownSig then
+      { Unknown signature: the implementing method's const-ness is invisible,
+        so protect every string-typed value argument by shape.  Pin/consume
+        are safe for value params too (the callee pair nets to zero on top). }
+      ConstStr := (not IsVarPos) and (Arg.ResolvedType <> nil) and
+                  (Arg.ResolvedType.Kind = tyString);
+    if ConstStr then
+    begin
+      Mode := Self.ConstStrShape(Arg, PinPlain);
+      if Mode <> camBorrowed then
+      begin
+        Self.EmitExprToEax(Arg);
+        Self.Emit(#9'pushq %rax');
+        if Mode = camPin then
+        begin
+          Self.Emit(#9'movq %rax, %rdi');
+          Self.Emit(#9'callq _StringAddRef');
+        end;
+        Result := Result + 8;
+        ADepths.Add(Result);
+        if Mode = camPin then
+          AKinds.Add(akStrPin)
+        else
+          AKinds.Add(akStrConsume);
+        Continue;
+      end;
+    end;
+
+    ADepths.Add(-1);
+    AKinds.Add(akNone);
+  end;
+end;
+
+procedure TX86_64Backend.EmitHoistEpilogue(AArgs: TObjectList;
+  ADepths: TList<Integer>; AKinds: TList<Integer>; ATotal, ABase: Integer;
+  AReclaim: Boolean);
+var
+  I, K, Off: Integer;
+  HasWork: Boolean;
+begin
+  HasWork := False;
+  for I := 0 to AKinds.Count - 1 do
+    if AKinds.Get(I) >= akRecCall then
+      HasWork := True;
+  if HasWork then
+  begin
+    { Preserve the call's return registers across the release calls:
+      %rax/%rdx (int and two-reg record returns), %xmm0/%xmm1 (float and
+      SSE-class record returns).  %rbx is the record-release scratch. }
+    Self.Emit(#9'subq $40, %rsp');
+    Self.Emit(#9'movq %rax, 0(%rsp)');
+    Self.Emit(#9'movq %rdx, 8(%rsp)');
+    Self.Emit(#9'movq %rbx, 16(%rsp)');
+    Self.Emit(#9'movsd %xmm0, 24(%rsp)');
+    Self.Emit(#9'movsd %xmm1, 32(%rsp)');
+    for I := 0 to AKinds.Count - 1 do
+    begin
+      K := AKinds.Get(I);
+      if K < akRecCall then Continue;
+      Off := 40 + ABase + ATotal - ADepths.Get(I);
+      if (K = akStrPin) or (K = akStrConsume) then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [Off]));
+        Self.Emit(#9'callq _StringRelease');
+      end
+      else
+      begin
+        { Hoisted record temp: release its managed fields; the buffer
+          itself is stack memory reclaimed below. }
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rbx', [Off]));
+        Self.EmitRecordFieldReleases(
+          TRecordTypeDesc(TASTExpr(AArgs.Items[I]).ResolvedType), '%rbx');
+      end;
+    end;
+    Self.Emit(#9'movq 0(%rsp), %rax');
+    Self.Emit(#9'movq 8(%rsp), %rdx');
+    Self.Emit(#9'movq 16(%rsp), %rbx');
+    Self.Emit(#9'movsd 24(%rsp), %xmm0');
+    Self.Emit(#9'movsd 32(%rsp), %xmm1');
+    Self.Emit(#9'addq $40, %rsp');
+  end;
+  if AReclaim and (ATotal + ABase > 0) then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [ATotal + ABase]));
+end;
+
+procedure TX86_64Backend.EmitArgPush(APar: TMethodParam; AArg: TASTExpr;
+  ATotal, ADepth, AKind: Integer; var APushed: Integer);
+begin
+  if AKind = akOALit then
   begin
     Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-      [AOALTotal - AOALDepth + APushed]));
+      [ATotal - ADepth + APushed]));
     Self.Emit(#9'pushq %rax');
     Self.Emit(Format(#9'pushq $%d',
       [TArrayLiteralExpr(AArg).Elements.Count - 1]));
     APushed := APushed + 16;
+    Exit;
+  end;
+  if AKind >= akRecCall then
+  begin
+    { Hoisted record-call or const-string argument: reload the saved value. }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+      [ATotal - ADepth + APushed]));
+    Self.Emit(#9'pushq %rax');
+    APushed := APushed + 8;
     Exit;
   end;
   Self.EmitMethodArgPush(APar, AArg);
@@ -9302,7 +9737,8 @@ var
   F: TOALCallFrame;
 begin
   F := TOALCallFrame.Create();
-  F.Total := Self.HoistOALitArgs(AParams, AArgs, F.Depths);
+  F.Args := AArgs;
+  F.Total := Self.EmitArgHoist(AParams, nil, True, '', AArgs, F.Depths, F.Kinds);
   FOALFrames.Add(F);
 end;
 
@@ -9311,15 +9747,22 @@ procedure TX86_64Backend.PushCallArg(APar: TMethodParam; AArg: TASTExpr;
 var
   F: TOALCallFrame;
   Depth: Integer;
+  Kind: Integer;
   Pushed: Integer;
 begin
   F := FOALFrames.Get(FOALFrames.Count - 1);
   if AIndex < F.Depths.Count then
-    Depth := F.Depths.Get(AIndex)
+  begin
+    Depth := F.Depths.Get(AIndex);
+    Kind := F.Kinds.Get(AIndex);
+  end
   else
+  begin
     Depth := -1;
+    Kind := akNone;
+  end;
   Pushed := F.Pushed;
-  Self.EmitArgPush(APar, AArg, F.Total, Depth, Pushed);
+  Self.EmitArgPush(APar, AArg, F.Total, Depth, Kind, Pushed);
   F.Pushed := Pushed;
 end;
 
@@ -9329,8 +9772,7 @@ var
 begin
   F := FOALFrames.Get(FOALFrames.Count - 1);
   FOALFrames.Delete(FOALFrames.Count - 1);
-  if F.Total > 0 then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [F.Total]));
+  Self.EmitHoistEpilogue(F.Args, F.Depths, F.Kinds, F.Total, 0, True);
   F.Free();
 end;
 
@@ -9355,9 +9797,10 @@ var
   SlotCount:      Integer;
   IntIdx, XmmIdx: Integer;
   AllocSz, SlotOff: Integer;
-  ExtraStackBytes: Integer;
+  OverflowBytes:  Integer;
   CleanUp:        Integer;
   OALD:           TList<Integer>;
+  OALK:           TList<Integer>;
   OALTotal:       Integer;
   OALPushed:      Integer;
 begin
@@ -9387,17 +9830,17 @@ begin
   if (ADecl <> nil) and (ADecl.CapturedVars <> nil) then
     Inc(SlotCount, ADecl.CapturedVars.Count);
 
-  ExtraStackBytes := 0;
+  OverflowBytes := 0;
 
-  { Hoist open-array literal blocks before any slot push / slot store (see
-    HoistOALitArgs).  The reclaim addq after the call comes from
-    ExtraStackBytes. }
+  { Hoist open-array literal blocks, record-call argument buffers and
+    pinned const-string values before any slot push / slot store (see
+    EmitArgHoist).  EmitHoistEpilogue after the call releases and reclaims. }
   OALD := TList<Integer>.Create();
+  OALK := TList<Integer>.Create();
   if ADecl <> nil then
-    OALTotal := Self.HoistOALitArgs(ADecl.Params, AArgs, OALD)
+    OALTotal := Self.EmitArgHoist(ADecl.Params, nil, True, '', AArgs, OALD, OALK)
   else
-    OALTotal := Self.HoistOALitArgs(nil, AArgs, OALD);
-  ExtraStackBytes := ExtraStackBytes + OALTotal;
+    OALTotal := Self.EmitArgHoist(nil, nil, True, '', AArgs, OALD, OALK);
   OALPushed := 0;
 
   if (not HasFloat) and (SlotCount <= 6) then
@@ -9436,7 +9879,22 @@ begin
                TMethodParam(ADecl.Params.Items[I]).IsVarParam;
       IsOA  := (ADecl <> nil) and (I < ADecl.Params.Count) and
                TMethodParam(ADecl.Params.Items[I]).IsOpenArray;
-      if IsOA then
+      { Recompute the param type per argument — the counting loop above
+        leaves ParamType holding the LAST argument's type. }
+      ParamType := nil;
+      if (ADecl <> nil) and (I < ADecl.Params.Count) then
+        ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := Arg.ResolvedType;
+      if (not IsOA) and (OALK.Get(I) >= akRecCall) then
+      begin
+        { Hoisted record-call or const-string argument — reload the saved
+          value from the pre-pass region. }
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [OALTotal - OALD.Get(I) + OALPushed]));
+        Self.Emit(#9'pushq %rax');
+      end
+      else if IsOA then
       begin
         if Arg is TArrayLiteralExpr then
         begin
@@ -9583,7 +10041,16 @@ begin
       if ParamType = nil then
         ParamType := Arg.ResolvedType;
 
-      if IsOA then
+      if (not IsOA) and (OALK.Get(I) >= akRecCall) then
+      begin
+        { Hoisted record-call or const-string argument — reload the saved
+          value from above the slot block. }
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + OALTotal - OALD.Get(I)]));
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+        Inc(SlotOff, 8);
+      end
+      else if IsOA then
       begin
         if Arg is TArrayLiteralExpr then
         begin
@@ -9817,61 +10284,14 @@ begin
     else
     begin
       Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
-      ExtraStackBytes := ExtraStackBytes + (AllocSz - 6 * 8);
+      OverflowBytes := AllocSz - 6 * 8;
     end;
   end;
 
   Self.Emit(#9'callq ' + AFuncSym);
-  if ExtraStackBytes > 0 then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [ExtraStackBytes]));
-  Self.EmitSretArgReleases(AArgs);
+  Self.EmitHoistEpilogue(AArgs, OALD, OALK, OALTotal, OverflowBytes, True);
   OALD.Free();
-end;
-
-procedure TX86_64Backend.EmitSretArgReleases(AArgs: TObjectList);
-var
-  I:        Integer;
-  Arg:      TASTExpr;
-  RT:       TRecordTypeDesc;
-  TotalSz:  Integer;
-  CurOff:   Integer;
-begin
-  TotalSz := 0;
-  for I := 0 to AArgs.Count - 1 do
-  begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    if Arg.ResolvedType = nil then Continue;
-    if Arg.ResolvedType.Kind <> tyRecord then Continue;
-    if (Arg is TFuncCallExpr) and (TFuncCallExpr(Arg).ResolvedDecl <> nil) then
-      Inc(TotalSz, (TRecordTypeDesc(Arg.ResolvedType).TotalSize() + 15) and (-16))
-    else if (Arg is TMethodCallExpr) and
-            not TMethodCallExpr(Arg).IsConstructorCall then
-      Inc(TotalSz, (TRecordTypeDesc(Arg.ResolvedType).TotalSize() + 15) and (-16));
-  end;
-  if TotalSz = 0 then Exit;
-  Self.Emit(#9'pushq %rax');
-  Self.Emit(#9'pushq %rbx');
-  CurOff := 16;
-  for I := AArgs.Count - 1 downto 0 do
-  begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    if Arg.ResolvedType = nil then Continue;
-    if Arg.ResolvedType.Kind <> tyRecord then Continue;
-    if (Arg is TFuncCallExpr) and (TFuncCallExpr(Arg).ResolvedDecl <> nil) then
-      { ok }
-    else if (Arg is TMethodCallExpr) and
-            not TMethodCallExpr(Arg).IsConstructorCall then
-      { ok }
-    else
-      Continue;
-    RT := TRecordTypeDesc(Arg.ResolvedType);
-    Self.Emit(Format(#9'leaq %d(%%rsp), %%rbx', [CurOff]));
-    Self.EmitRecordFieldReleases(RT, '%rbx');
-    Inc(CurOff, (RT.TotalSize() + 15) and (-16));
-  end;
-  Self.Emit(#9'popq %rbx');
-  Self.Emit(#9'popq %rax');
-  Self.Emit(Format(#9'addq $%d, %%rsp', [TotalSz]));
+  OALK.Free();
 end;
 
 { Spill the incoming argument register at index AIdx into the param slot
@@ -9903,8 +10323,21 @@ var
   AllocSz:  Integer;
   SlotOff:  Integer;
   CleanUp:  Integer;
+  HD:       TList<Integer>;
+  HK:       TList<Integer>;
+  HTotal:   Integer;
+  PParams:  TObjectList;
 begin
-  Self.Emit(Format(#9'movq %s, %%r10', [APtrOperand]));
+  PParams := nil;
+  if AProcType <> nil then
+    PParams := AProcType.Params;
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  HTotal := Self.EmitArgHoist(nil, PParams, True, '', AArgs, HD, HK);
+  { The function pointer is loaded into %r10 only AFTER all argument
+    evaluation: %r10 is caller-saved, so any call emitted while evaluating
+    an argument (or the hoist pre-pass above) would clobber it.
+    APtrOperand is %rbp- or %rip-relative, never %rsp-relative. }
 
   if AArgs.Count <= 6 then
   begin
@@ -9913,7 +10346,13 @@ begin
       Arg := TASTExpr(AArgs.Items[I]);
       IsVar := (AProcType <> nil) and (I < AProcType.Params.Count) and
                TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
-      if IsVar then
+      if HK.Get(I) >= akRecCall then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [HTotal - HD.Get(I) + I * 8]));
+        Self.Emit(#9'pushq %rax');
+      end
+      else if IsVar then
       begin
         if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
           Self.Emit(Format(#9'movq %s, %%rax',
@@ -9937,7 +10376,9 @@ begin
     end;
     for I := AArgs.Count - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+    Self.Emit(Format(#9'movq %s, %%r10', [APtrOperand]));
     Self.Emit(#9'callq *%r10');
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
   end
   else
   begin
@@ -9950,7 +10391,10 @@ begin
       Arg := TASTExpr(AArgs.Items[I]);
       IsVar := (AProcType <> nil) and (I < AProcType.Params.Count) and
                TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
-      if IsVar then
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else if IsVar then
       begin
         if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
           Self.Emit(Format(#9'movq %s, %%rax',
@@ -9974,11 +10418,12 @@ begin
       Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
     Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
     CleanUp := AllocSz - 6 * 8;
+    Self.Emit(Format(#9'movq %s, %%r10', [APtrOperand]));
     Self.Emit(#9'callq *%r10');
-    if CleanUp > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, CleanUp, True);
   end;
-  Self.EmitSretArgReleases(AArgs);
+  HD.Free();
+  HK.Free();
 end;
 
 procedure TX86_64Backend.EmitFieldAddrToRcx(AFA: TFieldAccessExpr);
@@ -10157,6 +10602,9 @@ var
   AllocSz:  Integer;
   CleanUp:  Integer;
   RC:       TRecReturnClass;
+  HD:       TList<Integer>;
+  HK:       TList<Integer>;
+  HTotal:   Integer;
 begin
   { Check if the callee returns a small POD record via registers. }
   RC := rcSret;
@@ -10181,42 +10629,50 @@ begin
       TRecordTypeDesc(ADecl.ResolvedReturnType), RC, ASretIsIndirect);
     Exit;
   end;
-  { Save the destination address in %r10 (caller-saved scratch that survives
-    arg evaluation and the memset call).  When ASretIsIndirect the operand holds
-    a pointer to the buffer (sret forwarding) — load it with movq. }
+  { Save the destination address on the stack, below the hoist region:
+    no caller-saved register survives argument evaluation, and a
+    %rsp-relative ASretAddr (e.g. '(%rsp)') would drift once the region is
+    live.  When ASretIsIndirect the operand holds a pointer to the buffer
+    (sret forwarding) — load it with movq. }
   if ASretIsIndirect then
-    Self.Emit(Format(#9'movq %s, %%r10', [ASretAddr]))
+    Self.Emit(Format(#9'movq %s, %%rax', [ASretAddr]))
   else
-    Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));
-  { Zero the destination buffer via memset(%r10, 0, size), mirroring the QBE
+    Self.Emit(Format(#9'leaq %s, %%rax', [ASretAddr]));
+  Self.Emit(#9'pushq %rax');
+  { Zero the destination buffer via memset(dest, 0, size), mirroring the QBE
     backend.  ADecl.ResolvedReturnType.Kind = tyRecord here. }
   if (ADecl <> nil) and (ADecl.ResolvedReturnType <> nil) then
   begin
-    Self.Emit(#9'movq %r10, %rdi');
+    Self.Emit(#9'movq (%rsp), %rdi');
     Self.Emit(#9'xorl %esi, %esi');
     Self.Emit(Format(#9'movq $%d, %%rdx',
       [TRecordTypeDesc(ADecl.ResolvedReturnType).TotalSize()]));
     Self.Emit(#9'callq memset');
-    if ASretIsIndirect then
-      Self.Emit(Format(#9'movq %s, %%r10', [ASretAddr]))
-    else
-      Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));
   end;
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  if ADecl <> nil then
+    HTotal := Self.EmitArgHoist(ADecl.Params, nil, True, '', AArgs, HD, HK)
+  else
+    HTotal := Self.EmitArgHoist(nil, nil, True, '', AArgs, HD, HK);
   if AArgs.Count <= 5 then
   begin
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
-      Self.EmitExprToEax(Arg);
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [HTotal - HD.Get(I) + I * 8]))
+      else
+        Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
     end;
     for I := AArgs.Count - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-    if ASretIsIndirect then
-      Self.Emit(Format(#9'movq %s, %%rdi', [ASretAddr]))
-    else
-      Self.Emit(Format(#9'leaq %s, %%rdi', [ASretAddr]));
+    { The saved dest sits just below the hoist region. }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [HTotal]));
     Self.Emit(#9'callq ' + AFuncSym);
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
   end
   else
   begin
@@ -10224,15 +10680,16 @@ begin
       explicit args = slots 1..Count).  Evaluate, load regs, leave overflow. }
     AllocSz := (((AArgs.Count + 1) * 8 + 15) and (-16));
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-    if ASretIsIndirect then
-      Self.Emit(Format(#9'movq %s, %%rax', [ASretAddr]))
-    else
-      Self.Emit(Format(#9'leaq %s, %%rax', [ASretAddr]));
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [AllocSz + HTotal]));
     Self.Emit(#9'movq %rax, 0(%rsp)');
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
-      Self.EmitExprToEax(Arg);
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else
+        Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));
     end;
     { Load sret ptr into %rdi, first 5 explicit args into %rsi..%r9. }
@@ -10243,9 +10700,12 @@ begin
     Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
     Self.Emit(#9'callq ' + AFuncSym);
     CleanUp := AllocSz - 6 * 8;
-    if CleanUp > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, CleanUp, True);
   end;
+  { Reclaim the saved dest slot. }
+  Self.Emit(#9'addq $8, %rsp');
+  HD.Free();
+  HK.Free();
 end;
 
 { Emit a method call that returns a record via the sret convention.
@@ -10262,6 +10722,9 @@ var
   AllocSz:  Integer;
   CleanUp:  Integer;
   RC:       TRecReturnClass;
+  HD:       TList<Integer>;
+  HK:       TList<Integer>;
+  HTotal:   Integer;
 begin
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then
@@ -10339,21 +10802,21 @@ begin
     Exit;
   end;
 
+  { Save the destination address below the hoist region — no caller-saved
+    register survives argument evaluation, and a %rsp-relative ASretAddr
+    would drift once the region is live. }
   if ASretIsIndirect then
-    Self.Emit(Format(#9'movq %s, %%r10', [ASretAddr]))
+    Self.Emit(Format(#9'movq %s, %%rax', [ASretAddr]))
   else
-    Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));
+    Self.Emit(Format(#9'leaq %s, %%rax', [ASretAddr]));
+  Self.Emit(#9'pushq %rax');
   if (MD.ResolvedReturnType <> nil) then
   begin
-    Self.Emit(#9'movq %r10, %rdi');
+    Self.Emit(#9'movq (%rsp), %rdi');
     Self.Emit(#9'xorl %esi, %esi');
     Self.Emit(Format(#9'movq $%d, %%rdx',
       [TRecordTypeDesc(MD.ResolvedReturnType).TotalSize()]));
     Self.Emit(#9'callq memset');
-    if ASretIsIndirect then
-      Self.Emit(Format(#9'movq %s, %%r10', [ASretAddr]))
-    else
-      Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));
   end;
 
   if ACall.Args.Count <= 4 then
@@ -10399,10 +10862,8 @@ begin
 
     for I := ACall.Args.Count - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
-    if ASretIsIndirect then
-      Self.Emit(Format(#9'movq %s, %%rdi', [ASretAddr]))
-    else
-      Self.Emit(Format(#9'leaq %s, %%rdi', [ASretAddr]));
+    { The saved dest sits just below the call frame's hoist region. }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [Self.TopFrameTotal()]));
     if MD.VTableSlot >= 0 then
     begin
       Self.Emit(#9'pushq %rdi');
@@ -10417,13 +10878,21 @@ begin
   end
   else
   begin
+    HD := TList<Integer>.Create();
+    HK := TList<Integer>.Create();
+    HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
     AllocSz := (((ACall.Args.Count + 2) * 8 + 15) and (-16));
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-    Self.Emit(Format(#9'movq %%r10, 0(%%rsp)', []));
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [AllocSz + HTotal]));
+    Self.Emit(#9'movq %rax, 0(%rsp)');
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Arg := TASTExpr(ACall.Args.Items[I]);
-      Self.EmitExprToEax(Arg);
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else
+        Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 2) * 8]));
     end;
     if ACall.ObjectName <> '' then
@@ -10444,9 +10913,12 @@ begin
     Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
     Self.Emit(#9'callq ' + Sym);
     CleanUp := AllocSz - 6 * 8;
-    if CleanUp > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
+    HD.Free();
+    HK.Free();
   end;
+  { Reclaim the saved dest slot. }
+  Self.Emit(#9'addq $8, %rsp');
 end;
 
 { Emit a standalone function call that returns an interface via sret.
@@ -10460,23 +10932,52 @@ var
   FSym:   string;
   Arg:    TASTExpr;
   ArgCnt: Integer;
+  Par:    TMethodParam;
+  HD:     TList<Integer>;
+  HK:     TList<Integer>;
+  HTotal: Integer;
+  Pushed: Integer;
 begin
   MD := TMethodDecl(ACall.ResolvedDecl);
   FSym := FuncSymbolOf(ACall);
   ArgCnt := ACall.Args.Count;
+  { Hoist region BELOW the sret buffer: the buffer must sit exactly at %rsp
+    when the call is made, so the region cannot live between buffer and call.
+    After the call the buffer is relocated down over the region so callers
+    keep their `fat pointer at (%rsp), addq $16` contract. }
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
   { Allocate the 16-byte sret buffer on the stack and zero it. }
   Self.Emit(#9'subq $16, %rsp');
   Self.Emit(#9'movq $0, (%rsp)');
   Self.Emit(#9'movq $0, 8(%rsp)');
   if ACall.IsImplicitSelfMethod then
   begin
-    { No BeginCallArgs frame here: the sret buffer must sit exactly at %rsp
-      when the call is made, so hoisted literal blocks cannot be reclaimed
-      inside this routine.  Open-array literal args raise in
-      EmitMethodArgPush — unsupported for interface-sret calls. }
+    { Open-array literal args raise in EmitMethodArgPush — unsupported for
+      interface-sret calls. }
+    Pushed := 0;
     for I := 0 to ArgCnt - 1 do
-      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-        TASTExpr(ACall.Args.Items[I]));
+    begin
+      Par := TMethodParam(MD.Params.Items[I]);
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      if HK.Get(I) >= akRecCall then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [16 + HTotal - HD.Get(I) + Pushed]));
+        Self.Emit(#9'pushq %rax');
+        Pushed := Pushed + 8;
+      end
+      else
+      begin
+        Self.EmitMethodArgPush(Par, Arg);
+        if Par.IsOpenArray or
+           ((Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface)) then
+          Pushed := Pushed + 16
+        else
+          Pushed := Pushed + 8;
+      end;
+    end;
     Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
     for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
@@ -10486,11 +10987,17 @@ begin
   end
   else if ArgCnt <= 5 then
   begin
+    Pushed := 0;
     for I := 0 to ArgCnt - 1 do
     begin
       Arg := TASTExpr(ACall.Args.Items[I]);
-      Self.EmitExprToEax(Arg);
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [16 + HTotal - HD.Get(I) + Pushed]))
+      else
+        Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
+      Pushed := Pushed + 8;
     end;
     for I := ArgCnt - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
@@ -10500,6 +11007,20 @@ begin
   else
     raise ENativeCodeGenError.Create(
       'native backend: interface sret with >5 args not yet supported');
+  { Post-call: release hoisted values (the 16-byte buffer sits between %rsp
+    and the region), then slide the buffer down over the region so the
+    caller's contract holds. }
+  Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
+  if HTotal > 0 then
+  begin
+    Self.Emit(#9'movq (%rsp), %rax');
+    Self.Emit(#9'movq 8(%rsp), %rcx');
+    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + HTotal]));
+    Self.Emit(#9'pushq %rcx');
+    Self.Emit(#9'pushq %rax');
+  end;
+  HD.Free();
+  HK.Free();
 end;
 
 { Emit a method-pointer (of-object) call through a TMethod block.
@@ -10513,46 +11034,74 @@ var
   Arg:     TASTExpr;
   AllocSz: Integer;
   CleanUp: Integer;
+  HD:      TList<Integer>;
+  HK:      TList<Integer>;
+  HTotal:  Integer;
+  PParams: TObjectList;
 begin
-  Self.Emit(Format(#9'leaq %s, %%rcx', [APtrOperand]));
-  Self.Emit(#9'movq (%rcx), %r10');
-  Self.Emit(#9'movq 8(%rcx), %r11');
+  PParams := nil;
+  if AProcType <> nil then
+    PParams := AProcType.Params;
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  HTotal := Self.EmitArgHoist(nil, PParams, True, '', AArgs, HD, HK);
+  { Code/Data are loaded into %r10/%r11 only AFTER all argument evaluation:
+    both are caller-saved, so any call emitted while evaluating an argument
+    (or the hoist pre-pass above) would clobber them.  APtrOperand is %rbp-
+    or %rip-relative, never %rsp-relative. }
 
   if AArgs.Count <= 5 then
   begin
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
-      Self.EmitExprToEax(Arg);
-      Self.Emit(#9'pushq %rax');
+      if HK.Get(I) >= akRecCall then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [HTotal - HD.Get(I) + I * 8]));
+        Self.Emit(#9'pushq %rax');
+      end
+      else
+      begin
+        Self.EmitExprToEax(Arg);
+        Self.Emit(#9'pushq %rax');
+      end;
     end;
     for I := AArgs.Count - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-    Self.Emit(#9'movq %r11, %rdi');
+    Self.Emit(Format(#9'leaq %s, %%rcx', [APtrOperand]));
+    Self.Emit(#9'movq (%rcx), %r10');
+    Self.Emit(#9'movq 8(%rcx), %rdi');
     Self.Emit(#9'callq *%r10');
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
   end
   else
   begin
-    { >5 explicit args: pre-allocate (Count+1) slots (Data=slot 0, args=1..N). }
+    { >5 explicit args: pre-allocate (Count+1) slots (slot 0 unused, args=1..N). }
     AllocSz := (((AArgs.Count + 1) * 8 + 15) and (-16));
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-    Self.Emit(#9'movq %r11, 0(%rsp)');
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
-      Self.EmitExprToEax(Arg);
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else
+        Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));
     end;
-    Self.Emit(#9'movq 0(%rsp), %rdi');
+    Self.Emit(Format(#9'leaq %s, %%rcx', [APtrOperand]));
+    Self.Emit(#9'movq (%rcx), %r10');
+    Self.Emit(#9'movq 8(%rcx), %rdi');
     for I := 0 to 4 do
       Self.Emit(Format(#9'movq %d(%%rsp), %s', [(I + 1) * 8, SysVArgRegs64[I + 1]]));
     Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
     CleanUp := AllocSz - 6 * 8;
     Self.Emit(#9'callq *%r10');
-    if CleanUp > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, CleanUp, True);
   end;
-  Self.EmitSretArgReleases(AArgs);
+  HD.Free();
+  HK.Free();
 end;
 
 { True when AType is an integer-family type the backend can place in a
@@ -10656,6 +11205,7 @@ var
   IntIdx:      Integer;
   XmmIdx:      Integer;
   NestedDecl:  TMethodDecl;
+  AddrTaken:   TStringList;
 begin
   { Emit any nested procedures declared inside this function's body before
     emitting this function itself.  Each nested proc gets a mangled name
@@ -10696,6 +11246,23 @@ begin
   { Set FCapturedVars for the duration of this function's emission so that
     variable-access paths redirect through the capture pointers. }
   FCapturedVars := ADecl.CapturedVars;
+
+  { Rebuild the borrowed-argument blocklist for this function: address-taken
+    locals (explicit @, var/out args) plus anything captured by a nested
+    procedure.  Consulted by ConstStrShape. }
+  FConstArgUnsafe.Clear();
+  if ADecl.Body <> nil then
+  begin
+    AddrTaken := CollectAddressTaken(ADecl.Body);
+    for I := 0 to AddrTaken.Count - 1 do
+      FConstArgUnsafe.Add(AddrTaken.Strings[I]);
+    AddrTaken.Free();
+    for I := 0 to ADecl.Body.ProcDecls.Count - 1 do
+      if TMethodDecl(ADecl.Body.ProcDecls.Items[I]).CapturedVars <> nil then
+        for J := 0 to TMethodDecl(ADecl.Body.ProcDecls.Items[I]).CapturedVars.Count - 1 do
+          FConstArgUnsafe.Add(
+            TMethodDecl(ADecl.Body.ProcDecls.Items[I]).CapturedVars.Strings[J]);
+  end;
 
   Sym := FuncSymbolFromDecl(ADecl);
   Self.BuildFrame(ADecl);
@@ -10799,17 +11366,14 @@ begin
     else if (P.ResolvedType <> nil) and
             (P.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
     begin
+      { Phase 1: spill only the incoming pointer.  The local copy is made
+        AFTER every register is spilled — memcpy clobbers the caller-saved
+        argument registers, so copying here would corrupt any parameter
+        that follows this one. }
       if IntIdx < 6 then
       begin
-        Self.Emit(Format(#9'movq %s, %%rsi', [SysVArgRegs64[IntIdx]]));
-        Self.Emit(Format(#9'leaq %s, %%rdi',
-          [Self.VarOperand(P.ParamName + '_data')]));
-        Self.Emit(Format(#9'movq $%d, %%rdx', [P.ResolvedType.RawSize()]));
-        Self.Emit(#9'callq memcpy');
-        Self.Emit(Format(#9'leaq %s, %%rax',
-          [Self.VarOperand(P.ParamName + '_data')]));
-        Self.Emit(Format(#9'movq %%rax, %s',
-          [Self.VarOperand(P.ParamName)]));
+        Self.Emit(Format(#9'movq %s, %s',
+          [SysVArgRegs64[IntIdx], Self.VarOperand(P.ParamName)]));
         Inc(IntIdx);
       end;
     end
@@ -10821,6 +11385,25 @@ begin
         Inc(IntIdx);
       end;
     end;
+  end;
+  { Phase 2: copy record / static-array value params into their local _data
+    blocks (Pascal value semantics) now that all registers are spilled, then
+    repoint the param slot at the copy. }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    if P.IsOpenArray or P.IsVarParam then Continue;
+    if (P.ResolvedType = nil) or
+       not (P.ResolvedType.Kind in [tyRecord, tyStaticArray]) then Continue;
+    Self.Emit(Format(#9'movq %s, %%rsi', [Self.VarOperand(P.ParamName)]));
+    Self.Emit(Format(#9'leaq %s, %%rdi',
+      [Self.VarOperand(P.ParamName + '_data')]));
+    Self.Emit(Format(#9'movq $%d, %%rdx', [P.ResolvedType.RawSize()]));
+    Self.Emit(#9'callq memcpy');
+    Self.Emit(Format(#9'leaq %s, %%rax',
+      [Self.VarOperand(P.ParamName + '_data')]));
+    Self.Emit(Format(#9'movq %%rax, %s',
+      [Self.VarOperand(P.ParamName)]));
   end;
   { Initialise Result to 0 (defined default), like the QBE backend.
     For sret functions Result IS the caller's buffer (already zeroed by caller). }
@@ -10891,21 +11474,16 @@ begin
         end;
     end;
   { ARC: retain string/class/interface value params on entry — balances the
-    release pass at the epilogue.  Skip var, out, open-array and const params —
-    EXCEPT const strings, which are retained too.  Rationale: _StringConcat
-    returns an rc=0 transient; the QBE backend protects it caller-side
-    (EnsureConstStringRef pin around the call), but the native backend has no
-    caller pin, so without a callee retain the first balanced retain/release
-    cycle further down (e.g. TStringList.Find's value-param pair) frees the
-    transient while this frame still reads it — heap corruption.  The callee
-    entry-retain/exit-release pair keeps it >= 1 for the whole call and frees
-    an rc-0 transient exactly once at exit; on owned values it nets to zero. }
+    release pass at the epilogue.  Skip var, out, open-array and const
+    params.  Const params (including const strings) are protected
+    CALLER-side by shape — see EmitArgHoist and the QBE backend's
+    ConstArgMode; both backends share this convention, which also keeps
+    calls into the QBE-compiled RTL consistent. }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    if P.IsVarParam or P.IsOpenArray then Continue;
+    if P.IsVarParam or P.IsOpenArray or P.IsConstParam then Continue;
     if P.ResolvedType = nil then Continue;
-    if P.IsConstParam and (P.ResolvedType.Kind <> tyString) then Continue;
     if P.ResolvedType.Kind = tyString then
     begin
       Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
@@ -11017,14 +11595,13 @@ begin
     end;
   end;
   { ARC: release string/class/interface value params on exit — matches the
-    entry retain pass.  Skip var, out, open-array and const params — except
-    const strings, which mirror the entry-retain (see the comment there). }
+    entry retain pass.  Skip var, out, open-array and const params (const
+    params are caller-protected; see the entry pass comment). }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    if P.IsVarParam or P.IsOpenArray then Continue;
+    if P.IsVarParam or P.IsOpenArray or P.IsConstParam then Continue;
     if P.ResolvedType = nil then Continue;
-    if P.IsConstParam and (P.ResolvedType.Kind <> tyString) then Continue;
     if P.ResolvedType.Kind = tyString then
     begin
       Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
@@ -11148,6 +11725,9 @@ begin
   FForEndNext   := 0;
   FFinallyStack.Free();
   FFinallyStack := TList<TCompoundStmt>.Create();
+  { Program-level vars are globals (always pinned as const args), so the
+    blocklist only needs to be free of stale entries from the last function. }
+  FConstArgUnsafe.Clear();
 
   Self.Emit('.text');
   Self.Emit('.globl main');
