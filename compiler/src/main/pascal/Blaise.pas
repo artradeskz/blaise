@@ -685,8 +685,20 @@ begin
       PrintUsage();
       Halt(1);
     end;
-    EmitIR  := False;
-    EmitAsm := False;
+    { ParseFPCArgs only assigns the four params above; every other
+      option variable must be defaulted here.  Locals are not
+      zero-initialised — reading them unassigned is stack garbage
+      that happens to be zero on a fresh stack. }
+    EmitIR         := False;
+    EmitAsm        := False;
+    DumpAST        := False;
+    DebugMode      := False;
+    Backend        := bkQBE;
+    Target         := HostTarget();
+    SkipDepCodegen := False;
+    EmitIfaceDir   := '';
+    Incremental    := False;
+    UnitCacheDir   := '';
   end
   else
   begin
