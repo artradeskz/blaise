@@ -4920,6 +4920,9 @@ var
   ElemType:     TTypeDesc;
   SynthDecl:    TVarDecl;
   WalkRT:       TRecordTypeDesc;
+  K:            Integer;
+  L:            Integer;
+  DupLocal:     Boolean;
 begin
   if AStmt is TForStmt then
   begin
@@ -5355,15 +5358,29 @@ begin
             AStmt.Line, AStmt.Col);
         if H.VarName <> '' then
         begin
-          { Inject a synthetic local so EmitVarAllocs allocates a stack slot. }
+          { Inject a synthetic local so EmitVarAllocs allocates a stack slot.
+            One slot per DISTINCT name: multiple `on E:` clauses (and nested
+            try-excepts) share it — injecting per clause double-allocated the
+            slot and emitted one epilogue release per duplicate, driving the
+            bound exception's refcount negative. }
           if FCurrentLocalBlock <> nil then
           begin
-            SynthDecl := TVarDecl.Create();
-            SynthDecl.Names.Add(H.VarName);
-            SynthDecl.TypeName    := H.TypeName;
-            SynthDecl.ResolvedType := CondType;
-            SynthDecl.IsGlobal    := False;
-            FCurrentLocalBlock.Decls.Add(SynthDecl);
+            DupLocal := False;
+            for K := 0 to FCurrentLocalBlock.Decls.Count - 1 do
+              if TObject(FCurrentLocalBlock.Decls.Items[K]) is TVarDecl then
+                for L := 0 to TVarDecl(FCurrentLocalBlock.Decls.Items[K]).Names.Count - 1 do
+                  if SameText(TVarDecl(FCurrentLocalBlock.Decls.Items[K]).Names.Strings[L],
+                              H.VarName) then
+                    DupLocal := True;
+            if not DupLocal then
+            begin
+              SynthDecl := TVarDecl.Create();
+              SynthDecl.Names.Add(H.VarName);
+              SynthDecl.TypeName    := H.TypeName;
+              SynthDecl.ResolvedType := CondType;
+              SynthDecl.IsGlobal    := False;
+              FCurrentLocalBlock.Decls.Add(SynthDecl);
+            end;
           end;
           FTable.PushScope();
           try

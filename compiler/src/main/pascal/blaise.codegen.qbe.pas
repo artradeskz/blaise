@@ -2333,6 +2333,7 @@ var
   MatchTemp:  string;
   LblBody:    string;
   LblNext:    string;
+  ExtTemp:    string;
   I, J:       Integer;
   H:          TExceptHandlerClause;
 begin
@@ -2402,8 +2403,12 @@ begin
           exit, so retain the exception here to balance that release — without
           this AddRef the scope-exit release drives the exception's refcount
           negative (it is created at rc=0 by `raise EFoo.Create` and never
-          otherwise retained). }
+          otherwise retained).  Release any PRIOR binding first — the slot is
+          shared by every same-named handler in the function. }
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =l loadl %%_var_%s', [ExtTemp, H.VarName]));
         EmitLine(Format('  call $_ClassAddRef(l %s)', [ExcTemp]));
+        EmitLine(Format('  call $_ClassRelease(l %s)', [ExtTemp]));
         EmitLine(Format('  storel %s, %%_var_%s', [ExcTemp, H.VarName]));
       end;
       for J := 0 to H.Body.Stmts.Count - 1 do
@@ -5559,14 +5564,12 @@ begin
     end
     else
     begin
-      { Class field keeps an unconditional retain.  ExprOwnsRef-guarding this
-        is unsafe: some method calls return a borrowed class reference without
-        an AddRef (ExprOwnsRef reports them as owning), so skipping the retain
-        would release a reference the field never acquired — a heap-corrupting
-        use-after-free that the self-hosting compiler hits in its own codegen.
-        The transient-leak this leaves for genuine +1 class returns assigned to
-        a field is the safe direction and matches long-standing behaviour. }
-      EmitLine(Format('  call $_ClassAddRef(l %s)',   [ValTemp]));
+      { Class field consumes a +1-owned RHS (function/method call results
+        transfer ownership — the callee retained into Result and does not
+        release it); everything else needs the assignment-site retain.
+        Mirrors the implicit-Self class-field path. }
+      if not ExprOwnsRef(AAssign.Expr) then
+        EmitLine(Format('  call $_ClassAddRef(l %s)',   [ValTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)',  [OldTemp]));
     end;
     EmitLine(Format('  storel %s, %s', [ValTemp, Ptr]));

@@ -7867,9 +7867,16 @@ begin
         { Retain the exception to balance the scope-exit release (the handler
           var is a class local; EmitFunctionDef will emit a release at epilogue
           only for string vars, but we retain here to match QBE backend ARC).
+          Release any PRIOR binding first — the slot is shared by every
+          same-named handler in the function.
           The handler var slot is a pre-declared local: assign %r15 into it. }
         Self.Emit(#9'movq %r15, %rdi');
         Self.Emit(#9'callq _ClassAddRef');
+        if Self.IsLocal(H.VarName) then
+          Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(H.VarName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [H.VarName]));
+        Self.Emit(#9'callq _ClassRelease');
         if Self.IsLocal(H.VarName) then
           Self.Emit(Format(#9'movq %%r15, %s', [Self.VarOperand(H.VarName)]))
         else
@@ -7996,7 +8003,7 @@ begin
           reference that NativeExprOwnsRef reports as owning, so eliding it would
           release a reference the field never acquired (a use-after-free).  This
           mirrors the deliberate asymmetry in the QBE backend (96514ee). }
-        if (Asgn.ResolvedLhsType.Kind = tyClass) or not NativeExprOwnsRef(Asgn.Expr) then
+        if not NativeExprOwnsRef(Asgn.Expr) then
         begin
           Self.Emit(#9'movq %rax, %rdi');
           if Asgn.ResolvedLhsType.IsString() then
@@ -9312,8 +9319,7 @@ begin
         Self.Emit(#9'pushq %rax');            { new value }
         Self.EmitExprToEax(FA.ObjExpr);
         Self.Emit(#9'movq %rax, %r15');       { receiver base }
-        if (FA.FieldInfo.TypeDesc.Kind = tyClass)
-           or not NativeExprOwnsRef(FA.Expr) then
+        if not NativeExprOwnsRef(FA.Expr) then
         begin
           Self.Emit(#9'movq (%rsp), %rdi');   { new value }
           if FA.FieldInfo.TypeDesc.IsString() then
@@ -9355,8 +9361,7 @@ begin
         Self.Emit(#9'pushq %r15');
         Self.Emit(#9'pushq %rax');
         Self.Emit(Format(#9'movq %s, %%r15', [Self.VarOperand('Result')]));
-        if (FA.FieldInfo.TypeDesc.Kind = tyClass)
-           or not NativeExprOwnsRef(FA.Expr) then
+        if not NativeExprOwnsRef(FA.Expr) then
         begin
           Self.Emit(#9'movq %rax, %rdi');
           if FA.FieldInfo.TypeDesc.IsString() then
@@ -9420,11 +9425,15 @@ begin
       end
       else if FA.FieldInfo.TypeDesc.Kind = tyClass then
       begin
-        { ARC: addref(new), release(old), store new. }
-        Self.Emit(#9'pushq %rcx');
-        Self.Emit(#9'movq 8(%rsp), %rdi');
-        Self.Emit(#9'callq _ClassAddRef');
-        Self.Emit(#9'popq %rcx');
+        { ARC: addref(new) unless the RHS already owns +1 (call results
+          transfer ownership), release(old), store new. }
+        if not NativeExprOwnsRef(FA.Expr) then
+        begin
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'movq 8(%rsp), %rdi');
+          Self.Emit(#9'callq _ClassAddRef');
+          Self.Emit(#9'popq %rcx');
+        end;
         Self.Emit(Format(#9'movq %d(%%rcx), %%rdi', [FA.FieldInfo.Offset]));
         Self.Emit(#9'pushq %rcx');
         Self.Emit(#9'callq _ClassRelease');

@@ -35,6 +35,11 @@ type
     procedure TestDebug_LeakReport_IncludesUnitAndLine_Native;
     procedure TestDebug_StringLeak_Reported;
     procedure TestDebug_StringClean_NoReport;
+
+    { obj.Field := MakeClass() consumes the call's +1 — no leak per store. }
+    procedure TestDebug_ClassFieldFromCall_NoLeak;
+    { Multiple same-named typed handlers share one slot — no over-release. }
+    procedure TestDebug_MultiHandlerVar_NoOverRelease;
   end;
 
 implementation
@@ -370,6 +375,84 @@ begin
     CompileAndRunWithRTLDebug(SrcStringClean, Output, ExitCode, True));
   AssertEquals('exit 0', 0, ExitCode);
   AssertTrue('no leak report', Pos('Blaise leak report', Output) < 0);
+end;
+
+const
+  SrcClassFieldFromCall = '''
+    program P;
+    type
+      TThing = class N: Integer; end;
+      THolder = class Item: TThing; end;
+    function MakeThing(): TThing;
+    begin
+      Result := TThing.Create();
+      Result.N := 7;
+    end;
+    var
+      H: THolder;
+      I: Integer;
+    begin
+      H := THolder.Create();
+      for I := 1 to 100 do
+        H.Item := MakeThing();
+      WriteLn(H.Item.N);
+    end.
+    ''';
+
+  SrcMultiHandlerVar = '''
+    program P;
+    type
+      EBase = class
+        FMessage: string;
+      end;
+      EFoo = class(EBase) end;
+    var X: Integer;
+    begin
+      X := 0;
+      try
+        raise EFoo.Create()
+      except
+        on E: EFoo do X := 42;
+        on E: EBase do X := 1
+      end;
+      WriteLn(X)
+    end.
+    ''';
+
+procedure TE2ELeakCheckTests.TestDebug_ClassFieldFromCall_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcClassFieldFromCall, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', '7' + LE, Output);
+  AssertTrue('no leak report (qbe)', Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcClassFieldFromCall, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', '7' + LE, Output);
+  AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_MultiHandlerVar_NoOverRelease;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcMultiHandlerVar, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', '42' + LE, Output);
+  AssertTrue('no leak report (qbe)', Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcMultiHandlerVar, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', '42' + LE, Output);
+  AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
 end;
 
 initialization
