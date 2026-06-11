@@ -51,6 +51,7 @@ type
     procedure TestRun_SubscriptChain_FieldElemWrite;
     procedure TestRun_RecordField_StaticArrayElemWrite;
     procedure TestRun_RecordField_DynArrayOfString_ElemWrite_ARC;
+    procedure TestRun_RecordCallResult_IntoArrayElement;
   end;
 
 implementation
@@ -1029,6 +1030,48 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcRecFieldDynStrElemWrite,
     'bye' + LE + 'world' + LE, 0);
+end;
+
+const
+  SrcRecordCallIntoElem = '''
+    program P;
+    type
+      TTok = record
+        Kind: Integer;
+        Text: String;
+      end;
+      TLex = class
+        FN: Integer;
+        function Next(): TTok;
+      end;
+    function TLex.Next(): TTok;
+    begin
+      FN := FN + 1;
+      Result.Kind := FN;
+      Result.Text := 'tok' + IntToStr(FN);
+    end;
+    var
+      L: TLex;
+      A: array[0..2] of TTok;
+      D: array of TTok;
+      I: Integer;
+    begin
+      L := TLex.Create();
+      for I := 0 to 2 do
+        A[I] := L.Next();
+      writeln(A[0].Kind, ' ', A[0].Text);
+      writeln(A[2].Kind, ' ', A[2].Text);
+      SetLength(D, 2);
+      D[1] := L.Next();
+      writeln(D[1].Kind, ' ', D[1].Text);
+    end.
+    ''';
+
+procedure TE2ERecordsTests.TestRun_RecordCallResult_IntoArrayElement;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcRecordCallIntoElem,
+    '1 tok1' + LE + '3 tok3' + LE + '4 tok4' + LE, 0);
 end;
 
 initialization

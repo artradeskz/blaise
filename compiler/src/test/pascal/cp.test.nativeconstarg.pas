@@ -51,6 +51,9 @@ type
     procedure TestConstArg_AddrTakenLocal_Pins;
     procedure TestConstArg_CapturedLocal_Pins;
     procedure TestConstArg_InterfaceDispatch_ConcatPins;
+    { Free on a chained field receiver must nil the slot after the release —
+      a stale pointer aliases the next allocation (UAF regression). }
+    procedure TestFree_FieldReceiver_NilsSlot;
   end;
 
 implementation
@@ -459,6 +462,32 @@ begin
     Pos('_StringAddRef', Region) >= 0);
   AssertTrue('Release frees concat temp at interface call site',
     Pos('_StringRelease', Region) >= 0);
+end;
+
+procedure TNativeConstArgTests.TestFree_FieldReceiver_NilsSlot;
+var
+  Region: string;
+begin
+  Region := FuncRegion(GenAsm('''
+      program P;
+      type
+        TInner = class
+          N: Integer;
+        end;
+        TOuter = class
+          Inner: TInner;
+        end;
+      procedure Drop(O: TOuter);
+      begin
+        O.Inner.Free();
+      end;
+      begin
+      end.
+      '''), 'Drop');
+  AssertTrue('releases the field value',
+    CountOccurrences('callq _ClassRelease', Region) >= 1);
+  AssertTrue('nils the field slot after the release',
+    CountOccurrences('movq $0, (%rdx)', Region) >= 1);
 end;
 
 initialization

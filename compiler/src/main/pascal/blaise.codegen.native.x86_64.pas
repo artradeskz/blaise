@@ -353,6 +353,10 @@ type
     procedure EmitSretCall(const AFuncSym: string; ADecl: TMethodDecl;
                            AArgs: TObjectList; const ASretAddr: string;
                            ASretIsIndirect: Boolean);
+    { True when AExpr is a record-returning function or method call. }
+    function  IsNativeRecordCall(AExpr: TASTExpr): Boolean;
+    { Sret a record-returning call (function or method) into ADest. }
+    procedure EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
     procedure EmitMethodSretCall(ACall: TMethodCallExpr; const ASretAddr: string;
                                  ASretIsIndirect: Boolean);
     { Compute the address of a record/class field into %rcx.  Handles
@@ -3180,6 +3184,31 @@ begin
   end;
   raise ENativeCodeGenError.Create(
     'native backend: unsupported L-value form');
+end;
+
+function TX86_64Backend.IsNativeRecordCall(AExpr: TASTExpr): Boolean;
+begin
+  Result := False;
+  if (AExpr is TMethodCallExpr) and
+     (TMethodCallExpr(AExpr).ResolvedMethod <> nil) and
+     (TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod).ResolvedReturnType <> nil) and
+     (TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) then
+    Exit(True);
+  if (AExpr is TFuncCallExpr) and
+     (TFuncCallExpr(AExpr).ResolvedDecl <> nil) and
+     (TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl).ResolvedReturnType <> nil) and
+     (TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) then
+    Exit(True);
+end;
+
+procedure TX86_64Backend.EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
+begin
+  if AExpr is TMethodCallExpr then
+    Self.EmitMethodSretCall(TMethodCallExpr(AExpr), ADest, False)
+  else
+    Self.EmitSretCall(FuncSymbolOf(TFuncCallExpr(AExpr)),
+      TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl),
+      TFuncCallExpr(AExpr).Args, ADest, False);
 end;
 
 procedure TX86_64Backend.EmitIncDec(ACall: TProcCall);
@@ -6493,9 +6522,25 @@ begin
     end
     else if ACall.ObjExpr <> nil then
     begin
-      Self.EmitExprToEax(ACall.ObjExpr);
-      Self.Emit(#9'movq %rax, %rdi');
-      Self.Emit(#9'callq _ClassRelease');
+      if (ACall.ObjExpr is TFieldAccessExpr) or (ACall.ObjExpr is TIdentExpr) then
+      begin
+        { L-value receiver (Def.ClassDef.Free()): release AND nil the slot.
+          A stale pointer left here aliases the next allocation of the same
+          size class, and the following ARC field store double-releases it —
+          the QBE lowering nils the slot, so must we. }
+        Self.EmitLValueSlotAddr(ACall.ObjExpr);
+        Self.Emit(#9'pushq %rdx');
+        Self.Emit(#9'movq (%rdx), %rdi');
+        Self.Emit(#9'callq _ClassRelease');
+        Self.Emit(#9'popq %rdx');
+        Self.Emit(#9'movq $0, (%rdx)');
+      end
+      else
+      begin
+        Self.EmitExprToEax(ACall.ObjExpr);
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'callq _ClassRelease');
+      end;
     end
     else if ACall.IsVarParam then
     begin
@@ -9574,6 +9619,32 @@ begin
        (SSA.ResolvedArrayType.Kind = tyDynArray) then
     begin
       DAElemType := TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType;
+      { Record-returning call as the RHS: sret directly into the element —
+        EmitExprToEax cannot evaluate a record call (the callee writes its
+        Result through the hidden sret pointer, which would be garbage). }
+      if (DAElemType.Kind = tyRecord) and Self.IsNativeRecordCall(SSA.ValueExpr) then
+      begin
+        Self.Emit(#9'pushq %rbx');
+        Self.EmitExprToEax(SSA.IndexExpr);
+        Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
+        if SSA.IsImplicitSelf then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+          if SSA.ImplicitFieldInfo.Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rcx', [SSA.ImplicitFieldInfo.Offset]));
+          Self.Emit(#9'movq (%rcx), %rcx');
+        end
+        else if Self.IsLocal(SSA.ArrayName) then
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [SSA.ArrayName]));
+        Self.Emit(#9'addq %rcx, %rax');
+        Self.Emit(#9'movq %rax, %rbx');
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(DAElemType), '%rbx');
+        Self.EmitRecordCallSretAt(SSA.ValueExpr, '(%rbx)');
+        Self.Emit(#9'popq %rbx');
+        Exit;
+      end;
       Self.EmitExprToEax(SSA.ValueExpr);
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);
@@ -9646,6 +9717,33 @@ begin
       raise ENativeCodeGenError.Create(
         'native backend: static subscript assign on non-static-array');
     DAElemType := TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType;
+    { Record-returning call RHS: sret directly into the element (see the
+      dyn-array branch above). }
+    if (DAElemType.Kind = tyRecord) and Self.IsNativeRecordCall(SSA.ValueExpr) then
+    begin
+      Self.Emit(#9'pushq %rbx');
+      Self.EmitExprToEax(SSA.IndexExpr);
+      if TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound <> 0 then
+        Self.Emit(Format(#9'subq $%d, %%rax',
+          [TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound]));
+      Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
+      if SSA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if SSA.ImplicitFieldInfo.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [SSA.ImplicitFieldInfo.Offset]));
+      end
+      else if Self.IsLocal(SSA.ArrayName) then
+        Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [SSA.ArrayName]));
+      Self.Emit(#9'addq %rcx, %rax');
+      Self.Emit(#9'movq %rax, %rbx');
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(DAElemType), '%rbx');
+      Self.EmitRecordCallSretAt(SSA.ValueExpr, '(%rbx)');
+      Self.Emit(#9'popq %rbx');
+      Exit;
+    end;
     Self.EmitExprToEax(SSA.ValueExpr);
     Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SSA.IndexExpr);
