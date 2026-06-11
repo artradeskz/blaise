@@ -21,7 +21,7 @@ unit DateUtils;
 //   - ISO 8601 as the only wire format for ToString/Parse.
 //   - UTC + fixed offset timezones.  IANA/DST deferred to a later phase.
 //
-// See docs/dateutils-design.adoc for the full rationale.
+// See docs/language-rationale.adoc for the full rationale.
 
 interface
 
