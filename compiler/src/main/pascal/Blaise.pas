@@ -483,8 +483,6 @@ begin
   try
     Args.Add('-o');
     Args.Add(AOutputFile);
-    if (AOPDFAsmFile <> '') or AOpdfDebug then
-      Args.Add('-no-pie');  { OPDF addresses are absolute; PIE relocation breaks them }
     Args.Add(AsmFile);
     if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
       Args.Add(AOPDFAsmFile);
@@ -532,8 +530,6 @@ begin
   try
     Args.Add('-o');
     Args.Add(AOutputFile);
-    if (AOPDFAsmFile <> '') or AOpdfDebug then
-      Args.Add('-no-pie');  { OPDF addresses are absolute; PIE relocation breaks them }
     Args.Add(AAsmFile);
     if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
       Args.Add(AOPDFAsmFile);
