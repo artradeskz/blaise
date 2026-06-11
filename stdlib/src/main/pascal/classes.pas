@@ -187,6 +187,13 @@ type
     constructor Create;
     procedure   Destroy;
     function    Add(S: string): Integer;
+    { Objects[] is NON-OWNING by design: slots hold raw, untyped pointers
+      with no ARC retain/release.  Callers commonly store integer payloads
+      cast to pointers (TObject(PtrUInt(N))), which makes blind retention
+      impossible.  When storing real objects, the caller must keep a strong
+      reference alive for the lifetime of the entry (e.g. an owning
+      TObjectList keep-alive) — see docs/language-rationale.adoc,
+      "Collection Ownership". }
     procedure   AddObject(S: string; AObject: Pointer);
     function    Find(const S: string; var Index: Integer): Boolean;
     function    IndexOf(const S: string): Integer;

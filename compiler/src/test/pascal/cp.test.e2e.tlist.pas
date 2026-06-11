@@ -29,6 +29,11 @@ type
     procedure TestRun_TListInteger_AddGetCount;
     procedure TestRun_TListInteger_IndexOf;
     procedure TestRun_TListString_IndexOf_NotFound;
+
+    { Class elements are RETAINED on store: an object whose only other
+      reference was a local in an exited routine must survive in the list
+      (decision recorded in language-rationale: collection ownership). }
+    procedure TestRun_TList_ClassElements_RetainedAcrossScope;
   end;
 
 implementation
@@ -156,6 +161,50 @@ begin
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('IndexOf(beta)=1',          Pos('1',  Output) >= 0);
   AssertTrue('IndexOf(gamma)=-1',        Pos('-1', Output) >= 0);
+end;
+
+const
+  SrcTListClassRetain = '''
+    program P;
+    uses generics.collections;
+    type
+      TC = class
+        N: Integer;
+      end;
+    procedure Fill(L: TList<TC>; S: TStack<TC>);
+    var C: TC;
+    begin
+      C := TC.Create();
+      C.N := 77;
+      L.Add(C);
+      C := TC.Create();
+      C.N := 88;
+      S.Push(C);
+    end;
+    var
+      L: TList<TC>;
+      S: TStack<TC>;
+    begin
+      L := TList<TC>.Create();
+      S := TStack<TC>.Create();
+      Fill(L, S);
+      writeln(L.Get(0).N);
+      writeln(S.Peek().N);
+    end.
+    ''';
+
+procedure TE2ETListTests.TestRun_TList_ClassElements_RetainedAcrossScope;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+link+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcTListClassRetain, Output, RCode, False));
+  AssertEquals('exit code (qbe)', 0, RCode);
+  AssertEquals('retained elements readable (qbe)', '77' + #10 + '88' + #10, Output);
+  AssertTrue('compile+link+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcTListClassRetain, Output, RCode, False));
+  AssertEquals('exit code (native)', 0, RCode);
+  AssertEquals('retained elements readable (native)', '77' + #10 + '88' + #10, Output);
 end;
 
 initialization

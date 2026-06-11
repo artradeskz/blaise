@@ -3566,3 +3566,40 @@ publishing the interface as the API surface.
   through chained expressions is not yet wired.
 * Indexed and default array properties in interfaces are not yet
   supported.
+
+== Collection Ownership — ARC Conventions
+
+=== Decision
+
+The collection types follow three explicit ownership conventions:
+
+* `TObjectList` — ownership is opt-in: `Create(True)` retains on add and
+  releases (destroying at refcount zero) on remove/clear/destroy;
+  `Create(False)` stores borrowed references.
+* `TList<T>`, `TStack<T>`, `TQueue<T>` and the other generic collections —
+  managed elements (`string`, class, dynamic array) ARE retained on store
+  and released when an element slot is overwritten (stores lower to
+  ARC-aware pointer writes).  An object whose only other reference was a
+  local in an exited routine therefore survives in the collection.
+* `TStringList.Objects[]` — NON-OWNING raw pointer slots, by design.
+  The API type is `Pointer`, and storing integer payloads cast to
+  pointers (`TObject(PtrUInt(N))`) is an accepted idiom (the compiler
+  itself uses it); blind retention would corrupt such entries.  Callers
+  storing real objects must hold a strong reference elsewhere for the
+  entry's lifetime.
+
+=== Rationale
+
+Retention for typed generic elements is safe because `T` is statically
+known — only genuinely managed types get ARC operations.  `Objects[]`
+cannot distinguish a pointer-encoded integer from an object reference at
+runtime, so it keeps FPC/Delphi's borrowed-pointer contract.
+
+=== Known limitation (leak backlog)
+
+`Clear`/`Destroy` on the generic collections do not yet release the
+retained references of remaining managed elements (releasing requires a
+`Default(T)`-style generic zero-store that the language does not provide
+yet).  Until then, collections of managed elements leak their contents
+when destroyed non-empty; element overwrite and `Delete` shifting are
+ARC-balanced.
