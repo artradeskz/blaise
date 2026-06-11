@@ -72,7 +72,7 @@ const
   { Untyped pointer variable declaration }
   SrcUntypedPtr =
     '''
-        program P;
+        program Prg;
         var P: Pointer;
         begin
         end.
@@ -81,7 +81,7 @@ const
   { Typed pointer variable declaration }
   SrcTypedPtrDecl =
     '''
-        program P;
+        program Prg;
         var P: ^Integer;
         begin
         end.
@@ -90,7 +90,7 @@ const
   { GetMem allocation }
   SrcGetMem =
     '''
-        program P;
+        program Prg;
         var P: Pointer;
         begin
           P := GetMem(8)
@@ -100,7 +100,7 @@ const
   { FreeMem call }
   SrcFreeMem =
     '''
-        program P;
+        program Prg;
         var P: Pointer;
         begin
           P := GetMem(8);
@@ -112,7 +112,7 @@ const
     No allocation needed — we test AST/IR shapes, not runtime correctness. }
   SrcTypedPtrRW =
     '''
-        program P;
+        program Prg;
         var
           Ptr: ^Integer;
           V: Integer;
@@ -124,7 +124,7 @@ const
 
   SrcDoublePtrWrite =
     '''
-        program P;
+        program Prg;
         var
           PD: ^Double;
           D:  Double;
@@ -136,7 +136,7 @@ const
 
   SrcSinglePtrWrite =
     '''
-        program P;
+        program Prg;
         var
           PS: ^Single;
           S:  Single;
@@ -149,7 +149,7 @@ const
   { Pointer arithmetic }
   SrcPtrArith =
     '''
-        program P;
+        program Prg;
         var
           P1: Pointer;
           P2: Pointer;
@@ -433,12 +433,12 @@ end;
 
 const
   SrcPointerFromInt =
-    'program P;' +
+    'program Prg;' +
     'var N: Integer; P: Pointer;' +
     'begin N := 42; P := Pointer(N) end.';
 
   SrcPtrUIntFromPtr =
-    'program P;' +
+    'program Prg;' +
     'var P: Pointer; U: UInt64;' +
     'begin P := nil; U := PtrUInt(P) end.';
 

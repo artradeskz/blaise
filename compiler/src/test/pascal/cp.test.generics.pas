@@ -110,7 +110,7 @@ implementation
 const
   SrcGenericOneParam =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -121,7 +121,7 @@ const
 
   SrcGenericTwoParams =
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V> = class
             FKey: K;
@@ -133,7 +133,7 @@ const
 
   SrcGenericWithMethod =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -146,7 +146,7 @@ const
 
   SrcGenericVarInteger =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -158,7 +158,7 @@ const
 
   SrcGenericVarString =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -170,7 +170,7 @@ const
 
   SrcGenericTwoParamVar =
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V> = class
             FKey: K;
@@ -183,7 +183,7 @@ const
 
   SrcGenericUsage =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -785,7 +785,7 @@ const
 
   SrcProgUsesUnitGeneric =
     '''
-        program P;
+        program Prg;
         uses UPair;
         begin
           InitPair;
@@ -843,7 +843,7 @@ const
     and then incorrectly re-used on the second. }
   SrcTwoInstancesSameGeneric =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -860,7 +860,7 @@ const
 
   SrcTwoInstancesPointerField =
     '''
-        program P;
+        program Prg;
         type
           TCell<T> = class
             FData: ^T;
@@ -900,7 +900,7 @@ const
     each instance has its own analysed body and the correct call targets. }
   SrcTwoInstancesMethodCallsOwn =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -988,7 +988,7 @@ end;
 const
   SrcDiamondSingleArg =
     '''
-        program P;
+        program Prg;
         type
           TBox<T> = class
             FValue: T;
@@ -1011,7 +1011,7 @@ const
 
   SrcDiamondTwoArgs =
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V> = class
             FKey: K;
@@ -1113,7 +1113,7 @@ var
 begin
   SrcExplicit :=
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V> = class
             FKey: K;

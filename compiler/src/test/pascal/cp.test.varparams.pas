@@ -371,7 +371,7 @@ begin
     Must analyse without error — field accesses are L-values. }
   Prog := AnalyseSrc(
     '''
-        program P;
+        program Prg;
         type
           TRec = record Count: Integer; end;
         procedure Bump(var N: Integer);
@@ -392,7 +392,7 @@ begin
   { Pass P^.Count (pointer deref + field) as a var argument. }
   Prog := AnalyseSrc(
     '''
-        program P;
+        program Prg;
         type
           TRec = record Count: Integer; end;
           PRec = ^TRec;

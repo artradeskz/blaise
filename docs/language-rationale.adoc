@@ -3603,3 +3603,69 @@ retained references of remaining managed elements (releasing requires a
 yet).  Until then, collections of managed elements leak their contents
 when destroyed non-empty; element overwrite and `Delete` shifting are
 ARC-balanced.
+
+== Module Names Are Reserved Identifiers
+
+*Decision*: the name of the module being compiled (the `program` or `unit`
+header name) and the names of all directly used units are reserved
+identifiers within that module.  No top-level declaration — variable,
+constant, type, procedure, or function — may redeclare them.  Inner scopes
+(routine bodies) may shadow them freely.  The module name is not a value:
+referencing it in an expression reports an undeclared identifier.
+
+This matches Delphi and FPC, both of which reject the redeclaration with
+`Duplicate identifier` (Delphi error E2004 documents exactly this case:
+`program Tests; var Tests: Integer;`).
+
+=== Rationale
+
+Before this rule (issue #84), Blaise accepted:
+
+[source,pascal]
+----
+program blaisefault;
+var
+  blaisefault: Integer;   { accepted; rejected by FPC and Delphi }
+begin
+  blaiseFault := 1;
+end.
+----
+
+The acceptance was an accident of implementation, not a decision: the parser
+stored the module name on the AST node without registering it in the symbol
+table, so the duplicate-identifier check had nothing to collide with.  The
+behaviour was benign only because Blaise currently has no module-qualified
+identifier syntax (`unitname.identifier`) and emits no linker symbol named
+after the module.
+
+Reserving the name now was chosen over documenting the accident as a
+feature for three reasons:
+
+* *Design freedom*: module-qualified access is the standard escape hatch
+  when two used units export the same name.  If it is ever added, module
+  names must be resolvable identifiers; programs relying on the old
+  behaviour would break or silently change meaning.  Reserving the name
+  early keeps that door open at near-zero cost.
+* *Migration expectations*: code arriving from FPC or Delphi already obeys
+  the rule, and programmers from those compilers expect the error.
+* *Consistency*: the rule extends uniformly to directly used unit names,
+  again matching FPC (`uses sysutils; var sysutils: Integer;` is rejected).
+
+=== Implementation
+
+The semantic pass plants an `skModule` marker symbol for the module's own
+name and each directly used unit name in the scope that receives top-level
+declarations (the global scope and the program block scope for programs;
+the unit scope for units).  The ordinary duplicate check on
+`TSymbolTable.Define` then rejects redeclarations with the standard
+`Duplicate identifier` error.  `TSymbolTable.Lookup` treats a marker hit as
+unresolvable, so the reserved name is not usable as a value and blocks
+same-named symbols in lower resolution layers, while pushed inner scopes
+shadow it naturally.
+
+One deliberate divergence: FPC accepts a *procedure* whose name matches the
+program name (an apparent accident of its overload machinery).  Blaise
+rejects all declaration forms uniformly.
+
+The grammar is unchanged — this is a name-resolution rule, not a syntax
+rule — so `docs/grammar.ebnf` is unaffected.

@@ -120,7 +120,7 @@ const
 
   SrcMultiTypeBlock =
     '''
-        program P;
+        program Prg;
         type
           TCounter = class
             FN: Integer;
@@ -147,7 +147,7 @@ const
         ''';
 
   SrcToStringDefault = '''
-    program P;
+    program Prg;
     type
       TFoo = class end;
       TBar = class(TFoo) end;
@@ -161,7 +161,7 @@ const
     ''';
 
   SrcToStringOverride = '''
-    program P;
+    program Prg;
     type
       TFoo = class
         function ToString: string; override;
@@ -183,7 +183,7 @@ const
     ''';
 
   SrcToStringInheritedOverride = '''
-    program P;
+    program Prg;
     type
       TFoo = class
         function ToString: string; override;
@@ -202,7 +202,7 @@ const
 
   SrcInheritsFromBase =
     '''
-        program P;
+        program Prg;
         type TBase = class end;
         var B: TBase;
         begin
@@ -217,7 +217,7 @@ const
 
   SrcInheritsFromParent =
     '''
-        program P;
+        program Prg;
         type TBase = class end;
              TChild = class(TBase) end;
         var C: TChild;
@@ -233,7 +233,7 @@ const
 
   SrcInheritsFromGrandParent =
     '''
-        program P;
+        program Prg;
         type TBase = class end;
              TChild = class(TBase) end;
              TGrandChild = class(TChild) end;
@@ -250,7 +250,7 @@ const
 
   SrcInheritsFromUnrelated =
     '''
-        program P;
+        program Prg;
         type TBase = class end;
              TUnrelated = class end;
         var B: TBase;
@@ -266,7 +266,7 @@ const
 
   SrcInheritsFromReverse =
     '''
-        program P;
+        program Prg;
         type TBase = class end;
              TChild = class(TBase) end;
         var B: TBase;
@@ -282,7 +282,7 @@ const
 
   SrcInheritsFromClassType =
     '''
-        program P;
+        program Prg;
         type TBase = class end;
              TChild = class(TBase) end;
         var C: TChild;
@@ -299,7 +299,7 @@ const
         ''';
 
   SrcIsTrue = '''
-    program P;
+    program Prg;
     type
       TAnimal = class end;
       TDog = class(TAnimal) end;
@@ -312,7 +312,7 @@ const
     ''';
 
   SrcIsFalse = '''
-    program P;
+    program Prg;
     type
       TAnimal = class end;
       TDog = class(TAnimal) end;
@@ -326,7 +326,7 @@ const
     ''';
 
   SrcAsDowncast = '''
-    program P;
+    program Prg;
     type
       TBase = class
         function Name: string; virtual;
@@ -348,7 +348,7 @@ const
     ''';
 
   SrcInherited = '''
-    program P;
+    program Prg;
     type
       TBase = class
         function Val: Integer; virtual;
@@ -378,7 +378,7 @@ const
     loaded VALUE (a `w`) where the callee expects an address (`l`) — the parent
     then dereferenced a small integer as a pointer and the program crashed. }
   SrcInheritedVarParam = '''
-    program P;
+    program Prg;
     type
       TBase = class
         procedure Bump(var X: Integer); virtual;
@@ -406,7 +406,7 @@ const
     ''';
 
   SrcVirtualOverride = '''
-    program P;
+    program Prg;
     type
       TShape = class
         function Area: Integer; virtual;
@@ -429,7 +429,7 @@ const
     ''';
 
   SrcMultiLevelChain = '''
-    program P;
+    program Prg;
     type
       TA = class
         function Lvl: Integer; virtual;
@@ -452,7 +452,7 @@ const
     ''';
 
   SrcIntfDispatch = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         procedure Greet;
@@ -478,7 +478,7 @@ const
     symbol with no data definition, causing an undefined-reference link error.
     Must be an e2e test: the IR-only harness never links, so it cannot see it. }
   SrcIntfGlobalNil = '''
-    program P;
+    program Prg;
     type
       ISpeaker = interface
         procedure Speak;
@@ -498,7 +498,7 @@ const
     ''';
 
   SrcIntfIsAs = '''
-    program P;
+    program Prg;
     type
       IPrinter = interface
         procedure Print;
@@ -528,7 +528,7 @@ const
     `storel %_par_X` ("invalid type for first operand") and the program failed
     to compile.  The method must receive obj+itab and dispatch through them. }
   SrcIntfMethodParam = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         function Greet: Integer;
@@ -561,7 +561,7 @@ const
     (Iprinter), not the global (Tmi).  Previously the semantic analyser found
     the global first and reported a type-mismatch. }
   SrcIntfFieldShadowsGlobal = '''
-    program P;
+    program Prg;
     type
       Iprinter = interface
         procedure print;
@@ -595,7 +595,7 @@ const
     ''';
 
   SrcSupportsTwoArgRun = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         procedure Greet;
@@ -617,7 +617,7 @@ const
     ''';
 
   SrcSupportsThreeArgRun = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         procedure Greet;
@@ -818,7 +818,7 @@ const
 
   SrcCtorOverloadArity =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class
             FA: Integer;
@@ -1273,7 +1273,7 @@ end;
 
 const
   SrcInterfaceProperty = '''
-    program P;
+    program Prg;
     type
       IInter = interface
         function GetValue(): Integer;
@@ -1331,7 +1331,7 @@ end;
 
 const
   SrcIntfPropCaseUses = '''
-    program P;
+    program Prg;
     uses classes;
     type
       Iinter = interface
@@ -1382,7 +1382,7 @@ end;
 
 const
   SrcIntfFieldCallStmt = '''
-    program P;
+    program Prg;
     type
       IShape = interface
         procedure Note();
@@ -1420,7 +1420,7 @@ end;
 
 const
   SrcVarParamClass = '''
-    program P;
+    program Prg;
     type
       TBox = class
         V: Integer;
@@ -1453,7 +1453,7 @@ const
     ''';
 
   SrcNestedCaptureParams = '''
-    program P;
+    program Prg;
     procedure Outer();
     var
       Total: Integer;
@@ -1491,7 +1491,7 @@ end;
 
 const
   SrcVarParamFloat = '''
-    program P;
+    program Prg;
     procedure SetD(var D: Double);
     begin
       D := 2.5;
@@ -1524,7 +1524,7 @@ end;
 
 const
   SrcVarParamDynArr = '''
-    program P;
+    program Prg;
     type
       TIntArr = array of Integer;
     procedure MutArr(var A: TIntArr);
@@ -1552,7 +1552,7 @@ const
     ''';
 
   SrcVarParamSAPChar = '''
-    program P;
+    program Prg;
     type
       TFive = array[0..4] of Integer;
     procedure MutSA(var A: TFive);
@@ -1582,7 +1582,7 @@ const
     ''';
 
   SrcVarParamIntf = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         procedure Greet;

@@ -74,7 +74,7 @@ var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
     '''
-        program P;
+        program Prg;
         type
           TBox<T: class> = class
             FItem: Integer;
@@ -96,7 +96,7 @@ var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
     '''
-        program P;
+        program Prg;
         type
           TBox<T: record> = class
             FItem: Integer;
@@ -115,7 +115,7 @@ var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
     '''
-        program P;
+        program Prg;
         type
           TAnimal = class(TObject) X: Integer; end;
           TPen<T: TAnimal> = class
@@ -135,7 +135,7 @@ var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V: class> = class
             FKey: Integer;
@@ -156,7 +156,7 @@ var Prog: TProgram; MD: TMethodDecl;
 begin
   Prog := ParseSrc(
     '''
-        program P;
+        program Prg;
         function Id<T: class>(A: T): T;
         begin Result := A end;
         begin end.
@@ -173,7 +173,7 @@ var Prog: TProgram; MD: TMethodDecl;
 begin
   Prog := ParseSrc(
     '''
-        program P;
+        program Prg;
         type TAnimal = class(TObject) X: Integer; end;
         function Box<T: TAnimal>(A: T): Integer;
         begin Result := 0 end;
@@ -190,7 +190,7 @@ begin
   { Integer is not a class — must raise }
   AnalyseExpectError(
     '''
-        program P;
+        program Prg;
         function Id<T: class>(A: T): T;
         begin Result := A end;
         var N: Integer;
@@ -205,7 +205,7 @@ var Prog: TProgram;
 begin
   Prog := AnalyseSrc(
     '''
-        program P;
+        program Prg;
         type TAnimal = class(TObject) X: Integer; end;
         function Id<T: class>(A: T): T;
         begin Result := A end;
@@ -223,7 +223,7 @@ procedure TGenericConstraintTests.TestSemantic_GenericType_ClassConstraint_Viola
 begin
   AnalyseExpectError(
     '''
-        program P;
+        program Prg;
         type
           TBox<T: class> = class
             FItem: Integer;
@@ -238,7 +238,7 @@ begin
   { TCat does not inherit from TDog → must raise }
   AnalyseExpectError(
     '''
-        program P;
+        program Prg;
         type
           TDog = class(TObject) X: Integer; end;
           TCat = class(TObject) Y: Integer; end;
@@ -259,7 +259,7 @@ begin
   { TPuppy inherits from TDog → OK }
   Prog := AnalyseSrc(
     '''
-        program P;
+        program Prg;
         type
           TDog = class(TObject) X: Integer; end;
           TPuppy = class(TDog) Y: Integer; end;

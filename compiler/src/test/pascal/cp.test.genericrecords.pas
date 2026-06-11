@@ -50,7 +50,7 @@ implementation
 const
   SrcGenericRecordOneParam =
     '''
-        program P;
+        program Prg;
         type
           TMyVal<T> = record
             Value: T;
@@ -61,7 +61,7 @@ const
 
   SrcGenericRecordTwoParams =
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V> = record
             Key: K;
@@ -73,7 +73,7 @@ const
 
   SrcGenericRecordWithMethod =
     '''
-        program P;
+        program Prg;
         type
           TMyVal<T> = record
             Value: T;
@@ -89,7 +89,7 @@ const
 
   SrcGenericRecordVarInteger =
     '''
-        program P;
+        program Prg;
         type
           TMyVal<T> = record
             Value: T;
@@ -102,7 +102,7 @@ const
 
   SrcGenericRecordVarString =
     '''
-        program P;
+        program Prg;
         type
           TMyVal<T> = record
             Value: T;
@@ -114,7 +114,7 @@ const
 
   SrcGenericRecordTwoParamVar =
     '''
-        program P;
+        program Prg;
         type
           TPair<K, V> = record
             Key: K;
@@ -127,7 +127,7 @@ const
 
   SrcGenericRecordUsage =
     '''
-        program P;
+        program Prg;
         type
           TMyVal<T> = record
             Value: T;

@@ -59,7 +59,7 @@ implementation
 const
   SrcSizeOfInteger =
     '''
-        program P;
+        program Prg;
         var N: Integer;
         begin
           N := SizeOf(Integer)
@@ -68,7 +68,7 @@ const
 
   SrcSizeOfInt64 =
     '''
-        program P;
+        program Prg;
         var N: Integer;
         begin
           N := SizeOf(Int64)
@@ -77,7 +77,7 @@ const
 
   SrcNilToTypedPtr =
     '''
-        program P;
+        program Prg;
         var P: ^Integer;
         begin
           P := nil
@@ -86,7 +86,7 @@ const
 
   SrcPointerToTypedPtr =
     '''
-        program P;
+        program Prg;
         var
           P: ^Integer;
           Q: Pointer;
@@ -98,7 +98,7 @@ const
 
   SrcTListType =
     '''
-        program P;
+        program Prg;
         type
           TList<T> = class
             FData: ^T;
@@ -132,7 +132,7 @@ const
 
   SrcTListGetResult =
     '''
-        program P;
+        program Prg;
         type
           TList<T> = class
             FData: ^T;
@@ -167,7 +167,7 @@ const
 
   SrcTListFull =
     '''
-        program P;
+        program Prg;
         type
           TList<T> = class
             FData: ^T;

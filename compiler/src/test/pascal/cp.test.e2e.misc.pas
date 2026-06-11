@@ -116,7 +116,7 @@ const
   LE = #10;
 
   SrcBoolOps = '''
-    program P;
+    program Prg;
     var A, B: Boolean;
     begin
       A := True;
@@ -128,7 +128,7 @@ const
     ''';
 
   SrcWriteLnBoolVar = '''
-    program P;
+    program Prg;
     var B: Boolean;
     begin
       B := True;
@@ -139,7 +139,7 @@ const
     ''';
 
   SrcWriteLnBoolExpr = '''
-    program P;
+    program Prg;
     begin
       WriteLn(3 > 2);
       WriteLn(1 = 2)
@@ -147,7 +147,7 @@ const
     ''';
 
   SrcMultiArg = '''
-    program P;
+    program Prg;
     var I, J, K: Integer;
     begin
       I := 1; J := 2; K := 3;
@@ -156,7 +156,7 @@ const
     ''';
 
   SrcForBreak = '''
-    program P;
+    program Prg;
     var I, Last: Integer;
     begin
       Last := 0;
@@ -170,7 +170,7 @@ const
     ''';
 
   SrcExitFunc = '''
-    program P;
+    program Prg;
     function FirstPositive(X: Integer): Integer;
     begin
       if X > 0 then
@@ -184,7 +184,7 @@ const
     ''';
 
   SrcChainedRecord = '''
-    program P;
+    program Prg;
     type
       TInner = record Value: Integer; end;
       TOuter = record I: TInner; end;
@@ -196,7 +196,7 @@ const
     ''';
 
   SrcConstInt = '''
-    program P;
+    program Prg;
     const MaxVal = 100;
     var X: Integer;
     begin
@@ -206,7 +206,7 @@ const
     ''';
 
   SrcConstStr = '''
-    program P;
+    program Prg;
     const Greeting = 'Hello';
     begin
       WriteLn(Greeting)
@@ -214,7 +214,7 @@ const
     ''';
 
   SrcConstNeg = '''
-    program P;
+    program Prg;
     const MinVal = -10;
     var X: Integer;
     begin
@@ -227,7 +227,7 @@ const
     referenced as $Name but never emitted as a data item, producing a
     link error.  Exercises the full toolchain (codegen + QBE + ld). }
   SrcConstLocalArrayInFunc = '''
-    program P;
+    program Prg;
     function DaysInMonth(M: Integer): Integer;
     const
       Days: array[1..12] of Integer = (31,28,31,30,31,30,31,31,30,31,30,31);
@@ -242,7 +242,7 @@ const
     ''';
 
   SrcProcTypeVar = '''
-    program P;
+    program Prg;
     type TFn = function(X: Integer): Integer;
     function Twice(X: Integer): Integer;
     begin Result := X * 2 end;
@@ -254,7 +254,7 @@ const
     ''';
 
   SrcProcTypeOfObject = '''
-    program P;
+    program Prg;
     type
       TProc = procedure of object;
       TFoo = class
@@ -276,7 +276,7 @@ const
     ''';
 
   SrcDefaultParam = '''
-    program P;
+    program Prg;
     function Add(A: Integer; B: Integer = 10): Integer;
     begin Result := A + B end;
     begin
@@ -286,7 +286,7 @@ const
     ''';
 
   SrcDefaultParamMulti = '''
-    program P;
+    program Prg;
     function Greet(Name: string; Prefix: string = 'Hello';
                    Suffix: string = '!'): string;
     begin Result := Prefix + ' ' + Name + Suffix end;
@@ -297,7 +297,7 @@ const
     ''';
 
   SrcVarParamSwap = '''
-    program P;
+    program Prg;
     procedure Swap(var A, B: Integer);
     var T: Integer;
     begin
@@ -313,7 +313,7 @@ const
     ''';
 
   SrcVarParamString = '''
-    program P;
+    program Prg;
     procedure Append(var S: string; const T: string);
     begin
       S := S + T
@@ -327,7 +327,7 @@ const
     ''';
 
   SrcConstParam = '''
-    program P;
+    program Prg;
     function Twice(const X: Integer): Integer;
     begin Result := X * 2 end;
     begin
@@ -336,7 +336,7 @@ const
     ''';
 
   SrcTypeCastIntByte = '''
-    program P;
+    program Prg;
     var I: Integer; B: Byte;
     begin
       I := 300;
@@ -346,7 +346,7 @@ const
     ''';
 
   SrcTypeCastPointerInt = '''
-    program P;
+    program Prg;
     var I: Integer; P1: Pointer;
     begin
       I  := 42;
@@ -359,7 +359,7 @@ const
     not a negative signed wrap.  3000000000 fits in UInt32 but is negative as a
     signed Int32. }
   SrcWriteUnsigned32 = '''
-    program P;
+    program Prg;
     var c: Cardinal;
     begin
       c := 3000000000;
@@ -368,7 +368,7 @@ const
     ''';
 
   SrcSetIncludeExclude = '''
-    program P;
+    program Prg;
     type TColor = (Red, Green, Blue);
          TColors = set of TColor;
     var S: TColors;
@@ -385,7 +385,7 @@ const
     ''';
 
   SrcSetIn = '''
-    program P;
+    program Prg;
     type TDir = (North, South, East, West);
          TDirs = set of TDir;
     var Horizontal: TDirs;
@@ -398,7 +398,7 @@ const
     ''';
 
   SrcSetUnion = '''
-    program P;
+    program Prg;
     type TBit = (B0, B1, B2, B3);
          TBits = set of TBit;
     var A, B, C: TBits;
@@ -418,7 +418,7 @@ const
   { Set-valued constants: an inferred-type const and an annotated empty const,
     both used as set values at runtime. }
   SrcSetConst = '''
-    program P;
+    program Prg;
     type TDir = (North, South, East, West);
          TDirs = set of TDir;
     const
@@ -438,7 +438,7 @@ const
   { A set literal passed directly as a `set of` argument (both non-empty and
     empty), exercising the set-param ABI (w-width spill) too. }
   SrcSetLiteralArg = '''
-    program P;
+    program Prg;
     type TDir = (North, South, East, West);
          TDirs = set of TDir;
     procedure Report(D: TDirs);
@@ -466,7 +466,7 @@ const
     ''';
 
   SrcSet64InOp =
-    'program P;' + #10 +
+    'program Prg;' + #10 +
     BigEnum64 +
     '''
     var S: TBigSet;
@@ -479,7 +479,7 @@ const
     ''';
 
   SrcSet64InclExcl =
-    'program P;' + #10 +
+    'program Prg;' + #10 +
     BigEnum64 +
     '''
     var S: TBigSet;
@@ -495,7 +495,7 @@ const
     ''';
 
   SrcSet64UnionE2E =
-    'program P;' + #10 +
+    'program Prg;' + #10 +
     BigEnum64 +
     '''
     var A, B, C: TBigSet;
@@ -512,7 +512,7 @@ const
     ''';
 
   SrcSet64ForIn =
-    'program P;' + #10 +
+    'program Prg;' + #10 +
     BigEnum64 +
     '''
     var S: TBigSet; V: TBig;
@@ -524,7 +524,7 @@ const
     ''';
 
   SrcForInStringByte = '''
-    program P;
+    program Prg;
     var
       S: string;
       B: Byte;
@@ -536,7 +536,7 @@ const
     ''';
 
   SrcForInStringInteger = '''
-    program P;
+    program Prg;
     var
       S: string;
       I: Integer;
@@ -549,7 +549,7 @@ const
 
   { 'Aâ' = A (65) + â (U+00E2, codepoint 226, 2 UTF-8 bytes) }
   SrcForInStringCP2Byte = '''
-    program P;
+    program Prg;
     var
       S: string;
       I: Integer;
@@ -562,7 +562,7 @@ const
 
   { '€X' = € (U+20AC, codepoint 8364, 3 UTF-8 bytes) + X (88) }
   SrcForInStringCP3Byte = '''
-    program P;
+    program Prg;
     var
       S: string;
       I: Integer;
@@ -574,7 +574,7 @@ const
     ''';
 
   SrcForInArrayInteger = '''
-    program P;
+    program Prg;
     var
       A: array[0..2] of Integer;
       X: Integer;
@@ -588,7 +588,7 @@ const
     ''';
 
   SrcForInClassEnum = '''
-    program P;
+    program Prg;
     type
       TRangeEnum = class
         FCurrent: Integer;
@@ -639,7 +639,7 @@ const
     ''';
 
   SrcForInSet = '''
-    program P;
+    program Prg;
     type
       TColor = (Red, Green, Blue);
       TColorSet = set of TColor;
@@ -957,7 +957,7 @@ procedure TE2EMiscTests.TestRun_NestedProc_MutatesCapturedVar;
 const
   Src =
     '''
-        program P;
+        program Prg;
         procedure Outer;
         var x: Integer;
           procedure Inner;
@@ -987,7 +987,7 @@ end;
 procedure TE2EMiscTests.TestRun_Diamond_SingleArg_WorksAtRuntime;
 const
   Src = '''
-    program P;
+    program Prg;
     type
       TBox<T> = class
         FValue: T;
@@ -1014,7 +1014,7 @@ end;
 procedure TE2EMiscTests.TestRun_Diamond_TwoArgs_WorksAtRuntime;
 const
   Src = '''
-    program P;
+    program Prg;
     type
       TPair<K, V> = class
         FKey: K;
@@ -1047,7 +1047,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_AddrOf_DynArrayFieldElement;
 const Src = '''
-    program P;
+    program Prg;
     type
       THolder = record Items: array of Integer; end;
     var
@@ -1074,7 +1074,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_GenericRecord_FieldStore_Prints;
 const Src = '''
-    program P;
+    program Prg;
     type
       TMyVal<T> = record
         Value: T;
@@ -1095,7 +1095,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_GenericRecord_WithMethod_Prints;
 const Src = '''
-    program P;
+    program Prg;
     type
       TMyVal<T> = record
         Value: T;
@@ -1120,7 +1120,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_GenericRecord_TwoParams_Prints;
 const Src = '''
-    program P;
+    program Prg;
     type
       TPair<K, V> = record
         Key: K;
@@ -1144,7 +1144,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_GenericRecord_StringField_Prints;
 const Src = '''
-    program P;
+    program Prg;
     type
       TMyVal<T> = record
         Value: T;
@@ -1165,7 +1165,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_BitwiseNot_Integer;
 const Src = '''
-    program P;
+    program Prg;
     var I: Integer;
     begin
       I := 0;
@@ -1182,7 +1182,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_BitwiseNot_Byte;
 const Src = '''
-    program P;
+    program Prg;
     var B: Byte;
     begin
       B := 0;
@@ -1199,7 +1199,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_BitwiseNot_Int64;
 const Src = '''
-    program P;
+    program Prg;
     var I: Int64;
     begin
       I := 0;
@@ -1216,7 +1216,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_BitwiseNot_Bitmask;
 const Src = '''
-    program P;
+    program Prg;
     const MASK = 3;
     var Flags: Integer;
     begin
@@ -1235,7 +1235,7 @@ end;
 
 procedure TE2EMiscTests.TestRun_WriteLn_StdErr_NotOnStdout;
 const Src = '''
-    program P;
+    program Prg;
     begin
       WriteLn(StdErr, 'error msg');
       WriteLn('ok')
@@ -1261,7 +1261,7 @@ end;
 
 const
   SrcFuncOfObjectIndirect = '''
-    program P;
+    program Prg;
     type
       TFn = function(N: Integer): Integer of object;
       TC = class

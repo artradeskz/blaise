@@ -128,7 +128,7 @@ procedure TDynArrayTests.TestParse_DynArray_TypeAlias_AcceptsDecl;
 var Prog: TProgram;
 begin
   Prog := ParseSrc('''
-      program P;
+      program Prg;
       type
         TIntArr = array of Integer;
       begin
@@ -143,7 +143,7 @@ procedure TDynArrayTests.TestParse_DynArray_InlineVarDecl_AcceptsDecl;
 var Prog: TProgram;
 begin
   Prog := ParseSrc('''
-      program P;
+      program Prg;
       var
         A: array of Integer;
       begin
@@ -158,7 +158,7 @@ procedure TDynArrayTests.TestParse_DynArray_Combined_TypeAndVar;
 var Prog: TProgram;
 begin
   Prog := ParseSrc('''
-      program P;
+      program Prg;
       type
         TStrArr = array of string;
       var
@@ -176,7 +176,7 @@ procedure TDynArrayTests.TestParse_DynArray_TypeName_EncodesCorrectly;
 var Prog: TProgram; TD: TTypeDecl; AD: TTypeAliasDef;
 begin
   Prog := ParseSrc('''
-      program P;
+      program Prg;
       type
         TIntArr = array of Integer;
       begin
@@ -198,7 +198,7 @@ procedure TDynArrayTests.TestSemantic_DynArray_Kind;
 var Prog: TProgram; Sym: TSymbol;
 begin
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       type
         TIntArr = array of Integer;
       begin
@@ -215,7 +215,7 @@ procedure TDynArrayTests.TestSemantic_DynArray_ElementType_Integer;
 var Prog: TProgram; Sym: TSymbol; DAT: TDynArrayTypeDesc;
 begin
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       type
         TIntArr = array of Integer;
       begin
@@ -232,7 +232,7 @@ procedure TDynArrayTests.TestSemantic_DynArray_ElementType_String;
 var Prog: TProgram; Sym: TSymbol; DAT: TDynArrayTypeDesc;
 begin
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       type
         TStrArr = array of string;
       begin
@@ -249,7 +249,7 @@ procedure TDynArrayTests.TestSemantic_DynArray_Var_ResolvesToDynArray;
 var Prog: TProgram; VD: TVarDecl;
 begin
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       var
         A: array of Integer;
       begin
@@ -270,7 +270,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_Var_AllocatedAsPointerSlot;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       procedure Foo;
       var A: array of Integer;
       begin
@@ -286,7 +286,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_Var_ZeroInitialised;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       procedure Foo;
       var A: array of Integer;
       begin
@@ -302,7 +302,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_SetLength_CallsRTL;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       procedure Foo;
       var A: array of Integer;
       begin
@@ -319,7 +319,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_Length_CallsRTL;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       procedure Foo;
       var A: array of Integer; N: Integer;
       begin
@@ -336,7 +336,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_Read_ComputesOffset;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       procedure Foo;
       var A: array of Integer; X: Integer;
       begin
@@ -357,7 +357,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_Write_ComputesOffset;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       procedure Foo;
       var A: array of Integer;
       begin
@@ -377,7 +377,7 @@ var Prog: TProgram;
 begin
   { High() on a named dynamic array type must not raise a semantic error }
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       type Tar = array of Integer;
       var ar: Tar;
           i: Integer;
@@ -394,7 +394,7 @@ var Prog: TProgram;
 begin
   { Low() on a named dynamic array type must not raise a semantic error }
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       type Tar = array of Integer;
       var ar: Tar;
           i: Integer;
@@ -411,7 +411,7 @@ var IR: string;
 begin
   { High(dynArr) = DynArrayLength(dynArr) - 1; must call _DynArrayLength }
   IR := GenIR('''
-      program P;
+      program Prg;
       type Tar = array of Integer;
       var ar: Tar;
           i: Integer;
@@ -430,7 +430,7 @@ var IR: string;
 begin
   { Low(dynArr) is always 0; must emit a copy of 0 }
   IR := GenIR('''
-      program P;
+      program Prg;
       type Tar = array of Integer;
       var ar: Tar;
           i: Integer;
@@ -453,7 +453,7 @@ begin
     Verify the offset arithmetic + base load are emitted without
     going through a temporary aggregate copy. }
   IR := GenIR('''
-      program P;
+      program Prg;
       type TRec = record X: Integer; end;
            PRec = ^TRec;
       var A: array of TRec;
@@ -473,7 +473,7 @@ procedure TDynArrayTests.TestCodegen_DynArray_AddrOfRecordFieldElement;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       type TRec = record X: Integer; end;
            PRec = ^TRec;
            THolder = record Items: array of TRec; end;
@@ -499,7 +499,7 @@ begin
     "Expected ':=' but got '.'" — the subscript statement branch only
     accepted ':=' directly after ']'. }
   Prog := ParseSrc('''
-      program P;
+      program Prg;
       type TRec = record Name: String; Number: Integer; end;
       var A: array of TRec;
       begin
@@ -519,7 +519,7 @@ begin
     (ARC-aware fieldwise copy), not store the address of r into the
     element slot. }
   IR := GenIR('''
-      program P;
+      program Prg;
       type TRec = record Name: String; Number: Integer; end;
       procedure Foo;
       var A: array of TRec;
@@ -543,7 +543,7 @@ begin
   { a[i].Name := s must write through the element address with string ARC
     (retain new value, release old element field). }
   IR := GenIR('''
-      program P;
+      program Prg;
       type TRec = record Name: String; Number: Integer; end;
       var A: array of TRec;
           S: String;
@@ -566,7 +566,7 @@ begin
     but got 'Integer'" — the subscript was treated as an indexed-property
     index and dropped from the LHS type. }
   Prog := AnalyseSrc('''
-      program P;
+      program Prg;
       type
         TIA = array of Integer;
         TR  = record A: TIA; end;
@@ -586,7 +586,7 @@ begin
   { c.N.A[0] := 7 used to fail parse with "Expected 'end' but got '['" —
     the chained L-value walker refused a subscript after the final field. }
   Prog := ParseSrc('''
-      program P;
+      program Prg;
       type
         TIA    = array of Integer;
         TInner = record A: TIA; end;
@@ -606,7 +606,7 @@ procedure TDynArrayTests.TestCodegen_RecordField_DynArrayElemWrite_StoresElement
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       type
         TIA = array of Integer;
         TR  = record A: TIA; end;
@@ -629,7 +629,7 @@ procedure TDynArrayTests.TestCodegen_ClassField_DynArrayElemWrite_StoresElement;
 var IR: string;
 begin
   IR := GenIR('''
-      program P;
+      program Prg;
       type
         TIA = array of Integer;
         TC  = class A: TIA; end;

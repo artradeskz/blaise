@@ -125,7 +125,7 @@ type
     { Generic function instantiation: resolves 'Identity<Integer>' on demand. }
     function  InstantiateGenericFunc(const AInstName: string): TMethodDecl;
 
-    procedure AnalyseBlock(ABlock: TBlock);
+    procedure AnalyseBlock(ABlock: TBlock; AIsProgramTop: Boolean = False);
     procedure AnalyseConstDecls(ABlock: TBlock);
     { Resolve a set-valued const decl (IsSet): fold the member bitmask into
       CD.IntVal and register the const symbol with its tySet type. }
@@ -311,6 +311,13 @@ type
       nil when not registered.  Used by LookupViaUsesChain to walk
       the chain without going through the flat global. }
     function FindUnitSymbol(const AUnitName, ASymName: string): TSymbol;
+
+    { Reserve a module name in the current scope (issue #84).  Defines
+      an skModule marker so any same-scope declaration of that name
+      fails the normal duplicate check, matching FPC/Delphi.  A failed
+      Define (name already taken — e.g. a unit listed twice in uses)
+      is silently ignored. }
+    procedure DefineModuleName(const AName: string);
 
     { Look up a registered TUnitInterface by unit name.  Returns nil
       if not registered.  Case-insensitive. }
@@ -846,6 +853,8 @@ begin
 end;
 
 procedure TSemanticAnalyser.Analyse(AProg: TProgram);
+var
+  I: Integer;
 begin
   FProg := AProg;
   FCurrentUnitName := AProg.Name;
@@ -855,7 +864,13 @@ begin
     lookup (current compilation's own symbols) finds them ahead of
     a use'd unit's same-named export. }
   FTable.DefineOwningUnit := AProg.Name;
-  AnalyseBlock(AProg.Block);
+  { The program's own name and the names of directly used units are
+    reserved identifiers — no top-level declaration may redeclare
+    them (issue #84, matching FPC/Delphi). }
+  DefineModuleName(AProg.Name);
+  for I := 0 to AProg.UsedUnits.Count - 1 do
+    DefineModuleName(AProg.UsedUnits.Strings[I]);
+  AnalyseBlock(AProg.Block, True);
   { Transfer symbol table ownership to the program so that TTypeDesc
     objects (referenced by ResolvedType pointers on AST nodes) outlive
     this analyser. }
@@ -877,6 +892,15 @@ begin
   FCurrentUnit := AUnit;
   FTable.PushScope();
   try
+    { The unit's own name and the names of directly used units are
+      reserved identifiers — no interface or implementation decl may
+      redeclare them (issue #84, matching FPC/Delphi). }
+    DefineModuleName(AUnit.Name);
+    for I := 0 to AUnit.UsedUnits.Count - 1 do
+      DefineModuleName(AUnit.UsedUnits.Strings[I]);
+    for I := 0 to AUnit.ImplUsedUnits.Count - 1 do
+      DefineModuleName(AUnit.ImplUsedUnits.Strings[I]);
+
     { Resolve interface type and constant declarations. }
     AnalyseConstDecls(AUnit.IntfBlock);
     AnalyseTypeDecls(AUnit.IntfBlock);
@@ -1513,6 +1537,16 @@ begin
     Result := TUnitInterface(FUnitIfaces.Objects[Idx])
   else
     Result := nil;
+end;
+
+procedure TSemanticAnalyser.DefineModuleName(const AName: string);
+var
+  Sym: TSymbol;
+begin
+  if AName = '' then Exit;
+  Sym := TSymbol.Create(AName, skModule, nil);
+  if not FTable.Define(Sym) then
+    Sym.Free();  { name already taken — keep the existing symbol }
 end;
 
 procedure TSemanticAnalyser.RegisterUnitSymbol(const AUnitName: string;
@@ -2780,7 +2814,9 @@ begin
   end;
 end;
 
-procedure TSemanticAnalyser.AnalyseBlock(ABlock: TBlock);
+procedure TSemanticAnalyser.AnalyseBlock(ABlock: TBlock; AIsProgramTop: Boolean = False);
+var
+  I: Integer;
 begin
   { Type declarations are registered in the outer scope so they remain visible
     after the block scope is popped — needed for var declarations and the
@@ -2798,6 +2834,16 @@ begin
   FTable.PushScope();
   Inc(FScopeDepth);
   try
+    { The program's top-level block gets its own pushed scope, so the
+      module-name markers planted in the global scope by Analyse() are
+      one level down and would not block program-level var decls.
+      Re-plant them in this scope (issue #84). }
+    if AIsProgramTop and (FProg <> nil) then
+    begin
+      DefineModuleName(FProg.Name);
+      for I := 0 to FProg.UsedUnits.Count - 1 do
+        DefineModuleName(FProg.UsedUnits.Strings[I]);
+    end;
     { Register var declarations before method bodies so that class methods can
       resolve identifiers that refer to program-level globals (issue #43).
       The same applies inside nested function/procedure blocks: locals must be
@@ -3032,6 +3078,13 @@ begin
     if not FTable.Define(Sym) then
     begin
       Sym.Free();
+      { A module-name marker blocking the Define is always a hard error
+        (issue #84) — without this check the const would be silently
+        dropped by the cross-unit shadowing tolerance below. }
+      RefSym := FTable.CurrentScope.LookupLocal(CD.Name);
+      if (RefSym <> nil) and (RefSym.Kind = skModule) then
+        SemanticError(Format('Duplicate identifier ''%s''', [CD.Name]),
+          CD.Line, CD.Col);
       { Only error for same-block duplicates.  Cross-unit const shadowing
         (e.g. a unit redefining a system.pas constant) is silently accepted,
         matching FPC behaviour and preserving the existing test coverage. }
@@ -3061,6 +3114,7 @@ var
   I, J:     Integer;
   CD:       TConstDecl;
   Sym:      TSymbol;
+  RefSym:   TSymbol;
   ElemTD:   TTypeDesc;
   IdxTD:    TTypeDesc;
   ArrTD:    TStaticArrayTypeDesc;
@@ -3128,7 +3182,15 @@ begin
     for J := 0 to CD.ArrayElements.Count - 1 do
       Sym.ConstArray.Add(CD.ArrayElements[J]);
     if not FTable.Define(Sym) then
+    begin
       Sym.Free();
+      { A module-name marker blocking the Define is a hard error
+        (issue #84); other clashes keep the silent-skip tolerance. }
+      RefSym := FTable.CurrentScope.LookupLocal(CD.Name);
+      if (RefSym <> nil) and (RefSym.Kind = skModule) then
+        SemanticError(Format('Duplicate identifier ''%s''', [CD.Name]),
+          CD.Line, CD.Col);
+    end;
   end;
 end;
 

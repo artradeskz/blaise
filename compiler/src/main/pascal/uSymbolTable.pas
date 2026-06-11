@@ -309,7 +309,12 @@ type
     skFunction,
     skParameter,
     skVarParameter,
-    skConstant     { built-in or user-declared constant; ConstValue holds the integer value }
+    skConstant,    { built-in or user-declared constant; ConstValue holds the integer value }
+    skModule       { reserved module name — the program/unit's own name or a
+                     directly used unit's name (issue #84).  Exists only so
+                     TScope.Define rejects same-scope redeclarations; Lookup
+                     treats a hit as unresolvable, so the name is reserved
+                     but is not a value.  TypeDesc is nil. }
   );
 
   TParamDesc = class
@@ -1770,7 +1775,15 @@ begin
   for I := FScopeStack.Count - 1 downto 1 do
   begin
     Result := TScope(FScopeStack.Items[I]).LookupLocal(AName);
-    if Result <> nil then Exit;
+    if Result <> nil then
+    begin
+      { A module-name marker reserves the identifier but is not a
+        value — the name resolves to nothing, and it shadows any
+        same-named symbol in lower layers (issue #84). }
+      if Result.Kind = skModule then
+        Result := nil;
+      Exit;
+    end;
   end;
 
   { Layer 3 — probe the global scope but only return a hit when the
@@ -1780,6 +1793,13 @@ begin
     symbols in a dedicated pool.  Builtins (OwningUnit = '') and
     symbols owned by other units fall through to later layers. }
   Sym := TScope(FScopeStack.Items[0]).LookupLocal(AName);
+  { Module-name marker at global scope: same rule as layer 1 — the
+    name is reserved, resolves to nothing, and blocks lower layers. }
+  if (Sym <> nil) and (Sym.Kind = skModule) then
+  begin
+    Result := nil;
+    Exit;
+  end;
   if (Sym <> nil) and (FDefineOwningUnit <> '')
      and SameText(Sym.OwningUnit, FDefineOwningUnit) then
   begin

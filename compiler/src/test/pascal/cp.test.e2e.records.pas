@@ -66,7 +66,7 @@ const
   LE = #10;
 
   SrcRecordFieldRW = '''
-    program P;
+    program Prg;
     type TPoint = record X, Y: Integer; end;
     var P1: TPoint;
     begin
@@ -77,7 +77,7 @@ const
     ''';
 
   SrcRecordPassByValue = '''
-    program P;
+    program Prg;
     type TPoint = record X, Y: Integer; end;
     procedure Print(Pt: TPoint);
     begin
@@ -93,7 +93,7 @@ const
     ''';
 
   SrcRecordPassByVar = '''
-    program P;
+    program Prg;
     type TPoint = record X, Y: Integer; end;
     procedure Scale(var Pt: TPoint);
     begin
@@ -116,7 +116,7 @@ const
     to the caller.  Covers both a local-record RHS (var) and a record-returning
     function RHS (out). }
   SrcRecordAssignToVarParam = '''
-    program P;
+    program Prg;
     type TPoint = record X, Y: Integer; end;
     function Make(AX, AY: Integer): TPoint;
     begin
@@ -146,7 +146,7 @@ const
     ''';
 
   SrcRecordStringField = '''
-    program P;
+    program Prg;
     type TName = record First, Last: string; end;
     var N: TName;
     begin
@@ -157,7 +157,7 @@ const
     ''';
 
   SrcRecordNested = '''
-    program P;
+    program Prg;
     type
       TInner = record V: Integer; end;
       TOuter = record A, B: TInner; end;
@@ -170,7 +170,7 @@ const
     ''';
 
   SrcRecordFourBytes = '''
-    program P;
+    program Prg;
     type
       TFourBytes = record
         A: Byte;
@@ -193,7 +193,7 @@ const
     ''';
 
   SrcRecordByteThenInteger = '''
-    program P;
+    program Prg;
     type
       TMixed = record
         Tag: Byte;
@@ -210,7 +210,7 @@ const
     ''';
 
   SrcRecordStmtMethodCallLocal = '''
-    program P;
+    program Prg;
     type
       TCounter = record
         Value: Integer;
@@ -237,7 +237,7 @@ const
     ''';
 
   SrcRecordStmtMethodCallImplicitSelf = '''
-    program P;
+    program Prg;
     type
       TCounter = record
         Value: Integer;
@@ -267,7 +267,7 @@ const
     ''';
 
   SrcRecordStmtMethodCallResult = '''
-    program P;
+    program Prg;
     type
       TPoint = record
         X, Y: Integer;
@@ -292,7 +292,7 @@ const
     ''';
 
   SrcRecordAddrOfImplicitSelf = '''
-    program P;
+    program Prg;
     type
       TPoint = record
         X, Y: Integer;
@@ -319,7 +319,7 @@ const
     ''';
 
   SrcRecordPointerDerefFieldAccess = '''
-    program P;
+    program Prg;
     type
       TPoint = record X, Y: Integer; end;
     var
@@ -351,7 +351,7 @@ const
     Before the fix, _FieldCleanup_<T> skipped record-typed fields entirely,
     so the chain leaked TMid and TLeaf instances every iteration. }
   SrcClassRecordFieldNestedCleanup = '''
-    program P;
+    program Prg;
     type
       TLeaf = class
         Tag: Integer;
@@ -433,7 +433,7 @@ const
     have a sentinel refcount of -1 (Release is a no-op); we force a
     real heap refcount via 'heap-' + 'allocated'. }
   SrcRecordByValParam_StringField_HeapARC = '''
-    program P;
+    program Prg;
     type TR = record S: string; end;
     procedure Mutate(R: TR);
     begin R.S := 'callee-replacement' end;
@@ -455,7 +455,7 @@ const
     exits 0; we drive the pattern in a tight loop so a leak would
     show up under stress. }
   SrcRecordByValArg_InlineNestedManaged = '''
-    program P;
+    program Prg;
     type
       TInner = record N: string; end;
       TOuter = record S: string; Inner: TInner; end;
@@ -479,7 +479,7 @@ const
     ''';
 
   SrcRecordDynArrayReturnByValueNoLeak = '''
-    program P;
+    program Prg;
     type
       TBuf = record
         Arr: array of Integer;
@@ -515,7 +515,7 @@ const
     bytes and the method dispatch emitted an undefined %_var__obj temp that QBE
     rejected. }
   SrcRecordInterfaceFieldAssignCallCopy = '''
-    program P;
+    program Prg;
     type
       IFoo = interface
         function GetVal: Integer;
@@ -555,7 +555,7 @@ const
     ''';
 
   SrcRecordNestedFieldAssignMethodCall = '''
-    program P;
+    program Prg;
     type
       TDate = record
         Year: Integer;
@@ -757,7 +757,7 @@ end;
 
 const
   SrcDynRecElemFieldAssign = '''
-    program P;
+    program Prg;
     type
       TInner = record N: Integer; end;
       TRec = record
@@ -788,7 +788,7 @@ const
     ''';
 
   SrcDynRecElemCopyNoAlias = '''
-    program P;
+    program Prg;
     type TRec = record Name: String; Number: Integer; end;
     var
       r: TRec;
@@ -811,7 +811,7 @@ const
     ''';
 
   SrcStaticRecElemFieldAssign = '''
-    program P;
+    program Prg;
     type TRec = record Name: String; Number: Integer; end;
     var
       r1, r2: TRec;
@@ -832,7 +832,7 @@ const
     ''';
 
   SrcDynClassElemMethodCall = '''
-    program P;
+    program Prg;
     type
       TC = class
         V: Integer;
@@ -883,7 +883,7 @@ end;
 
 const
   SrcRecFieldDynElemWrite = '''
-    program P;
+    program Prg;
     type
       TIA = array of Integer;
       TR  = record A: TIA; end;
@@ -900,7 +900,7 @@ const
     ''';
 
   SrcClassFieldDynElemWrite = '''
-    program P;
+    program Prg;
     type
       TIA = array of Integer;
       TC = class
@@ -927,7 +927,7 @@ const
     ''';
 
   SrcNestedChainDynElemWrite = '''
-    program P;
+    program Prg;
     type
       TIA    = array of Integer;
       TInner = record A: TIA; end;
@@ -944,7 +944,7 @@ const
     ''';
 
   SrcSubscriptChainFieldElemWrite = '''
-    program P;
+    program Prg;
     type
       TIA = array of Integer;
       TR  = record A: TIA; end;
@@ -959,7 +959,7 @@ const
     ''';
 
   SrcRecFieldStaticElemWrite = '''
-    program P;
+    program Prg;
     type
       TR = record S: array[0..2] of Integer; end;
     var r: TR;
@@ -974,7 +974,7 @@ const
     ''';
 
   SrcRecFieldDynStrElemWrite = '''
-    program P;
+    program Prg;
     type
       TSA = array of String;
       TR  = record N: TSA; end;
@@ -1034,7 +1034,7 @@ end;
 
 const
   SrcRecordCallIntoElem = '''
-    program P;
+    program Prg;
     type
       TTok = record
         Kind: Integer;

@@ -219,7 +219,7 @@ procedure TPublishedRTTITests.TestParse_Published_Sets_IsPublished;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -251,7 +251,7 @@ procedure TPublishedRTTITests.TestParse_Public_Does_Not_Set_IsPublished;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           public
@@ -278,7 +278,7 @@ procedure TPublishedRTTITests.TestParse_PublishedThenPublic_Boundary;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -313,7 +313,7 @@ procedure TPublishedRTTITests.TestCodegen_TypeInfo_HasFourSlots;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type TFoo = class(TObject) end;
         begin end.
         ''';
@@ -333,7 +333,7 @@ procedure TPublishedRTTITests.TestCodegen_NoPublishedMethods_MethodsSlotZero;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           public
@@ -354,7 +354,7 @@ procedure TPublishedRTTITests.TestCodegen_PublishedMethods_TableEmitted;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -375,7 +375,7 @@ procedure TPublishedRTTITests.TestCodegen_PublishedMethods_TableCount;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -399,7 +399,7 @@ procedure TPublishedRTTITests.TestCodegen_PublishedMethods_NameAndAddrPairs;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -419,7 +419,7 @@ procedure TPublishedRTTITests.TestCodegen_MethodAddress_BuiltinCall;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -448,7 +448,7 @@ procedure TPublishedRTTITests.TestE2E_MethodAddress_Found;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -474,7 +474,7 @@ procedure TPublishedRTTITests.TestE2E_MethodAddress_NotFound;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published
@@ -500,7 +500,7 @@ procedure TPublishedRTTITests.TestE2E_MethodAddress_WalksParent;
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TBase = class(TObject)
           published
@@ -535,7 +535,7 @@ procedure TPublishedRTTITests.TestE2E_MethodAddress_DistinctMethodsHaveDistinctA
 const
   Src =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class(TObject)
           published

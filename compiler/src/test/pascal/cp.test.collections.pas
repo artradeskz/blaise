@@ -101,7 +101,7 @@ const
   { Minimal TObjectList inline source }
   SrcTObjectListBase =
     '''
-        program P;
+        program Prg;
         type
           TObjectList = class
             FData:     ^Pointer;
@@ -161,7 +161,7 @@ const
   { CompareStr/CompareText test }
   SrcCompareStr =
     '''
-        program P;
+        program Prg;
         var N: Integer;
         begin
           N := CompareStr('abc', 'abd')
@@ -170,7 +170,7 @@ const
 
   SrcCompareText =
     '''
-        program P;
+        program Prg;
         var N: Integer;
         begin
           N := CompareText('ABC', 'abc')
@@ -180,7 +180,7 @@ const
   { ZeroMem test }
   SrcZeroMem =
     '''
-        program P;
+        program Prg;
         var P: Pointer;
         begin
           P := GetMem(16);
@@ -191,7 +191,7 @@ const
   { Minimal TStringList inline source }
   SrcTStringListBase =
     '''
-        program P;
+        program Prg;
         type
           TStringList = class
             FStrings:    ^string;
@@ -487,7 +487,7 @@ const
   { Minimal TStringList with Text property and file methods }
   SrcTStringListTextBase =
     '''
-        program P;
+        program Prg;
         type
           TStringList = class
             FStrings:  ^string;

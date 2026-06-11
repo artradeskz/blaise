@@ -54,6 +54,12 @@ type
     procedure TestSemantic_Unit_SignatureMismatch_ParamCount_RaisesError;
     procedure TestSemantic_Unit_MissingImpl_RaisesError;
     procedure TestSemantic_Unit_ImplOnlyDecl_OK;
+    { Module names are reserved identifiers (issue #84): a unit's own
+      name cannot be redeclared by interface or implementation decls;
+      routine-local scopes may still shadow it. }
+    procedure TestSemantic_UnitName_RedeclaredAsIntfVar_RaisesError;
+    procedure TestSemantic_UnitName_RedeclaredAsImplVar_RaisesError;
+    procedure TestSemantic_UnitName_LocalShadow_OK;
 
     { Interface-section global variable is registered and visible to
       implementation-section function bodies. }
@@ -370,6 +376,47 @@ begin
         implementation
         end.
         ''');                                     { no implementation of Add }
+end;
+
+procedure TUnitTests.TestSemantic_UnitName_RedeclaredAsIntfVar_RaisesError;
+begin
+  AnalyseUnitExpectError(
+    '''
+        unit Clash;
+        interface
+        var Clash: Integer;
+        implementation
+        end.
+        ''');
+end;
+
+procedure TUnitTests.TestSemantic_UnitName_RedeclaredAsImplVar_RaisesError;
+begin
+  AnalyseUnitExpectError(
+    '''
+        unit Clash;
+        interface
+        implementation
+        var Clash: Integer;
+        end.
+        ''');
+end;
+
+procedure TUnitTests.TestSemantic_UnitName_LocalShadow_OK;
+begin
+  AnalyseUnit(
+    '''
+        unit Outer;
+        interface
+        procedure P;
+        implementation
+        procedure P;
+        var Outer: Integer;
+        begin
+          Outer := 1;
+        end;
+        end.
+        ''').Free();
 end;
 
 procedure TUnitTests.TestSemantic_Unit_ImplOnlyDecl_OK;

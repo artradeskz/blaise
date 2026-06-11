@@ -377,13 +377,13 @@ const
   LE = #10;
 
   SrcEmpty = '''
-    program P;
+    program Prg;
     begin
     end.
     ''';
 
   SrcArith = '''
-    program P;
+    program Prg;
     begin
       WriteLn(2 + 3 * 4);
       WriteLn(100 - 58)
@@ -391,7 +391,7 @@ const
     ''';
 
   SrcDivMod = '''
-    program P;
+    program Prg;
     begin
       WriteLn(20 div 6);
       WriteLn(20 mod 6);
@@ -401,7 +401,7 @@ const
     ''';
 
   SrcWriteNoNL = '''
-    program P;
+    program Prg;
     begin
       Write(1);
       Write(2);
@@ -410,7 +410,7 @@ const
     ''';
 
   SrcIfElse = '''
-    program P;
+    program Prg;
     begin
       if 5 > 3 then WriteLn(1) else WriteLn(0);
       if 2 > 9 then WriteLn(1) else WriteLn(0);
@@ -419,7 +419,7 @@ const
     ''';
 
   SrcComparisons = '''
-    program P;
+    program Prg;
     begin
       if 3 < 5 then WriteLn(11);
       if 5 <= 5 then WriteLn(22);
@@ -433,7 +433,7 @@ const
   { while with a false condition never runs; repeat runs once then exits when
     the until condition is true.  (Counter-driven loops arrive with M4 locals.) }
   SrcRepeat = '''
-    program P;
+    program Prg;
     begin
       while 3 > 5 do WriteLn(999);
       repeat WriteLn(8) until 1 = 1
@@ -441,7 +441,7 @@ const
     ''';
 
   SrcVarsForLoop = '''
-    program P;
+    program Prg;
     var i, sum: Integer;
     begin
       sum := 0;
@@ -452,7 +452,7 @@ const
     ''';
 
   SrcDownToNested = '''
-    program P;
+    program Prg;
     var i, j, total: Integer;
     begin
       for i := 5 downto 1 do Write(i);
@@ -466,7 +466,7 @@ const
     ''';
 
   SrcCounterLoops = '''
-    program P;
+    program Prg;
     var n: Integer;
     begin
       n := 0;
@@ -485,7 +485,7 @@ const
     ''';
 
   SrcForEndOnce = '''
-    program P;
+    program Prg;
     var i, limit, count: Integer;
     begin
       limit := 3;
@@ -500,7 +500,7 @@ const
     ''';
 
   SrcFunctions = '''
-    program P;
+    program Prg;
     function Square(x: Integer): Integer;
     begin
       Result := x * x
@@ -524,7 +524,7 @@ const
     ''';
 
   SrcRecursion = '''
-    program P;
+    program Prg;
     function Fact(n: Integer): Integer;
     begin
       if n <= 1 then
@@ -539,7 +539,7 @@ const
     ''';
 
   SrcForOverLocal = '''
-    program P;
+    program Prg;
     function SumTo(n: Integer): Integer;
     var i, s: Integer;
     begin
@@ -557,7 +557,7 @@ const
     WriteLn each.  Byte/Word/SmallInt are stored narrow but read back to the
     full ordinal value; Int64 holds a value beyond 32 bits. }
   SrcWiderIntGlobals = '''
-    program P;
+    program Prg;
     var
       b: Byte;
       w: Word;
@@ -578,7 +578,7 @@ const
   { Int64 arithmetic must use 64-bit operations: a product that overflows 32
     bits, and addition past the 32-bit boundary. }
   SrcInt64Arith = '''
-    program P;
+    program Prg;
     var a, b, r: Int64;
     begin
       a := 100000;
@@ -594,7 +594,7 @@ const
 
   { Wider-int parameters and return values across a call boundary. }
   SrcWiderIntParams = '''
-    program P;
+    program Prg;
     function AddBytes(x, y: Byte): Integer;
     begin
       Result := x + y
@@ -618,7 +618,7 @@ const
     exactly like the QBE backend: Byte(X) keeps the low 8 bits, Word(X) the
     low 16; Int64(X) widens a 32-bit value. }
   SrcTypeCasts = '''
-    program P;
+    program Prg;
     var i: Integer;
     var big: Int64;
     begin
@@ -636,7 +636,7 @@ const
     is negative reads back sign-extended; a Word with the same low-16 bits
     reads back as the large unsigned ordinal. }
   SrcSignedness = '''
-    program P;
+    program Prg;
     var s: SmallInt;
     var w: Word;
     begin
@@ -651,7 +651,7 @@ const
   { A Cardinal/UInt32 value above 2^31 must print as the large unsigned value,
     not a negative signed wrap. }
   SrcWriteUnsigned32 = '''
-    program P;
+    program Prg;
     var c: Cardinal;
     begin
       c := 3000000000;
@@ -662,7 +662,7 @@ const
   { Var/out parameter support (M5 continuation). }
 
   SrcVarParamSwap = '''
-    program P;
+    program Prg;
     procedure Swap(var A, B: Integer);
     var T: Integer;
     begin
@@ -679,7 +679,7 @@ const
 
   { Pass a var param through to another var param (pointer forwarding). }
   SrcVarParamPassThrough = '''
-    program P;
+    program Prg;
     procedure Inc10(var N: Integer);
     begin
       N := N + 10
@@ -699,7 +699,7 @@ const
 
   { Var params with wider integer types. }
   SrcVarParamWiderInt = '''
-    program P;
+    program Prg;
     procedure SetBig(var B: Int64);
     begin
       B := 9000000000
@@ -722,7 +722,7 @@ const
 
   { Out parameter (same ABI as var — pointer passing). }
   SrcOutParam = '''
-    program P;
+    program Prg;
     procedure Init(out X, Y: Integer);
     begin
       X := 42;
@@ -740,7 +740,7 @@ const
   { Break/continue/exit support. }
 
   SrcForBreak = '''
-    program P;
+    program Prg;
     var I, Last: Integer;
     begin
       Last := 0;
@@ -754,7 +754,7 @@ const
     ''';
 
   SrcWhileContinue = '''
-    program P;
+    program Prg;
     var I, Sum: Integer;
     begin
       I := 0;
@@ -770,7 +770,7 @@ const
     ''';
 
   SrcExitFunc = '''
-    program P;
+    program Prg;
     function FirstPositive(X: Integer): Integer;
     begin
       if X > 0 then
@@ -784,7 +784,7 @@ const
     ''';
 
   SrcExitValue = '''
-    program P;
+    program Prg;
     function Clamp(X, Lo, Hi: Integer): Integer;
     begin
       if X < Lo then Exit(Lo);
@@ -800,7 +800,7 @@ const
 
   { 7 integer args: first 6 in registers, 7th on the stack. }
   SrcSevenArgs = '''
-    program P;
+    program Prg;
     function Sum7(A, B, C, D, E, F, G: Integer): Integer;
     begin
       Result := A + B + C + D + E + F + G
@@ -812,7 +812,7 @@ const
 
   { 8 integer args: first 6 in registers, 7th and 8th on the stack. }
   SrcEightArgs = '''
-    program P;
+    program Prg;
     function Sum8(A, B, C, D, E, F, G, H: Integer): Integer;
     begin
       Result := A + B + C + D + E + F + G + H
@@ -829,7 +829,7 @@ const
 
   { 10 integer args: first 6 in registers, 7th–10th on the stack. }
   SrcTenArgs = '''
-    program P;
+    program Prg;
     function Sum10(A, B, C, D, E, F, G, H, I, J: Integer): Integer;
     begin
       Result := A + B + C + D + E + F + G + H + I + J
@@ -843,7 +843,7 @@ const
     and call through it.  WriteLn is not callable via a proc var in the test
     harness, so we use a user-defined Print procedure. }
   SrcIndirectBareProc = '''
-    program P;
+    program Prg;
     type
       TProc = procedure(X: Integer);
     procedure PrintIt(X: Integer);
@@ -861,7 +861,7 @@ const
   { Bare function pointer: assign a function to a variable and call it in
     an expression. }
   SrcIndirectBareFunc = '''
-    program P;
+    program Prg;
     type
       TFunc = function(A, B: Integer): Integer;
     function Add(A, B: Integer): Integer;
@@ -885,7 +885,7 @@ const
     calling it must pass Data as Self.  Uses TMethod + MethodAddress + a cast
     to bind the method pointer, matching the established e2e pattern. }
   SrcIndirectMethodPtr = '''
-    program P;
+    program Prg;
     type
       TCounter = class
         FVal: Integer;
@@ -919,7 +919,7 @@ const
 
   { MethodAddress with a variable (non-literal) string argument. }
   SrcMethodAddrVarString = '''
-    program P;
+    program Prg;
     type
       TCounter = class
         FVal: Integer;
@@ -955,7 +955,7 @@ const
 
   { Record global: declare a record type, write fields from main, read back. }
   SrcRecordGlobal = '''
-    program P;
+    program Prg;
     type
       TPoint = record
         X: Integer;
@@ -973,7 +973,7 @@ const
 
   { Record local inside a function. }
   SrcRecordLocal = '''
-    program P;
+    program Prg;
     type
       TRect = record
         W: Integer;
@@ -994,7 +994,7 @@ const
 
   { Record fields passed as scalar parameters and result. }
   SrcRecordParam = '''
-    program P;
+    program Prg;
     type
       TPoint = record
         X: Integer;
@@ -1019,7 +1019,7 @@ const
 
   { Static array global: declare at program level, write elements, read back. }
   SrcStaticArrayGlobal = '''
-    program P;
+    program Prg;
     var A: array[0..4] of Integer;
     begin
       A[0] := 10;
@@ -1034,7 +1034,7 @@ const
 
   { Static array local inside a function. }
   SrcStaticArrayLocal = '''
-    program P;
+    program Prg;
     function SumArray: Integer;
     var
       B: array[0..2] of Integer;
@@ -1051,7 +1051,7 @@ const
 
   { Static array with non-zero lower bound: A[1..3]. }
   SrcStaticArrayNonZeroLow = '''
-    program P;
+    program Prg;
     var C: array[1..3] of Integer;
     begin
       C[1] := 100;
@@ -1067,7 +1067,7 @@ const
     test is expected to fail on the native path with "only integer-family or void
     return supported". }
   SrcRecordReturnFunction = '''
-    program P;
+    program Prg;
     type TPoint = record X: Integer; Y: Integer; end;
     function MakePoint(X, Y: Integer): TPoint;
     begin
@@ -1083,7 +1083,7 @@ const
     ''';
 
   SrcSizeOfRecord = '''
-    program P;
+    program Prg;
     type
       TPoint = record
         X: Integer;
@@ -1095,7 +1095,7 @@ const
     ''';
 
   SrcSizeOfGenericRecord = '''
-    program P;
+    program Prg;
     type
       TPair<T1, T2> = record
         First: T1;
@@ -1111,7 +1111,7 @@ const
     ''';
 
   SrcNestedRecordFieldAssign = '''
-    program P;
+    program Prg;
     type
       TDate = record
         Year: Integer;
@@ -1144,7 +1144,7 @@ const
   { M6 — float source programs }
 
   SrcDoubleGlobal = '''
-    program P;
+    program Prg;
     var D: Double;
     begin
       D := 3.14;
@@ -1153,7 +1153,7 @@ const
     ''';
 
   SrcDoubleLocal = '''
-    program P;
+    program Prg;
     procedure ShowDouble;
     var D: Double;
     begin
@@ -1166,7 +1166,7 @@ const
     ''';
 
   SrcDoubleArith = '''
-    program P;
+    program Prg;
     var A, B: Double;
     begin
       A := 10.0;
@@ -1179,7 +1179,7 @@ const
     ''';
 
   SrcDoubleCompare = '''
-    program P;
+    program Prg;
     var A, B: Double;
     begin
       A := 1.5;
@@ -1196,7 +1196,7 @@ const
     ''';
 
   SrcDoubleWriteLn = '''
-    program P;
+    program Prg;
     var D: Double;
     begin
       D := 1.5;
@@ -1206,7 +1206,7 @@ const
     ''';
 
   SrcSingleGlobal = '''
-    program P;
+    program Prg;
     var S: Single;
     begin
       S := 1.5;
@@ -1215,7 +1215,7 @@ const
     ''';
 
   SrcDoubleFuncParam = '''
-    program P;
+    program Prg;
     function Scale(V: Double; Factor: Double): Double;
     begin
       Result := V * Factor
@@ -1226,7 +1226,7 @@ const
     ''';
 
   SrcDoubleFuncReturn = '''
-    program P;
+    program Prg;
     function Half(V: Double): Double;
     begin
       Result := V / 2.0
@@ -1582,14 +1582,14 @@ end;
 
 const
   SrcStrWriteLnLiteral = '''
-    program P;
+    program Prg;
     begin
       WriteLn('hello')
     end.
     ''';
 
   SrcStrAssignAndWrite = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := 'world';
@@ -1598,7 +1598,7 @@ const
     ''';
 
   SrcStrConcat = '''
-    program P;
+    program Prg;
     var A, B, C: string;
     begin
       A := 'foo';
@@ -1612,7 +1612,7 @@ const
     must lower to _Chr (string pointer), not treat N as the pointer itself (the
     latter crashed: a raw integer fed into _StringAddRef). }
   SrcChrConcat = '''
-    program P;
+    program Prg;
     var
       S: string;
       I: Integer;
@@ -1631,7 +1631,7 @@ const
     ''';
 
   SrcStrLength = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := 'hello';
@@ -1640,7 +1640,7 @@ const
     ''';
 
   SrcStrPos = '''
-    program P;
+    program Prg;
     var S, Sub: string;
     begin
       S   := 'hello world';
@@ -1650,7 +1650,7 @@ const
     ''';
 
   SrcStrCopy = '''
-    program P;
+    program Prg;
     var S, T: string;
     begin
       S := 'hello';
@@ -1660,7 +1660,7 @@ const
     ''';
 
   SrcStrUpperCase = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := 'hello';
@@ -1669,7 +1669,7 @@ const
     ''';
 
   SrcStrIntToStr = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := IntToStr(42);
@@ -1678,7 +1678,7 @@ const
     ''';
 
   SrcStrStrToInt = '''
-    program P;
+    program Prg;
     var N: Integer;
     begin
       N := StrToInt('123');
@@ -1687,7 +1687,7 @@ const
     ''';
 
   SrcStrParam = '''
-    program P;
+    program Prg;
     function Greet(Name: string): string;
     begin
       Result := 'Hello ' + Name
@@ -1698,7 +1698,7 @@ const
     ''';
 
   SrcStrFuncReturn = '''
-    program P;
+    program Prg;
     function Twice(S: string): string;
     begin
       Result := S + S
@@ -1709,7 +1709,7 @@ const
     ''';
 
   SrcStrDelete = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := 'Hello World';
@@ -1719,7 +1719,7 @@ const
     ''';
 
   SrcStrSetLength = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := 'Hello';
@@ -1729,7 +1729,7 @@ const
     ''';
 
   SrcStrSubscript = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := 'ABC';
@@ -1829,7 +1829,7 @@ end;
 
 const
   SrcStrSameText = '''
-    program P;
+    program Prg;
     var S, T: string;
     begin
       S := 'Hello';
@@ -1839,7 +1839,7 @@ const
     ''';
 
   SrcFormatIntArg = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := Format('val=%d', 42);
@@ -1848,7 +1848,7 @@ const
     ''';
 
   SrcFormatStrArg = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := Format('hello %s', 'world');
@@ -1857,7 +1857,7 @@ const
     ''';
 
   SrcFormatMixedArgs = '''
-    program P;
+    program Prg;
     var S: string;
     begin
       S := Format('%s=%d', 'Alice', 30);
@@ -1866,7 +1866,7 @@ const
     ''';
 
   SrcFormatFuncCallArg = '''
-    program P;
+    program Prg;
     function GetName: string;
     begin
       Result := 'Bob'
@@ -1881,7 +1881,7 @@ const
     ''';
 
   SrcConcatWithInt = '''
-    program P;
+    program Prg;
     begin
       WriteLn('x=' + IntToStr(7))
     end.
@@ -1932,7 +1932,7 @@ end;
 const
   SrcLocalDynDirty =
     '''
-    program P;
+    program Prg;
     procedure Dirty();
     var
       A: array[0..63] of Int64;
@@ -1966,7 +1966,7 @@ end;
 const
   SrcExcBase =
     '''
-        program P;
+        program Prg;
         type
           Exception = class
             FMessage: string;
@@ -1977,7 +1977,7 @@ const
     ''';
 
   SrcTryFinallyNormal = '''
-    program P;
+    program Prg;
     begin
       try
         WriteLn('in_try')
@@ -1988,7 +1988,7 @@ const
     ''';
 
   SrcTryFinallyNested = '''
-    program P;
+    program Prg;
     begin
       try
         try
@@ -2003,7 +2003,7 @@ const
     ''';
 
   SrcExitThroughFinally = '''
-    program P;
+    program Prg;
     procedure Run;
     begin
       try
@@ -2021,7 +2021,7 @@ const
     ''';
 
   SrcBreakThroughFinally = '''
-    program P;
+    program Prg;
     var I: Integer;
     begin
       for I := 0 to 3 do
@@ -2038,7 +2038,7 @@ const
     ''';
 
   SrcTryExceptBare = '''
-    program P;
+    program Prg;
     var X: Integer;
     begin
       X := 0;
@@ -2118,7 +2118,7 @@ const
     ''';
 
   SrcExitNestedFinally = '''
-    program P;
+    program Prg;
     procedure Run;
     begin
       try
@@ -2208,7 +2208,7 @@ end;
 const
   SrcOASum =
     '''
-    program P;
+    program Prg;
     function Sum(const A: array of Integer): Integer;
     var I: Integer;
     begin
@@ -2223,7 +2223,7 @@ const
 
   SrcOAHighLow =
     '''
-    program P;
+    program Prg;
     procedure PrintBounds(const A: array of Integer);
     begin
       WriteLn(Low(A));
@@ -2236,7 +2236,7 @@ const
 
   SrcOALength =
     '''
-    program P;
+    program Prg;
     function Count(const A: array of Integer): Integer;
     begin
       Result := Length(A)
@@ -2248,7 +2248,7 @@ const
 
   SrcStaticToOpenLen =
     '''
-    program P;
+    program Prg;
     procedure PrintLen(const A: array of Integer);
     begin
       WriteLn(Length(A))
@@ -2261,7 +2261,7 @@ const
 
   SrcStaticToOpenSum =
     '''
-    program P;
+    program Prg;
     function Sum(const A: array of Integer): Integer;
     var I: Integer;
     begin
@@ -2280,7 +2280,7 @@ const
 
   SrcStaticToOpenNested =
     '''
-    program P;
+    program Prg;
     function Sum(const A: array of Integer): Integer;
     var I: Integer;
     begin
@@ -2303,7 +2303,7 @@ const
 
   SrcDynArrayBasic =
     '''
-    program P;
+    program Prg;
     var A: array of Integer;
         I: Integer;
     begin
@@ -2318,7 +2318,7 @@ const
 
   SrcDynArrayLenHigh =
     '''
-    program P;
+    program Prg;
     var A: array of Integer;
     begin
       SetLength(A, 5);
@@ -2333,7 +2333,7 @@ const
     oracle. }
   SrcIntfZeroArg =
     '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         function Greet: Integer;
@@ -2355,7 +2355,7 @@ const
 
   SrcIntfArg =
     '''
-    program P;
+    program Prg;
     type
       IShape = interface
         function Area(Scale: Integer): Integer;
@@ -2377,7 +2377,7 @@ const
 
   SrcIntfProc =
     '''
-    program P;
+    program Prg;
     type
       IShape = interface
         procedure Describe;
@@ -2399,7 +2399,7 @@ const
 
   SrcIntfCopy =
     '''
-    program P;
+    program Prg;
     type
       IShape = interface
         function Area: Integer;
@@ -2422,7 +2422,7 @@ const
 
   SrcIntfAsCast =
     '''
-    program P;
+    program Prg;
     type
       IShape = interface
         function Area: Integer;
@@ -2453,7 +2453,7 @@ const
 
   SrcIntfNilClear =
     '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         function Greet: Integer;
@@ -2478,7 +2478,7 @@ const
   { Regression (issue #64): interface-typed field 'im' in a class with a
     same-named global of a different type. }
   SrcNativeIntfFieldShadowsGlobal = '''
-    program P;
+    program Prg;
     type
       Iprinter = interface
         procedure print;
@@ -2517,7 +2517,7 @@ const
 
   { 1. Interface arg to a standalone procedure. }
   SrcNativeIntfParamProc = '''
-    program P;
+    program Prg;
     type
       IPrinter = interface
         procedure Print;
@@ -2541,7 +2541,7 @@ const
 
   { 2. Interface arg to a class method. }
   SrcNativeIntfParamMethod = '''
-    program P;
+    program Prg;
     type
       IPrinter = interface
         procedure Print;
@@ -2570,7 +2570,7 @@ const
 
   { 3. Interface arg to a constructor. }
   SrcNativeIntfParamCtor = '''
-    program P;
+    program Prg;
     type
       IPrinter = interface
         procedure Print;
@@ -2603,7 +2603,7 @@ const
 
   { 4. Interface arg to an inherited call. }
   SrcNativeIntfParamInherited = '''
-    program P;
+    program Prg;
     type
       IPrinter = interface
         procedure Print;
@@ -2637,7 +2637,7 @@ const
 
   { 5. Passing a class expression directly as an interface parameter. }
   SrcNativeIntfParamClassExpr = '''
-    program P;
+    program Prg;
     type
       IPrinter = interface
         procedure Print;
@@ -2657,7 +2657,7 @@ const
   { M8 — inherited calls.  An override that chains to the parent body via
     `inherited` must dispatch statically to the parent method. }
   SrcInheritedProc = '''
-    program P;
+    program Prg;
     type
       TBase = class
         procedure Hello; virtual;
@@ -2682,7 +2682,7 @@ const
   { A value-returning `inherited Calc(N)` statement seeds Result with the
     parent's return value (which the override then adjusts). }
   SrcInheritedFunc = '''
-    program P;
+    program Prg;
     type
       TBase = class
         function Calc(N: Integer): Integer; virtual;
@@ -2707,7 +2707,7 @@ const
   { M8 — a var/out parameter to a method call must pass the caller's address so
     the mutation is visible after the call. }
   SrcMethodVarParam = '''
-    program P;
+    program Prg;
     type
       TFoo = class
         procedure Bump(var X: Integer);
@@ -2726,7 +2726,7 @@ const
     ''';
 
   SrcMethodVarSwap = '''
-    program P;
+    program Prg;
     type
       TSwapper = class
         procedure Swap(var A, B: Integer);
@@ -2747,7 +2747,7 @@ const
     ''';
 
   SrcRecordStaticArrayField = '''
-    program P;
+    program Prg;
     type
       TRec = record
         X: Integer;
@@ -2771,7 +2771,7 @@ const
     ''';
 
   SrcArcClassField = '''
-    program P;
+    program Prg;
     type
       TChild = class
         X: Integer;
@@ -2793,7 +2793,7 @@ const
     ''';
 
   SrcArcStringField = '''
-    program P;
+    program Prg;
     type
       THolder = class
         S: string;
@@ -2807,7 +2807,7 @@ const
     ''';
 
   SrcArcClassAssignNil = '''
-    program P;
+    program Prg;
     type
       TThing = class
         destructor Destroy; override;
@@ -2826,7 +2826,7 @@ const
     ''';
 
   SrcArcValueParamString = '''
-    program P;
+    program Prg;
     procedure PrintIt(S: string);
     begin
       WriteLn(S)
@@ -2840,7 +2840,7 @@ const
     ''';
 
   SrcArcValueParamClass = '''
-    program P;
+    program Prg;
     type
       TObj = class
         X: Integer;
@@ -2864,7 +2864,7 @@ const
     must be loaded into %rax AFTER that release, not before.  Previously the
     native backend loaded Result first and returned garbage (e.g. 3 not 55). }
   SrcRetValSurvivesArcRelease = '''
-    program P;
+    program Prg;
     type
       TGreeter = class
         function Greet: Integer;
@@ -2889,7 +2889,7 @@ const
     Exercises the fat-pointer arg ABI at a method call site AND the
     return-value-survives-release fix (the callee releases the interface param). }
   SrcIntfArgToMethod = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         function Greet: Integer;
@@ -2915,7 +2915,7 @@ const
     ''';
 
   SrcIntfFieldAsArg = '''
-    program P;
+    program Prg;
     type
       IVal = interface
         function Get: Integer;
@@ -2943,7 +2943,7 @@ const
     ''';
 
   SrcIntfFieldNilAssign = '''
-    program P;
+    program Prg;
     type
       IVal = interface
         function Get: Integer;
@@ -2975,7 +2975,7 @@ const
     ''';
 
   SrcDynArrayElemArcString = '''
-    program P;
+    program Prg;
     var A: array of String;
     begin
       SetLength(A, 2);
@@ -2990,7 +2990,7 @@ const
     ''';
 
   SrcIntfFuncReturn = '''
-    program P;
+    program Prg;
     type
       IVal = interface
         function Get(): Integer;
@@ -3018,7 +3018,7 @@ const
     ''';
 
   SrcIntfFieldFromFunc = '''
-    program P;
+    program Prg;
     type
       IVal = interface
         function Get(): Integer;
@@ -3057,7 +3057,7 @@ const
     ''';
 
   SrcWeakInterfaceVar = '''
-    program P;
+    program Prg;
     type
       IVal = interface
         function Get(): Integer;
@@ -3090,7 +3090,7 @@ const
     ''';
 
   SrcSretTempFieldRelease = '''
-    program P;
+    program Prg;
     type
       TRec = record
         S: String;
@@ -3114,7 +3114,7 @@ const
     element back after the field assignment — a dropped/garbled buffer would
     diverge from the QBE backend's output. }
   SrcArcDynArrayField = '''
-    program P;
+    program Prg;
     type
       THolder = class
         Data: array of Integer;
@@ -3144,7 +3144,7 @@ const
     class field — H.G.Greet() — including a method that takes an argument.  The
     receiver's fat pointer must be loaded from the field's contiguous memory. }
   SrcIntfFieldDispatch = '''
-    program P;
+    program Prg;
     type
       IShape = interface
         function Area(Scale: Integer): Integer;
@@ -3170,7 +3170,7 @@ const
     dispatch on the local.  Exercises the interface-to-interface assignment with
     a field-access source. }
   SrcIntfFieldReadIntoLocal = '''
-    program P;
+    program Prg;
     type
       IShape = interface
         function Area(Scale: Integer): Integer;
@@ -3193,7 +3193,7 @@ const
     ''';
 
   SrcArcInterfaceField = '''
-    program P;
+    program Prg;
     type
       IGreeter = interface
         function Greet: Integer;
@@ -3233,7 +3233,7 @@ const
     field and release the inner class — firing its destructor exactly once
     (f74e5cc nested-record recursion). }
   SrcArcNestedRecordField = '''
-    program P;
+    program Prg;
     type
       TInner = class
         destructor Destroy; override;
@@ -3266,7 +3266,7 @@ const
     (96514ee).  A double-retain would leak; a missing retain would free early
     and corrupt the read-back. }
   SrcArcStringReturnToField = '''
-    program P;
+    program Prg;
     type
       THolder = class
         S: string;
@@ -3288,7 +3288,7 @@ const
     retain the new value and release the old, so reassigning the field does not
     leak or use-after-free (ARC on the ImplicitSelfField path). }
   SrcArcImplicitSelfStringField = '''
-    program P;
+    program Prg;
     type
       THolder = class
         Name: string;
@@ -3308,7 +3308,7 @@ const
     ''';
 
   SrcAddrOfLocalVar = '''
-    program P;
+    program Prg;
     var
       X: Integer;
       P: ^Integer;
@@ -3321,7 +3321,7 @@ const
     ''';
 
   SrcAddrOfStaticArrayElem = '''
-    program P;
+    program Prg;
     var
       A: array[0..3] of Integer;
       P: ^Integer;
@@ -3336,7 +3336,7 @@ const
     ''';
 
   SrcAddrOfDynArrayElem = '''
-    program P;
+    program Prg;
     var
       A: array of Integer;
       P: ^Integer;
@@ -3351,7 +3351,7 @@ const
     ''';
 
   SrcAddrOfRecFieldArrElem = '''
-    program P;
+    program Prg;
     type
       TRec = record
         Items: array of Integer;
@@ -3372,7 +3372,7 @@ const
     ''';
 
   SrcAddrOfMethodPtr = '''
-    program P;
+    program Prg;
     type
       TAddProc = procedure(A, B: Integer) of object;
       TCalc = class
@@ -3392,7 +3392,7 @@ const
     ''';
 
   SrcBitwiseNotInt = '''
-    program P;
+    program Prg;
     var I: Integer;
     begin
       I := 0;
@@ -3401,7 +3401,7 @@ const
     ''';
 
   SrcBitwiseNotBitmask = '''
-    program P;
+    program Prg;
     const MASK = 3;
     var Flags: Integer;
     begin
@@ -3412,7 +3412,7 @@ const
     ''';
 
   SrcGenericRecordMethod = '''
-    program P;
+    program Prg;
     type
       THolder<T> = record
         Value: T;
@@ -3430,7 +3430,7 @@ const
     ''';
 
   SrcGenericClassMethod = '''
-    program P;
+    program Prg;
     type
       TBox<T> = class
         FVal: T;
@@ -3453,7 +3453,7 @@ const
     ''';
 
   SrcGenericFuncStandalone = '''
-    program P;
+    program Prg;
     function Identity<T>(X: T): T;
     begin
       Result := X
@@ -3464,7 +3464,7 @@ const
     ''';
 
   SrcGenericClassInterface = '''
-    program P;
+    program Prg;
     type
       IValue = interface
         function GetValue: Integer;
@@ -3834,7 +3834,7 @@ begin
     end.
     ''';
   ProgSrc := '''
-    program P;
+    program Prg;
     uses mu_pf;
     begin WriteLn(Doubled(21)); end.
     ''';
@@ -3863,7 +3863,7 @@ begin
     end.
     ''';
   ProgSrc := '''
-    program P;
+    program Prg;
     uses mu_sf;
     begin WriteLn(Greeting('World')); end.
     ''';
@@ -3902,7 +3902,7 @@ begin
     end.
     ''';
   ProgSrc := '''
-    program P;
+    program Prg;
     uses mu_cl;
     var C: TCounter;
     begin
@@ -3942,7 +3942,7 @@ begin
     end.
     ''';
   ProgSrc := '''
-    program P;
+    program Prg;
     uses mu_if;
     var S: ISpeaker;
     begin
@@ -3978,7 +3978,7 @@ begin
     end.
     ''';
   ProgSrc := '''
-    program P;
+    program Prg;
     uses mu_gi;
     begin
       WriteLn(GLabel, ' ', GCounter);
@@ -4001,7 +4001,7 @@ procedure TE2ENativeTests.TestRun_Native_RecordParam_ReadOnly;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TRec = record S: string; end;
     procedure Show(R: TRec);
     begin WriteLn('in: ', R.S) end;
@@ -4019,7 +4019,7 @@ procedure TE2ENativeTests.TestRun_Native_RecordParam_Mutate;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TR = record S: string; end;
     procedure Mutate(R: TR); begin R.S := 'new' end;
     var W: TR;
@@ -4036,7 +4036,7 @@ procedure TE2ENativeTests.TestRun_Native_RecordParam_ThreeStrings;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TR = record A: string; B: string; C: string; end;
     procedure Mutate(R: TR); begin R.A := 'changed' end;
     var W: TR;
@@ -4055,7 +4055,7 @@ procedure TE2ENativeTests.TestRun_Native_RecordParam_IntOnly;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TR = record A: Integer; B: Integer; end;
     procedure Show(R: TR); begin WriteLn(R.A + R.B) end;
     var W: TR;
@@ -4068,7 +4068,7 @@ procedure TE2ENativeTests.TestRun_Native_RecordParam_InlineSretArg;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TInner = record N: string; end;
          TOuter = record S: string; Inner: TInner; end;
     function MakeOuter: TOuter;
@@ -4086,7 +4086,7 @@ procedure TE2ENativeTests.TestRun_Native_RecordParam_ConstSkipsArc;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TR = record S: string; end;
     procedure Show(const R: TR);
     begin WriteLn(R.S) end;
@@ -4104,7 +4104,7 @@ procedure TE2ENativeTests.TestRun_Native_ShortCircuit_AndSkipsRhs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var X: Integer;
     begin
       X := 5;
@@ -4125,7 +4125,7 @@ procedure TE2ENativeTests.TestRun_Native_ShortCircuit_OrSkipsRhs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var X: Integer;
     begin
       X := 5;
@@ -4146,7 +4146,7 @@ procedure TE2ENativeTests.TestRun_Native_ShortCircuit_AndNilGuard;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TFoo = class
       public
         N: Integer;
@@ -4175,7 +4175,7 @@ procedure TE2ENativeTests.TestRun_Native_ProceduralParam;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TIntFunc = function(X: Integer): Integer;
     function Twice(X: Integer): Integer;
     begin Result := X * 2 end;
@@ -4192,7 +4192,7 @@ procedure TE2ENativeTests.TestRun_Native_IsExpr_Class;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type
       TBase = class public N: Integer; end;
       TChild = class(TBase) public S: string; end;
@@ -4212,7 +4212,7 @@ procedure TE2ENativeTests.TestRun_Native_AsExpr_Class;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type
       TBase = class public N: Integer; end;
       TChild = class(TBase) public S: string; end;
@@ -4231,7 +4231,7 @@ procedure TE2ENativeTests.TestRun_Native_SupportsExpr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type
       IGreet = interface procedure Greet; end;
       TFoo = class(IGreet) public procedure Greet; end;
@@ -4249,7 +4249,7 @@ procedure TE2ENativeTests.TestRun_Native_IndirectFuncCallExpr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TMapper = function(X: Integer): Integer;
     function Triple(X: Integer): Integer;
     begin Result := X * 3 end;
@@ -4266,7 +4266,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_Ord;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TColor = (Red, Green, Blue);
     var C: TColor;
     begin
@@ -4282,7 +4282,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_Assigned;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TObj = class end;
     var O: TObj;
     begin
@@ -4299,7 +4299,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_Abs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     begin
       WriteLn(Abs(-42));
       WriteLn(Abs(7));
@@ -4313,7 +4313,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_Halt;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     begin
       WriteLn('before');
       Halt(42);
@@ -4327,7 +4327,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_RoundTrunc;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var D: Double;
     begin
       D := 3.7;
@@ -4342,7 +4342,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_CompareStr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     begin
       if CompareStr('abc', 'abc') = 0 then WriteLn('eq') else WriteLn('ne');
       if CompareStr('abc', 'abd') < 0 then WriteLn('lt') else WriteLn('ge')
@@ -4355,7 +4355,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_UpCase;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     begin
       WriteLn(UpCase(97));
       WriteLn(UpCase(90))
@@ -4368,7 +4368,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_Int64ToStr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var N: Int64;
     begin
       N := 9876543210;
@@ -4382,7 +4382,7 @@ procedure TE2ENativeTests.TestRun_Native_NestedProc_ReadCapture;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     procedure Outer;
     var X: Integer;
       procedure Inner;
@@ -4402,7 +4402,7 @@ procedure TE2ENativeTests.TestRun_Native_NestedProc_WriteCapture;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     procedure Outer;
     var X: Integer;
       procedure Inner;
@@ -4423,7 +4423,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_SinCos;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var R: Integer;
     begin
       R := Round(Sin(0.0));
@@ -4439,7 +4439,7 @@ procedure TE2ENativeTests.TestRun_Native_Builtin_SqrtDouble;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var R: Integer;
     begin
       R := Round(Sqrt(4.0));
@@ -4453,7 +4453,7 @@ procedure TE2ENativeTests.TestRun_Native_DoublePtrWrite;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var D: Double; PD: ^Double;
     begin
       D := 0.0;
@@ -4469,7 +4469,7 @@ procedure TE2ENativeTests.TestRun_Native_SinglePtrWrite_NoAdjacentClobber;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var A: Single; B: Single; PA: ^Single;
     begin
       A := 0.0;
@@ -4486,7 +4486,7 @@ procedure TE2ENativeTests.TestRun_Native_IncDec_RecordField;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TRec = record X: Integer; Y: Integer; end;
     var R: TRec;
     begin
@@ -4506,7 +4506,7 @@ procedure TE2ENativeTests.TestRun_Native_IncDec_PtrDeref;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var N: Integer;
     var P: ^Integer;
     begin
@@ -4524,7 +4524,7 @@ procedure TE2ENativeTests.TestRun_Native_TypeCast_PointerClass;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     var N: Integer; P: Pointer;
     begin
       N := 42;
@@ -4539,7 +4539,7 @@ procedure TE2ENativeTests.TestRun_Native_PropertyRead_Simple;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TBox = class
       FVal: Integer;
       constructor Create(V: Integer);
@@ -4564,7 +4564,7 @@ procedure TE2ENativeTests.TestRun_Native_PropertyRead_Indexed;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TArr = class
       FA: Integer; FB: Integer;
       constructor Create;
@@ -4590,7 +4590,7 @@ procedure TE2ENativeTests.TestRun_Native_PropertyWrite_Simple;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TBox = class
       FVal: Integer;
       procedure SetVal(V: Integer);
@@ -4616,7 +4616,7 @@ procedure TE2ENativeTests.TestRun_Native_PropertyWrite_Indexed;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TArr = class
       FA: Integer; FB: Integer;
       procedure SetItem(I: Integer; V: Integer);
@@ -4644,7 +4644,7 @@ procedure TE2ENativeTests.TestRun_Native_ClassName;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TFoo = class end;
     var F: TFoo;
     begin
@@ -4660,7 +4660,7 @@ procedure TE2ENativeTests.TestRun_Native_MethodCall_ManyArgs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TCalc = class
       function Sum6(A: Integer; B: Integer; C: Integer;
         D: Integer; E: Integer; F: Integer): Integer;
@@ -5145,7 +5145,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_RcInt2_TwoInt64;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type T2 = record A, B: Int64; end;
     function MakeIt(A, B: Int64): T2;
     begin
@@ -5165,7 +5165,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_RcSSE1_Double;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TF = record V: Double; end;
     function MakeIt(V: Double): TF;
     begin
@@ -5184,7 +5184,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_RcSSE1_Single;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TF = record V: Single; end;
     function MakeIt(V: Single): TF;
     begin
@@ -5203,7 +5203,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_RcSSE2_TwoDouble;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type T2D = record A, B: Double; end;
     function MakeIt(A, B: Double): T2D;
     begin
@@ -5224,7 +5224,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_RcIntSSE;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TM = record I: Int64; D: Double; end;
     function MakeIt(I: Int64; D: Double): TM;
     begin
@@ -5245,7 +5245,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_RcSSEInt;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TM = record D: Double; I: Int64; end;
     function MakeIt(D: Double; I: Int64): TM;
     begin
@@ -5266,7 +5266,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_Nested_RcInt2;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type
       TInner = record X, Y: Integer; end;
       TOuter = record A: TInner; B: Integer; end;
@@ -5289,7 +5289,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_Method_RcInt1;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type
       TPoint = record X, Y: Integer; end;
       TFactory = class
@@ -5317,7 +5317,7 @@ procedure TE2ENativeTests.TestRun_Native_RecReturn_ManagedStaysSret;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type TS = record S: string; end;
     function MakeIt(S: string): TS;
     begin
@@ -5335,7 +5335,7 @@ end;
 procedure TE2ENativeTests.TestRun_Native_RecordSret_OutParam;
 begin
   AssertRunsOnAll('''
-    program P;
+    program Prg;
     type
       TOS = (osLinux, osFreeBSD, osWindows);
       TCPU = (cpuX86_64, cpuI386, cpuArm64);
@@ -5381,7 +5381,7 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_StaticArray_ComputedIndex;
 const Src = '''
-    program P;
+    program Prg;
     const
       Names: array[0..3] of string = ('alpha', 'beta', 'gamma', 'delta');
     var I: Integer;
@@ -5397,7 +5397,7 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_Metaclass_BareClassRef;
 const Src = '''
-    program P;
+    program Prg;
     type
       TFoo = class
       public
@@ -5489,7 +5489,7 @@ begin
     end.
     ''';
   ProgSrc := '''
-    program P;
+    program Prg;
     uses mu_mc;
     type
       TGadget = class(TWidget)
@@ -5523,7 +5523,7 @@ end;
 
 procedure TE2ENativeTests.TestRun_Native_OpenArrayLiteral_AfterOtherArgs;
 const Src = '''
-    program P;
+    program Prg;
     procedure Inner(const AArgs: array of string);
     var I: Integer;
     begin

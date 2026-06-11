@@ -32,6 +32,18 @@ type
     { Const redeclared with same name in same block is a duplicate }
     procedure TestConst_Duplicate_RaisesError;
 
+    { Module names are reserved identifiers (issue #84).  The program
+      name and the names of directly used units cannot be redeclared
+      by any top-level declaration, matching FPC and Delphi.  Inner
+      scopes may shadow them. }
+    procedure TestModuleName_RedeclaredAsVar_RaisesError;
+    procedure TestModuleName_RedeclaredAsConst_RaisesError;
+    procedure TestModuleName_RedeclaredAsType_RaisesError;
+    procedure TestModuleName_RedeclaredAsProc_RaisesError;
+    procedure TestModuleName_LocalShadow_OK;
+    procedure TestModuleName_NotUsableAsExpression_RaisesError;
+    procedure TestUsedUnitName_RedeclaredAsVar_RaisesError;
+
     { Expression type inference }
     procedure TestExpr_IntLiteral_TypeIsInteger;
     procedure TestExpr_StringLiteral_TypeIsString;
@@ -181,6 +193,51 @@ procedure TSemanticTests.TestConst_Duplicate_RaisesError;
 begin
   AnalyseExpectError(
     'program P; const b = 42; b = 99; begin end.');
+end;
+
+{ ------------------------------------------------------------------ }
+{ Module names are reserved identifiers (issue #84)                   }
+{ ------------------------------------------------------------------ }
+
+procedure TSemanticTests.TestModuleName_RedeclaredAsVar_RaisesError;
+begin
+  AnalyseExpectError('program P; var P: Integer; begin end.');
+end;
+
+procedure TSemanticTests.TestModuleName_RedeclaredAsConst_RaisesError;
+begin
+  AnalyseExpectError('program P; const P = 1; begin end.');
+end;
+
+procedure TSemanticTests.TestModuleName_RedeclaredAsType_RaisesError;
+begin
+  AnalyseExpectError('program P; type P = record X: Integer; end; begin end.');
+end;
+
+procedure TSemanticTests.TestModuleName_RedeclaredAsProc_RaisesError;
+begin
+  AnalyseExpectError('program P; procedure P; begin end; begin end.');
+end;
+
+procedure TSemanticTests.TestModuleName_LocalShadow_OK;
+begin
+  { An inner scope may shadow the module name, as in FPC/Delphi. }
+  Analyse(
+    'program P; procedure Q; var P: Integer; begin P := 1; end; ' +
+    'begin Q(); end.'
+  ).Free();
+end;
+
+procedure TSemanticTests.TestModuleName_NotUsableAsExpression_RaisesError;
+begin
+  { The module name is reserved but is not a value — using it in an
+    expression resolves to nothing. }
+  AnalyseExpectError('program P; var x: Integer; begin x := P; end.');
+end;
+
+procedure TSemanticTests.TestUsedUnitName_RedeclaredAsVar_RaisesError;
+begin
+  AnalyseExpectError('program P; uses foo; var foo: Integer; begin end.');
 end;
 
 { ------------------------------------------------------------------ }

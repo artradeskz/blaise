@@ -87,7 +87,7 @@ implementation
 const
   SrcBase =
     '''
-        program P;
+        program Prg;
         type
           TAnimal = class
             procedure Speak; virtual; begin end;
@@ -97,7 +97,7 @@ const
 
   SrcInherit =
     '''
-        program P;
+        program Prg;
         type
           TAnimal = class
             procedure Speak; virtual; begin end;
@@ -110,7 +110,7 @@ const
 
   SrcBaseWithField =
     '''
-        program P;
+        program Prg;
         type
           TPoint = class
             X: Integer;
@@ -125,7 +125,7 @@ const
 
   SrcStaticMethod =
     '''
-        program P;
+        program Prg;
         type
           TFoo = class
             procedure Bar; begin end;
@@ -139,7 +139,7 @@ const
 
   SrcVirtualCall =
     '''
-        program P;
+        program Prg;
         type
           TAnimal = class
             procedure Speak; virtual; begin end;
@@ -290,7 +290,7 @@ var
 begin
   Src :=
     '''
-        program P;
+        program Prg;
         type
           TBase = class
           end;
@@ -402,7 +402,7 @@ var
 begin
   SrcWith2Virtuals :=
     '''
-        program P;
+        program Prg;
         type
           TAnimal = class
             procedure Speak; virtual; begin end;
@@ -494,7 +494,7 @@ var
 begin
   L := TLexer.Create(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -524,7 +524,7 @@ var
 begin
   L := TLexer.Create(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -554,7 +554,7 @@ begin
   GotError := False;
   L := TLexer.Create(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -583,7 +583,7 @@ procedure TVTableTests.TestSemantic_AbstractMethod_NoBody_OK;
 begin
   AnalyseExpectOK(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -596,7 +596,7 @@ procedure TVTableTests.TestSemantic_ConcreteSubclass_OK;
 begin
   AnalyseExpectOK(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -622,7 +622,7 @@ begin
   GotError := False;
   L := TLexer.Create(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -655,7 +655,7 @@ var IR: string;
 begin
   IR := GenIR(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -673,7 +673,7 @@ var IR: string;
 begin
   IR := GenIR(
     '''
-    program P;
+    program Prg;
     type
       TBase = class
         procedure Foo; virtual; abstract;
@@ -691,7 +691,7 @@ var IR: string;
 begin
   IR := GenIR(
     '''
-    program P;
+    program Prg;
     type
       TShape = class
         procedure Draw; virtual; abstract;
@@ -712,7 +712,7 @@ var IR: string;
 begin
   IR := GenIR(
     '''
-    program P;
+    program Prg;
     type
       IShape = interface
         procedure Draw;
