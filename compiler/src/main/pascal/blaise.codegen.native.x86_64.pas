@@ -6461,7 +6461,10 @@ var
   HK:       TList<Integer>;
   HTotal:   Integer;
 begin
-  { Interface method dispatch (statement position): route through the itab. }
+  { Interface method dispatch (statement position): route through the itab.
+    Pass ObjExpr so receivers that are interface-typed fields (H.S.Note())
+    load obj/itab from the field's fat pointer instead of bogus _obj/_itab
+    operands built from an empty ObjectName. }
   if (ACall.ResolvedClassType <> nil) and
      (ACall.ResolvedClassType.Kind = tyInterface) then
   begin
@@ -6470,7 +6473,8 @@ begin
         TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args)
     else
       Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal,
-        TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args);
+        TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args,
+        ACall.ObjExpr);
     Exit;
   end;
 

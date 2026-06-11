@@ -5434,6 +5434,23 @@ begin
       SemanticError(
         Format('Receiver of ''.%s'' must be a class or interface', [ACall.Name]),
         ACall.Line, ACall.Col);
+    { Interface-typed receiver expression (e.g. a non-Self interface field:
+      H.S.Note();) — dispatch through the itab, mirroring the implicit-Self
+      interface path below.  Codegen resolves obj/itab from the receiver
+      expression's fat pointer. }
+    if ObjType.Kind = tyInterface then
+    begin
+      if not TInterfaceTypeDesc(ObjType).HasMethod(ACall.Name) then
+        SemanticError(
+          Format('Interface ''%s'' has no method ''%s''',
+            [ObjType.Name, ACall.Name]),
+          ACall.Line, ACall.Col);
+      for I := 0 to ACall.Args.Count - 1 do
+        AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+      ACall.ResolvedClassType := ObjType;
+      ACall.ResolvedMethod    := nil;
+      Exit;
+    end;
     RT := TRecordTypeDesc(ObjType);
     if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) and
        (FindMethodDecl(RT.Name, 'Free') = nil) then

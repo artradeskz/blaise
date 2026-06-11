@@ -84,6 +84,10 @@ type
       implementing interfaces must link when units are in the uses chain
       (program-scope symbols carry no unit prefix). }
     procedure TestRun_InterfaceProperty_CaseMismatchAndUses;
+
+    { Statement-position method call through a non-Self interface field:
+      H.S.Note(); — expression position already worked. }
+    procedure TestRun_InterfaceFieldCall_StatementPosition;
   end;
 
 implementation
@@ -1357,6 +1361,44 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcIntfPropCaseUses, Output, RCode, False));
   AssertEquals('exit code (native)', 0, RCode);
   AssertEquals('output (native)', '13' + LE + '29' + LE, Output);
+end;
+
+const
+  SrcIntfFieldCallStmt = '''
+    program P;
+    type
+      IShape = interface
+        procedure Note();
+        function Area(K: Integer): Integer;
+      end;
+      TSq = class(TObject, IShape)
+        procedure Note();
+        function Area(K: Integer): Integer;
+      end;
+      THolder = class
+        S: IShape;
+      end;
+    procedure TSq.Note();
+    begin
+      writeln('note');
+    end;
+    function TSq.Area(K: Integer): Integer;
+    begin
+      Result := K * K;
+    end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.S := TSq.Create();
+      writeln(H.S.Area(3));
+      H.S.Note();
+    end.
+    ''';
+
+procedure TE2EClasses2Tests.TestRun_InterfaceFieldCall_StatementPosition;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcIntfFieldCallStmt, '9' + LE + 'note' + LE, 0);
 end;
 
 initialization
