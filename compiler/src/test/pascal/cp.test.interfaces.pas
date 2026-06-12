@@ -123,6 +123,13 @@ type
     procedure TestCodegen_InterfaceResult_NilCompare_UsesObjSlot;
     procedure TestCodegen_InterfaceLocal_NilCompare_UsesObjSlot;
     procedure TestCodegen_IntfMethodReturningIntf_AssignsToSplitSlots;
+
+    { ------------------------------------------------------------------ }
+    { Regression — itab-dispatch argument ABI; discarded sret returns     }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_IntfDispatch_RecordArg_PassesAggregate;
+    procedure TestCodegen_IntfDispatch_OutString_PassesSlotAddr;
+    procedure TestCodegen_DiscardedIntfReturnStmt_GetsSretAndRelease;
   end;
 
 implementation
@@ -1625,6 +1632,146 @@ begin
     Pos(', %_var_W_itab', IR) > 0);
   AssertFalse('must not store into a non-existent single %_var_W slot',
     Pos(', %_var_W' + #10, IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Regression — itab-dispatch argument ABI; discarded sret returns     }
+{ ------------------------------------------------------------------ }
+
+const
+  { Record by const through itab dispatch — must use the same aggregate
+    param type (:_ffi_TOpts) as a direct call, not a single w/l scalar. }
+  SrcIntfDispatchRecordArg =
+    '''
+        program P;
+        type
+          TOpts = record
+            A: Integer;
+            B: Integer;
+            C: Integer;
+          end;
+          ICfg = interface
+            procedure Configure(const Opts: TOpts; X: Integer);
+          end;
+          TCfg = class(TObject, ICfg)
+            procedure Configure(const Opts: TOpts; X: Integer);
+          end;
+        procedure TCfg.Configure(const Opts: TOpts; X: Integer);
+        begin
+          WriteLn(X)
+        end;
+        var
+          C: ICfg;
+          O: TOpts;
+        begin
+          C := TCfg.Create();
+          C.Configure(O, 77)
+        end.
+        ''';
+
+  { out-string through itab dispatch — must pass the slot ADDRESS
+    (var-param rule), not the loaded value. }
+  SrcIntfDispatchOutString =
+    '''
+        program P;
+        type
+          IName = interface
+            procedure GetName(out AName: string);
+          end;
+          TNamed = class(TObject, IName)
+            procedure GetName(out AName: string);
+          end;
+        procedure TNamed.GetName(out AName: string);
+        begin
+          AName := 'x'
+        end;
+        procedure Run();
+        var
+          N: IName;
+          S: string;
+        begin
+          N := TNamed.Create();
+          N.GetName(S)
+        end;
+        begin
+          Run()
+        end.
+        ''';
+
+  { Interface-returning itab call discarded in statement position — the
+    call must receive a throwaway sret buffer as hidden first arg and the
+    returned obj must be released. }
+  SrcDiscardedIntfReturnStmt =
+    '''
+        program P;
+        type
+          IWidget = interface
+            function Tag(): Integer;
+          end;
+          IDriver = interface
+            function MakeWidget(N: Integer): IWidget;
+          end;
+          TWidget = class(TObject, IWidget)
+            function Tag(): Integer;
+          end;
+          TDrv = class(TObject, IDriver)
+            function MakeWidget(N: Integer): IWidget;
+          end;
+        function TWidget.Tag(): Integer;
+        begin
+          Result := 1
+        end;
+        function TDrv.MakeWidget(N: Integer): IWidget;
+        begin
+          Result := TWidget.Create()
+        end;
+        var
+          D: IDriver;
+        begin
+          D := TDrv.Create();
+          D.MakeWidget(5)
+        end.
+        ''';
+
+procedure TInterfaceTests.TestCodegen_IntfDispatch_RecordArg_PassesAggregate;
+var
+  IR: string;
+  CallPos: Integer;
+  CallLine: string;
+begin
+  IR := GenIR(SrcIntfDispatchRecordArg);
+  { The dispatch site is the only INDIRECT call ('call %fptr(...)'); the
+    callee signature also mentions :_ffi_TOpts, so scope the check to the
+    indirect call line. }
+  CallPos := Pos('call %', IR);
+  AssertTrue('indirect dispatch call present', CallPos > 0);
+  CallLine := Copy(IR, CallPos, Pos(')', Copy(IR, CallPos, MaxInt)) + 1);
+  AssertTrue('record arg uses the aggregate FFI type at the dispatch site: '
+    + CallLine, Pos(':_ffi_TOpts ', CallLine) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_IntfDispatch_OutString_PassesSlotAddr;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcIntfDispatchOutString);
+  AssertTrue('out-string arg passes the slot address',
+    Pos(', l %_var_S', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_DiscardedIntfReturnStmt_GetsSretAndRelease;
+var
+  IR: string;
+  CallPos: Integer;
+begin
+  IR := GenIR(SrcDiscardedIntfReturnStmt);
+  { The dispatch call must carry a hidden sret buffer; the buffer alloc and
+    a release of the returned obj must both be present in main. }
+  CallPos := Pos('alloc8 16', IR);
+  AssertTrue('throwaway sret buffer allocated for the discarded call',
+    CallPos > 0);
+  AssertTrue('returned obj released after the discarded call',
+    Pos('call $_ClassRelease', Copy(IR, CallPos, MaxInt)) > 0);
 end;
 
 initialization

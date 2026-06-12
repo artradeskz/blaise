@@ -33,6 +33,11 @@ type
     procedure TestRun_StaticArrayOfInterface_FatPointer;
     procedure TestRun_InterfaceResult_NilCompare_Registry;
     procedure TestRun_IntfMethodReturningIntf_ToLocal;
+    procedure TestRun_IntfDispatch_ConstRecordArg;
+    procedure TestRun_IntfDispatch_OutStringArg;
+    procedure TestRun_IntfDispatch_VarDynArrayArg;
+    procedure TestRun_FuncCallReceiver_IntfDispatch;
+    procedure TestRun_DiscardedIntfReturn_StatementPosition;
   end;
 
 implementation
@@ -628,6 +633,202 @@ begin
   if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
   AssertRunsOnAll(SrcIntfMethodReturningIntf,
     '42' + LineEnding + '21' + LineEnding, 0);
+end;
+
+const
+  { Record passed by const through itab dispatch: the callee must see the
+    full record (per the direct-call aggregate ABI), and the parameter
+    AFTER the record must arrive un-shifted. }
+  SrcIntfConstRecordArg =
+    '''
+    program P;
+    type
+      TOpts = record
+        A: Integer;
+        B: Integer;
+        C: Integer;
+      end;
+      ICfg = interface
+        procedure Configure(const Opts: TOpts; X: Integer);
+      end;
+      TCfg = class(ICfg)
+        procedure Configure(const Opts: TOpts; X: Integer);
+        begin
+          WriteLn(Opts.A);
+          WriteLn(Opts.B);
+          WriteLn(Opts.C);
+          WriteLn(X)
+        end;
+      end;
+    var
+      C: ICfg;
+      O: TOpts;
+    begin
+      O.A := 11; O.B := 22; O.C := 33;
+      C := TCfg.Create();
+      C.Configure(O, 77)
+    end.
+    ''';
+
+  { out-string param through itab dispatch: the caller must pass the SLOT
+    ADDRESS (var-param rule), not the loaded string value. }
+  SrcIntfOutStringArg =
+    '''
+    program P;
+    type
+      IName = interface
+        procedure GetName(out AName: string);
+      end;
+      TNamed = class(IName)
+        procedure GetName(out AName: string);
+        begin
+          AName := 'blaise'
+        end;
+      end;
+    var
+      N: IName;
+      S: string;
+    begin
+      S := 'old';
+      N := TNamed.Create();
+      N.GetName(S);
+      WriteLn(S)
+    end.
+    ''';
+
+  { var dynarray param through itab dispatch: same slot-address rule as
+    strings — the callee reassigns the caller's array. }
+  SrcIntfVarDynArrayArg =
+    '''
+    program P;
+    type
+      TIntArr = array of Integer;
+      ISink = interface
+        procedure Fill(var A: TIntArr);
+      end;
+      TSink = class(ISink)
+        procedure Fill(var A: TIntArr);
+        begin
+          SetLength(A, 2);
+          A[0] := 5;
+          A[1] := 9
+        end;
+      end;
+    var
+      K: ISink;
+      Arr: TIntArr;
+    begin
+      K := TSink.Create();
+      K.Fill(Arr);
+      WriteLn(Length(Arr));
+      WriteLn(Arr[0]);
+      WriteLn(Arr[1])
+    end.
+    ''';
+
+  { TFuncCallExpr receiver: the interface-returning CALL itself is the
+    receiver of an itab dispatch — both in expression position
+    (WriteLn(GetInfo().Val())) and statement position (GetInfo().Note()). }
+  SrcFuncCallReceiver =
+    '''
+    program P;
+    type
+      IInfo = interface
+        function Val(): Integer;
+        procedure Note();
+      end;
+      TInfo = class(IInfo)
+        function Val(): Integer;
+        begin
+          Result := 5
+        end;
+        procedure Note();
+        begin
+          WriteLn('note')
+        end;
+      end;
+    function GetInfo(): IInfo;
+    begin
+      Result := TInfo.Create()
+    end;
+    begin
+      WriteLn(GetInfo().Val());
+      GetInfo().Note()
+    end.
+    ''';
+
+  { Interface-returning itab call DISCARDED in statement position: must not
+    clobber the receiver (the callee writes a 16-byte fat pointer through
+    the hidden sret arg) and the receiver must stay usable afterwards. }
+  SrcDiscardedIntfReturnStmt =
+    '''
+    program P;
+    type
+      IWidget = interface
+        function Tag(): Integer;
+      end;
+      IDriver = interface
+        function MakeWidget(N: Integer): IWidget;
+      end;
+      TWidget = class(IWidget)
+        FTag: Integer;
+        function Tag(): Integer;
+        begin
+          Result := Self.FTag
+        end;
+      end;
+      TDrv = class(IDriver)
+        function MakeWidget(N: Integer): IWidget;
+        var W: TWidget;
+        begin
+          W := TWidget.Create();
+          W.FTag := N;
+          Result := W
+        end;
+      end;
+    var
+      D: IDriver;
+      W: IWidget;
+    begin
+      D := TDrv.Create();
+      D.MakeWidget(5);
+      W := D.MakeWidget(7);
+      WriteLn(W.Tag())
+    end.
+    ''';
+
+procedure TE2EIMapTests.TestRun_IntfDispatch_ConstRecordArg;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcIntfConstRecordArg,
+    '11' + LineEnding + '22' + LineEnding + '33' + LineEnding +
+    '77' + LineEnding, 0);
+end;
+
+procedure TE2EIMapTests.TestRun_IntfDispatch_OutStringArg;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcIntfOutStringArg, 'blaise' + LineEnding, 0);
+end;
+
+procedure TE2EIMapTests.TestRun_IntfDispatch_VarDynArrayArg;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcIntfVarDynArrayArg,
+    '2' + LineEnding + '5' + LineEnding + '9' + LineEnding, 0);
+end;
+
+procedure TE2EIMapTests.TestRun_FuncCallReceiver_IntfDispatch;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcFuncCallReceiver,
+    '5' + LineEnding + 'note' + LineEnding, 0);
+end;
+
+procedure TE2EIMapTests.TestRun_DiscardedIntfReturn_StatementPosition;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcDiscardedIntfReturnStmt, '7' + LineEnding, 0);
 end;
 
 initialization

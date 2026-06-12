@@ -1071,10 +1071,12 @@ begin
   if (AMethodIndex < 0) or (AMethodIndex >= FParamIsVar.Count) then Exit;
   Flags := FParamIsVar.Strings[AMethodIndex];
   if Flags = '' then Exit;
-  { Walk through comma-separated '0'/'1' flags to find AParamIndex }
+  { Walk through comma-separated '0'/'1' flags to find AParamIndex.
+    Blaise strings are 0-based — starting at index 1 skipped the first
+    parameter's flag entirely (var/out at position 0 was never seen). }
   CurPar := 0;
-  Idx    := 1;
-  while Idx <= Length(Flags) do
+  Idx    := 0;
+  while Idx < Length(Flags) do
   begin
     if Flags[Idx] = ',' then
       CurPar := CurPar + 1

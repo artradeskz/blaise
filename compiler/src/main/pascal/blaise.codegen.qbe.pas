@@ -127,6 +127,14 @@ type
       leave the linear entry-prelude region of a function — see SeenArcStore. }
     FArcSlotWritten: TStringList;
 
+    { Obj temps of owned (+1) interface pairs materialised by
+      EmitInterfaceExprPair for call-shaped sources (a function or itab call
+      returning an interface used as receiver or argument).  The dispatch
+      site that consumed the pair captures a mark before evaluating its
+      receiver/args and flushes the releases right after its call
+      instruction — the object must stay alive across the call. }
+    FPendingObjReleases: TStringList;
+
     { Record types referenced by a record-by-value FFI (cdecl external) call
       parameter.  Each entry is a record name; Objects[] holds the
       TRecordTypeDesc.  At end of Generate/GenerateUnit/AppendUnit/
@@ -349,6 +357,19 @@ type
       ACall is a TMethodCallExpr (args form) or a TFieldAccessExpr with
       IsInterfaceCall set (zero-arg form). }
     procedure EmitIntfSretDispatch(ACall: TASTExpr; const ASretAddr: string);
+    { Build the visible-argument fragment (', t %a, ...') for an itab
+      dispatch site.  No TMethodParam list exists there — only the var-param
+      flags recorded on the interface descriptor and each argument's
+      resolved type — so: var/out positions pass the slot address, interface
+      args pass both fat-pointer slots, records use the aggregate FFI type,
+      and scalars use their natural QBE type. }
+    function  IntfDispatchArgFragment(AIntfDesc: TInterfaceTypeDesc;
+      AMethIdx: Integer; AArgs: TObjectList): string;
+    { Deferred releases for owned interface pairs produced while building a
+      call (see FPendingObjReleases).  Capture the mark before evaluating
+      receiver/args, flush right after the call instruction. }
+    function  PendingReleaseMark(): Integer;
+    procedure FlushPendingReleases(AMark: Integer);
     procedure EmitRecordReturnCallSite(const AFuncName, AVisibleArgs: string;
                                        ARetType: TRecordTypeDesc;
                                        const ADestAddr: string);
@@ -569,6 +590,8 @@ begin
   FPromotedTypes   := TStringList.Create();
   FArcSlotWritten  := TStringList.Create();
   FArcSlotWritten.CaseSensitive := True;
+  FPendingObjReleases := TStringList.Create();
+  FPendingObjReleases.CaseSensitive := True;
   FFFIRecordTypes  := TStringList.Create();
   FFFIRecordTypes.CaseSensitive := True;
   FFFIRecordTypes.Sorted := True;
@@ -599,6 +622,7 @@ begin
   FConstArgUnsafe.Free();
   FPromotedTypes.Free();
   FArcSlotWritten.Free();
+  FPendingObjReleases.Free();
   FFFIRecordTypes.Free();
   FFFIRecordEmitted.Free();
   FCapturedVars.Free();
@@ -5076,6 +5100,60 @@ begin
   end;
 end;
 
+function TCodeGenQBE.PendingReleaseMark(): Integer;
+begin
+  Result := FPendingObjReleases.Count;
+end;
+
+procedure TCodeGenQBE.FlushPendingReleases(AMark: Integer);
+begin
+  while FPendingObjReleases.Count > AMark do
+  begin
+    EmitLine(Format('  call $_ClassRelease(l %s)',
+      [FPendingObjReleases.Strings[FPendingObjReleases.Count - 1]]));
+    FPendingObjReleases.Delete(FPendingObjReleases.Count - 1);
+  end;
+end;
+
+function TCodeGenQBE.IntfDispatchArgFragment(AIntfDesc: TInterfaceTypeDesc;
+  AMethIdx: Integer; AArgs: TObjectList): string;
+var
+  I: Integer;
+  Arg: TASTExpr;
+  ArgTemp: string;
+begin
+  Result := '';
+  if AArgs = nil then Exit;
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    if AIntfDesc.MethodParamIsVar(AMethIdx, I) then
+      { var/out params pass the slot address — same rule as direct calls;
+        covers managed types (string, dynarray) whose slot the callee
+        rebinds. }
+      Result := Result + Format(', l %s', [EmitLValueAddr(Arg)])
+    else if (Arg.ResolvedType <> nil) and
+            (Arg.ResolvedType.Kind = tyInterface) then
+      { Interface args are two-slot fat pointers; the callee declares
+        obj + itab params. }
+      Result := Result + InterfaceArgFragment(Arg)
+    else if Arg.ResolvedType <> nil then
+    begin
+      ArgTemp := EmitExpr(Arg);
+      { QbeParamTypeOf gives records the same :_ffi_<Name> aggregate ABI
+        the implementing method declares; scalars get their natural type
+        (w/l/s/d) instead of an unconditional w. }
+      Result := Result + Format(', %s %s',
+        [QbeParamTypeOf(Arg.ResolvedType), ArgTemp]);
+    end
+    else
+    begin
+      ArgTemp := EmitExpr(Arg);
+      Result := Result + Format(', w %s', [ArgTemp]);
+    end;
+  end;
+end;
+
 procedure TCodeGenQBE.EmitIntfSretDispatch(ACall: TASTExpr;
   const ASretAddr: string);
 var
@@ -5090,8 +5168,9 @@ var
   ArgTemp: string;
   ArgLine: string;
   SlotOff: Integer;
-  I: Integer;
+  PMark: Integer;
 begin
+  PMark := PendingReleaseMark();
   AArgs := nil;
   if ACall is TMethodCallExpr then
   begin
@@ -5139,27 +5218,10 @@ begin
   end;
   { Callee signature is (sret, Self, args...) — the same shape every
     interface-returning method body declares (`l %_par__sret, l %_par_Self`). }
-  ArgLine := Format('l %s, l %s', [ASretAddr, SelfTemp]);
-  if AArgs <> nil then
-  begin
-    for I := 0 to AArgs.Count - 1 do
-    begin
-      if IntfDesc.MethodParamIsVar(IntfDesc.MethodIndex(MethName), I) then
-        ArgLine := ArgLine + Format(', l %s',
-          [EmitLValueAddr(TASTExpr(AArgs.Items[I]))])
-      else
-      begin
-        ArgTemp := EmitExpr(TASTExpr(AArgs.Items[I]));
-        if (TASTExpr(AArgs.Items[I]).ResolvedType <> nil) and
-           (TASTExpr(AArgs.Items[I]).ResolvedType.Kind in
-             [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
-          ArgLine := ArgLine + Format(', l %s', [ArgTemp])
-        else
-          ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
-      end;
-    end;
-  end;
+  ArgLine := Format('l %s, l %s', [ASretAddr, SelfTemp]) +
+    IntfDispatchArgFragment(IntfDesc, IntfDesc.MethodIndex(MethName), AArgs);
   EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+  FlushPendingReleases(PMark);
 end;
 
 procedure TCodeGenQBE.EmitRecordCallSret(AExpr: TASTExpr;
@@ -5177,7 +5239,9 @@ var
   FuncName:  string;
   Ptr:       string;
   RetType:   TRecordTypeDesc;
+  PMark:     Integer;
 begin
+  PMark := PendingReleaseMark();
   if AExpr is TFuncCallExpr then
   begin
     FCallExpr := TFuncCallExpr(AExpr);
@@ -5225,6 +5289,7 @@ begin
       end;
     end;
     EmitRecordReturnCallSite(FuncName, VisArgs, RetType, ASretAddr);
+    FlushPendingReleases(PMark);
   end
   else if AExpr is TMethodCallExpr then
   begin
@@ -5275,6 +5340,7 @@ begin
       end;
     end;
     EmitRecordReturnCallSite(FuncName, VisArgs, RetType, ASretAddr);
+    FlushPendingReleases(PMark);
   end
   else if AExpr is TFieldAccessExpr then
   begin
@@ -5322,6 +5388,7 @@ begin
     FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName);
     VisArgs  := Format('l %s', [SelfTemp]);
     EmitRecordReturnCallSite(FuncName, VisArgs, RetType, ASretAddr);
+    FlushPendingReleases(PMark);
   end;
 end;
 
@@ -5880,7 +5947,10 @@ var
   SlotAddr: string;
   DataTemp: string;
   ItabName: string;
+  SretTemp: string;
+  PMark:    Integer;
 begin
+  PMark := PendingReleaseMark();
   { Interface method dispatch: load obj + itab, index by method slot }
   if (ACall.ResolvedClassType <> nil) and
      (ACall.ResolvedClassType.Kind = tyInterface) then
@@ -5930,22 +6000,27 @@ begin
       EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
       EmitLine(Format('  %s =l loadl %s',   [FPtrTemp, ArgTemp]));
     end;
-    { Emit args: no concrete param info at interface-dispatch site, so use
-      the resolved type of each argument expression to pick the QBE type.
-      Pointer-typed args (var params written as TAddrOfExpr or already resolved
-      as pointer/class) use 'l'; all other scalar args use 'w'. }
-    ArgLine := Format('l %s', [SelfTemp]);
-    for I := 0 to ACall.Args.Count - 1 do
+    ArgLine := Format('l %s', [SelfTemp]) +
+      IntfDispatchArgFragment(IntfDesc, IntfDesc.MethodIndex(ACall.Name),
+        ACall.Args);
+    if (ACall.ResolvedReturnTypeDesc <> nil) and
+       (ACall.ResolvedReturnTypeDesc.Kind = tyInterface) then
     begin
-      ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
-      if (TASTExpr(ACall.Args.Items[I]).ResolvedType <> nil) and
-         (TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind in
-           [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
-        ArgLine := ArgLine + Format(', l %s', [ArgTemp])
-      else
-        ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
-    end;
-    EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+      { Discarded interface return: the callee still writes its fat pointer
+        through a hidden first sret arg — without a buffer it would write
+        through whatever the first register holds.  Give it a throwaway
+        buffer and release the returned (owned +1) obj. }
+      SretTemp := AllocTemp();
+      EmitLine(Format('  %s =l alloc8 16', [SretTemp]));
+      EmitLine(Format('  call $memset(l %s, w 0, l 16)', [SretTemp]));
+      EmitLine(Format('  call %s(l %s, %s)', [FPtrTemp, SretTemp, ArgLine]));
+      ArgTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [ArgTemp, SretTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ArgTemp]));
+    end
+    else
+      EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+    FlushPendingReleases(PMark);
     Exit;
   end;
 
@@ -6057,6 +6132,7 @@ begin
       EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+      FlushPendingReleases(PMark);
       EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
       ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
       ArgTemps.Free();
@@ -6071,6 +6147,7 @@ begin
     else
       FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+    FlushPendingReleases(PMark);
     EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
     ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
     ArgTemps.Free();
@@ -6266,6 +6343,7 @@ begin
         FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
       EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     end;
+    FlushPendingReleases(PMark);
     EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
     ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
   finally
@@ -6351,10 +6429,12 @@ var
   Par:      TMethodParam;
   QType:    string;
   I:        Integer;
+  PMark:    Integer;
 begin
   { TObject inherited calls are no-ops — no method body exists }
   if ACall.ResolvedMethod = nil then Exit;
 
+  PMark := PendingReleaseMark();
   MDecl := TMethodDecl(ACall.ResolvedMethod);
 
   { Load Self from the current method's local slot }
@@ -6411,6 +6491,7 @@ begin
   else
     EmitLine(Format('  call $%s(%s)',
       [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+  FlushPendingReleases(PMark);
 end;
 
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;
@@ -7703,7 +7784,9 @@ var
   SetQT:     string;
   SetLoad:   string;
   SetStore:  string;
+  PMark:     Integer;
 begin
+  PMark := PendingReleaseMark();
   { Indirect call through a procedural-typed variable: load the function
     pointer from the variable and call through it.  For 'of object' types
     the variable's slot is a 16-byte (Code, Data) block; load both halves
@@ -7821,6 +7904,7 @@ begin
         end;
         EmitLine(Format('  call $%s(%s)',
           [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+        FlushPendingReleases(PMark);
         ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
         Exit;
       finally
@@ -7917,6 +8001,7 @@ begin
         EmitLine(Format('  call $%s(%s)', [QBEMangle(MDecl.ResolvedQbeName), ArgLine]))
       else
         EmitLine(Format('  call $%s(%s)', [QBEMangle(ACall.Name), ArgLine]));
+      FlushPendingReleases(PMark);
       EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
       ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
     finally
@@ -8431,7 +8516,9 @@ var
   SlotAddr:     string;
   DataTemp:     string;
   SQT:          string;
+  PMark:        Integer;
 begin
+  PMark := PendingReleaseMark();
   if AExpr is TFuncCallExpr then
   begin
     { Standalone function call expression }
@@ -9648,6 +9735,7 @@ begin
           end;
           T := AllocTemp();
           EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
+          FlushPendingReleases(PMark);
           ReleaseConstStringArgs(FC.Args, ArgTemps, MDecl.Params);
           Exit(MaybeNormalizeExtReturn(T, MDecl));
         finally
@@ -9719,6 +9807,7 @@ begin
         end;
         T := AllocTemp();
         EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
+        FlushPendingReleases(PMark);
         EmitOwnedArgReleases(FC.Args, ArgTemps, MDecl.Params);
         ReleaseConstStringArgs(FC.Args, ArgTemps, MDecl.Params);
         Result := MaybeNormalizeExtReturn(T, MDecl);
@@ -9791,6 +9880,7 @@ begin
     if (MCallExpr.ResolvedClassType <> nil) and
        (MCallExpr.ResolvedClassType.Kind = tyInterface) then
     begin
+      PMark := PendingReleaseMark();
       IntfDesc := TInterfaceTypeDesc(MCallExpr.ResolvedClassType);
       if MCallExpr.ObjExpr <> nil then
         { Receiver is an expression (record/class field, as-cast, implicit
@@ -9816,28 +9906,16 @@ begin
         EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
         EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       end;
-      { Evaluate arguments: use var-param flags stored on the interface desc }
-      ArgLine := Format('l %s', [SelfTemp]);
-      for I := 0 to MCallExpr.Args.Count - 1 do
-      begin
-        if IntfDesc.MethodParamIsVar(IntfDesc.MethodIndex(MCallExpr.Name), I) then
-          ArgLine := ArgLine + Format(', l %s',
-            [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))])
-        else
-        begin
-          ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
-          if (TASTExpr(MCallExpr.Args.Items[I]).ResolvedType <> nil) and
-             (TASTExpr(MCallExpr.Args.Items[I]).ResolvedType.Kind in
-               [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
-            ArgLine := ArgLine + Format(', l %s', [ArgTemp])
-          else
-            ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
-        end;
-      end;
+      { Evaluate arguments: var-param flags + resolved arg types decide the
+        ABI — same rules as every other itab dispatch site. }
+      ArgLine := Format('l %s', [SelfTemp]) +
+        IntfDispatchArgFragment(IntfDesc,
+          IntfDesc.MethodIndex(MCallExpr.Name), MCallExpr.Args);
       QType := QbeTypeOf(MCallExpr.ResolvedType);
       if QType = '' then QType := 'w';
       T := AllocTemp();
       EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FPtrTemp, ArgLine]));
+      FlushPendingReleases(PMark);
       Exit(T);
     end;
 
@@ -9870,6 +9948,7 @@ begin
       if MCallExpr.ResolvedMethod <> nil then
       begin
         MDecl   := TMethodDecl(MCallExpr.ResolvedMethod);
+        PMark   := PendingReleaseMark();
         ArgLine := Format('l %s', [SelfTemp]);
         ArgTemps := TStringList.Create();
         try
@@ -9920,6 +9999,7 @@ begin
           else
             FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
           EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+          FlushPendingReleases(PMark);
           EmitOwnedArgReleases(MCallExpr.Args, ArgTemps, MDecl.Params);
           ReleaseConstStringArgs(MCallExpr.Args, ArgTemps, MDecl.Params);
         finally
@@ -10057,6 +10137,7 @@ begin
     end;
 
     { Build argument string }
+    PMark := PendingReleaseMark();
     ArgLine := Format('l %s', [SelfTemp]);
     ArgTemps := TStringList.Create();
     for I := 0 to MCallExpr.Args.Count - 1 do
@@ -10105,6 +10186,7 @@ begin
     end
     else
       EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
+    FlushPendingReleases(PMark);
     EmitOwnedArgReleases(MCallExpr.Args, ArgTemps, MDecl.Params);
     ReleaseConstStringArgs(MCallExpr.Args, ArgTemps, MDecl.Params);
     ArgTemps.Free();
@@ -11849,6 +11931,27 @@ begin
     EmitLine('@' + LblEnd);
     AObjTemp  := ObjT;
     AItabTemp := ItabT;
+  end
+  else if IsInterfaceCall(AExpr) then
+  begin
+    { Interface-returning CALL as the pair source (function-call receiver:
+      GetDriver().Info(), or a chained itab call).  Must be checked before
+      the stored-field branch — a zero-arg itab call is field-access shaped.
+      Evaluate via the sret convention into a fresh 16-byte buffer and load
+      the pair.  The callee AddRef'd into the buffer, so the pair is owned
+      (+1) — defer the obj release to the consuming dispatch site (after
+      its call instruction). }
+    ObjT := AllocTemp();
+    EmitLine(Format('  %s =l alloc8 16', [ObjT]));
+    EmitLine(Format('  call $memset(l %s, w 0, l 16)', [ObjT]));
+    EmitRecordCallSret(AExpr, ObjT);
+    AObjTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [AObjTemp, ObjT]));
+    ItabT := AllocTemp();
+    EmitLine(Format('  %s =l add %s, 8', [ItabT, ObjT]));
+    AItabTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [AItabTemp, ItabT]));
+    FPendingObjReleases.Add(AObjTemp);
   end
   else if AExpr is TFieldAccessExpr then
   begin

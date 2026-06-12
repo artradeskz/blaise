@@ -202,6 +202,11 @@ type
     { Re-type set-literal args to their `set of` param type post-overload. }
     procedure RetypeSetLiteralArgs(AArgs: TObjectList; AMDecl: TMethodDecl);
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
+    { Resolve the return type of an interface method for a statement-position
+      itab dispatch; nil for procedures.  Codegen uses this to give discarded
+      sret-convention returns a throwaway buffer. }
+    function  ResolveIntfMethodReturn(AIntf: TInterfaceTypeDesc;
+      const AMethName: string): TTypeDesc;
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
     function  AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
@@ -5494,6 +5499,17 @@ begin
     AnalyseCaseStmt(TCaseStmt(AStmt));
 end;
 
+function TSemanticAnalyser.ResolveIntfMethodReturn(AIntf: TInterfaceTypeDesc;
+  const AMethName: string): TTypeDesc;
+var
+  RetName: string;
+begin
+  Result := nil;
+  RetName := AIntf.MethodReturnTypeName(AIntf.MethodIndex(AMethName));
+  if RetName <> '' then
+    Result := FindTypeOrInstantiate(RetName);
+end;
+
 procedure TSemanticAnalyser.AnalyseMethodCall(ACall: TMethodCallStmt);
 var
   ObjSym:  TSymbol;
@@ -5528,6 +5544,8 @@ begin
         AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
       ACall.ResolvedClassType := ObjType;
       ACall.ResolvedMethod    := nil;
+      ACall.ResolvedReturnTypeDesc :=
+        ResolveIntfMethodReturn(TInterfaceTypeDesc(ObjType), ACall.Name);
       Exit;
     end;
     RT := TRecordTypeDesc(ObjType);
@@ -5591,6 +5609,8 @@ begin
           AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
         ACall.ResolvedClassType := ACall.ImplicitBaseInfo.TypeDesc;
         ACall.ResolvedMethod    := nil;
+        ACall.ResolvedReturnTypeDesc := ResolveIntfMethodReturn(
+          TInterfaceTypeDesc(ACall.ImplicitBaseInfo.TypeDesc), ACall.Name);
         Exit;
       end;
       RT := TRecordTypeDesc(ACall.ImplicitBaseInfo.TypeDesc);
@@ -5652,6 +5672,8 @@ begin
     ACall.ResolvedMethod    := nil;  { nil = interface dispatch, not class dispatch }
     ACall.IsGlobal          := ObjSym.IsGlobal;
     ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
+    ACall.ResolvedReturnTypeDesc := ResolveIntfMethodReturn(
+      TInterfaceTypeDesc(ObjSym.TypeDesc), ACall.Name);
     Exit;
   end;
 

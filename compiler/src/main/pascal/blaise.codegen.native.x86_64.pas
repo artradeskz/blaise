@@ -271,9 +271,11 @@ type
                                 AIsVarParam: Boolean;
                                 AIntf: TInterfaceTypeDesc;
                                 const AMethName: string; AArgs: TObjectList;
-                                AObjExpr: TASTExpr = nil);
+                                AObjExpr: TASTExpr = nil;
+                                ADiscardIntfRet: Boolean = False);
     procedure EmitInterfaceFieldCall(AFld: TFieldInfo; AIntf: TInterfaceTypeDesc;
-                                const AMethName: string; AArgs: TObjectList);
+                                const AMethName: string; AArgs: TObjectList;
+                                ADiscardIntfRet: Boolean = False);
     { Emit typeinfo / itab / impllist blocks for interfaces and the classes
       that implement them.  Mirrors the QBE backend's EmitInterfaceDefs. }
     procedure EmitInterfaceDefs(ATypeDecls: TObjectList;
@@ -1831,12 +1833,34 @@ var
   HK: TList<Integer>;
   HTotal, Pushed: Integer;
   VFlags: string;
+  RecvOnStack: Boolean;
+  DiscSz: Integer;
 begin
   { x86_64: pointers are 8 bytes (this backend's invariant, like the rest of the
     file).  i386/arm64 backends will be separate TNativeBackend subclasses. }
   Ps := 8;
   ArgN := 0;
   if AArgs <> nil then ArgN := AArgs.Count;
+  RecvOnStack := False;
+  if (AObjExpr <> nil) and (AObjExpr is TFuncCallExpr) then
+  begin
+    { Function-call receiver (GetDriver().Info()): evaluate it FIRST via the
+      sret convention — it is a call and would clobber pushed args.  The
+      owned (+1) fat pair stays at (%rsp) until after the dispatch, then the
+      obj is released. }
+    Self.EmitIntfSretCall(TFuncCallExpr(AObjExpr));
+    RecvOnStack := True;
+  end;
+  DiscSz := 0;
+  if ADiscardIntfRet then
+  begin
+    { Throwaway sret buffer for a DISCARDED interface return: without it the
+      callee would write its 16-byte fat-pointer return through %rdi. }
+    Self.Emit(#9'subq $16, %rsp');
+    Self.Emit(#9'movq $0, (%rsp)');
+    Self.Emit(#9'movq $0, 8(%rsp)');
+    DiscSz := 16;
+  end;
   { Hoist record-call args and (shape-classified) string args — the
     implementing method's const-ness is invisible at an interface call site,
     so every string-typed value argument is protected by shape.  The var
@@ -1856,6 +1880,13 @@ begin
     begin
       { Hoisted record-call or string argument — reload the saved value. }
       Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else if Self.VarFlagAt(VFlags, I) then
+    begin
+      { var/out position: pass the slot ADDRESS — same rule as direct
+        calls; covers managed types (string, dynarray) the callee rebinds. }
+      Self.EmitVarArgAddrToRax(Arg);
       Self.Emit(#9'pushq %rax');
     end
     else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
@@ -1901,8 +1932,10 @@ begin
       Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
     end;
-    { Track bytes pushed so far — hoisted-value reloads are %rsp-relative. }
-    if (HK.Get(I) < akRecCall) and (Arg.ResolvedType <> nil) and
+    { Track bytes pushed so far — hoisted-value reloads are %rsp-relative.
+      var positions always occupy one slot, even for interface-typed args. }
+    if (HK.Get(I) < akRecCall) and (not Self.VarFlagAt(VFlags, I)) and
+       (Arg.ResolvedType <> nil) and
        (Arg.ResolvedType.Kind = tyInterface) then
       Pushed := Pushed + 16
     else
@@ -1914,7 +1947,13 @@ begin
     The receiver shapes that need EmitExprToEax (FA.Base) are not yet reachable
     here — args are already on the stack, so only the call-free shapes (class
     access, local/global record, var-param) are safe; reject the rest loudly. }
-  if (AObjExpr <> nil) and (AObjExpr is TFieldAccessExpr) then
+  if RecvOnStack then
+  begin
+    { Receiver fat pair sits above the discard buffer + hoist region + args. }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%r10', [Pushed + HTotal + DiscSz]));
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [Pushed + HTotal + DiscSz + 8]));
+  end
+  else if (AObjExpr <> nil) and (AObjExpr is TFieldAccessExpr) then
   begin
     Self.EmitInterfaceFieldAddr(TFieldAccessExpr(AObjExpr), '%r10');
     Self.Emit(#9'movq 8(%r10), %rax');   { itab }
@@ -1939,21 +1978,57 @@ begin
   else
     Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
   { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self).
-    Count slots: interface args occupy 2 slots each. }
+    Count slots: interface args occupy 2 slots each, except at var
+    positions (one address slot). }
   SlotOff := 0;
   for I := 0 to ArgN - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
-    if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    if (not Self.VarFlagAt(VFlags, I)) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
       Inc(SlotOff, 2)
     else
       Inc(SlotOff);
   end;
-  for I := SlotOff - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-  Self.Emit(#9'movq %r10, %rdi');
+  if ADiscardIntfRet then
+  begin
+    { sret convention: %rdi = buffer, %rsi = Self, visible args from %rdx. }
+    for I := SlotOff - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
+    Self.Emit(Format(#9'leaq %d(%%rsp), %%rdi', [HTotal]));
+    Self.Emit(#9'movq %r10, %rsi');
+  end
+  else
+  begin
+    for I := SlotOff - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+    Self.Emit(#9'movq %r10, %rdi');
+  end;
   Self.Emit(#9'callq *%r11');
   Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
+  if ADiscardIntfRet then
+  begin
+    { Discarded owned return: release the obj half; statement position, so
+      no live result registers to preserve. }
+    Self.Emit(#9'movq (%rsp), %rdi');
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'addq $16, %rsp');
+  end;
+  if RecvOnStack then
+  begin
+    { Release the owned receiver pair; preserve the dispatch result regs
+      (this path also serves expression position). }
+    Self.Emit(#9'subq $24, %rsp');
+    Self.Emit(#9'movq %rax, 0(%rsp)');
+    Self.Emit(#9'movq %rdx, 8(%rsp)');
+    Self.Emit(#9'movsd %xmm0, 16(%rsp)');
+    Self.Emit(#9'movq 24(%rsp), %rdi');
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'movq 0(%rsp), %rax');
+    Self.Emit(#9'movq 8(%rsp), %rdx');
+    Self.Emit(#9'movsd 16(%rsp), %xmm0');
+    Self.Emit(#9'addq $40, %rsp');
+  end;
   HD.Free();
   HK.Free();
 end;
@@ -1972,6 +2047,14 @@ var
 begin
   ArgN := 0;
   if AArgs <> nil then ArgN := AArgs.Count;
+  if ADiscardIntfRet then
+  begin
+    { Throwaway sret buffer for a DISCARDED interface return: without it the
+      callee would write its 16-byte fat-pointer return through %rdi. }
+    Self.Emit(#9'subq $16, %rsp');
+    Self.Emit(#9'movq $0, (%rsp)');
+    Self.Emit(#9'movq $0, 8(%rsp)');
+  end;
   { Same unknown-signature hoist as EmitInterfaceCall. }
   HD := TList<Integer>.Create();
   HK := TList<Integer>.Create();
@@ -1986,6 +2069,13 @@ begin
     begin
       { Hoisted record-call or string argument — reload the saved value. }
       Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else if Self.VarFlagAt(VFlags, I) then
+    begin
+      { var/out position: pass the slot ADDRESS — same rule as direct
+        calls; covers managed types (string, dynarray) the callee rebinds. }
+      Self.EmitVarArgAddrToRax(Arg);
       Self.Emit(#9'pushq %rax');
     end
     else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
@@ -2031,8 +2121,10 @@ begin
       Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
     end;
-    { Track bytes pushed so far — hoisted-value reloads are %rsp-relative. }
-    if (HK.Get(I) < akRecCall) and (Arg.ResolvedType <> nil) and
+    { Track bytes pushed so far — hoisted-value reloads are %rsp-relative.
+      var positions always occupy one slot, even for interface-typed args. }
+    if (HK.Get(I) < akRecCall) and (not Self.VarFlagAt(VFlags, I)) and
+       (Arg.ResolvedType <> nil) and
        (Arg.ResolvedType.Kind = tyInterface) then
       Pushed := Pushed + 16
     else
@@ -2050,21 +2142,40 @@ begin
     Self.Emit(#9'movq (%rax), %r11')
   else
     Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
-  { Count total slots then pop in reverse. }
+  { Count total slots then pop in reverse; var positions take one slot. }
   SlotOff := 0;
   for I := 0 to ArgN - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
-    if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    if (not Self.VarFlagAt(VFlags, I)) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
       Inc(SlotOff, 2)
     else
       Inc(SlotOff);
   end;
-  for I := SlotOff - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-  Self.Emit(#9'movq %r10, %rdi');
+  if ADiscardIntfRet then
+  begin
+    { sret convention: %rdi = buffer, %rsi = Self, visible args from %rdx. }
+    for I := SlotOff - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
+    Self.Emit(Format(#9'leaq %d(%%rsp), %%rdi', [HTotal]));
+    Self.Emit(#9'movq %r10, %rsi');
+  end
+  else
+  begin
+    for I := SlotOff - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+    Self.Emit(#9'movq %r10, %rdi');
+  end;
   Self.Emit(#9'callq *%r11');
   Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, 0, True);
+  if ADiscardIntfRet then
+  begin
+    { Discarded owned return: release the obj half (statement position). }
+    Self.Emit(#9'movq (%rsp), %rdi');
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'addq $16, %rsp');
+  end;
   HD.Free();
   HK.Free();
 end;
@@ -6916,11 +7027,15 @@ begin
   begin
     if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
       Self.EmitInterfaceFieldCall(ACall.ImplicitBaseInfo,
-        TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args)
+        TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args,
+        (ACall.ResolvedReturnTypeDesc <> nil) and
+        (ACall.ResolvedReturnTypeDesc.Kind = tyInterface))
     else
       Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal, ACall.IsVarParam,
         TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args,
-        ACall.ObjExpr);
+        ACall.ObjExpr,
+        (ACall.ResolvedReturnTypeDesc <> nil) and
+        (ACall.ResolvedReturnTypeDesc.Kind = tyInterface));
     Exit;
   end;
 
@@ -12072,6 +12187,13 @@ begin
         [16 + HTotal - HD.Get(I) + Pushed]));
       Self.Emit(#9'pushq %rax');
     end
+    else if Self.VarFlagAt(VFlags, I) then
+    begin
+      { var/out position: pass the slot ADDRESS — same rule as direct
+        calls; covers managed types (string, dynarray) the callee rebinds. }
+      Self.EmitVarArgAddrToRax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end
     else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
     begin
       if Arg is TIdentExpr then
@@ -12115,7 +12237,8 @@ begin
       Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
     end;
-    if (HK.Get(I) < akRecCall) and (Arg.ResolvedType <> nil) and
+    if (HK.Get(I) < akRecCall) and (not Self.VarFlagAt(VFlags, I)) and
+       (Arg.ResolvedType <> nil) and
        (Arg.ResolvedType.Kind = tyInterface) then
       Pushed := Pushed + 16
     else
@@ -12170,12 +12293,14 @@ begin
     Self.Emit(#9'movq (%rax), %r11')
   else
     Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
-  { Pop args shifted by 2: %rdi = sret buffer, %rsi = receiver obj. }
+  { Pop args shifted by 2: %rdi = sret buffer, %rsi = receiver obj.
+    var positions take one slot. }
   SlotOff := 0;
   for I := 0 to ArgN - 1 do
   begin
     Arg := TASTExpr(ACall.Args.Items[I]);
-    if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    if (not Self.VarFlagAt(VFlags, I)) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
       Inc(SlotOff, 2)
     else
       Inc(SlotOff);
