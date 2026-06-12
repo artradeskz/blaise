@@ -22,6 +22,7 @@ unit blaise.codegen.qbe.driver;
 interface
 
 uses
+  Classes,
   blaise.codegen,
   blaise.codegen.qbe,
   blaise.codegen.driver;
@@ -36,9 +37,21 @@ type
     function SupportsWarmCache: Boolean; override;
     function CreateCodeGen(AOpts: TBackendOpts): ICodeGen; override;
     function CreateUnitCodeGen(AOpts: TBackendOpts): ICodeGen; override;
+    function LowerToObject(const AIRFile, AObjFile: string;
+      AOpts: TBackendOpts): string; override;
+    function LinkProgram(const AIRFile, AOutputFile: string;
+      AOpts: TBackendOpts; AExtraObjects: TStringList): string; override;
+  protected
+    { qbe AIRFile -> AAsmFile.  Returns '' on success. }
+    function LowerToAsm(const AIRFile, AAsmFile: string;
+      AOpts: TBackendOpts): string;
   end;
 
 implementation
+
+uses
+  SysUtils,
+  uToolchain;
 
 function TQBEBackendDriver.Kind: TBackendKind;
 begin
@@ -93,6 +106,70 @@ begin
   CG.SetOpdfMode(AOpts.OPDFEnabled);
   CG.SetExportAll(True);
   Result := CG;
+end;
+
+function TQBEBackendDriver.LowerToAsm(const AIRFile, AAsmFile: string;
+  AOpts: TBackendOpts): string;
+var
+  Args: TStringList;
+  Msg: string;
+  ExitCode: Integer;
+begin
+  Result := '';
+  Args := TStringList.Create();
+  try
+    Args.Add('-o');
+    Args.Add(AAsmFile);
+    Args.Add(AIRFile);
+    ExitCode := RunProcess(ResolveQBE().Path, Args, Msg);
+  finally
+    Args.Free();
+  end;
+  if ExitCode <> 0 then
+    Result := 'qbe error (exit ' + IntToStr(ExitCode) + '): ' + Msg;
+end;
+
+function TQBEBackendDriver.LowerToObject(const AIRFile, AObjFile: string;
+  AOpts: TBackendOpts): string;
+var
+  AsmFile: string;
+  Args: TStringList;
+  Msg: string;
+  ExitCode: Integer;
+begin
+  AsmFile := ChangeFileExt(AIRFile, '.s');
+  Result := Self.LowerToAsm(AIRFile, AsmFile, AOpts);
+  if Result <> '' then Exit;
+
+  Args := TStringList.Create();
+  try
+    Args.Add('-c');
+    Args.Add('-o');
+    Args.Add(AObjFile);
+    Args.Add(AsmFile);
+    ExitCode := RunProcess(ResolveLinker(AOpts.Target).Path, Args, Msg);
+  finally
+    Args.Free();
+  end;
+  if ExitCode <> 0 then
+    Exit('cc -c error (exit ' + IntToStr(ExitCode) + '): ' + Msg);
+
+  DeleteFile(AsmFile);
+end;
+
+function TQBEBackendDriver.LinkProgram(const AIRFile, AOutputFile: string;
+  AOpts: TBackendOpts; AExtraObjects: TStringList): string;
+var
+  AsmFile: string;
+begin
+  AsmFile := ChangeFileExt(AIRFile, '.s');
+  Result := Self.LowerToAsm(AIRFile, AsmFile, AOpts);
+  if Result <> '' then Exit;
+  Result := Self.LinkViaToolchain(AsmFile, AOutputFile, AOpts, AExtraObjects);
+  { The intermediate .s is this driver's own artefact.  Keep it on link
+    failure as a debugging aid (matches the pre-driver behaviour). }
+  if Result = '' then
+    DeleteFile(AsmFile);
 end;
 
 initialization

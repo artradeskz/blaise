@@ -21,15 +21,15 @@ program Blaise;
 }
 
 uses
-  SysUtils, Classes, Process, contnrs,
+  SysUtils, Classes, contnrs,
   uLexer, uParser, uAST, uSemantic, blaise.codegen, blaise.codegen.qbe,
-  blaise.codegen.target, uToolchain,
+  blaise.codegen.target,
   blaise.codegen.driver,
   blaise.codegen.qbe.driver,
   blaise.codegen.native.driver,
   uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
-  uStrCompat, uConfig, blaise.assembler.x86_64;
+  uStrCompat, uConfig;
 
 type
   { Alias so existing signatures (ParseArgs out param, locals) read
@@ -357,253 +357,38 @@ begin
   Result := True;
 end;
 
-function ReadProcessChunk(AProc: TProcess): string;
+{ Lower one unit's IR to a .o through the driver, then embed the .bif.
+  Returns '' on success.  The .bif embedding is an object-format concern
+  shared across backends, so it stays here rather than in the driver. }
+function CompileUnitToObjectSafe(ADriver: TBackendDriver;
+  const AIRFile, AOutputFile, ABifFile: string;
+  AOpts: TBackendOpts): string;
 begin
-  Result := AProc.ReadOutput()
-end;
-
-function RunProcess(const AExe: string; AArgs: TStringList;
-  out AOutput: string): Integer;
-var
-  Proc:  TProcess;
-  Chunk: string;
-  I:     Integer;
-begin
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := AExe;
-    for I := 0 to AArgs.Count - 1 do
-      Proc.Parameters.Add(AArgs.Strings[I]);
-    Proc.Execute();
-    AOutput := '';
-    repeat
-      Chunk := ReadProcessChunk(Proc);
-      AOutput := AOutput + Chunk;
-    until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit();
-    Result := Proc.ExitCode;
-  finally
-    Proc.Free();
-  end;
-end;
-
-{ Locate the Blaise RTL static library.
-  Search order:
-    1. BLAISE_RTL environment variable (explicit override)
-    2. Same directory as this compiler binary (installed layout) }
-function FindRTL: string;
-var
-  BinDir: string;
-begin
-  Result := GetEnvironmentVariable('BLAISE_RTL');
-  if (Result <> '') and FileExists(Result) then
-    Exit;
-  BinDir := ExtractFilePath(ParamStr(0));
-  Result  := IncludeTrailingPathDelimiter(BinDir) + 'blaise_rtl.a';
-  if FileExists(Result) then
-    Exit;
-  Result := '';
-end;
-
-function CompileUnitToObjectSafe(const AIRFile, AOutputFile,
-                                ABifFile: string): string;
-var
-  AsmFile:  string;
-  Msg:      string;
-  ExitCode: Integer;
-  Args:     TStringList;
-begin
-  Result := '';
-  AsmFile := ChangeFileExt(AIRFile, '.s');
-  Args := TStringList.Create();
-  try
-    Args.Add('-o');
-    Args.Add(AsmFile);
-    Args.Add(AIRFile);
-    ExitCode := RunProcess('qbe', Args, Msg);
-  finally
-    Args.Free();
-  end;
-  if ExitCode <> 0 then
-  begin
-    Exit('qbe error (exit ' + IntToStr(ExitCode) + '): ' + Msg);
-  end;
-
-  Args := TStringList.Create();
-  try
-    Args.Add('-c');
-    Args.Add('-o');
-    Args.Add(AOutputFile);
-    Args.Add(AsmFile);
-    ExitCode := RunProcess('cc', Args, Msg);
-  finally
-    Args.Free();
-  end;
-  if ExitCode <> 0 then
-  begin
-    Exit('cc -c error (exit ' + IntToStr(ExitCode) + '): ' + Msg);
-  end;
-
-  DeleteFile(AsmFile);
+  Result := ADriver.LowerToObject(AIRFile, AOutputFile, AOpts);
+  if Result <> '' then Exit;
 
   if (ABifFile <> '') and FileExists(ABifFile) then
     if not EmbedBifInObject(AOutputFile, ABifFile, ofELF) then
       Exit('Failed to embed .bif in ' + AOutputFile);
 end;
 
-{ Unit-as-top-level: qbe -> .s -> cc -c -> .o.  Stops at the object
-  file so the caller can link multiple unit-objects + a program
-  object together.  No RTL, no -lm/-lpthread -- those are link-time
-  concerns.
+{ Unit-as-top-level: IR -> .o via the driver.  Stops at the object file
+  so the caller can link multiple unit-objects + a program object
+  together.  No RTL, no -lm/-lpthread -- those are link-time concerns.
 
   When ABifFile is non-empty, also embeds those bytes into the
   resulting .o via uElfObject into a non-loaded ELF section.  Keeps
   the on-disk .o + iface inseparable so the loader can read the
   iface straight out of the .o without a parallel filename. }
-procedure CompileUnitToObject(const AIRFile, AOutputFile,
-                              ABifFile: string);
+procedure CompileUnitToObject(ADriver: TBackendDriver;
+  const AIRFile, AOutputFile, ABifFile: string; AOpts: TBackendOpts);
 var
   Err: string;
 begin
-  Err := CompileUnitToObjectSafe(AIRFile, AOutputFile, ABifFile);
+  Err := CompileUnitToObjectSafe(ADriver, AIRFile, AOutputFile, ABifFile, AOpts);
   if Err <> '' then
   begin
     WriteLn(StdErr, Err);
-    Halt(1);
-  end;
-end;
-
-procedure CompileToNative(const AIRFile, AOutputFile, AOPDFAsmFile: string;
-                          AExtraObjects: TStringList = nil;
-                          AOpdfDebug: Boolean = False);
-var
-  AsmFile, RTLPath: string;
-  Msg:              string;
-  ExitCode:         Integer;
-  Args:             TStringList;
-  I:                Integer;
-begin
-  AsmFile := ChangeFileExt(AIRFile, '.s');
-  RTLPath := FindRTL();
-
-  Args := TStringList.Create();
-  try
-    Args.Add('-o');
-    Args.Add(AsmFile);
-    Args.Add(AIRFile);
-    ExitCode := RunProcess('qbe', Args, Msg);
-  finally
-    Args.Free();
-  end;
-  if ExitCode <> 0 then
-  begin
-    WriteLn(StdErr, 'qbe error (exit ', ExitCode, '):');
-    Write(StdErr, Msg);
-    Halt(1);
-  end;
-
-  Args := TStringList.Create();
-  try
-    Args.Add('-o');
-    Args.Add(AOutputFile);
-    Args.Add(AsmFile);
-    if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
-      Args.Add(AOPDFAsmFile);
-    { Pre-built dep object files (auto-discovered by the loader).
-      Linked alongside the main object so their symbols resolve
-      what AppendUnit skipped. }
-    if AExtraObjects <> nil then
-      for I := 0 to AExtraObjects.Count - 1 do
-        Args.Add(AExtraObjects.Strings[I]);
-    if RTLPath <> '' then
-      Args.Add(RTLPath);
-    Args.Add('-lm');       { math functions (sqrt, sin, cos, etc.) }
-    Args.Add('-lpthread'); { POSIX threads (blaise_thread unit) }
-    ExitCode := RunProcess('cc', Args, Msg);
-  finally
-    Args.Free();
-  end;
-
-  if ExitCode <> 0 then
-  begin
-    WriteLn(StdErr, 'cc error (exit ', ExitCode, '):');
-    Write(StdErr, Msg);
-    Halt(1);
-  end;
-
-  DeleteFile(AsmFile);
-end;
-
-{ Link a native-backend assembly file (.s) into the final binary.  The native
-  backend has already produced the assembly (no qbe step); this only drives the
-  cc link, reusing the same link line as CompileToNative.  Tool + RTL paths are
-  resolved through uToolchain so env-var overrides and target awareness apply. }
-procedure CompileToNativeDirect(const AAsmFile, AOutputFile: string;
-  const ATarget: TTargetDesc; const AOPDFAsmFile: string;
-  AOpdfDebug: Boolean = False);
-var
-  TC:       TToolchain;
-  Msg:      string;
-  ExitCode: Integer;
-  Args:     TStringList;
-begin
-  TC := ResolveToolchain(ATarget);
-
-  Args := TStringList.Create();
-  try
-    Args.Add('-o');
-    Args.Add(AOutputFile);
-    Args.Add(AAsmFile);
-    if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
-      Args.Add(AOPDFAsmFile);
-    if TC.RTLPath <> '' then
-      Args.Add(TC.RTLPath);
-    Args.Add('-lm');       { math functions (sqrt, sin, cos, etc.) }
-    Args.Add('-lpthread'); { POSIX threads (blaise_thread unit) }
-    ExitCode := RunProcess(TC.Linker.Path, Args, Msg);
-  finally
-    Args.Free();
-  end;
-
-  if ExitCode <> 0 then
-  begin
-    WriteLn(StdErr, 'link error (exit ', ExitCode, '):');
-    Write(StdErr, Msg);
-    Halt(1);
-  end;
-end;
-
-{ Link a pre-assembled object file (.o) into the final binary.  Used when
-  the internal assembler has already produced the .o — only the linker driver
-  is invoked. }
-procedure LinkObjectFile(const AObjFile, AOutputFile: string;
-  const ATarget: TTargetDesc; const AOPDFAsmFile: string);
-var
-  TC:       TToolchain;
-  Msg:      string;
-  ExitCode: Integer;
-  Args:     TStringList;
-begin
-  TC := ResolveToolchain(ATarget);
-  Args := TStringList.Create();
-  try
-    Args.Add('-o');
-    Args.Add(AOutputFile);
-    Args.Add(AObjFile);
-    if (AOPDFAsmFile <> '') and FileExists(AOPDFAsmFile) then
-      Args.Add(AOPDFAsmFile);
-    if TC.RTLPath <> '' then
-      Args.Add(TC.RTLPath);
-    Args.Add('-lm');
-    Args.Add('-lpthread');
-    ExitCode := RunProcess(TC.Linker.Path, Args, Msg);
-  finally
-    Args.Free();
-  end;
-  if ExitCode <> 0 then
-  begin
-    WriteLn(StdErr, 'link error (exit ', ExitCode, '):');
-    Write(StdErr, Msg);
     Halt(1);
   end;
 end;
@@ -615,6 +400,7 @@ type
     SymTable: TSymbolTable;
     OPath: string;
     Error: string;
+    Opts: TBackendOpts;       { shared read-only opts bag, set by dispatcher }
   protected
     procedure Execute; override;
   end;
@@ -651,7 +437,8 @@ begin
     WBifFile := Self.OPath + '.bif.tmp';
     WriteUnitInterfaceToFile(Self.Iface, WBifFile);
 
-    Self.Error := CompileUnitToObjectSafe(WIRFile, Self.OPath, WBifFile);
+    Self.Error := CompileUnitToObjectSafe(GetDriver(bkQBE),
+      WIRFile, Self.OPath, WBifFile, Self.Opts);
 
     DeleteFile(WIRFile);
     DeleteFile(WBifFile);
@@ -716,14 +503,9 @@ var
   I:        Integer;
   IR:       string;
   IRFile:   string;
-  AsmFile:     string;
-  UnitName:    string;
-  UnitPath:    string;
+  LinkErr:  string;      { Driver.LinkProgram result ('' on success) }
   UnitOPath:   string;   { per-dep .o output path in --incremental mode }
-  UnitBifPath: string;   { per-dep iface temp path }
-  UnitIR:      string;   { per-dep IR text under --incremental }
   UseInternalAsm: Boolean;
-  ObjFile:     string;
   Workers:  TObjectList; { TCompileWorker threads for parallel incremental }
   Worker:   TCompileWorker;
 
@@ -795,6 +577,7 @@ begin
   Opts.OPDFEnabled := OPDFEnabled;
   Opts.EmitAsm := EmitAsm;
   Opts.OPDFAsmFile := OPDFAsmFile;
+  Opts.UseInternalAsm := UseInternalAsm;
 
   { Resolve the top-program driver once.  All backend-selection policy
     lives in PickTopDriver; everything downstream dispatches through
@@ -993,6 +776,7 @@ begin
           Worker.Iface := TUnitInterface(UnitIfaces.Items[I]);
           Worker.SymTable := Prog.SymbolTable;
           Worker.OPath := UnitOPath;
+          Worker.Opts := Opts;
           Workers.Add(Worker);
           PrebuiltObjPaths.Add(UnitOPath);
         end;
@@ -1108,53 +892,20 @@ begin
     program exit so the main block's scope-exit ARC cleanup runs.  Calling
     Halt(0) here would lower to libc exit(), skipping every Pascal stack frame
     and leaving main's locals unreleased — defeating the leak tracker. }
-  if EmitIR then
+  if EmitIR or EmitAsm then
+    { Driver was picked to match the flag (QBE for --emit-ir, native for
+      --emit-asm — see PickTopDriver), so IR already holds the text the
+      user asked for. }
     Write(IR)
-  else if EmitAsm then
-    Write(IR)
-  else if Backend = bkNative then
-  begin
-    AsmFile := ChangeFileExt(OutputFile, '.s');
-    try
-      Source := TStringList.Create();
-      try
-        Source.Text := IR;
-        Source.SaveToFile(AsmFile);
-      finally
-        Source.Free();
-      end;
-    except
-      on E: Exception do
-      begin
-        WriteLn(StdErr, 'Error writing assembly: ', Exception(E).Message);
-        Halt(1);
-      end;
-    end;
-
-    if UseInternalAsm then
-    begin
-      ObjFile := ChangeFileExt(OutputFile, '.o');
-      try
-        AssembleToObject(IR, ObjFile);
-      except
-        on E: EAssembler do
-        begin
-          WriteLn(StdErr, 'Internal assembler error: ', Exception(E).Message);
-          Halt(1);
-        end;
-      end;
-      LinkObjectFile(ObjFile, OutputFile, Target, OPDFAsmFile);
-      DeleteFile(ObjFile);
-    end
-    else
-      CompileToNativeDirect(AsmFile, OutputFile, Target, OPDFAsmFile, OPDFEnabled);
-    DeleteFile(AsmFile);
-    if OPDFAsmFile <> '' then
-      DeleteFile(OPDFAsmFile);
-  end
   else
   begin
-    IRFile := ChangeFileExt(OutputFile, '.ssa');
+    { Backend-neutral output dispatch: write the IR to a file with the
+      driver's extension (.ssa for QBE; .s for native — its IR IS the
+      assembly), then lower + link through the driver.  OPDFAsmFile may
+      have been bound to a sidecar path during the OPDF emit above, so
+      refresh it onto Opts before the drivers read it. }
+    Opts.OPDFAsmFile := OPDFAsmFile;
+    IRFile := ChangeFileExt(OutputFile, Driver.IRFileExt());
     try
       Source := TStringList.Create();
       try
@@ -1173,17 +924,20 @@ begin
 
     if IsUnitMode then
     begin
-      CompileUnitToObject(IRFile, OutputFile, TopIfacePath);
+      CompileUnitToObject(Driver, IRFile, OutputFile, TopIfacePath, Opts);
       if (TopIfacePath <> '') and FileExists(TopIfacePath) then
         DeleteFile(TopIfacePath);
     end
     else
     begin
-      { Auto-discovered prebuilt dep object paths feed straight into the cc command line. }
-      if PrebuiltObjPaths.Count > 0 then
-        CompileToNative(IRFile, OutputFile, OPDFAsmFile, PrebuiltObjPaths, OPDFEnabled)
-      else
-        CompileToNative(IRFile, OutputFile, OPDFAsmFile, nil, OPDFEnabled);
+      { Auto-discovered prebuilt dep object paths feed straight into the
+        link line. }
+      LinkErr := Driver.LinkProgram(IRFile, OutputFile, Opts, PrebuiltObjPaths);
+      if LinkErr <> '' then
+      begin
+        WriteLn(StdErr, LinkErr);
+        Halt(1);
+      end;
     end;
     PrebuiltObjPaths.Free();
     DeleteFile(IRFile);

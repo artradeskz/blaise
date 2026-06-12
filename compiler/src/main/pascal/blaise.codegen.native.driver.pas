@@ -33,6 +33,7 @@ unit blaise.codegen.native.driver;
 interface
 
 uses
+  Classes,
   blaise.codegen,
   blaise.codegen.native,
   blaise.codegen.driver;
@@ -44,9 +45,15 @@ type
     function Name: string; override;
     function IRFileExt: string; override;
     function CreateCodeGen(AOpts: TBackendOpts): ICodeGen; override;
+    function LinkProgram(const AIRFile, AOutputFile: string;
+      AOpts: TBackendOpts; AExtraObjects: TStringList): string; override;
   end;
 
 implementation
+
+uses
+  SysUtils,
+  blaise.assembler.x86_64;
 
 function TNativeBackendDriver.Kind: TBackendKind;
 begin
@@ -72,6 +79,44 @@ begin
   CG.SetDebugMode(AOpts.DebugMode);
   CG.SetOpdfMode(AOpts.OPDFEnabled);
   Result := CG;
+end;
+
+function TNativeBackendDriver.LinkProgram(const AIRFile, AOutputFile: string;
+  AOpts: TBackendOpts; AExtraObjects: TStringList): string;
+var
+  ObjFile: string;
+  AsmText: TStringList;
+begin
+  if AOpts.UseInternalAsm then
+  begin
+    { --assembler internal: assemble the .s text in-process, then drive
+      only the final link.  The IR file IS the assembly the top-program
+      codegen emitted. }
+    ObjFile := ChangeFileExt(AOutputFile, '.o');
+    AsmText := TStringList.Create();
+    try
+      try
+        AsmText.LoadFromFile(AIRFile);
+        AssembleToObject(AsmText.Text, ObjFile);
+      except
+        on E: EAssembler do
+          Exit('Internal assembler error: ' + Exception(E).Message);
+        on E: Exception do
+          Exit('Internal assembler error [' + Exception(E).ClassName + ']: ' +
+            Exception(E).Message);
+      end;
+    finally
+      AsmText.Free();
+    end;
+    Result := Self.LinkViaToolchain(ObjFile, AOutputFile, AOpts, AExtraObjects);
+    if Result = '' then
+      DeleteFile(ObjFile);
+  end
+  else
+    { External assembler: the cc driver assembles and links the .s in
+      one invocation.  The IR file is owned by the caller — no cleanup
+      here. }
+    Result := Self.LinkViaToolchain(AIRFile, AOutputFile, AOpts, AExtraObjects);
 end;
 
 initialization

@@ -72,6 +72,7 @@ type
     OPDFEnabled: Boolean;     { OPDF code shaping }
     EmitAsm: Boolean;         { native --emit-asm }
     OPDFAsmFile: string;      { OPDF sidecar path, if any }
+    UseInternalAsm: Boolean;  { --assembler internal (native backend) }
   end;
 
   TBackendDriver = class
@@ -107,7 +108,35 @@ type
       Default nil: the driver does not support separate-unit emission and
       the dispatcher falls back to the QBE driver. }
     function CreateUnitCodeGen(AOpts: TBackendOpts): ICodeGen; virtual;
+
+    { Lower one unit's IR file to a relocatable object (--incremental
+      worker path and unit-as-top-level mode).  Returns '' on success,
+      an error message otherwise.  Default fails loudly: a driver that
+      claims SupportsIncremental must override this. }
+    function LowerToObject(const AIRFile, AObjFile: string;
+      AOpts: TBackendOpts): string; virtual;
+
+    { Lower the top program's IR file and link the final binary —
+      including the OPDF sidecar, prebuilt dep objects, the RTL archive,
+      and -lm/-lpthread.  Returns '' on success, an error message
+      otherwise.  AExtraObjects may be nil. }
+    function LinkProgram(const AIRFile, AOutputFile: string;
+      AOpts: TBackendOpts; AExtraObjects: TStringList): string; virtual; abstract;
+
+  protected
+    { Shared link line: cc-driver resolved via uToolchain (env overrides
+      and target awareness apply), input file, OPDF sidecar, extra
+      objects, RTL archive, -lm, -lpthread.  Used by every driver's
+      LinkProgram. }
+    function LinkViaToolchain(const AInputFile, AOutputFile: string;
+      AOpts: TBackendOpts; AExtraObjects: TStringList): string;
   end;
+
+{ Run an external tool, capturing combined output.  Shared by the
+  drivers; exposed because the lowering steps run from worker threads
+  as well as the main compile path. }
+function RunProcess(const AExe: string; AArgs: TStringList;
+  out AOutput: string): Integer;
 
 { Registry.  Each backend unit registers its singleton in its
   initialization block; consumers fetch by kind.  Looking up an
@@ -136,7 +165,9 @@ function PickTopDriver(ABackend: TBackendKind;
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+  Process,
+  uToolchain;
 
 { Indexed by Ord(TBackendKind).  The bound is a literal because the
   parser only accepts integer literals on array decls; keep the upper
@@ -164,6 +195,80 @@ end;
 function TBackendDriver.CreateUnitCodeGen(AOpts: TBackendOpts): ICodeGen;
 begin
   Result := nil;
+end;
+
+function TBackendDriver.LowerToObject(const AIRFile, AObjFile: string;
+  AOpts: TBackendOpts): string;
+begin
+  Result := Self.Name() +
+    ' backend does not support per-unit object lowering';
+end;
+
+function TBackendDriver.LinkViaToolchain(const AInputFile, AOutputFile: string;
+  AOpts: TBackendOpts; AExtraObjects: TStringList): string;
+var
+  TC: TToolchain;
+  Args: TStringList;
+  Msg: string;
+  ExitCode: Integer;
+  I: Integer;
+begin
+  Result := '';
+  TC := ResolveToolchain(AOpts.Target);
+  Args := TStringList.Create();
+  try
+    Args.Add('-o');
+    Args.Add(AOutputFile);
+    Args.Add(AInputFile);
+    { OPDF sidecar (QBE backend only — the native backend appends its
+      exact-facts OPDF section to the main assembly instead). }
+    if (AOpts.OPDFAsmFile <> '') and FileExists(AOpts.OPDFAsmFile) then
+      Args.Add(AOpts.OPDFAsmFile);
+    { Pre-built dep object files (auto-discovered by the loader or
+      produced by the --incremental workers). }
+    if AExtraObjects <> nil then
+      for I := 0 to AExtraObjects.Count - 1 do
+        Args.Add(AExtraObjects.Strings[I]);
+    if TC.RTLPath <> '' then
+      Args.Add(TC.RTLPath);
+    Args.Add('-lm');       { math functions (sqrt, sin, cos, etc.) }
+    Args.Add('-lpthread'); { POSIX threads (blaise_thread unit) }
+    ExitCode := RunProcess(TC.Linker.Path, Args, Msg);
+  finally
+    Args.Free();
+  end;
+  if ExitCode <> 0 then
+    Result := 'link error (exit ' + IntToStr(ExitCode) + '): ' + Msg;
+end;
+
+function ReadProcessChunk(AProc: TProcess): string;
+begin
+  Result := AProc.ReadOutput()
+end;
+
+function RunProcess(const AExe: string; AArgs: TStringList;
+  out AOutput: string): Integer;
+var
+  Proc: TProcess;
+  Chunk: string;
+  I: Integer;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    for I := 0 to AArgs.Count - 1 do
+      Proc.Parameters.Add(AArgs.Strings[I]);
+    Proc.Execute();
+    AOutput := '';
+    repeat
+      Chunk := ReadProcessChunk(Proc);
+      AOutput := AOutput + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free();
+  end;
 end;
 
 procedure RegisterDriver(ADriver: TBackendDriver);
