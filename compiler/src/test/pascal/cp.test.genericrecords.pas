@@ -38,9 +38,13 @@ type
     procedure TestSemantic_GenericRecord_TwoParams_BothFieldsResolved;
     procedure TestSemantic_GenericRecord_IsRecordKind;
 
+    { Semantic — out-of-line method implementations }
+    procedure TestSemantic_GenericRecord_OutOfLine_MethodLinked;
+
     { Codegen }
     procedure TestCodegen_GenericRecord_FieldAccess_StoreAndLoad;
     procedure TestCodegen_GenericRecord_MethodEmitted;
+    procedure TestCodegen_GenericRecord_OutOfLine_MethodEmitted;
     procedure TestCodegen_GenericRecord_NoTypeInfoEmitted;
     procedure TestCodegen_GenericRecord_NoVTableEmitted;
   end;
@@ -139,6 +143,33 @@ const
         var V: TMyVal<Integer>;
         begin
           V.Value := 42;
+          WriteLn(V.GetValue())
+        end.
+        ''';
+
+  SrcGenericRecordOutOfLineMethod =
+    '''
+        program Prg;
+        type
+          TMyVal<T> = record
+            FValue: T;
+            function GetValue: T;
+            procedure SetValue(AValue: T);
+          end;
+
+        function TMyVal<T>.GetValue: T;
+        begin
+          Result := Self.FValue
+        end;
+
+        procedure TMyVal<T>.SetValue(AValue: T);
+        begin
+          Self.FValue := AValue
+        end;
+
+        var V: TMyVal<Integer>;
+        begin
+          V.SetValue(42);
           WriteLn(V.GetValue())
         end.
         ''';
@@ -383,6 +414,30 @@ end;
 { ------------------------------------------------------------------ }
 { Codegen tests                                                        }
 { ------------------------------------------------------------------ }
+
+procedure TGenericRecordTests.TestSemantic_GenericRecord_OutOfLine_MethodLinked;
+var
+  Prog: TProgram;
+begin
+  { Must not raise a semantic error — out-of-line generic record methods must link }
+  Prog := AnalyseSrc(SrcGenericRecordOutOfLineMethod);
+  try
+    AssertNotNull('program analysed without error', Prog);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TGenericRecordTests.TestCodegen_GenericRecord_OutOfLine_MethodEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcGenericRecordOutOfLineMethod);
+  AssertTrue('GetValue method emitted',
+    Pos('TMyVal_Integer_GetValue', IR) > 0);
+  AssertTrue('SetValue method emitted',
+    Pos('TMyVal_Integer_SetValue', IR) > 0);
+end;
 
 procedure TGenericRecordTests.TestCodegen_GenericRecord_FieldAccess_StoreAndLoad;
 var

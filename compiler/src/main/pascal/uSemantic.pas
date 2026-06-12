@@ -1734,7 +1734,8 @@ procedure TSemanticAnalyser.LinkGenericClassMethodImpls(ABlock: TBlock);
 var
   I, J: Integer;
   Decl: TMethodDecl;
-  Templ: TGenericTypeDef;
+  GenObj: TObject;
+  Methods: TObjectList;
   MDecl: TMethodDecl;
 begin
   for I := 0 to ABlock.ProcDecls.Count - 1 do
@@ -1742,24 +1743,33 @@ begin
     Decl := TMethodDecl(ABlock.ProcDecls.Items[I]);
     if (Decl.OwnerTypeName = '') or (Decl.OwnerTypeParams = nil) then
       Continue;
-    { Locate the generic template by base class name }
-    if not (FTable.FindGeneric(Decl.OwnerTypeName) is TGenericTypeDef) then
-      SemanticError(
-        Format('Generic type ''%s'' not found for method ''%s''',
-          [Decl.OwnerTypeName, Decl.Name]),
-        Decl.Line, Decl.Col);
-    Templ := TGenericTypeDef(FTable.FindGeneric(Decl.OwnerTypeName));
+    { Locate the generic template — may be a class or a record }
+    GenObj := FTable.FindGeneric(Decl.OwnerTypeName);
+    if GenObj is TGenericTypeDef then
+      Methods := TGenericTypeDef(GenObj).ClassDef.Methods
+    else if GenObj is TGenericRecordDef then
+      Methods := TGenericRecordDef(GenObj).RecordDef.Methods
+    else
+      begin
+        SemanticError(
+          Format('Generic type ''%s'' not found for method ''%s''',
+            [Decl.OwnerTypeName, Decl.Name]),
+          Decl.Line, Decl.Col);
+        Methods := nil;
+      end;
+    if Methods = nil then
+      Continue;
     { Find the matching forward declaration in the template }
     MDecl := nil;
-    for J := 0 to Templ.ClassDef.Methods.Count - 1 do
-      if SameText(TMethodDecl(Templ.ClassDef.Methods.Items[J]).Name, Decl.Name) then
+    for J := 0 to Methods.Count - 1 do
+      if SameText(TMethodDecl(Methods.Items[J]).Name, Decl.Name) then
       begin
-        MDecl := TMethodDecl(Templ.ClassDef.Methods.Items[J]);
+        MDecl := TMethodDecl(Methods.Items[J]);
         Break;
       end;
     if MDecl = nil then
       SemanticError(
-        Format('Method ''%s'' is not declared in generic class ''%s''',
+        Format('Method ''%s'' is not declared in generic type ''%s''',
           [Decl.Name, Decl.OwnerTypeName]),
         Decl.Line, Decl.Col);
     if MDecl.Body <> nil then
