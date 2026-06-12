@@ -193,6 +193,11 @@ begin
   end
   else if AStmt is TForInStmt then
   begin
+    { The loop variable is written through its slot address by the
+      for-in lowering (storew/storel into %_var_<name>) — it must stay
+      a stack slot, never a promoted SSA temp. }
+    if ASet.IndexOf(TForInStmt(AStmt).VarName) < 0 then
+      ASet.Add(TForInStmt(AStmt).VarName);
     CollectAddressTakenExpr(TForInStmt(AStmt).CollExpr, ASet);
     CollectAddressTakenStmt(TForInStmt(AStmt).Body, ASet);
   end

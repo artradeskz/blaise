@@ -3247,10 +3247,12 @@ begin
   else
     EmitLine(Format('  %s =l call %s(l %s)', [EnumT, FuncName, SelfT]));
 
-  { ARC-assign the enumerator into the synthetic slot }
+  { Move the enumerator into the synthetic slot.  GetEnumerator's
+    result is an owned +1 (constructor/call result) — transfer it; an
+    extra AddRef leaks one enumerator per loop because the function
+    epilogue releases the slot exactly once. }
   OldT := AllocTemp();
   EmitLine(Format('  %s =l loadl %s', [OldT, EnumSlot]));
-  EmitLine(Format('  call $_ClassAddRef(l %s)', [EnumT]));
   EmitLine(Format('  call $_ClassRelease(l %s)', [OldT]));
   EmitLine(Format('  storel %s, %s', [EnumT, EnumSlot]));
 

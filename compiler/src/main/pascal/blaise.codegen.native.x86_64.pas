@@ -7975,10 +7975,11 @@ begin
   else
     Self.Emit(#9'callq ' + Sym);
 
-  { ARC-assign the enumerator into the synthetic slot }
+  { Move the enumerator into the synthetic slot.  GetEnumerator's
+    result is an owned +1 (constructor/call result) — transfer it;
+    an extra AddRef here leaks one enumerator per loop because the
+    function epilogue releases the slot exactly once. }
   Self.Emit(#9'pushq %rax');
-  Self.Emit(#9'movq %rax, %rdi');
-  Self.Emit(#9'callq _ClassAddRef');
   Self.Emit(Format(#9'movq %s, %%rdi', [EnumOp]));
   Self.Emit(#9'callq _ClassRelease');
   Self.Emit(#9'popq %rax');

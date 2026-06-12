@@ -40,6 +40,11 @@ type
     procedure TestDebug_ClassFieldFromCall_NoLeak;
     { Multiple same-named typed handlers share one slot — no over-release. }
     procedure TestDebug_MultiHandlerVar_NoOverRelease;
+    { for-in over a TList: GetEnumerator's +1 result must be transferred
+      into the loop slot, not re-retained — one enumerator leaked per
+      loop otherwise. }
+    procedure TestDebug_ForInEnumerator_NoLeak;
+    procedure TestDebug_ForInEnumerator_NoLeak_Native;
   end;
 
 implementation
@@ -230,6 +235,50 @@ const
     ''';
 
 { ------------------------------------------------------------------ }
+
+const
+  SrcForInEnum = '''
+    program P;
+    uses generics.collections;
+    var
+      L: TList<Integer>;
+      I, Total: Integer;
+    begin
+      L := TList<Integer>.Create;
+      L.Add(5);
+      L.Add(4);
+      Total := 0;
+      for I in L do
+        Total := Total + I;
+      WriteLn(Total);
+    end.
+    ''';
+
+procedure TE2ELeakCheckTests.TestDebug_ForInEnumerator_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebug(SrcForInEnum, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertEquals('stdout', '9' + LE, Output);
+  AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_ForInEnumerator_NoLeak_Native;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebugOn(beNative, SrcForInEnum, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertEquals('stdout', '9' + LE, Output);
+  AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
+end;
 
 procedure TE2ELeakCheckTests.TestDebug_NoLeak_NoReport;
 var
