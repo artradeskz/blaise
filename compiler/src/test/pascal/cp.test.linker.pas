@@ -16,7 +16,7 @@ interface
 
 uses
   SysUtils, blaise.testing, Generics.Collections,
-  blaise.elfreader, blaise.assembler.x86_64;
+  blaise.elfreader, blaise.linker.elf, blaise.assembler.x86_64;
 
 type
   TElfReaderTests = class(TTestCase)
@@ -32,6 +32,14 @@ type
     procedure TestArchive_SyntheticLongNames;
     procedure TestArchive_BadMagic_Raises;
     procedure TestArchive_ParsesRTL;
+  end;
+
+  TSectionMergerTests = class(TTestCase)
+  published
+    procedure TestMerge_ConcatenatesText;
+    procedure TestMerge_AlignmentPadding;
+    procedure TestMerge_BssSizesAccumulate;
+    procedure TestMerge_SkipsBookkeepingSections;
   end;
 
 implementation
@@ -281,7 +289,122 @@ begin
   end;
 end;
 
+{ ---- TSectionMergerTests ---- }
+
+procedure TSectionMergerTests.TestMerge_ConcatenatesText;
+var
+  O1, O2: TElfObjectFile;
+  Mg: TSectionMerger;
+  M: TMergedSection;
+  P: TSectionPlacement;
+begin
+  O1 := ParseElfObject(AssembleToBytes('ret' + LineEnding), 'a.o');
+  O2 := ParseElfObject(AssembleToBytes('nop' + LineEnding
+    + 'ret' + LineEnding), 'b.o');
+  Mg := TSectionMerger.Create();
+  try
+    Mg.AddObject(0, O1);
+    Mg.AddObject(1, O2);
+    M := Mg.FindMerged('.text');
+    AssertTrue('.text missing', M <> nil);
+    AssertEquals(Chr($C3) + Chr($90) + Chr($C3), M.Data);
+    AssertEquals(3, Integer(M.Size));
+    P := Mg.PlacementOf(0, O1.SectionIndexOf('.text'));
+    AssertTrue('placement 0 missing', P <> nil);
+    AssertEquals(0, Integer(P.Offset));
+    P := Mg.PlacementOf(1, O2.SectionIndexOf('.text'));
+    AssertTrue('placement 1 missing', P <> nil);
+    AssertEquals(1, Integer(P.Offset));
+  finally
+    Mg.Free();
+    O2.Free();
+    O1.Free();
+  end;
+end;
+
+procedure TSectionMergerTests.TestMerge_AlignmentPadding;
+var
+  O1, O2: TElfObjectFile;
+  Mg: TSectionMerger;
+  M: TMergedSection;
+  P: TSectionPlacement;
+begin
+  { First object contributes 1 byte of .data; the second declares
+    .balign 8, so its contribution must start at offset 8 with zero
+    padding in between. }
+  O1 := ParseElfObject(AssembleToBytes('.data' + LineEnding
+    + '.byte 17' + LineEnding), 'a.o');
+  O2 := ParseElfObject(AssembleToBytes('.data' + LineEnding
+    + '.balign 8' + LineEnding + '.byte 34' + LineEnding), 'b.o');
+  Mg := TSectionMerger.Create();
+  try
+    Mg.AddObject(0, O1);
+    Mg.AddObject(1, O2);
+    M := Mg.FindMerged('.data');
+    AssertTrue('.data missing', M <> nil);
+    AssertEquals(9, Integer(M.Size));
+    AssertEquals(8, Integer(M.Align));
+    AssertEquals(17, Ord(M.Data[0]));
+    AssertEquals(0, Ord(M.Data[1]));
+    AssertEquals(34, Ord(M.Data[8]));
+    P := Mg.PlacementOf(1, O2.SectionIndexOf('.data'));
+    AssertTrue('placement missing', P <> nil);
+    AssertEquals(8, Integer(P.Offset));
+  finally
+    Mg.Free();
+    O2.Free();
+    O1.Free();
+  end;
+end;
+
+procedure TSectionMergerTests.TestMerge_BssSizesAccumulate;
+var
+  O1, O2: TElfObjectFile;
+  Mg: TSectionMerger;
+  M: TMergedSection;
+begin
+  O1 := ParseElfObject(AssembleToBytes('.section .bss' + LineEnding
+    + '.skip 24' + LineEnding), 'a.o');
+  O2 := ParseElfObject(AssembleToBytes('.section .bss' + LineEnding
+    + '.skip 40' + LineEnding), 'b.o');
+  Mg := TSectionMerger.Create();
+  try
+    Mg.AddObject(0, O1);
+    Mg.AddObject(1, O2);
+    M := Mg.FindMerged('.bss');
+    AssertTrue('.bss missing', M <> nil);
+    AssertEquals(SHT_NOBITS, M.ShType);
+    AssertEquals(64, Integer(M.Size));
+    AssertEquals(0, Length(M.Data));
+  finally
+    Mg.Free();
+    O2.Free();
+    O1.Free();
+  end;
+end;
+
+procedure TSectionMergerTests.TestMerge_SkipsBookkeepingSections;
+var
+  O1: TElfObjectFile;
+  Mg: TSectionMerger;
+begin
+  O1 := ParseElfObject(AssembleToBytes('ret' + LineEnding), 'a.o');
+  Mg := TSectionMerger.Create();
+  try
+    Mg.AddObject(0, O1);
+    AssertTrue('.symtab must not merge', Mg.FindMerged('.symtab') = nil);
+    AssertTrue('.strtab must not merge', Mg.FindMerged('.strtab') = nil);
+    AssertTrue('.shstrtab must not merge', Mg.FindMerged('.shstrtab') = nil);
+    AssertTrue('.note.GNU-stack must not merge',
+      Mg.FindMerged('.note.GNU-stack') = nil);
+  finally
+    Mg.Free();
+    O1.Free();
+  end;
+end;
+
 initialization
   RegisterTest(TElfReaderTests);
+  RegisterTest(TSectionMergerTests);
 
 end.
