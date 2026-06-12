@@ -456,6 +456,7 @@ type
       var/out params push one value; interface params push two (itab first, then
       obj — reversed so the pop loop restores them in the correct register order). }
     procedure EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
+    procedure EmitVarArgAddrToRax(AArg: TASTExpr);
     { Pre-pass for call arguments (phase A of the call protocol).  Hoists
       three argument kinds into a stack region BELOW the argument slots,
       recording one (depth, kind) pair per argument (-1/akNone when not
@@ -6370,29 +6371,7 @@ begin
             Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
               [AllocSz + HTotal - HD.Get(I)]))
           else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-          begin
-            { Forwarding a var/out param: the slot already holds the pointer —
-              pass the VALUE, not the slot's address. }
-            if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-              Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
-            else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
-                    and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
-            begin
-              Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
-              if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
-                Self.Emit(Format(#9'addq $%d, %%rax',
-                  [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
-            end
-            else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-              Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
-            else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
-              Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-                [NativeMangle(TIdentExpr(Arg).ConstArraySymbol)]))
-            else if Arg is TIdentExpr then
-              Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(Arg).Name]))
-            else
-              Self.EmitExprToEax(Arg);
-          end
+            Self.EmitVarArgAddrToRax(Arg)
           else
             Self.EmitExprToEax(Arg);
           Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
@@ -6497,29 +6476,7 @@ begin
         Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
           [AllocSz + HTotal - HD.Get(I)]))
       else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-      begin
-        { Forwarding a var/out param: the slot already holds the pointer —
-          pass the VALUE, not the slot's address. }
-        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
-                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
-        begin
-          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
-          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
-            Self.Emit(Format(#9'addq $%d, %%rax',
-              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
-        end
-        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-          Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [NativeMangle(TIdentExpr(Arg).ConstArraySymbol)]))
-        else if Arg is TIdentExpr then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(Arg).Name]))
-        else
-          Self.EmitExprToEax(Arg);
-      end
+        Self.EmitVarArgAddrToRax(Arg)
       else
         Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
@@ -6573,6 +6530,81 @@ begin
   end;
 end;
 
+{ Leave the ADDRESS of a var/out argument in %rax.  Shared by every
+  call-emission path that passes a var param — loading the variable's
+  VALUE here (the old EmitSretCall behaviour) hands the callee a garbage
+  pointer. }
+procedure TX86_64Backend.EmitVarArgAddrToRax(AArg: TASTExpr);
+var
+  FAE: TFieldAccessExpr;
+begin
+  if (AArg is TIdentExpr) and (TIdentExpr(AArg).ParamMode <> pmNone) then
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.VarOperand(TIdentExpr(AArg).Name)]))
+  else if (AArg is TIdentExpr) and TIdentExpr(AArg).IsImplicitSelf
+          and (TIdentExpr(AArg).ImplicitFieldInfo <> nil) then
+  begin
+    Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+    if TFieldInfo(TIdentExpr(AArg).ImplicitFieldInfo).Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rax',
+        [TFieldInfo(TIdentExpr(AArg).ImplicitFieldInfo).Offset]));
+  end
+  else if (AArg is TIdentExpr) and Self.IsLocal(TIdentExpr(AArg).Name) then
+    Self.Emit(Format(#9'leaq %s, %%rax',
+      [Self.VarOperand(TIdentExpr(AArg).Name)]))
+  else if (AArg is TIdentExpr) and (TIdentExpr(AArg).ConstArraySymbol <> '') then
+    Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+      [NativeMangle(TIdentExpr(AArg).ConstArraySymbol)]))
+  else if (AArg is TIdentExpr) and (AArg.ResolvedType <> nil) and
+          (AArg.ResolvedType.Kind = tyInterface) then
+    { Global interface: there is no bare Name symbol — the 16-byte fat
+      pointer block starts at the Name_obj label. }
+    Self.Emit(Format(#9'leaq %s_obj(%%rip), %%rax', [TIdentExpr(AArg).Name]))
+  else if AArg is TIdentExpr then
+    Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(AArg).Name]))
+  else if AArg is TFieldAccessExpr then
+  begin
+    { Record/class field as var argument (including fields of the sret
+      Result record).  Compute the field's address. }
+    FAE := TFieldAccessExpr(AArg);
+    if FAE.FieldInfo = nil then
+      raise ENativeCodeGenError.Create(
+        'native backend: var/out field argument has no resolved field info');
+    if FAE.Base <> nil then
+      Self.EmitExprToEax(FAE.Base)
+    else if FAE.IsImplicitSelf then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+      if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+        Self.Emit(Format(#9'addq $%d, %%rax', [FAE.ImplicitBaseInfo.Offset]));
+      if FAE.IsClassAccess then
+        Self.Emit(#9'movq (%rax), %rax');
+    end
+    else if (FSretFunc and SameText(FAE.RecordName, 'Result'))
+            or FAE.IsClassAccess or FAE.IsVarParam then
+    begin
+      { The slot holds a POINTER (sret Result, class instance, var-param
+        record) — load it. }
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rax', [FAE.RecordName]));
+      if FAE.IsClassAccess and FAE.IsVarParam then
+        { var-param class: slot -> caller var -> instance }
+        Self.Emit(#9'movq (%rax), %rax');
+    end
+    else if Self.IsLocal(FAE.RecordName) then
+      Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [FAE.RecordName]));
+    if FAE.FieldInfo.Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rax', [FAE.FieldInfo.Offset]));
+  end
+  else
+    raise ENativeCodeGenError.Create(
+      'native backend: var/out argument must be a variable or field');
+end;
+
 procedure TX86_64Backend.EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
 var
   ClassRT: TRecordTypeDesc;
@@ -6581,33 +6613,7 @@ var
 begin
   if (APar <> nil) and APar.IsVarParam then
   begin
-    if (AArg is TIdentExpr) and (TIdentExpr(AArg).ParamMode <> pmNone) then
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.VarOperand(TIdentExpr(AArg).Name)]))
-    else if (AArg is TIdentExpr) and TIdentExpr(AArg).IsImplicitSelf
-            and (TIdentExpr(AArg).ImplicitFieldInfo <> nil) then
-    begin
-      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
-      if TFieldInfo(TIdentExpr(AArg).ImplicitFieldInfo).Offset > 0 then
-        Self.Emit(Format(#9'addq $%d, %%rax',
-          [TFieldInfo(TIdentExpr(AArg).ImplicitFieldInfo).Offset]));
-    end
-    else if (AArg is TIdentExpr) and Self.IsLocal(TIdentExpr(AArg).Name) then
-      Self.Emit(Format(#9'leaq %s, %%rax',
-        [Self.VarOperand(TIdentExpr(AArg).Name)]))
-    else if (AArg is TIdentExpr) and (TIdentExpr(AArg).ConstArraySymbol <> '') then
-      Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-        [NativeMangle(TIdentExpr(AArg).ConstArraySymbol)]))
-    else if (AArg is TIdentExpr) and (AArg.ResolvedType <> nil) and
-            (AArg.ResolvedType.Kind = tyInterface) then
-      { Global interface: there is no bare Name symbol — the 16-byte fat
-        pointer block starts at the Name_obj label. }
-      Self.Emit(Format(#9'leaq %s_obj(%%rip), %%rax', [TIdentExpr(AArg).Name]))
-    else if AArg is TIdentExpr then
-      Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(AArg).Name]))
-    else
-      raise ENativeCodeGenError.Create(
-        'native backend: var/out method argument must be a variable');
+    Self.EmitVarArgAddrToRax(AArg);
     Self.Emit(#9'pushq %rax');
   end
   else if (APar <> nil) and (APar.ResolvedType <> nil) and
@@ -6921,29 +6927,7 @@ begin
         Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
           [AllocSz + HTotal - HD.Get(I)]))
       else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-      begin
-        { Forwarding a var/out param: the slot already holds the pointer —
-          pass the VALUE, not the slot's address. }
-        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
-                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
-        begin
-          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
-          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
-            Self.Emit(Format(#9'addq $%d, %%rax',
-              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
-        end
-        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-          Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [NativeMangle(TIdentExpr(Arg).ConstArraySymbol)]))
-        else if Arg is TIdentExpr then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(Arg).Name]))
-        else
-          Self.EmitExprToEax(Arg);
-      end
+        Self.EmitVarArgAddrToRax(Arg)
       else
         Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
@@ -9645,6 +9629,64 @@ begin
       Self.EmitStoreFloat('(%rcx)', FA.FieldInfo.TypeDesc);
       Exit;
     end;
+    { Record-typed field := record value: full copy with ARC (retain the
+      source's managed fields, release the destination's, then memcpy).
+      The scalar tail below would store just the source ADDRESS — an
+      8-byte pointer write masquerading as a record copy. }
+    if FA.FieldInfo.TypeDesc.Kind = tyRecord then
+    begin
+      Self.EmitExprToEax(FA.Expr);       { source record address }
+      Self.Emit(#9'pushq %rax');
+      { Destination field address -> %rcx per receiver shape. }
+      if FA.ObjExpr <> nil then
+      begin
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rcx');
+      end
+      else if FSretFunc and (FA.RecordName = 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]))
+      else if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
+      else if FA.IsClassAccess or FA.IsVarParam then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+        if FA.IsClassAccess and FA.IsVarParam then
+          { var-param class: slot -> caller var -> instance }
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
+      else if Self.IsLocal(FA.RecordName) then
+        Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+      if FA.FieldInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [FA.FieldInfo.Offset]));
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(#9'pushq %r15');
+      Self.Emit(#9'subq $8, %rsp');
+      Self.Emit(#9'movq %rcx, %r15');      { dest field addr }
+      Self.Emit(#9'movq 24(%rsp), %rbx');  { src record addr }
+      Self.EmitRecordFieldRetains(TRecordTypeDesc(FA.FieldInfo.TypeDesc), '%rbx');
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(FA.FieldInfo.TypeDesc), '%r15');
+      Self.Emit(#9'movq %r15, %rdi');
+      Self.Emit(#9'movq %rbx, %rsi');
+      Self.Emit(Format(#9'movq $%d, %%rdx',
+        [FA.FieldInfo.TypeDesc.RawSize()]));
+      Self.Emit(#9'callq memcpy');
+      Self.Emit(#9'addq $8, %rsp');
+      Self.Emit(#9'popq %r15');
+      Self.Emit(#9'popq %rbx');
+      Self.Emit(#9'addq $8, %rsp');        { drop saved src addr }
+      Exit;
+    end;
     Self.EmitExprToEax(FA.Expr);
     { Chained field assignment: ObjExpr is the receiver expression (e.g. DT.Date
       or H.R.Obj).  Emit the receiver to get the base address, then store at the
@@ -10810,26 +10852,7 @@ begin
       end
       else if IsVar then
       begin
-        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-          Self.Emit(Format(#9'movq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
-                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
-        begin
-          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
-          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
-            Self.Emit(Format(#9'addq $%d, %%rax',
-              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
-        end
-        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-          Self.Emit(Format(#9'leaq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and (Arg.ResolvedType <> nil) and
-                (Arg.ResolvedType.Kind = tyInterface) then
-          Self.Emit(Format(#9'leaq %s_obj(%%rip), %%rax', [TIdentExpr(Arg).Name]))
-        else if Arg is TIdentExpr then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [TIdentExpr(Arg).Name]));
+        Self.EmitVarArgAddrToRax(Arg);
         Self.Emit(#9'pushq %rax');
       end
       else if (ParamType <> nil) and (ParamType.Kind = tyInterface) then
@@ -10994,29 +11017,7 @@ begin
       end
       else if IsVar then
       begin
-        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-          Self.Emit(Format(#9'movq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and TIdentExpr(Arg).IsImplicitSelf
-                and (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
-        begin
-          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
-          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
-            Self.Emit(Format(#9'addq $%d, %%rax',
-              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
-        end
-        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-          Self.Emit(Format(#9'leaq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [NativeMangle(TIdentExpr(Arg).ConstArraySymbol)]))
-        else if (Arg is TIdentExpr) and (Arg.ResolvedType <> nil) and
-                (Arg.ResolvedType.Kind = tyInterface) then
-          Self.Emit(Format(#9'leaq %s_obj(%%rip), %%rax', [TIdentExpr(Arg).Name]))
-        else if Arg is TIdentExpr then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [TIdentExpr(Arg).Name]));
+        Self.EmitVarArgAddrToRax(Arg);
         Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
         Inc(SlotOff, 8);
       end
@@ -11238,18 +11239,7 @@ begin
       end
       else if IsVar then
       begin
-        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-          Self.Emit(Format(#9'movq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-          Self.Emit(Format(#9'leaq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [NativeMangle(TIdentExpr(Arg).ConstArraySymbol)]))
-        else if Arg is TIdentExpr then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [TIdentExpr(Arg).Name]));
+        Self.EmitVarArgAddrToRax(Arg);
         Self.Emit(#9'pushq %rax');
       end
       else
@@ -11279,20 +11269,7 @@ begin
         Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
           [AllocSz + HTotal - HD.Get(I)]))
       else if IsVar then
-      begin
-        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-          Self.Emit(Format(#9'movq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-          Self.Emit(Format(#9'leaq %s, %%rax',
-            [Self.VarOperand(TIdentExpr(Arg).Name)]))
-        else if (Arg is TIdentExpr) and (TIdentExpr(Arg).ConstArraySymbol <> '') then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [NativeMangle(TIdentExpr(Arg).ConstArraySymbol)]))
-        else if Arg is TIdentExpr then
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-            [TIdentExpr(Arg).Name]));
-      end
+        Self.EmitVarArgAddrToRax(Arg)
       else
         Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
@@ -11486,6 +11463,7 @@ procedure TX86_64Backend.EmitSretCall(const AFuncSym: string; ADecl: TMethodDecl
 var
   I:        Integer;
   Arg:      TASTExpr;
+  IsVar:    Boolean;
   AllocSz:  Integer;
   CleanUp:  Integer;
   RC:       TRecReturnClass;
@@ -11547,9 +11525,13 @@ begin
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
       if HK.Get(I) >= akRecCall then
         Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
           [HTotal - HD.Get(I) + I * 8]))
+      else if IsVar then
+        Self.EmitVarArgAddrToRax(Arg)
       else
         Self.EmitExprToEax(Arg);
       Self.Emit(#9'pushq %rax');
@@ -11572,9 +11554,13 @@ begin
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
       if HK.Get(I) >= akRecCall then
         Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
           [AllocSz + HTotal - HD.Get(I)]))
+      else if IsVar then
+        Self.EmitVarArgAddrToRax(Arg)
       else
         Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));

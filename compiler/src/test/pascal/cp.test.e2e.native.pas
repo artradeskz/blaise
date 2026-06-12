@@ -363,6 +363,13 @@ type
       block must be hoisted before the argument pushes, or the popq sequence
       pops from inside the block and the callee sees shifted registers. }
     procedure TestRun_Native_OpenArrayLiteral_AfterOtherArgs;
+    { var-param argument to an sret (record-returning) call must pass the
+      variable's ADDRESS, not its value (regression: movslq instead of
+      leaq handed the callee a garbage pointer). }
+    procedure TestRun_Native_SretCall_VarParamArg;
+    { Record value assigned into a record-typed field of the sret Result
+      must be a full ARC-aware copy, not an 8-byte pointer store. }
+    procedure TestRun_Native_SretResult_NestedRecordFieldAssign;
   end;
 
 implementation
@@ -1244,6 +1251,92 @@ const
   both code generators against one hand-written expected value.  As native
   gains features, more suites can adopt AssertRunsOnAll; until then this
   suite covers the integer-family subset native supports. }
+
+const
+  SrcSretVarParamArg = '''
+    program Prg;
+    type
+      TBig = record
+        A, B, C, D: Int64;
+        S: string;
+      end;
+    function MakeBig(const AStr: string; APos: Integer;
+      var AEnd: Integer): TBig;
+    begin
+      Result.A := APos;
+      Result.S := AStr;
+      AEnd := APos + 5;
+    end;
+    var
+      R: TBig;
+      E: Integer;
+    begin
+      E := 0;
+      R := MakeBig('hi', 10, E);
+      WriteLn(R.A);
+      WriteLn(R.S);
+      WriteLn(E);
+    end.
+    ''';
+
+  SrcSretNestedRecFieldAssign = '''
+    program Prg;
+    type
+      TOp = record
+        K: Integer;
+        Imm: Int64;
+        S: string;
+        A, B: Int64;
+      end;
+      TLine = record
+        Kind: Integer;
+        Op1: TOp;
+        Op2: TOp;
+        N: Integer;
+      end;
+    function PO(V: Integer): TOp;
+    begin
+      Result.K := V;
+      Result.Imm := V * 10;
+      Result.S := 'x';
+    end;
+    function PL: TLine;
+    var
+      T: TOp;
+    begin
+      Result.Kind := 1;
+      T := PO(5);
+      Result.Op1 := T;
+      T := PO(7);
+      Result.Op2 := T;
+      Result.N := 9;
+    end;
+    var
+      L: TLine;
+    begin
+      L := PL();
+      WriteLn(L.Kind);
+      WriteLn(L.Op1.K);
+      WriteLn(L.Op2.K);
+      WriteLn(L.Op2.Imm);
+      WriteLn(L.Op1.S);
+      WriteLn(L.N);
+    end.
+    ''';
+
+procedure TE2ENativeTests.TestRun_Native_SretCall_VarParamArg;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcSretVarParamArg,
+    '10' + LE + 'hi' + LE + '15' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SretResult_NestedRecordFieldAssign;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcSretNestedRecFieldAssign,
+    '1' + LE + '5' + LE + '7' + LE + '70' + LE + 'x' + LE + '9' + LE, 0);
+end;
 
 procedure TE2ENativeTests.TestRun_Native_EmptyProgram_ExitsZero;
 begin
