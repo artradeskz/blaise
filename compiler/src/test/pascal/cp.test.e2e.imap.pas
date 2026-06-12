@@ -31,6 +31,8 @@ type
     procedure TestRun_IMap_SwapImplementation_SameCallSite;
     procedure TestRun_IMap_GenericDictInUnit_LinksAndRuns;
     procedure TestRun_StaticArrayOfInterface_FatPointer;
+    procedure TestRun_InterfaceResult_NilCompare_Registry;
+    procedure TestRun_IntfMethodReturningIntf_ToLocal;
   end;
 
 implementation
@@ -517,6 +519,115 @@ begin
   AssertEquals('exit 0', 0, RCode);
   AssertTrue('output: ' + Output,
     Pos('11' + #10 + '22' + #10 + '22' + #10 + '11' + #10 + '11', Output) >= 0);
+end;
+
+const
+  { Registry pattern: function returning an interface with `if Result = nil`
+    inside.  The interface Result lives in the caller's sret buffer (split
+    obj/itab) — the nil compare must read the obj half, not a single slot. }
+  SrcIntfResultNilCompare =
+    '''
+    program P;
+    type
+      IDriver = interface
+        function GetVal: Integer;
+      end;
+      TDrv = class(IDriver)
+        function GetVal: Integer;
+        begin
+          Result := 7
+        end;
+      end;
+    var
+      GCache: IDriver;
+    function GetDriver(): IDriver;
+    begin
+      Result := GCache;
+      if Result = nil then
+      begin
+        WriteLn('miss');
+        Result := TDrv.Create();
+        GCache := Result
+      end
+    end;
+    var
+      D: IDriver;
+    begin
+      D := GetDriver();
+      WriteLn(D.GetVal());
+      D := GetDriver();
+      WriteLn(D.GetVal())
+    end.
+    ''';
+
+  { Interface-method call (itab dispatch) returning an interface, assigned to
+    a LOCAL interface var — both with a local interface receiver and with an
+    implicit-Self interface-field receiver. }
+  SrcIntfMethodReturningIntf =
+    '''
+    program P;
+    type
+      IWidget = interface
+        function Tag: Integer;
+      end;
+      IDriver = interface
+        function MakeWidget(N: Integer): IWidget;
+      end;
+      TWidget = class(IWidget)
+        FTag: Integer;
+        function Tag: Integer;
+        begin
+          Result := Self.FTag
+        end;
+      end;
+      TDrv = class(IDriver)
+        function MakeWidget(N: Integer): IWidget;
+        var W: TWidget;
+        begin
+          W := TWidget.Create();
+          W.FTag := N;
+          Result := W
+        end;
+      end;
+      TWorker = class
+        FDriver: IDriver;
+        function Run: Integer;
+        var W: IWidget;
+        begin
+          W := FDriver.MakeWidget(21);
+          Result := W.Tag()
+        end;
+      end;
+    procedure Go();
+    var
+      D: IDriver;
+      W: IWidget;
+      K: TWorker;
+    begin
+      D := TDrv.Create();
+      W := D.MakeWidget(42);
+      WriteLn(W.Tag());
+      K := TWorker.Create();
+      K.FDriver := D;
+      WriteLn(K.Run())
+    end;
+    begin
+      Go()
+    end.
+    ''';
+
+procedure TE2EIMapTests.TestRun_InterfaceResult_NilCompare_Registry;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcIntfResultNilCompare,
+    'miss' + LineEnding + '7' + LineEnding + '7' + LineEnding, 0);
+end;
+
+procedure TE2EIMapTests.TestRun_IntfMethodReturningIntf_ToLocal;
+begin
+  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
+  AssertRunsOnAll(SrcIntfMethodReturningIntf,
+    '42' + LineEnding + '21' + LineEnding, 0);
 end;
 
 initialization

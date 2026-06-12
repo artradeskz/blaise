@@ -251,6 +251,12 @@ type
       globals are two separate .data labels, AName + '_obj'/'_itab'. }
     function IntfObjOperand(const AName: string; AIsGlobal: Boolean): string;
     function IntfItabOperand(const AName: string; AIsGlobal: Boolean): string;
+    { Push the (itab, obj) pair of a named interface ident source — itab
+      first so obj ends on top; leaves obj in %rax for the ARC retain that
+      follows.  Handles the sret interface Result, whose slot holds a
+      POINTER to the caller's 16-byte buffer rather than the fat pointer
+      itself (IntfObjOperand alone would push that pointer as the obj). }
+    procedure PushIntfIdentPair(AIdent: TIdentExpr);
     { Lower one interface method call (TFieldAccessExpr.IsInterfaceCall or a
       TMethodCallExpr/Stmt whose ResolvedClassType is tyInterface): load obj +
       itab, index the itab by method slot, call the loaded pointer with obj as
@@ -398,6 +404,12 @@ type
       buffer (obj+itab) is left on the stack; caller is responsible for loading
       the slots and cleaning up (addq $16, %rsp). }
     procedure EmitIntfSretCall(ACall: TFuncCallExpr);
+    { Interface-method call (itab dispatch) RETURNING an interface: the callee
+      writes the fat pointer through a hidden sret first arg (%rdi), with the
+      receiver obj as the second arg (%rsi).  Same caller contract as
+      EmitIntfSretCall: the 16-byte buffer is left at (%rsp); the caller loads
+      the slots and pops it (addq $16, %rsp). }
+    procedure EmitIntfSretMethodCall(ACall: TMethodCallExpr);
     { Indirect call: load a bare function pointer from APtrOperand (an AT&T
       memory operand, e.g. "-8(%rbp)"), set up args as for EmitCall, then
       dispatch via callq *%r10.  AProcType supplies the param list for
@@ -2265,12 +2277,7 @@ begin
     end
     else if (AAsgn.Expr.ResolvedType.Kind = tyInterface) and (AAsgn.Expr is TIdentExpr) then
     begin
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-      Self.Emit(#9'pushq %rax');
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-      Self.Emit(#9'pushq %rax');
+      Self.PushIntfIdentPair(TIdentExpr(AAsgn.Expr));
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(#9'callq _ClassAddRef');
       Self.Emit(#9'movq (%r15), %rdi');
@@ -2302,6 +2309,21 @@ begin
             (TMethodDecl(TFuncCallExpr(AAsgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyInterface) then
     begin
       Self.EmitIntfSretCall(TFuncCallExpr(AAsgn.Expr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
+    end
+    else if (AAsgn.Expr is TMethodCallExpr) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType <> nil) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyInterface) then
+    begin
+      { Interface-method call (itab dispatch) returning an interface — the
+        callee hands back an OWNED +1 fat pointer in the sret buffer. }
+      Self.EmitIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
       Self.Emit(#9'movq (%r15), %rdi');
       Self.Emit(#9'callq _ClassRelease');
       Self.Emit(#9'movq (%rsp), %rax');
@@ -2354,12 +2376,7 @@ begin
     end
     else if (AAsgn.Expr.ResolvedType.Kind = tyInterface) and (AAsgn.Expr is TIdentExpr) then
     begin
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-      Self.Emit(#9'pushq %rax');
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-      Self.Emit(#9'pushq %rax');
+      Self.PushIntfIdentPair(TIdentExpr(AAsgn.Expr));
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(#9'callq _ClassAddRef');
       Self.Emit(#9'movq (%r15), %rdi');
@@ -2368,6 +2385,35 @@ begin
       Self.Emit(#9'movq %rax, (%r15)');
       Self.Emit(#9'popq %rax');
       Self.Emit(#9'movq %rax, 8(%r15)');
+    end
+    else if (AAsgn.Expr is TFuncCallExpr) and
+            (TFuncCallExpr(AAsgn.Expr).ResolvedDecl <> nil) and
+            (TMethodDecl(TFuncCallExpr(AAsgn.Expr).ResolvedDecl).ResolvedReturnType <> nil) and
+            (TMethodDecl(TFuncCallExpr(AAsgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyInterface) then
+    begin
+      Self.EmitIntfSretCall(TFuncCallExpr(AAsgn.Expr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
+    end
+    else if (AAsgn.Expr is TMethodCallExpr) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType <> nil) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyInterface) then
+    begin
+      { Interface-method call (itab dispatch) returning an interface — the
+        callee hands back an OWNED +1 fat pointer in the sret buffer. }
+      Self.EmitIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
     end
     else
       raise ENativeCodeGenError.Create(
@@ -2473,12 +2519,7 @@ begin
     else
     begin
       { Load src obj+itab; addref new obj; release old obj; store both. }
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-      Self.Emit(#9'pushq %rax');             { itab }
-      Self.Emit(Format(#9'movq %s, %%rax',
-        [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
-      Self.Emit(#9'pushq %rax');             { obj; stack now (obj, itab) }
+      Self.PushIntfIdentPair(TIdentExpr(AAsgn.Expr));
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(#9'callq _ClassAddRef');
       Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
@@ -2528,6 +2569,24 @@ begin
   begin
     Self.EmitIntfSretCall(TFuncCallExpr(AAsgn.Expr));
     { Sret buffer at (%rsp): obj at 0(%rsp), itab at 8(%rsp). }
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));  { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'movq (%rsp), %rax');
+    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+    Self.Emit(#9'movq 8(%rsp), %rax');
+    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    Self.Emit(#9'addq $16, %rsp');
+    Exit;
+  end;
+
+  { F := SomeIntf.Method(args) where Method (itab dispatch) returns an
+    interface — same sret protocol; the callee hands back an OWNED +1 fat
+    pointer, so release the old obj and store without an extra AddRef. }
+  if (AAsgn.Expr is TMethodCallExpr) and
+     (TMethodCallExpr(AAsgn.Expr).ResolvedClassType <> nil) and
+     (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyInterface) then
+  begin
+    Self.EmitIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
     Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));  { old obj }
     Self.Emit(#9'callq _ClassRelease');
     Self.Emit(#9'movq (%rsp), %rax');
@@ -2606,14 +2665,7 @@ begin
         Self.Emit(#9'pushq %rcx');
       end
       else
-      begin
-        Self.Emit(Format(#9'movq %s, %%rax',
-          [Self.IntfItabOperand(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
-        Self.Emit(#9'pushq %rax');
-        Self.Emit(Format(#9'movq %s, %%rax',
-          [Self.IntfObjOperand(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
-        Self.Emit(#9'pushq %rax');
-      end;
+        Self.PushIntfIdentPair(TIdentExpr(AExpr));
     end
     else if AExpr is TFieldAccessExpr then
     begin
@@ -2827,6 +2879,29 @@ begin
   end
   else
     Result := AName + '_itab(%rip)';
+end;
+
+procedure TX86_64Backend.PushIntfIdentPair(AIdent: TIdentExpr);
+begin
+  if FSretFunc and SameText(AIdent.Name, 'Result') then
+  begin
+    { sret interface Result: the slot holds the caller-buffer address —
+      dereference for obj (+0) and itab (+8). }
+    Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Result')]));
+    Self.Emit(#9'movq 8(%rax), %rcx');
+    Self.Emit(#9'pushq %rcx');
+    Self.Emit(#9'movq (%rax), %rax');
+    Self.Emit(#9'pushq %rax');
+  end
+  else
+  begin
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfItabOperand(AIdent.Name, AIdent.IsGlobal)]));
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfObjOperand(AIdent.Name, AIdent.IsGlobal)]));
+    Self.Emit(#9'pushq %rax');
+  end;
 end;
 
 { Load an integer-family value from memory into %rax, extended to the full
@@ -4222,6 +4297,24 @@ begin
       Self.Emit(Format(#9'movq %s, %%rcx',
         [Self.VarOperand('_cap_' + TIdentExpr(AExpr).Name)]));
       Self.EmitLoadVar('(%rcx)', Self.IntExprType(AExpr));
+    end
+    else if (TIdentExpr(AExpr).ResolvedType <> nil) and
+            (TIdentExpr(AExpr).ResolvedType.Kind = tyInterface) then
+    begin
+      { Interface ident used as a single value (nil/identity compare): load
+        the obj half of the fat pointer.  An sret Result slot holds a POINTER
+        to the caller's 16-byte buffer — dereference it; locals keep obj at
+        the slot base and globals use the _obj data label (a bare global
+        symbol load would reference a label that does not exist). }
+      if FSretFunc and SameText(TIdentExpr(AExpr).Name, 'Result') then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]));
+        Self.Emit(#9'movq (%rcx), %rax');
+      end
+      else
+        Self.Emit(Format(#9'movq %s, %%rax',
+          [Self.IntfObjOperand(TIdentExpr(AExpr).Name,
+              TIdentExpr(AExpr).IsGlobal)]));
     end
     else
       Self.EmitLoadVar(Self.VarOperand(TIdentExpr(AExpr).Name),
@@ -11929,6 +12022,171 @@ begin
   { Post-call: release hoisted values (the 16-byte buffer sits between %rsp
     and the region), then slide the buffer down over the region so the
     caller's contract holds. }
+  Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
+  if HTotal > 0 then
+  begin
+    Self.Emit(#9'movq (%rsp), %rax');
+    Self.Emit(#9'movq 8(%rsp), %rcx');
+    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + HTotal]));
+    Self.Emit(#9'pushq %rcx');
+    Self.Emit(#9'pushq %rax');
+  end;
+  HD.Free();
+  HK.Free();
+end;
+
+procedure TX86_64Backend.EmitIntfSretMethodCall(ACall: TMethodCallExpr);
+var
+  I, SlotOff, ArgN: Integer;
+  Arg: TASTExpr;
+  IntfD: TInterfaceTypeDesc;
+  HD: TList<Integer>;
+  HK: TList<Integer>;
+  HTotal, Pushed: Integer;
+  VFlags: string;
+  IE: TIdentExpr;
+begin
+  IntfD := TInterfaceTypeDesc(ACall.ResolvedClassType);
+  ArgN := 0;
+  if ACall.Args <> nil then ArgN := ACall.Args.Count;
+  { Same unknown-signature hoist as EmitInterfaceCall; the region sits BELOW
+    the sret buffer (see EmitIntfSretCall for the layout rationale). }
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  VFlags := IntfD.MethodParamVarFlagsStr(IntfD.MethodIndex(ACall.Name));
+  HTotal := Self.EmitArgHoist(nil, nil, False, VFlags, ACall.Args, HD, HK);
+  { Allocate and zero the 16-byte sret buffer. }
+  Self.Emit(#9'subq $16, %rsp');
+  Self.Emit(#9'movq $0, (%rsp)');
+  Self.Emit(#9'movq $0, 8(%rsp)');
+  Pushed := 0;
+  { Push args left-to-right; interface args push obj then itab (2 slots). }
+  for I := 0 to ArgN - 1 do
+  begin
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    if HK.Get(I) >= akRecCall then
+    begin
+      { Hoisted record-call or string argument — reload the saved value
+        (+16 for the sret buffer between %rsp and the hoist region). }
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+        [16 + HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    begin
+      if Arg is TIdentExpr then
+      begin
+        if TIdentExpr(Arg).IsImplicitSelf and
+           (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+          Self.Emit(#9'movq (%rax), %rcx');
+          Self.Emit(#9'movq 8(%rax), %rdx');
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'pushq %rdx');
+        end
+        else
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(Format(#9'movq %s, %%rcx',
+            [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(#9'pushq %rcx');
+        end;
+      end
+      else if Arg is TFieldAccessExpr then
+      begin
+        Self.EmitInterfaceFieldAddr(TFieldAccessExpr(Arg), '%rax');
+        Self.Emit(#9'movq (%rax), %rcx');
+        Self.Emit(#9'movq 8(%rax), %rdx');
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'pushq %rdx');
+      end
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: unsupported interface arg expression in sret interface dispatch');
+    end
+    else
+    begin
+      Self.EmitExprToEax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end;
+    if (HK.Get(I) < akRecCall) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
+      Pushed := Pushed + 16
+    else
+      Pushed := Pushed + 8;
+  end;
+  { Resolve the receiver: obj into %r10, itab into %rax. }
+  if (ACall.ObjExpr <> nil) and (ACall.ObjExpr is TFieldAccessExpr) then
+  begin
+    Self.EmitInterfaceFieldAddr(TFieldAccessExpr(ACall.ObjExpr), '%r10');
+    Self.Emit(#9'movq 8(%r10), %rax');
+    Self.Emit(#9'movq (%r10), %r10');
+  end
+  else if (ACall.ObjExpr <> nil) and (ACall.ObjExpr is TIdentExpr) and
+          TIdentExpr(ACall.ObjExpr).IsImplicitSelf and
+          (TIdentExpr(ACall.ObjExpr).ImplicitFieldInfo <> nil) then
+  begin
+    { Interface field of Self as receiver: fat pointer at Self + offset. }
+    IE := TIdentExpr(ACall.ObjExpr);
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+    if TFieldInfo(IE.ImplicitFieldInfo).Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%r10',
+        [TFieldInfo(IE.ImplicitFieldInfo).Offset]));
+    Self.Emit(#9'movq 8(%r10), %rax');
+    Self.Emit(#9'movq (%r10), %r10');
+  end
+  else if (ACall.ObjExpr <> nil) and (ACall.ObjExpr is TIdentExpr) then
+  begin
+    IE := TIdentExpr(ACall.ObjExpr);
+    Self.Emit(Format(#9'movq %s, %%r10',
+      [Self.IntfObjOperand(IE.Name, IE.IsGlobal)]));
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfItabOperand(IE.Name, IE.IsGlobal)]));
+  end
+  else if ACall.ObjExpr <> nil then
+    raise ENativeCodeGenError.Create(
+      'native backend: unsupported receiver expression in sret interface dispatch')
+  else if ACall.IsVarParam then
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
+    Self.Emit(#9'movq 8(%r10), %rax');
+    Self.Emit(#9'movq (%r10), %r10');
+  end
+  else
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10',
+      [Self.IntfObjOperand(ACall.ObjectName, ACall.IsGlobal)]));
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfItabOperand(ACall.ObjectName, ACall.IsGlobal)]));
+  end;
+  SlotOff := IntfD.MethodIndex(ACall.Name) * 8;
+  if SlotOff = 0 then
+    Self.Emit(#9'movq (%rax), %r11')
+  else
+    Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
+  { Pop args shifted by 2: %rdi = sret buffer, %rsi = receiver obj. }
+  SlotOff := 0;
+  for I := 0 to ArgN - 1 do
+  begin
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+      Inc(SlotOff, 2)
+    else
+      Inc(SlotOff);
+  end;
+  for I := SlotOff - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
+  Self.Emit(#9'movq %r10, %rsi');
+  Self.Emit(#9'movq %rsp, %rdi');
+  Self.Emit(#9'callq *%r11');
+  { Post-call: release hoisted values, then slide the buffer down over the
+    hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
   if HTotal > 0 then
   begin

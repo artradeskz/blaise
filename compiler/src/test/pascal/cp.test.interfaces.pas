@@ -115,6 +115,14 @@ type
     procedure TestSemantic_InterfaceProperty_InheritedFromParent_OK;
     procedure TestCodegen_InterfacePropertyRead_DispatchesGetter;
     procedure TestCodegen_InterfacePropertyWrite_DispatchesSetter;
+
+    { ------------------------------------------------------------------ }
+    { Regression — interface idents as values; interface-returning        }
+    { interface-method calls                                              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_InterfaceResult_NilCompare_UsesObjSlot;
+    procedure TestCodegen_InterfaceLocal_NilCompare_UsesObjSlot;
+    procedure TestCodegen_IntfMethodReturningIntf_AssignsToSplitSlots;
   end;
 
 implementation
@@ -1479,6 +1487,144 @@ begin
     as the single argument after Self. }
   AssertTrue('setter dispatched with value argument',
     Pos('call %', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Regression — interface idents as values; interface-returning        }
+{ interface-method calls                                              }
+{ ------------------------------------------------------------------ }
+
+const
+  { Function whose RETURN TYPE is an interface, with `if Result = nil` in the
+    body.  An interface Result has no single %_var_Result slot — only the
+    split %_var_Result_obj / %_var_Result_itab pair pointing into the sret
+    buffer — so the nil compare must load the obj half. }
+  SrcInterfaceResultNilCompare =
+    '''
+        program P;
+        type
+          IDriver = interface
+            function GetVal(): Integer;
+          end;
+          TDrv = class(TObject, IDriver)
+            function GetVal(): Integer;
+          end;
+        function TDrv.GetVal(): Integer;
+        begin
+          Result := 7
+        end;
+        function GetDriver(): IDriver;
+        begin
+          Result := nil;
+          if Result = nil then
+            Result := TDrv.Create()
+        end;
+        begin
+        end.
+        ''';
+
+  { Plain interface LOCAL compared against nil — same obj-half rule. }
+  SrcInterfaceLocalNilCompare =
+    '''
+        program P;
+        type
+          IDriver = interface
+            function GetVal(): Integer;
+          end;
+          TDrv = class(TObject, IDriver)
+            function GetVal(): Integer;
+          end;
+        function TDrv.GetVal(): Integer;
+        begin
+          Result := 7
+        end;
+        procedure Run();
+        var
+          D: IDriver;
+        begin
+          D := nil;
+          if D = nil then
+            D := TDrv.Create()
+        end;
+        begin
+          Run()
+        end.
+        ''';
+
+  { Interface-method call (itab dispatch) RETURNING an interface, assigned to
+    a LOCAL interface var.  The callee writes the fat pointer through a hidden
+    sret arg; the caller must store obj/itab into the split slots — never a
+    single `storel %t, %_var_W`. }
+  SrcIntfMethodCallReturnsInterface =
+    '''
+        program P;
+        type
+          IWidget = interface
+            function Tag(): Integer;
+          end;
+          IDriver = interface
+            function MakeWidget(N: Integer): IWidget;
+          end;
+          TWidget = class(TObject, IWidget)
+            function Tag(): Integer;
+          end;
+          TDrv = class(TObject, IDriver)
+            function MakeWidget(N: Integer): IWidget;
+          end;
+        function TWidget.Tag(): Integer;
+        begin
+          Result := 1
+        end;
+        function TDrv.MakeWidget(N: Integer): IWidget;
+        begin
+          Result := TWidget.Create()
+        end;
+        procedure Run();
+        var
+          D: IDriver;
+          W: IWidget;
+        begin
+          D := TDrv.Create();
+          W := D.MakeWidget(3)
+        end;
+        begin
+          Run()
+        end.
+        ''';
+
+procedure TInterfaceTests.TestCodegen_InterfaceResult_NilCompare_UsesObjSlot;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcInterfaceResultNilCompare);
+  AssertTrue('nil compare loads the obj half of Result',
+    Pos('loadl %_var_Result_obj', IR) > 0);
+  AssertFalse('must not load a non-existent single %_var_Result slot',
+    Pos('loadl %_var_Result' + #10, IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceLocal_NilCompare_UsesObjSlot;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcInterfaceLocalNilCompare);
+  AssertTrue('nil compare loads the obj half of the local',
+    Pos('loadl %_var_D_obj', IR) > 0);
+  AssertFalse('must not load a non-existent single %_var_D slot',
+    Pos('loadl %_var_D' + #10, IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_IntfMethodReturningIntf_AssignsToSplitSlots;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcIntfMethodCallReturnsInterface);
+  AssertTrue('obj half stored into the split obj slot',
+    Pos(', %_var_W_obj', IR) > 0);
+  AssertTrue('itab half stored into the split itab slot',
+    Pos(', %_var_W_itab', IR) > 0);
+  AssertFalse('must not store into a non-existent single %_var_W slot',
+    Pos(', %_var_W' + #10, IR) > 0);
 end;
 
 initialization

@@ -344,6 +344,11 @@ type
       the result there instead of returning it.  Handles TFuncCallExpr,
       TMethodCallExpr, and TFieldAccessExpr.IsMethodCall. }
     procedure EmitRecordCallSret(AExpr: TASTExpr; const ASretAddr: string);
+    { Interface-dispatched (itab) call whose return type is an interface:
+      the callee writes the fat pointer through a hidden first sret arg.
+      ACall is a TMethodCallExpr (args form) or a TFieldAccessExpr with
+      IsInterfaceCall set (zero-arg form). }
+    procedure EmitIntfSretDispatch(ACall: TASTExpr; const ASretAddr: string);
     procedure EmitRecordReturnCallSite(const AFuncName, AVisibleArgs: string;
                                        ARetType: TRecordTypeDesc;
                                        const ADestAddr: string);
@@ -3830,6 +3835,42 @@ begin
     Exit;
   end;
 
+  { Interface := call returning an interface — the callee writes the fat
+    pointer (obj+itab) into a caller-supplied 16-byte sret buffer.  Load both
+    slots from the buffer and store into the LHS split slots with ARC.  This
+    must run BEFORE the interface-to-interface branch below: a zero-arg
+    interface-method call is a TFieldAccessExpr, which that branch would
+    otherwise mistake for a plain field read. }
+  if (AAssign.ResolvedLhsType <> nil) and
+     (AAssign.ResolvedLhsType.Kind = tyInterface) and
+     IsInterfaceCall(AAssign.Expr) then
+  begin
+    SretBuf := AllocTemp();
+    EmitLine(Format('  %s =l alloc8 16', [SretBuf]));
+    EmitLine(Format('  call $memset(l %s, w 0, l 16)', [SretBuf]));
+    EmitRecordCallSret(AAssign.Expr, SretBuf);
+    ObjTemp := AllocTemp();
+    ItabTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [ObjTemp, SretBuf]));
+    ValTemp := AllocTemp();
+    EmitLine(Format('  %s =l add %s, 8', [ValTemp, SretBuf]));
+    EmitLine(Format('  %s =l loadl %s', [ItabTemp, ValTemp]));
+    ObjAddr  := IntfObjAddr(AAssign.Name, AAssign.IsGlobal, AAssign.IsVarParam);
+    ItabAddr := IntfItabAddr(AAssign.Name, AAssign.IsGlobal, AAssign.IsVarParam);
+    if AAssign.IsWeakLhs then
+      EmitLine(Format('  call $_WeakAssign(l %s, l %s)', [ObjAddr, ObjTemp]))
+    else
+    begin
+      { The callee returns an OWNED +1 fat pointer — no caller AddRef. }
+      OldTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, ObjAddr]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %s', [ObjTemp, ObjAddr]));
+    end;
+    EmitLine(Format('  storel %s, %s', [ItabTemp, ItabAddr]));
+    Exit;
+  end;
+
   { Interface-to-interface direct assignment: F := G where both sides are
     interface-typed.  Copy obj and itab from G's fat pointer to F's; for
     strong F, retain the backing object and release F's prior obj ref;
@@ -3891,38 +3932,6 @@ begin
       EmitLine(Format('  storel 0, %s', [ObjAddr]));
     end;
     EmitLine(Format('  storel 0, %s', [ItabAddr]));
-    Exit;
-  end;
-
-  { Interface := FuncReturningInterface() — the callee writes the fat pointer
-    (obj+itab) into a caller-supplied 16-byte sret buffer.  Load both slots
-    from the buffer and store into the LHS split slots with ARC. }
-  if (AAssign.ResolvedLhsType <> nil) and
-     (AAssign.ResolvedLhsType.Kind = tyInterface) and
-     IsInterfaceCall(AAssign.Expr) then
-  begin
-    SretBuf := AllocTemp();
-    EmitLine(Format('  %s =l alloc8 16', [SretBuf]));
-    EmitLine(Format('  call $memset(l %s, w 0, l 16)', [SretBuf]));
-    EmitRecordCallSret(AAssign.Expr, SretBuf);
-    ObjTemp  := AllocTemp();
-    ItabTemp := AllocTemp();
-    EmitLine(Format('  %s =l loadl %s', [ObjTemp, SretBuf]));
-    ValTemp := AllocTemp();
-    EmitLine(Format('  %s =l add %s, 8', [ValTemp, SretBuf]));
-    EmitLine(Format('  %s =l loadl %s', [ItabTemp, ValTemp]));
-    ObjAddr  := IntfObjAddr(AAssign.Name, AAssign.IsGlobal, AAssign.IsVarParam);
-    ItabAddr := IntfItabAddr(AAssign.Name, AAssign.IsGlobal, AAssign.IsVarParam);
-    if AAssign.IsWeakLhs then
-      EmitLine(Format('  call $_WeakAssign(l %s, l %s)', [ObjAddr, ObjTemp]))
-    else
-    begin
-      OldTemp := AllocTemp();
-      EmitLine(Format('  %s =l loadl %s', [OldTemp, ObjAddr]));
-      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-      EmitLine(Format('  storel %s, %s', [ObjTemp, ObjAddr]));
-    end;
-    EmitLine(Format('  storel %s, %s', [ItabTemp, ItabAddr]));
     Exit;
   end;
 
@@ -4607,6 +4616,16 @@ begin
   end
   else if AExpr is TMethodCallExpr then
   begin
+    { Interface dispatch: ResolvedMethod is nil by design (the target is
+      resolved through the itab); the call's own resolved type carries the
+      interface method's return type. }
+    if (TMethodCallExpr(AExpr).ResolvedClassType <> nil) and
+       (TMethodCallExpr(AExpr).ResolvedClassType.Kind = tyInterface) then
+    begin
+      Result := (AExpr.ResolvedType <> nil) and
+                (AExpr.ResolvedType.Kind = tyInterface);
+      Exit;
+    end;
     if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
     MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
     Result := (MDecl.ResolvedReturnType <> nil) and
@@ -4615,6 +4634,14 @@ begin
   else if AExpr is TFieldAccessExpr then
   begin
     FldA := TFieldAccessExpr(AExpr);
+    { Zero-arg interface method call through itab dispatch — same rule as
+      the TMethodCallExpr interface-dispatch case above. }
+    if FldA.IsInterfaceCall then
+    begin
+      Result := (AExpr.ResolvedType <> nil) and
+                (AExpr.ResolvedType.Kind = tyInterface);
+      Exit;
+    end;
     if not FldA.IsMethodCall then Exit;
     if FldA.ResolvedMethod = nil then Exit;
     MDecl := TMethodDecl(FldA.ResolvedMethod);
@@ -5049,6 +5076,92 @@ begin
   end;
 end;
 
+procedure TCodeGenQBE.EmitIntfSretDispatch(ACall: TASTExpr;
+  const ASretAddr: string);
+var
+  IntfDesc: TInterfaceTypeDesc;
+  MethName: string;
+  AArgs: TObjectList;
+  MCall: TMethodCallExpr;
+  FldA: TFieldAccessExpr;
+  SelfTemp: string;
+  VTblTemp: string;
+  FPtrTemp: string;
+  ArgTemp: string;
+  ArgLine: string;
+  SlotOff: Integer;
+  I: Integer;
+begin
+  AArgs := nil;
+  if ACall is TMethodCallExpr then
+  begin
+    MCall := TMethodCallExpr(ACall);
+    IntfDesc := TInterfaceTypeDesc(MCall.ResolvedClassType);
+    MethName := MCall.Name;
+    AArgs := MCall.Args;
+    if MCall.ObjExpr <> nil then
+      { Receiver is an expression (record/class field, implicit-Self field,
+        as-cast) — resolve its fat pointer rather than split slots. }
+      EmitInterfaceExprPair(MCall.ObjExpr, SelfTemp, VTblTemp)
+    else
+    begin
+      SelfTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s',
+        [SelfTemp, IntfObjAddr(MCall.ObjectName, MCall.IsGlobal, MCall.IsVarParam)]));
+      VTblTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s',
+        [VTblTemp, IntfItabAddr(MCall.ObjectName, MCall.IsGlobal, MCall.IsVarParam)]));
+    end;
+  end
+  else
+  begin
+    { Zero-arg interface method call: F := G.GetThing — receiver is the
+      named interface local/global/var-param G. }
+    FldA := TFieldAccessExpr(ACall);
+    IntfDesc := TInterfaceTypeDesc(FldA.ResolvedClassType);
+    MethName := FldA.FieldName;
+    SelfTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s',
+      [SelfTemp, IntfObjAddr(FldA.RecordName, FldA.IsGlobal, FldA.IsVarParam)]));
+    VTblTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s',
+      [VTblTemp, IntfItabAddr(FldA.RecordName, FldA.IsGlobal, FldA.IsVarParam)]));
+  end;
+  SlotOff := IntfDesc.MethodIndex(MethName) * 8;
+  FPtrTemp := AllocTemp();
+  if SlotOff = 0 then
+    EmitLine(Format('  %s =l loadl %s', [FPtrTemp, VTblTemp]))
+  else
+  begin
+    ArgTemp := AllocTemp();
+    EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+    EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+  end;
+  { Callee signature is (sret, Self, args...) — the same shape every
+    interface-returning method body declares (`l %_par__sret, l %_par_Self`). }
+  ArgLine := Format('l %s, l %s', [ASretAddr, SelfTemp]);
+  if AArgs <> nil then
+  begin
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      if IntfDesc.MethodParamIsVar(IntfDesc.MethodIndex(MethName), I) then
+        ArgLine := ArgLine + Format(', l %s',
+          [EmitLValueAddr(TASTExpr(AArgs.Items[I]))])
+      else
+      begin
+        ArgTemp := EmitExpr(TASTExpr(AArgs.Items[I]));
+        if (TASTExpr(AArgs.Items[I]).ResolvedType <> nil) and
+           (TASTExpr(AArgs.Items[I]).ResolvedType.Kind in
+             [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
+          ArgLine := ArgLine + Format(', l %s', [ArgTemp])
+        else
+          ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
+      end;
+    end;
+  end;
+  EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+end;
+
 procedure TCodeGenQBE.EmitRecordCallSret(AExpr: TASTExpr;
   const ASretAddr: string);
 var
@@ -5116,6 +5229,14 @@ begin
   else if AExpr is TMethodCallExpr then
   begin
     MCallExpr := TMethodCallExpr(AExpr);
+    if (MCallExpr.ResolvedClassType <> nil) and
+       (MCallExpr.ResolvedClassType.Kind = tyInterface) then
+    begin
+      { Interface-method call through itab dispatch — ResolvedMethod is nil,
+        so the direct-call path below cannot be used. }
+      EmitIntfSretDispatch(MCallExpr, ASretAddr);
+      Exit;
+    end;
     MDecl := TMethodDecl(MCallExpr.ResolvedMethod);
     RetType := TRecordTypeDesc(MDecl.ResolvedReturnType);
     if MCallExpr.ObjExpr <> nil then
@@ -5158,6 +5279,12 @@ begin
   else if AExpr is TFieldAccessExpr then
   begin
     FldAccess := TFieldAccessExpr(AExpr);
+    if FldAccess.IsInterfaceCall then
+    begin
+      { Zero-arg interface method call through itab dispatch. }
+      EmitIntfSretDispatch(FldAccess, ASretAddr);
+      Exit;
+    end;
     MDecl := TMethodDecl(FldAccess.ResolvedMethod);
     RetType := TRecordTypeDesc(MDecl.ResolvedReturnType);
     if FldAccess.IsImplicitSelf then
@@ -11022,6 +11149,17 @@ begin
       { Aggregate variable — return its storage address directly (no load). }
       Exit(VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal));
     end
+    else if (AExpr.ResolvedType <> nil) and
+            (AExpr.ResolvedType.Kind = tyInterface) then
+    begin
+      { Interface ident used as a single value (nil/identity compare): the
+        fat pointer lives in split _obj/_itab slots — there is no single
+        %_var_Name slot.  Load the obj half; this also covers an interface
+        Result, whose _obj slot holds the sret-buffer address. }
+      EmitLine(Format('  %s =l loadl %s',
+        [T, IntfObjAddr(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal,
+            False)]));
+    end
     else if not TIdentExpr(AExpr).IsGlobal and
             IsPromoted(TIdentExpr(AExpr).Name) then
     begin
@@ -11224,9 +11362,9 @@ begin
       pointer-shaped (class/nil/pointer/metaclass).  Identity check only;
       ordering ops on pointers are not supported. }
     if ((BinExpr.Left.ResolvedType <> nil) and
-        (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil, tyPointer, tyMetaClass])) or
+        (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil, tyPointer, tyMetaClass, tyInterface])) or
        ((BinExpr.Right.ResolvedType <> nil) and
-        (BinExpr.Right.ResolvedType.Kind in [tyClass, tyNil, tyPointer, tyMetaClass])) then
+        (BinExpr.Right.ResolvedType.Kind in [tyClass, tyNil, tyPointer, tyMetaClass, tyInterface])) then
     begin
       case BinExpr.Op of
         boEQ: Op := 'ceql';
