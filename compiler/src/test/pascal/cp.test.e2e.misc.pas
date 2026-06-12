@@ -62,6 +62,7 @@ type
     procedure TestRun_Set_UnionIntersect;
     procedure TestRun_Set_ValuedConstant;
     procedure TestRun_Set_LiteralArgument;
+    procedure TestRun_Set_EqualityWithLiteral;
 
     { 64-bit sets (>32 members) }
     procedure TestRun_Set64_InOperator_HighBit;
@@ -449,6 +450,22 @@ const
     begin
       Report([East, West]);
       Report([])
+    end.
+    ''';
+
+  { Set equality: S = [] and S = [literal] comparisons. }
+  SrcSetEquality = '''
+    program Prg;
+    type TDir = (North, South, East, West);
+         TDirs = set of TDir;
+    var S: TDirs;
+    begin
+      S := [];
+      if S = [] then WriteLn('empty') else WriteLn('not-empty');
+      S := [East, West];
+      if S = [] then WriteLn('bad-empty') else WriteLn('not-empty2');
+      if S = [East, West] then WriteLn('match') else WriteLn('no-match');
+      if S <> [East, West] then WriteLn('bad-ne') else WriteLn('equal')
     end.
     ''';
 
@@ -863,6 +880,16 @@ begin
   { Report([East,West]): no-N, E.  Report([]): no-N, no-E. }
   AssertEquals('set literal arg',
     'no-N' + LE + 'E' + LE + 'no-N' + LE + 'no-E' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_Set_EqualityWithLiteral;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSetEquality, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('set equality with literals',
+    'empty' + LE + 'not-empty2' + LE + 'match' + LE + 'equal' + LE, Output);
 end;
 
 { ------------------------------------------------------------------ }

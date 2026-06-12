@@ -50,6 +50,8 @@ type
     procedure TestSemantic_Set_Difference_OK;
     procedure TestSemantic_Set_Intersection_OK;
     procedure TestSemantic_Set_Equality_OK;
+    procedure TestSemantic_Set_EqualityEmptyLiteral_OK;
+    procedure TestSemantic_Set_EqualityLiteral_OK;
     procedure TestSemantic_Set_BaseTypeMustBeEnum;
     procedure TestSemantic_Set_LiteralElementMustMatchBase;
 
@@ -68,6 +70,8 @@ type
     procedure TestCodegen_Set_IntersectionEmitsAnd;
     procedure TestCodegen_Set_EqualityEmitsCeqw;
     procedure TestCodegen_Set_InequalityEmitsCnew;
+    procedure TestCodegen_Set_EqualityEmptyLiteralEmitsCeqw;
+    procedure TestCodegen_Set_EqualityLiteralEmitsCeqw;
 
     { ------------------------------------------------------------------ }
     { set-valued constants  (const X = [a, b])                            }
@@ -358,6 +362,28 @@ const
           S1 := [dNorth];
           S2 := [dSouth];
           B := S1 <> S2
+        end.
+        ''';
+
+  SrcSetEqualityEmptyLiteral =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        var S: TDirSet; B: Boolean;
+        begin
+          S := [];
+          B := S = []
+        end.
+        ''';
+
+  SrcSetEqualityLiteral =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        var S: TDirSet; B: Boolean;
+        begin
+          S := [dNorth, dEast];
+          B := S = [dNorth, dEast]
         end.
         ''';
 
@@ -767,6 +793,18 @@ begin
   SemanticOK(SrcSetInequality);
 end;
 
+procedure TSetTests.TestSemantic_Set_EqualityEmptyLiteral_OK;
+begin
+  { S = [] must not crash the semantic pass (was nil-deref before fix). }
+  SemanticOK(SrcSetEqualityEmptyLiteral);
+end;
+
+procedure TSetTests.TestSemantic_Set_EqualityLiteral_OK;
+begin
+  { S = [dNorth, dEast] — literal RHS coerced to the set type of LHS. }
+  SemanticOK(SrcSetEqualityLiteral);
+end;
+
 procedure TSetTests.TestSemantic_Set_BaseTypeMustBeEnum;
 begin
   SemanticFail(SrcSetBadBaseType);
@@ -896,6 +934,24 @@ var
 begin
   IR := GenIR(SrcSetInequality);
   AssertTrue('set inequality emits cnew', Pos('cnew', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set_EqualityEmptyLiteralEmitsCeqw;
+var
+  IR: string;
+begin
+  { S = [] coerces [] to the set type of S; bitmask 0 vs S — still ceqw. }
+  IR := GenIR(SrcSetEqualityEmptyLiteral);
+  AssertTrue('S = [] emits ceqw', Pos('ceqw', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set_EqualityLiteralEmitsCeqw;
+var
+  IR: string;
+begin
+  { S = [dNorth, dEast] coerces the literal to mask 5; comparison is ceqw. }
+  IR := GenIR(SrcSetEqualityLiteral);
+  AssertTrue('S = [dNorth, dEast] emits ceqw', Pos('ceqw', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }

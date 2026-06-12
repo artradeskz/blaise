@@ -385,9 +385,7 @@ type
       starts at its zero value even on a dirty stack.  Each test category uses
       a Dirty() helper that fills the stack with 0xDEADBEEF garbage before the
       real procedure runs, proving that the zero-init comes from the prologue
-      and not from lucky stack layout.
-      Note: TestRun_ZeroInit_SetLocal runs QBE-only because the native backend
-      currently crashes the compiler on set-typed variables (bugs.txt). }
+      and not from lucky stack layout. }
     procedure TestRun_ZeroInit_ScalarIntegers;
     procedure TestRun_ZeroInit_FloatLocals;
     procedure TestRun_ZeroInit_BooleanAndChar;
@@ -6067,19 +6065,9 @@ begin
 end;
 
 procedure TE2ENativeTests.TestRun_ZeroInit_SetLocal;
-var
-  Stdout: string;
-  ExitCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { Native backend crashes the compiler on set-typed variables — QBE only
-    until that pre-existing bug is fixed (see bugs.txt).
-    Note: set equality (S = []) also crashes the semantic pass (separate bug),
-    so we probe zero-init via the 'in' operator instead. }
-  if not CompileAndRun(SrcZeroInit_SetLocal, Stdout, ExitCode) then
-    Fail('QBE compile/run failed');
-  AssertEquals('0' + LE, Stdout);
-  AssertEquals(0, ExitCode);
+  AssertRunsOnAll(SrcZeroInit_SetLocal, '0' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_ZeroInit_RecordWithMixedFields;

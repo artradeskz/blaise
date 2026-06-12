@@ -8938,18 +8938,31 @@ begin
     Exit;
   end;
 
-  { Set arithmetic and equality when both operands are set types }
-  if (LType.Kind = tySet) or (RType.Kind = tySet) then
+  { Set arithmetic and equality: coerce array literals [...] or empty []
+    to the set type of the other operand.  AnalyseArrayLiteralExpr returns nil
+    for [] (no element type to infer) and tyOpenArray for [a, b, c]. }
+  if (LType <> nil) and (LType.Kind = tySet) and
+     (ABin.Right is TArrayLiteralExpr) and
+     ((RType = nil) or (RType.Kind = tyOpenArray)) then
+    RType := AnalyseSetLiteralExpr(TArrayLiteralExpr(ABin.Right),
+                                   TSetTypeDesc(LType));
+  if (RType <> nil) and (RType.Kind = tySet) and
+     (ABin.Left is TArrayLiteralExpr) and
+     ((LType = nil) or (LType.Kind = tyOpenArray)) then
+    LType := AnalyseSetLiteralExpr(TArrayLiteralExpr(ABin.Left),
+                                   TSetTypeDesc(RType));
+  if ((LType <> nil) and (LType.Kind = tySet)) or
+     ((RType <> nil) and (RType.Kind = tySet)) then
   begin
-    if LType.Kind <> tySet then
+    if (LType = nil) or (LType.Kind <> tySet) then
       SemanticError(
-        Format('Left operand of ''%s'' must be a set type, got ''%s''',
-          [BinaryOpName(ABin.Op), LType.Name]),
+        Format('Left operand of ''%s'' must be a set type',
+          [BinaryOpName(ABin.Op)]),
         ABin.Line, ABin.Col);
-    if RType.Kind <> tySet then
+    if (RType = nil) or (RType.Kind <> tySet) then
       SemanticError(
-        Format('Right operand of ''%s'' must be a set type, got ''%s''',
-          [BinaryOpName(ABin.Op), RType.Name]),
+        Format('Right operand of ''%s'' must be a set type',
+          [BinaryOpName(ABin.Op)]),
         ABin.Line, ABin.Col);
     if LType <> RType then
       SemanticError(
