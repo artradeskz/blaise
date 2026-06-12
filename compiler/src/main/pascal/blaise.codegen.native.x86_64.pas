@@ -412,6 +412,12 @@ type
       EmitIntfSretCall: the 16-byte buffer is left at (%rsp); the caller loads
       the slots and pops it (addq $16, %rsp). }
     procedure EmitIntfSretMethodCall(ACall: TMethodCallExpr);
+    { Class-receiver method call RETURNING an interface (Obj.Make() where Obj
+      is class-typed): sret hidden first arg (%rdi), receiver in %rsi, static
+      or vtable dispatch from the receiver's class.  Same caller contract as
+      EmitIntfSretCall: the 16-byte buffer is left at (%rsp); the caller loads
+      the slots and pops it (addq $16, %rsp). }
+    procedure EmitClassIntfSretMethodCall(ACall: TMethodCallExpr);
     { Indirect call: load a bare function pointer from APtrOperand (an AT&T
       memory operand, e.g. "-8(%rbp)"), set up args as for EmitCall, then
       dispatch via callq *%r10.  AProcType supplies the param list for
@@ -2443,6 +2449,21 @@ begin
       Self.Emit(#9'movq %rax, 8(%r15)');
       Self.Emit(#9'addq $16, %rsp');
     end
+    else if (AAsgn.Expr is TMethodCallExpr) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType <> nil) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyClass) then
+    begin
+      { Class-receiver method call returning an interface — sret protocol;
+        the callee hands back an OWNED +1 fat pointer. }
+      Self.EmitClassIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
+    end
     else
       raise ENativeCodeGenError.Create(
         'native backend: unsupported interface-field assignment RHS');
@@ -2518,6 +2539,21 @@ begin
       { Interface-method call (itab dispatch) returning an interface — the
         callee hands back an OWNED +1 fat pointer in the sret buffer. }
       Self.EmitIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq (%rsp), %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'movq 8(%rsp), %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+      Self.Emit(#9'addq $16, %rsp');
+    end
+    else if (AAsgn.Expr is TMethodCallExpr) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType <> nil) and
+            (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyClass) then
+    begin
+      { Class-receiver method call returning an interface — sret protocol;
+        the callee hands back an OWNED +1 fat pointer. }
+      Self.EmitClassIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
       Self.Emit(#9'movq (%r15), %rdi');
       Self.Emit(#9'callq _ClassRelease');
       Self.Emit(#9'movq (%rsp), %rax');
@@ -2698,6 +2734,25 @@ begin
      (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyInterface) then
   begin
     Self.EmitIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));  { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'movq (%rsp), %rax');
+    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+    Self.Emit(#9'movq 8(%rsp), %rax');
+    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    Self.Emit(#9'addq $16, %rsp');
+    Exit;
+  end;
+
+  { F := Obj.Method() where Obj is class-typed and Method returns an
+    interface — sret protocol with the receiver in %rsi; the callee hands
+    back an OWNED +1 fat pointer, so release the old obj and store without
+    an extra AddRef. }
+  if (AAsgn.Expr is TMethodCallExpr) and
+     (TMethodCallExpr(AAsgn.Expr).ResolvedClassType <> nil) and
+     (TMethodCallExpr(AAsgn.Expr).ResolvedClassType.Kind = tyClass) then
+  begin
+    Self.EmitClassIntfSretMethodCall(TMethodCallExpr(AAsgn.Expr));
     Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));  { old obj }
     Self.Emit(#9'callq _ClassRelease');
     Self.Emit(#9'movq (%rsp), %rax');
@@ -12310,6 +12365,111 @@ begin
   Self.Emit(#9'movq %r10, %rsi');
   Self.Emit(#9'movq %rsp, %rdi');
   Self.Emit(#9'callq *%r11');
+  { Post-call: release hoisted values, then slide the buffer down over the
+    hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
+  Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
+  if HTotal > 0 then
+  begin
+    Self.Emit(#9'movq (%rsp), %rax');
+    Self.Emit(#9'movq 8(%rsp), %rcx');
+    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + HTotal]));
+    Self.Emit(#9'pushq %rcx');
+    Self.Emit(#9'pushq %rax');
+  end;
+  HD.Free();
+  HK.Free();
+end;
+
+procedure TX86_64Backend.EmitClassIntfSretMethodCall(ACall: TMethodCallExpr);
+var
+  I: Integer;
+  MD: TMethodDecl;
+  Sym: string;
+  Arg: TASTExpr;
+  Par: TMethodParam;
+  UserSlots: Integer;
+  HD: TList<Integer>;
+  HK: TList<Integer>;
+  HTotal: Integer;
+  Pushed: Integer;
+begin
+  MD := TMethodDecl(ACall.ResolvedMethod);
+  if MD = nil then
+    raise ENativeCodeGenError.Create(
+      'native backend: class sret interface call has no ResolvedMethod (' +
+      ACall.Name + ')');
+  Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
+  UserSlots := Self.CountArgSlots(MD.Params);
+  { %rdi = sret buffer, %rsi = Self leave four integer arg registers. }
+  if UserSlots > 4 then
+    raise ENativeCodeGenError.Create(
+      'native backend: class sret interface call with >4 arg slots not yet supported');
+  { Hoist region BELOW the sret buffer — same layout rationale as
+    EmitIntfSretCall. }
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
+  Self.Emit(#9'subq $16, %rsp');
+  Self.Emit(#9'movq $0, (%rsp)');
+  Self.Emit(#9'movq $0, 8(%rsp)');
+  Pushed := 0;
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    Par := TMethodParam(MD.Params.Items[I]);
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    if HK.Get(I) >= akRecCall then
+    begin
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+        [16 + HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+      Pushed := Pushed + 8;
+    end
+    else
+    begin
+      Self.EmitMethodArgPush(Par, Arg);
+      if Par.IsOpenArray or
+         ((Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface)) then
+        Pushed := Pushed + 16
+      else
+        Pushed := Pushed + 8;
+    end;
+  end;
+  { Receiver into %r10 — mirrors EmitMethodCallExpr's resolution for
+    class-typed receivers. }
+  if ACall.ObjectName <> '' then
+  begin
+    if ACall.IsVarParam then
+    begin
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
+      Self.Emit(#9'movq (%r10), %r10');
+    end
+    else if Self.IsLocal(ACall.ObjectName) then
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
+  end
+  else if ACall.ObjExpr <> nil then
+  begin
+    Self.EmitExprToEax(ACall.ObjExpr);
+    Self.Emit(#9'movq %rax, %r10');
+  end
+  else
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+  { Pop args shifted by 2: %rdi = sret buffer, %rsi = receiver. }
+  for I := UserSlots - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
+  Self.Emit(#9'movq %r10, %rsi');
+  Self.Emit(#9'movq %rsp, %rdi');
+  if MD.VTableSlot >= 0 then
+  begin
+    { Virtual dispatch through the receiver's vtable (slot 0 is the
+      typeinfo pointer, hence +1). }
+    Self.Emit(#9'movq (%rsi), %rax');
+    Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+    Self.Emit(#9'callq *%rax');
+  end
+  else
+    Self.Emit(#9'callq ' + Sym);
   { Post-call: release hoisted values, then slide the buffer down over the
     hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);

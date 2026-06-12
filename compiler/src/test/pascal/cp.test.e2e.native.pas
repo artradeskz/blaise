@@ -335,6 +335,9 @@ type
     procedure TestRun_Native_DynArrayElemArc_String;
     { M8b — function returning interface: sret convention, obj+itab propagated. }
     procedure TestRun_Native_IntfFuncReturn;
+    { Class-receiver method call returning an interface (Obj.Make()) into
+      local/global vars, sret Result, and an implicit-Self field. }
+    procedure TestRun_Native_IntfFromClassMethod;
     { M8b — interface-field := function-returning-interface (sret into field). }
     procedure TestRun_Native_IntfFieldFromFunc;
     { M8b — weak interface variable: _WeakAssign/_WeakClear instead of ARC. }
@@ -3155,6 +3158,66 @@ const
     end.
     ''';
 
+  { Class-receiver method calls returning an interface (Obj.Make()) —
+    sret protocol with the receiver in %rsi.  Covers all three LHS
+    shapes of EmitInterfaceAssign (local/global var, sret Result,
+    implicit-Self field) plus static and virtual dispatch. }
+  SrcIntfFromClassMethod = '''
+    program Prg;
+    type
+      IThing = interface
+        function Tag(): Integer;
+      end;
+      TThing = class(TObject, IThing)
+        V: Integer;
+        function Tag(): Integer;
+      end;
+      TFactory = class
+        F: IThing;
+        function Make(N: Integer): IThing;
+        function MakeVirt(N: Integer): IThing; virtual;
+        procedure Fill(N: Integer);
+      end;
+    function TThing.Tag(): Integer;
+    begin
+      Result := V
+    end;
+    function TFactory.Make(N: Integer): IThing;
+    var T: TThing;
+    begin
+      T := TThing.Create();
+      T.V := N;
+      Result := T
+    end;
+    function TFactory.MakeVirt(N: Integer): IThing;
+    begin
+      Result := Self.Make(N + 100)
+    end;
+    procedure TFactory.Fill(N: Integer);
+    begin
+      F := Self.Make(N)
+    end;
+    var
+      Fac: TFactory;
+      G: IThing;
+    procedure RunLocal;
+    var L: IThing;
+    begin
+      L := Fac.Make(1);
+      WriteLn(L.Tag())
+    end;
+    begin
+      Fac := TFactory.Create();
+      RunLocal();
+      G := Fac.Make(2);
+      WriteLn(G.Tag());
+      G := Fac.MakeVirt(3);
+      WriteLn(G.Tag());
+      Fac.Fill(5);
+      WriteLn(Fac.F.Tag())
+    end.
+    ''';
+
   SrcIntfFieldFromFunc = '''
     program Prg;
     type
@@ -5254,6 +5317,13 @@ procedure TE2ENativeTests.TestRun_Native_IntfFuncReturn;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcIntfFuncReturn, '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntfFromClassMethod;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcIntfFromClassMethod,
+    '1' + LE + '2' + LE + '103' + LE + '5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IntfFieldFromFunc;
