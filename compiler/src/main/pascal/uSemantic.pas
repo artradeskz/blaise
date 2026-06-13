@@ -132,6 +132,13 @@ type
       CD.IntVal and register the const symbol with its tySet type. }
     procedure AnalyseSetConstDecl(ACD: TConstDecl);
     procedure AnalyseArrayConstDecls(ABlock: TBlock);
+    { Build the (possibly nested) static-array type for a range-indexed array
+      const and validate that the flat row-major element count matches the
+      product of the dimension sizes.  Single-dimension constants build one
+      TStaticArrayTypeDesc as before; multi-dimensional ones build the nested
+      array[d0] of array[d1] of ... of Elem chain. }
+    function BuildConstArrayType(ACD: TConstDecl;
+      AElemTD: TTypeDesc): TStaticArrayTypeDesc;
     { Mint a unique, link-safe QBE data-label for an array const.  The source
       name is kept for lookups; this mangled label is what codegen emits and
       references so identically-named consts in different scopes (and consts
@@ -3234,6 +3241,51 @@ begin
   Result := Format('__bac_%d_%s', [FArrayConstCounter, AName]);
 end;
 
+function TSemanticAnalyser.BuildConstArrayType(ACD: TConstDecl;
+  AElemTD: TTypeDesc): TStaticArrayTypeDesc;
+var
+  D, Lo, Hi: Integer;
+  Expected:  Integer;
+  Inner:     TTypeDesc;
+begin
+  { Multi-dimensional: build the nested type innermost-first and require the
+    flat element count to equal the product of all dimension extents. }
+  if (ACD.ArrayDimLows <> nil) and (ACD.ArrayDimLows.Count > 1) then
+  begin
+    Expected := 1;
+    for D := 0 to ACD.ArrayDimLows.Count - 1 do
+    begin
+      Lo := StrToInt(ACD.ArrayDimLows.Strings[D]);
+      Hi := StrToInt(ACD.ArrayDimHighs.Strings[D]);
+      Expected := Expected * (Hi - Lo + 1);
+    end;
+    if ACD.ArrayElements.Count <> Expected then
+      SemanticError(Format(
+        'Array const ''%s'' has %d element(s) but its dimensions need %d',
+        [ACD.Name, ACD.ArrayElements.Count, Expected]),
+        ACD.Line, ACD.Col);
+    Inner := AElemTD;
+    for D := ACD.ArrayDimLows.Count - 1 downto 0 do
+    begin
+      Lo := StrToInt(ACD.ArrayDimLows.Strings[D]);
+      Hi := StrToInt(ACD.ArrayDimHighs.Strings[D]);
+      Inner := FTable.NewStaticArrayType(Inner, Lo, Hi);
+    end;
+    Result := TStaticArrayTypeDesc(Inner);
+    Exit;
+  end;
+  { Single dimension. }
+  Expected := ACD.ArrayHighBound - ACD.ArrayLowBound + 1;
+  if ACD.ArrayElements.Count <> Expected then
+    SemanticError(Format(
+      'Array const ''%s'' has %d element(s) but range [%d..%d] needs %d',
+      [ACD.Name, ACD.ArrayElements.Count, ACD.ArrayLowBound,
+       ACD.ArrayHighBound, Expected]),
+      ACD.Line, ACD.Col);
+  Result := FTable.NewStaticArrayType(AElemTD, ACD.ArrayLowBound,
+    ACD.ArrayHighBound);
+end;
+
 procedure TSemanticAnalyser.AnalyseArrayConstDecls(ABlock: TBlock);
 { Second-pass constant analysis for array-typed constants.
   Called after AnalyseTypeDecls so that enum index types are in scope. }
@@ -3264,16 +3316,7 @@ begin
       SemanticError(Format('Unknown element type ''%s'' in array const ''%s''',
         [CD.ArrayElemType, CD.Name]), CD.Line, CD.Col);
     if CD.ArrayIsRangeIndexed then
-    begin
-      Expected := CD.ArrayHighBound - CD.ArrayLowBound + 1;
-      if CD.ArrayElements.Count <> Expected then
-        SemanticError(Format(
-          'Array const ''%s'' has %d element(s) but range [%d..%d] needs %d',
-          [CD.Name, CD.ArrayElements.Count, CD.ArrayLowBound,
-           CD.ArrayHighBound, Expected]),
-          CD.Line, CD.Col);
-      ArrTD := FTable.NewStaticArrayType(ElemTD, CD.ArrayLowBound, CD.ArrayHighBound);
-    end
+      ArrTD := Self.BuildConstArrayType(CD, ElemTD)
     else
     begin
       IdxTD := FTable.FindType(CD.ArrayIndexType);
@@ -4014,16 +4057,7 @@ begin
             SemanticError(Format('Unknown element type ''%s'' in class array const ''%s''',
               [CD.ArrayElemType, CD.Name]), CD.Line, CD.Col);
           if CD.ArrayIsRangeIndexed then
-          begin
-            Expected := CD.ArrayHighBound - CD.ArrayLowBound + 1;
-            if CD.ArrayElements.Count <> Expected then
-              SemanticError(Format(
-                'Class array const ''%s'' has %d element(s) but range [%d..%d] needs %d',
-                [CD.Name, CD.ArrayElements.Count, CD.ArrayLowBound,
-                 CD.ArrayHighBound, Expected]),
-                CD.Line, CD.Col);
-            ArrTD := FTable.NewStaticArrayType(ElemTD, CD.ArrayLowBound, CD.ArrayHighBound);
-          end
+            ArrTD := Self.BuildConstArrayType(CD, ElemTD)
           else
           begin
             IdxTD := FTable.FindType(CD.ArrayIndexType);

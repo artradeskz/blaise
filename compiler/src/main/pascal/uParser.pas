@@ -67,6 +67,10 @@ type
     procedure ParseTypeSection(ABlock: TBlock);
     procedure ParseTypeDecl(ABlock: TBlock);
     procedure ParseConstBlock(AList: TObjectList);
+    procedure ParseConstArrayType(CD: TConstDecl);
+    procedure ReadConstArrayDim(CD: TConstDecl);
+    procedure ParseConstArrayScalar(CD: TConstDecl);
+    procedure ParseConstArrayGroup(CD: TConstDecl);
     procedure ParseConstValue(CD: TConstDecl);
     function  TryParseConstIntTypecast(out AValue: Int64): Boolean;
     function  CurrentIsConstBitOp: Boolean;
@@ -863,42 +867,7 @@ begin
     begin
       Advance();
       if Check(tkArray) then
-      begin
-        { array-typed constant }
-        Advance();
-        Expect(tkLBracket);
-        if Check(tkIntLit) then
-        begin
-          CD.ArrayLowBound := ParseIntLiteral(FCurrent.Value);
-          Advance();
-          Expect(tkDotDot);
-          if not Check(tkIntLit) then
-            raise EParseError.Create(Format(
-              'Expected integer high bound in array const at line %d col %d in %s',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-          CD.ArrayHighBound := ParseIntLiteral(FCurrent.Value);
-          Advance();
-          CD.ArrayIsRangeIndexed := True;
-        end
-        else if Check(tkIdent) then
-        begin
-          CD.ArrayIndexType := FCurrent.Value;
-          Advance();
-        end
-        else
-          raise EParseError.Create(Format(
-            'Expected index type or range in array const at line %d col %d in %s',
-            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        Expect(tkRBracket);
-        Expect(tkOf);
-        if not Check(tkIdent) then
-          raise EParseError.Create(Format(
-            'Expected element type name in array const at line %d col %d in %s',
-            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        CD.ArrayElemType := FCurrent.Value;
-        Advance();
-        CD.IsArrayConst := True;
-      end
+        Self.ParseConstArrayType(CD)
       else if Check(tkIdent) then
       begin
         CD.TypeName := FCurrent.Value;
@@ -916,106 +885,218 @@ begin
   end;
 end;
 
+{ Parse the TYPE of an array-typed constant, starting at 'array'.  Supports:
+
+    array[L..H] of T                       single, range-indexed
+    array[E] of T                          single, enum-indexed (E an enum type)
+    array[L0..H0, L1..H1, ...] of T        multi-dim, comma form
+    array[L0..H0] of array[L1..H1] of T    multi-dim, nested form
+
+  Each range dimension's bounds are pushed onto CD.ArrayDimLows /
+  ArrayDimHighs.  For the single range-indexed case ArrayLowBound /
+  ArrayHighBound are also set so the existing single-dim path is unchanged.
+  Enum indexing is only supported for a single dimension (CD.ArrayIndexType);
+  it cannot be mixed with multi-dimensional ranges. }
+procedure TParser.ReadConstArrayDim(CD: TConstDecl);
+var
+  Lo, Hi: Integer;
+begin
+  Lo := ParseIntLiteral(FCurrent.Value);
+  Advance();
+  Expect(tkDotDot);
+  if not Check(tkIntLit) then
+    raise EParseError.Create(Format(
+      'Expected integer high bound in array const at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  Hi := ParseIntLiteral(FCurrent.Value);
+  Advance();
+  CD.ArrayDimLows.Add(IntToStr(Lo));
+  CD.ArrayDimHighs.Add(IntToStr(Hi));
+  CD.ArrayIsRangeIndexed := True;
+end;
+
+procedure TParser.ParseConstArrayType(CD: TConstDecl);
+begin
+  CD.IsArrayConst := True;
+  CD.ArrayDimLows  := TStringList.Create();
+  CD.ArrayDimHighs := TStringList.Create();
+  { Outer loop walks one or more 'array[...] of' headers — the nested form
+    contributes one iteration per 'array' keyword; the comma form contributes
+    several dimensions within a single header. }
+  while True do
+  begin
+    Expect(tkArray);
+    Expect(tkLBracket);
+    if Check(tkIntLit) then
+    begin
+      Self.ReadConstArrayDim(CD);
+      while Check(tkComma) do
+      begin
+        Advance();
+        if not Check(tkIntLit) then
+          raise EParseError.Create(Format(
+            'Expected integer low bound in array const at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        Self.ReadConstArrayDim(CD);
+      end;
+    end
+    else if Check(tkIdent) then
+    begin
+      { Enum-indexed: only valid as a lone single dimension. }
+      if (CD.ArrayDimLows.Count > 0) or (CD.ArrayIndexType <> '') then
+        raise EParseError.Create(Format(
+          'Enum-indexed dimension cannot be combined with other dimensions ' +
+          'in array const at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      CD.ArrayIndexType := FCurrent.Value;
+      Advance();
+    end
+    else
+      raise EParseError.Create(Format(
+        'Expected index type or range in array const at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+    Expect(tkRBracket);
+    Expect(tkOf);
+    { A nested 'array' continues the dimension chain; anything else is the
+      scalar element type that terminates it. }
+    if Check(tkArray) then
+      Continue;
+    if not Check(tkIdent) then
+      raise EParseError.Create(Format(
+        'Expected element type name in array const at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+    CD.ArrayElemType := FCurrent.Value;
+    Advance();
+    Break;
+  end;
+  { Mirror dim-0 bounds onto the legacy single-dim fields so the existing
+    range-indexed semantic/codegen path is unchanged for 1-D constants. }
+  if CD.ArrayDimLows.Count > 0 then
+  begin
+    CD.ArrayLowBound  := StrToInt(CD.ArrayDimLows.Strings[0]);
+    CD.ArrayHighBound := StrToInt(CD.ArrayDimHighs.Strings[0]);
+  end;
+end;
+
 { Parse a constant value (everything after '=', up to but excluding the
   terminating ';') into CD.  CD.IsArrayConst / CD.TypeName must already be set
   by the caller when they were declared.  Shared by const declarations and
   initialised variable declarations (var G: T = value). }
-procedure TParser.ParseConstValue(CD: TConstDecl);
+{ Parse a single scalar element (string/int/float/typecast/named const, with
+  an optional leading minus and an optional integer bit-op chain) and append it
+  to CD.ArrayElements in row-major order.  Shared by the flat and nested
+  (multi-dimensional) array-const value forms. }
+procedure TParser.ParseConstArrayScalar(CD: TConstDecl);
 var
   CastVal:      Int64;
   FirstOperand: string;
   FirstIsIdent: Boolean;
 begin
-    { Array const value list: (elem, elem, ...) }
+  FirstOperand := '';
+  FirstIsIdent := False;
+  if Check(tkMinus) then
+  begin
+    Advance();
+    if Check(tkFloatLit) then
+    begin
+      CD.ArrayElements.Add('-' + FCurrent.Value);
+      Advance();
+    end
+    else if Check(tkIntLit) then
+    begin
+      FirstOperand := '-' + FCurrent.Value;
+      Advance();
+      CD.ArrayElements.Add(FirstOperand);
+    end
+    else
+      raise EParseError.Create(Format(
+        'Expected numeric literal after minus in array const at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  end
+  else if Check(tkStringLit) then
+  begin
+    CD.ArrayElements.Add(FCurrent.Value);
+    Advance();
+  end
+  else if Check(tkIntLit) then
+  begin
+    FirstOperand := FCurrent.Value;
+    CD.ArrayElements.Add(FirstOperand);
+    Advance();
+  end
+  else if Check(tkFloatLit) then
+  begin
+    CD.ArrayElements.Add(FCurrent.Value);
+    Advance();
+  end
+  else if Check(tkIdent) and (PeekKind() = tkLParen)
+       and TryParseConstIntTypecast(CastVal) then
+  begin
+    { TypeName(IntLit) typecast — store the truncated value }
+    FirstOperand := IntToStr(CastVal);
+    CD.ArrayElements.Add(FirstOperand);
+  end
+  else if Check(tkIdent) then
+  begin
+    { named constant or boolean literal }
+    FirstOperand := FCurrent.Value;
+    FirstIsIdent := True;
+    CD.ArrayElements.Add(FirstOperand);
+    Advance();
+  end
+  else
+    raise EParseError.Create(Format(
+      'Expected constant value in array const at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  { Bit-op continuation — only applies when the element started as an
+    integer operand (FirstOperand was set), not strings/floats. }
+  if (FirstOperand <> '') and CurrentIsConstBitOp() then
+  begin
+    if CD.ArrayElementParts = nil then
+    begin
+      CD.ArrayElementParts := TObjectList.Create(True);
+      { Pad with nils for prior elements that were not expressions. }
+      while CD.ArrayElementParts.Count < CD.ArrayElements.Count - 1 do
+        CD.ArrayElementParts.Add(nil);
+    end;
+    CD.ArrayElementParts.Add(
+      CollectConstBitOpExpr(FirstOperand, FirstIsIdent));
+  end
+  else if CD.ArrayElementParts <> nil then
+    CD.ArrayElementParts.Add(nil);
+end;
+
+{ Parse a parenthesised group of comma-separated items.  Each item is either a
+  nested group (multi-dimensional initialiser) or a scalar element.  Leaves
+  accumulate into CD.ArrayElements in row-major order, which matches the
+  contiguous in-memory layout the codegen emitters expect. }
+procedure TParser.ParseConstArrayGroup(CD: TConstDecl);
+begin
+  Expect(tkLParen);
+  while True do
+  begin
+    if Check(tkLParen) then
+      Self.ParseConstArrayGroup(CD)
+    else
+      Self.ParseConstArrayScalar(CD);
+    if Check(tkComma) then
+      Advance()
+    else
+      Break;
+  end;
+  Expect(tkRParen);
+end;
+
+procedure TParser.ParseConstValue(CD: TConstDecl);
+var
+  CastVal:      Int64;
+  FirstOperand: string;
+begin
+    { Array const value list: flat (e, e, ...) or nested ((..),(..)). }
     if CD.IsArrayConst then
     begin
-      Expect(tkLParen);
       CD.ArrayElements := TStringList.Create();
-      while True do
-      begin
-        { Each element may be a string literal, integer literal,
-          optionally preceded by a minus sign, or float literal.
-          Integer-typed elements may also be a bit-op chain (e.g.
-          'FG_BLUE or 4'); when the chain references named consts
-          it's deferred to semantic via ArrayElementParts. }
-        FirstOperand := '';
-        FirstIsIdent := False;
-        if Check(tkMinus) then
-        begin
-          Advance();
-          if Check(tkFloatLit) then
-          begin
-            CD.ArrayElements.Add('-' + FCurrent.Value);
-            Advance();
-          end
-          else if Check(tkIntLit) then
-          begin
-            FirstOperand := '-' + FCurrent.Value;
-            Advance();
-            CD.ArrayElements.Add(FirstOperand);
-          end
-          else
-            raise EParseError.Create(Format(
-              'Expected numeric literal after minus in array const at line %d col %d in %s',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        end
-        else if Check(tkStringLit) then
-        begin
-          CD.ArrayElements.Add(FCurrent.Value);
-          Advance();
-        end
-        else if Check(tkIntLit) then
-        begin
-          FirstOperand := FCurrent.Value;
-          CD.ArrayElements.Add(FirstOperand);
-          Advance();
-        end
-        else if Check(tkFloatLit) then
-        begin
-          CD.ArrayElements.Add(FCurrent.Value);
-          Advance();
-        end
-        else if Check(tkIdent) and (PeekKind() = tkLParen)
-             and TryParseConstIntTypecast(CastVal) then
-        begin
-          { TypeName(IntLit) typecast — store the truncated value }
-          FirstOperand := IntToStr(CastVal);
-          CD.ArrayElements.Add(FirstOperand);
-        end
-        else if Check(tkIdent) then
-        begin
-          { named constant or boolean literal }
-          FirstOperand := FCurrent.Value;
-          FirstIsIdent := True;
-          CD.ArrayElements.Add(FirstOperand);
-          Advance();
-        end
-        else
-          raise EParseError.Create(Format(
-            'Expected constant value in array const at line %d col %d in %s',
-            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        { Bit-op continuation — only applies when the element started as an
-          integer operand (FirstOperand was set), not strings/floats. }
-        if (FirstOperand <> '') and CurrentIsConstBitOp() then
-        begin
-          if CD.ArrayElementParts = nil then
-          begin
-            CD.ArrayElementParts := TObjectList.Create(True);
-            { Pad with nils for prior elements that were not expressions. }
-            while CD.ArrayElementParts.Count < CD.ArrayElements.Count - 1 do
-              CD.ArrayElementParts.Add(nil);
-          end;
-          CD.ArrayElementParts.Add(
-            CollectConstBitOpExpr(FirstOperand, FirstIsIdent));
-        end
-        else if CD.ArrayElementParts <> nil then
-          CD.ArrayElementParts.Add(nil);
-        if Check(tkComma) then
-          Advance()
-        else
-          Break;
-      end;
-      Expect(tkRParen);
+      Self.ParseConstArrayGroup(CD);
       Exit;
     end;
     if Check(tkMinus) then

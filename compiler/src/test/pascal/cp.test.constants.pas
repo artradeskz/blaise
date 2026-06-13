@@ -81,6 +81,12 @@ type
     procedure TestArrayConst_RangeIndexed_WrongCount_Error;
     procedure TestArrayConst_RangeIndexed_IndexedByVar;
 
+    { Multi-dimensional range-indexed const arrays }
+    procedure TestArrayConst_MultiDim_CommaForm_Parses;
+    procedure TestArrayConst_MultiDim_NestedForm_Parses;
+    procedure TestArrayConst_MultiDim_RowMajorData_InIR;
+    procedure TestArrayConst_MultiDim_WrongCount_Error;
+
     { Class-level array constants }
     procedure TestClassArrayConst_RangeIndexed_InIR;
     procedure TestClassArrayConst_EnumIndexed_InIR;
@@ -928,6 +934,93 @@ begin
     ''');
   AssertTrue('IR non-empty', IR <> '');
   AssertTrue('Days in IR', IRContains(IR, 'Days'));
+end;
+
+procedure TConstTests.TestArrayConst_MultiDim_CommaForm_Parses;
+var U: TUnit;
+begin
+  U := ParseUnit(
+    '''
+    unit W;
+    interface
+    const M: array[0..1, 0..2] of Integer = ((1, 2, 3), (4, 5, 6));
+    implementation
+    end.
+    ''');
+  AssertNotNull('unit parsed', U);
+  AssertEquals('one const decl', 1, U.IntfBlock.ConstDecls.Count);
+  AssertEquals('six flat elements', 6,
+    TConstDecl(U.IntfBlock.ConstDecls.Items[0]).ArrayElements.Count);
+  AssertEquals('two dimensions', 2,
+    TConstDecl(U.IntfBlock.ConstDecls.Items[0]).ArrayDimLows.Count);
+  U.Free();
+end;
+
+procedure TConstTests.TestArrayConst_MultiDim_NestedForm_Parses;
+var U: TUnit;
+begin
+  U := ParseUnit(
+    '''
+    unit W;
+    interface
+    const M: array[0..1] of array[0..1] of Integer = ((10, 20), (30, 40));
+    implementation
+    end.
+    ''');
+  AssertNotNull('unit parsed', U);
+  AssertEquals('four flat elements', 4,
+    TConstDecl(U.IntfBlock.ConstDecls.Items[0]).ArrayElements.Count);
+  AssertEquals('two dimensions', 2,
+    TConstDecl(U.IntfBlock.ConstDecls.Items[0]).ArrayDimLows.Count);
+  U.Free();
+end;
+
+procedure TConstTests.TestArrayConst_MultiDim_RowMajorData_InIR;
+var IR: string;
+begin
+  { Comma and nested forms must lower to the same flat row-major data blob. }
+  IR := GenIR(
+    '''
+    program P;
+    const M: array[0..1, 0..1] of Integer = ((1, 2), (3, 4));
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('M in IR', IRContains(IR, 'M'));
+  { Row-major: the four words appear in declaration order in one data item. }
+  AssertTrue('row-major words present',
+    IRContains(IR, 'w 1, w 2, w 3, w 4'));
+end;
+
+procedure TConstTests.TestArrayConst_MultiDim_WrongCount_Error;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  SA: TSemanticAnalyser;
+  GotError: Boolean;
+begin
+  GotError := False;
+  L  := TLexer.Create(
+    '''
+    program P;
+    const M: array[0..1, 0..1] of Integer = ((1, 2, 3), (4, 5, 6));
+    begin end.
+    ''');
+  P  := TParser.Create(L);
+  Pr := P.Parse();
+  SA := TSemanticAnalyser.Create();
+  try
+    try
+      SA.Analyse(Pr);
+    except
+      on E: ESemanticError do GotError := True;
+    end;
+  finally
+    SA.Free(); Pr.Free(); P.Free(); L.Free();
+  end;
+  AssertTrue('wrong element count raises error', GotError);
 end;
 
 procedure TConstTests.TestClassArrayConst_RangeIndexed_InIR;

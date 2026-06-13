@@ -545,6 +545,15 @@ type
     ArrayIsRangeIndexed: Boolean; { True when index is Low..High integer range }
     ArrayLowBound:  Integer;
     ArrayHighBound: Integer;
+    { Multi-dimensional range-indexed const arrays.  When the declaration is
+      array[L0..H0, L1..H1, ...] of T (comma form) or the equivalent nested
+      array[L0..H0] of array[L1..H1] of T, each dimension's bounds are pushed
+      onto these parallel lists (one entry per dimension, integer text).  When
+      non-nil and Count > 1 the constant is multi-dimensional; ArrayElements
+      holds the values flattened in row-major order.  Count <= 1 (or nil) means
+      single-dimension — ArrayLowBound/ArrayHighBound are authoritative. }
+    ArrayDimLows:   TStringList;
+    ArrayDimHighs:  TStringList;
     { Integer bit-op expression in the value position — non-nil when the
       RHS was a chain like 'FG_BLUE or 8' that couldn't be folded at
       parse time (because it references named constants).  Tokens are
@@ -2119,6 +2128,18 @@ begin
   Result.ArrayIsRangeIndexed := ASrc.ArrayIsRangeIndexed;
   Result.ArrayLowBound       := ASrc.ArrayLowBound;
   Result.ArrayHighBound      := ASrc.ArrayHighBound;
+  if ASrc.ArrayDimLows <> nil then
+  begin
+    Result.ArrayDimLows := TStringList.Create();
+    for I := 0 to ASrc.ArrayDimLows.Count - 1 do
+      Result.ArrayDimLows.Add(ASrc.ArrayDimLows.Strings[I]);
+  end;
+  if ASrc.ArrayDimHighs <> nil then
+  begin
+    Result.ArrayDimHighs := TStringList.Create();
+    for I := 0 to ASrc.ArrayDimHighs.Count - 1 do
+      Result.ArrayDimHighs.Add(ASrc.ArrayDimHighs.Strings[I]);
+  end;
   if ASrc.ArrayElements <> nil then
   begin
     Result.ArrayElements := TStringList.Create();

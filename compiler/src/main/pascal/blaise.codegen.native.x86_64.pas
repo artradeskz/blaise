@@ -948,6 +948,11 @@ begin
   if (AType.Kind = tyStaticArray) and CD.IsArrayConst then
   begin
     SAT := TStaticArrayTypeDesc(AType);
+    { Multi-dimensional const arrays are nested static-array types; the element
+      directive is governed by the INNERMOST scalar element, and the flat
+      row-major ArrayElements already match the contiguous layout. }
+    while SAT.ElementType.Kind = tyStaticArray do
+      SAT := TStaticArrayTypeDesc(SAT.ElementType);
     ElemKind := SAT.ElementType.Kind;
     Self.Emit('.balign 8');
     if Copy(AName, 0, 2) <> '.L' then

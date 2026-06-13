@@ -66,6 +66,12 @@ type
     procedure TestRun_DynArray_DoubleElement_ReadWrite;
     procedure TestRun_DynArray_SingleElement_ReadWrite;
     procedure TestRun_StaticArray_DoubleElement_ReadWrite;
+
+    { Multi-dimensional const arrays — run on both backends (QBE + native).
+      Comma and nested declaration forms; row-major value layout. }
+    procedure TestRun_MultiDimConst_CommaForm_ReadsValues;
+    procedure TestRun_MultiDimConst_NestedForm_ReadsValues;
+    procedure TestRun_MultiDimConst_ThreeDimensions;
   end;
 
 implementation
@@ -722,6 +728,63 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   LE := LineEnding;
   AssertRunsOnAll(Src, '12.5' + LE + '-3.25' + LE + '100' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDimConst_CommaForm_ReadsValues;
+const Src =
+  '''
+  program P;
+  const M: array[0..1, 0..2] of Integer = ((1, 2, 3), (4, 5, 6));
+  begin
+    WriteLn(M[0, 0]);
+    WriteLn(M[0, 2]);
+    WriteLn(M[1, 0]);
+    WriteLn(M[1, 2])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '1' + LE + '3' + LE + '4' + LE + '6' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDimConst_NestedForm_ReadsValues;
+const Src =
+  '''
+  program P;
+  const M: array[0..1] of array[0..1] of Integer = ((10, 20), (30, 40));
+  begin
+    WriteLn(M[0][0]);
+    WriteLn(M[0][1]);
+    WriteLn(M[1][0]);
+    WriteLn(M[1][1])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '10' + LE + '20' + LE + '30' + LE + '40' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDimConst_ThreeDimensions;
+const Src =
+  '''
+  program P;
+  const M: array[0..1, 0..1, 0..1] of Integer =
+    (((1, 2), (3, 4)), ((5, 6), (7, 8)));
+  begin
+    WriteLn(M[0, 0, 0]);
+    WriteLn(M[1, 0, 1]);
+    WriteLn(M[1, 1, 1])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '1' + LE + '6' + LE + '8' + LE, 0);
 end;
 
 initialization

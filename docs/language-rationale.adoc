@@ -2788,22 +2788,34 @@ begin
 end.
 ----
 
-=== Constraint: enum index only
+=== Index forms: enum, integer range, and multi-dimensional
 
-Only enum types are permitted as the array index.  Integer-range indices
-(`array[0..2] of string`) are not supported for const arrays.  The enum
-constraint is deliberate: it ties the element count to a type the compiler
-already knows the cardinality of, enabling the mismatch error without
-additional syntax for an explicit bounds range.
+Both enum and integer-range indices are supported for const arrays:
 
-=== Alternatives Rejected
+[source]
+----
+const Days: array[0..6] of string = ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat');
+const Wether: array[TWetherType] of string = ('Sunny', 'Cloudy', 'Rainy');
+----
 
-*Integer range index* (`array[0..N-1] of T`) — requires the parser to evaluate
-a constant expression for the upper bound inside the const type annotation,
-which adds complexity and is rarely more readable than the enum form.
+Range-indexed const arrays extend to multiple dimensions, in either the comma
+form or the equivalent nested form:
 
-*Named-constant workaround* (`case` statement) — correct but verbose and not
-checked by the compiler against enum additions.
+[source]
+----
+const M: array[0..1, 0..2] of Integer = ((1, 2, 3), (4, 5, 6));
+const N: array[0..1] of array[0..1] of Integer = ((10, 20), (30, 40));
+----
+
+A multi-dimensional const desugars to a nested static-array type (the comma and
+nested forms are interchangeable) and its initialiser values are stored
+flattened in row-major order — the same contiguous layout a `var`-declared
+multi-dimensional array uses.  The compiler validates that the number of
+initialiser leaves equals the product of the dimension extents.
+
+Enum indexing is intentionally limited to a single dimension: it ties the
+element count to a type whose cardinality the compiler already knows, and
+mixing enum and range dimensions buys little over the uniform range form.
 
 == Record Methods
 
@@ -3825,6 +3837,18 @@ No new debug record is required.  A nested array emits one `recArray`
 pointing at the next inner `recArray`.  The reference debugger (pdr)
 follows the element chain and renders the value as a true multi-dimensional
 structure, e.g. `array[0..1] of array[0..2] of Integer = [[0,0,0],[0,0,0]]`.
+
+=== Constant initialisers
+
+Multi-dimensional *const* arrays use the same nested desugaring and
+row-major layout.  Both the comma form (`array[0..1, 0..2] of Integer`)
+and the nested form (`array[0..1] of array[0..1] of Integer`) are accepted
+in a const type annotation, and the initialiser nests one parenthesised
+group per dimension (`((1, 2, 3), (4, 5, 6))`).  The values are flattened
+to row-major order at parse time, so codegen emits a single contiguous data
+blob identical to what the equivalent runtime assignments would produce.
+See the "Array-of-enum Typed Constants" section for the value-count
+validation rule.
 
 == Initialised Global Variables
 
