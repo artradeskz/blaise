@@ -3932,3 +3932,127 @@ appear, with no ordering or ownership concerns.
 * *Require named set types (status quo).*  Rejected: inline set types are
   common in ported FPC/Delphi code and the named-type requirement is friction
   with no compensating benefit.
+
+== Loosely-Typed Parameter Passing — `array of const`, untyped params, `varargs`, `Variant`
+
+Four Object Pascal features share the theme of passing a value whose type is
+not fully fixed at the call site.  They are frequently conflated but are
+distinct mechanisms with very different safety profiles.  Blaise adopts only
+one of them.
+
+[cols="1,1,1,2", options="header"]
+|===
+| Feature | Runtime type tag | Count known | Purpose
+
+| Untyped `const Data` / `var Data`
+| none (raw bytes)
+| n/a (single argument)
+| Low-level memory primitives (`Move`, `FillChar`)
+
+| `array of const`
+| yes — per element (`TVarRec.VType`)
+| yes (it is an array)
+| Heterogeneous argument lists (`Format`-style APIs)
+
+| `varargs`
+| none
+| no
+| C ABI interop (`printf`)
+
+| `Variant`
+| yes (`TVarData.VType`)
+| n/a (a storeable value)
+| Dynamic / late-bound values (historically COM/OLE)
+|===
+
+=== Decision
+
+Blaise implements *only* `array of const`.  Untyped parameters, `varargs`, and
+`Variant` are deliberately omitted.
+
+=== Untyped parameters (`const Data`, `var Data`) — omitted
+
+An untyped parameter discards the argument's type entirely; the compiler
+implicitly takes the variable's address, and the callee operates on raw bytes
+(`PByte(@Data)`).  It exists for call-site ergonomics on raw-memory routines:
+`Move(Source, Dest, Count)` reads more cleanly than `Move(@Source, @Dest,
+Count)`.
+
+This is rejected on footgun grounds, which is the consistent thread through
+Blaise's type-system decisions.  `DoSomething(Rec)` *looks* like it passes a
+value, but silently passes an address and erases the type — the caller gets no
+signal that raw, uncheckable memory access is happening.  The same job is done
+by an ordinary typed-pointer parameter with no new language machinery:
+
+[source,pascal]
+----
+procedure DoSomething(const Data: PByte);      // or ^TMyRecord
+...
+DoSomething(@Rec);                             // explicit, honest
+----
+
+The explicit `@` at the call site signals "raw memory, be careful," and a
+*typed* pointer (`PByte`, `^TMyRecord`) keeps type information — it permits
+indexing and field access without a cast, which is strictly more useful than a
+fully untyped blob.  The only thing lost is the `@`-free call syntax on a
+handful of RTL primitives; that is an ergonomics cost, arguably a clarity gain,
+and not a capability loss — a typed pointer can express everything an untyped
+parameter can.  Blaise's RTL writes these primitives against `Pointer` /
+`PByte` instead.
+
+=== `varargs` — omitted
+
+`varargs` is the untyped, C-ABI variadic form (FPC's `cdecl; varargs`).  It
+carries no type tags and no argument count; the callee must recover both from
+an external convention (e.g. a `printf` format string).  It exists almost
+exclusively to call C variadic functions.  Blaise has no need for it today, and
+it is the least safe option of the four — omitted unless direct C-variadic
+interop becomes a requirement.
+
+=== `Variant` — omitted
+
+`Variant` is a storeable, self-describing value type with runtime conversion
+rules, late binding, and (historically) COM/OLE Automation dispatch.  It is the
+weakest fit for Blaise: its coercions can fail at runtime, and its primary
+historical motivation (COM) is irrelevant to Blaise's targets.  Blaise prefers
+the statically-checkable alternatives — method overloads for the fixed-arity
+cases, generics for parametric code, and explicit discriminated unions
+(`case`-based records) for genuinely dynamic data.  A clean tagged union
+expresses "one of a known set of types" with compile-time checking; `Variant`
+trades that checking for runtime flexibility Blaise does not want to encourage.
+
+=== `array of const` — adopted
+
+`array of const` is the one mechanism that overloads and generics cannot
+cleanly replace, and it is therefore worth its cost.  Its purpose is a single
+call accepting an *arbitrary-length, mixed-type* argument list:
+
+[source,pascal]
+----
+WriteLn(Format('%s is %d years old', [Name, Age]));
+Log(['count=', N, ' ratio=', R, ' ok=', Flag]);
+----
+
+No finite set of overloads can express "any number of arguments, each of any
+type" — the arity and type combinations are unbounded.  This is the feature
+that makes `Format`-style APIs feel native, which is the expected Pascal idiom.
+
+Unlike `Variant`, `array of const` is a compiler-generated *call construct*,
+not a free-floating dynamic value type.  The compiler builds an array of tagged
+records (`TVarRec`: a `VType` discriminator plus a union of the value or a
+pointer to it) at the call site from the bracket literal, and the callee
+dispatches on `VType`.  The tag set is fixed and known at compile time, the
+array length is known, and the construct cannot leak into arbitrary storage the
+way a `Variant` value can — so it admits the heterogeneous-list ergonomics
+without importing `Variant`'s runtime-coercion surface.
+
+=== Alternatives considered
+
+* *Adopt untyped parameters for RTL ergonomics.*  Rejected — typed pointers do
+  the same job explicitly and keep type information; see above.
+* *Adopt `Variant` for dynamic values.*  Rejected in favour of overloads,
+  generics, and explicit tagged unions, which keep checking at compile time.
+* *Reject `array of const` too, and require callers to build an explicit
+  array/record.*  Rejected — it would make `Format`-style APIs verbose and
+  un-idiomatic, and the construct is compiler-bounded and tagged, so it does
+  not carry the open-ended risks of the omitted three.
