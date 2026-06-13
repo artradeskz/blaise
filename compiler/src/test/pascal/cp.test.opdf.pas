@@ -55,6 +55,7 @@ type
     procedure TestOPDF_Pointer_RecType;
     procedure TestOPDF_Array_Static_RecType;
     procedure TestOPDF_Array_Static_IsDynamic;
+    procedure TestOPDF_Array_MultiDim_EmitsNestedRecords;
     procedure TestOPDF_Array_OpenArray_ArrayKind;
     procedure TestOPDF_OpenArray_CompanionLocation;
     procedure TestOPDF_Set_RecType;
@@ -469,6 +470,27 @@ begin
         begin end.
         ''');
   AssertTrue('IsDynamic=0 for static array', Contains(IR, '.byte 0  # IsDynamic'));
+end;
+
+procedure TOPDFTests.TestOPDF_Array_MultiDim_EmitsNestedRecords;
+var
+  IR: string;
+begin
+  { A multi-dimensional array is represented as nested single-dimension
+    arrays, so the OPDF emitter produces one recArray per dimension: the
+    outer array[0..1] whose element is the inner array[0..2], and the inner
+    array itself.  The debugger follows the element chain to reconstruct the
+    full multi-dimensional structure. }
+  IR := GenOPDF(
+    '''
+        program P;
+        var A: array[0..1, 0..2] of Integer;
+        begin end.
+        ''');
+  AssertTrue('outer recArray emitted',
+    Contains(IR, '# recArray (static): array[0..1] of array[0..2] of Integer'));
+  AssertTrue('inner recArray emitted',
+    Contains(IR, '# recArray (static): array[0..2] of Integer'));
 end;
 
 procedure TOPDFTests.TestOPDF_Array_OpenArray_ArrayKind;

@@ -182,22 +182,23 @@ TFieldAssignment.IsElemWrite  safe
 TStaticSubscriptAssign.ArrayName  serialise
 TStaticSubscriptAssign.IndexExpr  serialise
 TStaticSubscriptAssign.ValueExpr  serialise
+TStaticSubscriptAssign.BaseExpr  serialise
 TStaticSubscriptAssign.IsGlobal  safe
 TStaticSubscriptAssign.IsVarParam  safe
 TStaticSubscriptAssign.IsImplicitSelf  safe
 
-# TPointerWriteStmt (uAST.pas:388)
+# TPointerWriteStmt (uAST.pas:398)
 TPointerWriteStmt.PtrExpr  serialise
 TPointerWriteStmt.ValExpr  serialise
 
-# TProcCall (uAST.pas:396)
+# TProcCall (uAST.pas:406)
 TProcCall.Name  serialise
 TProcCall.Args  serialise
 TProcCall.IsImplicitSelfMethod  safe
 TProcCall.IsIndirectCall  safe
 TProcCall.IndirectCallIsGlobal  safe
 
-# TFuncCallExpr (uAST.pas:409)
+# TFuncCallExpr (uAST.pas:419)
 TFuncCallExpr.Name  serialise
 TFuncCallExpr.Args  serialise
 TFuncCallExpr.IsImplicitSelfMethod  safe
@@ -207,18 +208,18 @@ TFuncCallExpr.IsBuiltinHasClassAttr  safe
 TFuncCallExpr.HasClassAttrClass  safe
 TFuncCallExpr.HasClassAttrAttr  safe
 
-# TIndirectFuncCallExpr (uAST.pas:435)
+# TIndirectFuncCallExpr (uAST.pas:445)
 TIndirectFuncCallExpr.CalleeExpr  serialise
 TIndirectFuncCallExpr.Args  serialise
 
-# TDerefExpr (uAST.pas:445)
+# TDerefExpr (uAST.pas:455)
 TDerefExpr.Expr  serialise
 
-# TAddrOfExpr (uAST.pas:452)
+# TAddrOfExpr (uAST.pas:462)
 TAddrOfExpr.Expr  serialise
 TAddrOfExpr.ResolvedFreeRoutine  safe
 
-# TMethodCallStmt (uAST.pas:464)
+# TMethodCallStmt (uAST.pas:474)
 TMethodCallStmt.ObjectName  serialise
 TMethodCallStmt.Name  serialise
 TMethodCallStmt.Args  serialise
@@ -229,11 +230,11 @@ TMethodCallStmt.IsVarParam  safe
 TMethodCallStmt.IsBuiltinToString  safe
 TMethodCallStmt.IsProcFieldCall  safe
 
-# TInheritedCallStmt (uAST.pas:491)
+# TInheritedCallStmt (uAST.pas:506)
 TInheritedCallStmt.Name  serialise
 TInheritedCallStmt.Args  serialise
 
-# TMethodCallExpr (uAST.pas:681)
+# TMethodCallExpr (uAST.pas:696)
 TMethodCallExpr.ObjectName  serialise
 TMethodCallExpr.Name  serialise
 TMethodCallExpr.Args  serialise

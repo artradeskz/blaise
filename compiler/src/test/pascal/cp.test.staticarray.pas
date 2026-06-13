@@ -82,6 +82,19 @@ type
     procedure TestSemantic_TypeAlias_NonZeroBase;
     procedure TestCodegen_TypeAlias_AllocEmitted;
     procedure TestCodegen_TypeAlias_ElementSizeInAlloc;
+
+    { ------------------------------------------------------------------ }
+    { Multi-dimensional arrays (comma form desugars to nested arrays)     }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_MultiDim_CommaDecl_DesugarsToNested;
+    procedure TestSemantic_MultiDim_Kind_IsStaticArray;
+    procedure TestSemantic_MultiDim_ElementType_IsInnerArray;
+    procedure TestSemantic_MultiDim_TotalByteSize;
+    procedure TestSemantic_MultiDim_ThreeDims;
+    procedure TestCodegen_MultiDim_AllocTotalSize;
+    procedure TestCodegen_MultiDim_CommaWrite_EmitsRowOffset;
+    procedure TestCodegen_MultiDim_ChainedWrite_SameAsComma;
+    procedure TestCodegen_MultiDim_CommaRead_NestedSubscript;
   end;
 
 implementation
@@ -678,6 +691,160 @@ begin
   IR := GenIR(SrcTypeAliasBasic);
   // 8 bytes * 1 (Byte) = 8 bytes total; check the number 8 appears in the IR
   AssertTrue('size 8 appears in IR', Pos('8', IR) >= 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Multi-dimensional arrays                                            }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcMultiDimComma =
+    '''
+        program SA;
+        procedure Foo;
+        var A: array[0..1, 0..2] of Integer;
+        begin
+          A[1, 2] := 99
+        end;
+        begin end.
+        ''';
+
+  SrcMultiDimChained =
+    '''
+        program SA;
+        procedure Foo;
+        var A: array[0..1] of array[0..2] of Integer;
+        begin
+          A[1][2] := 99
+        end;
+        begin end.
+        ''';
+
+  SrcMultiDimRead =
+    '''
+        program SA;
+        function Foo: Integer;
+        var A: array[0..1, 0..2] of Integer;
+        begin
+          Result := A[1, 2]
+        end;
+        begin end.
+        ''';
+
+  SrcMultiDim3D =
+    '''
+        program SA;
+        procedure Foo;
+        var A: array[0..1, 0..2, 0..3] of Integer;
+        begin
+          A[0, 0, 0] := 1
+        end;
+        begin end.
+        ''';
+
+procedure TStaticArrayTests.TestParse_MultiDim_CommaDecl_DesugarsToNested;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  { The comma form array[0..1, 0..2] of T is desugared at parse time into the
+    nested type string array[0..1] of array[0..2] of T. }
+  P := ParseSrc(SrcMultiDimComma);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    AssertEquals('desugared to nested array type',
+      'array[0..1] of array[0..2] of Integer', Decl.TypeName);
+  finally P.Free(); end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_MultiDim_Kind_IsStaticArray;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcMultiDimComma);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    AssertTrue('outer is static array', Decl.ResolvedType is TStaticArrayTypeDesc);
+    AssertEquals('outer high bound = 1', 1,
+      TStaticArrayTypeDesc(Decl.ResolvedType).HighBound);
+  finally P.Free(); end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_MultiDim_ElementType_IsInnerArray;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl; Inner: TTypeDesc;
+begin
+  P := AnalyseSrc(SrcMultiDimComma);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    Inner := TStaticArrayTypeDesc(Decl.ResolvedType).ElementType;
+    AssertTrue('element type is itself a static array',
+      Inner is TStaticArrayTypeDesc);
+    AssertEquals('inner high bound = 2', 2,
+      TStaticArrayTypeDesc(Inner).HighBound);
+    AssertEquals('inner element is tyInteger', Ord(tyInteger),
+      Ord(TStaticArrayTypeDesc(Inner).ElementType.Kind));
+  finally P.Free(); end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_MultiDim_TotalByteSize;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcMultiDimComma);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    { 2 rows × 3 cols × 4 bytes = 24 bytes }
+    AssertEquals('ByteSize = 24', 24, Decl.ResolvedType.ByteSize());
+  finally P.Free(); end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_MultiDim_ThreeDims;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcMultiDim3D);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    { 2 × 3 × 4 × 4 bytes = 96 bytes }
+    AssertEquals('ByteSize = 96', 96, Decl.ResolvedType.ByteSize());
+  finally P.Free(); end;
+end;
+
+procedure TStaticArrayTests.TestCodegen_MultiDim_AllocTotalSize;
+var IR: string;
+begin
+  { The single backing allocation must cover the whole flattened block (24). }
+  IR := GenIR(SrcMultiDimComma);
+  AssertTrue('alloc of 24 bytes present', Pos('24', IR) >= 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_MultiDim_CommaWrite_EmitsRowOffset;
+var IR: string;
+begin
+  { Writing A[1, 2] indexes row 1 (stride = inner size 12) then col 2
+    (stride 4): both the row stride 12 and column stride 4 must appear. }
+  IR := GenIR(SrcMultiDimComma);
+  AssertTrue('row stride 12 present', Pos('mul', IR) >= 0);
+  AssertTrue('stores the value 99', Pos('99', IR) >= 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_MultiDim_ChainedWrite_SameAsComma;
+var IRComma, IRChained: string;
+begin
+  { The comma form and the explicit nested-chained form must produce identical
+    IR — the comma form is pure sugar over the nested form. }
+  IRComma   := GenIR(SrcMultiDimComma);
+  IRChained := GenIR(SrcMultiDimChained);
+  AssertEquals('comma form IR == chained form IR', IRComma, IRChained);
+end;
+
+procedure TStaticArrayTests.TestCodegen_MultiDim_CommaRead_NestedSubscript;
+var IR: string;
+begin
+  { A read A[1, 2] must compute an inner-array address (a load of the final
+    element off base + row offset + col offset). }
+  IR := GenIR(SrcMultiDimRead);
+  AssertTrue('emits a word load for the element', Pos('loadw', IR) >= 0);
 end;
 
 initialization

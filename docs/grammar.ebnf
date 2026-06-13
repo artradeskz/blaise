@@ -553,8 +553,14 @@ TypeName
     | IDENT                       (* simple type or built-in *)
     ;
 
+(* A static array may declare multiple dimensions either as a comma-separated
+ * index list (ARRAY [L1..H1, L2..H2] OF T) or, equivalently, as nested
+ * single-dimension arrays (ARRAY [L1..H1] OF ARRAY [L2..H2] OF T).  The
+ * comma form is desugared by the parser into the nested form, so the two
+ * are interchangeable. *)
 ArrayType
-    = ARRAY LBRACKET IntLit DOTDOT IntLit RBRACKET OF TypeName
+    = ARRAY LBRACKET IntLit DOTDOT IntLit
+            { COMMA IntLit DOTDOT IntLit } RBRACKET OF TypeName
     ;
 
 DynArrayType
@@ -660,8 +666,12 @@ Stmt
     | (* empty *)
     ;
 
+(* A multi-dimensional element write addresses nested static arrays.  Both the
+ * comma form a[i, j] := v and the chained form a[i][j] := v are accepted and
+ * lower to the same element write through the inner-array address. *)
 StaticSubscriptAssign
-    = IDENT LBRACKET Expr RBRACKET ASSIGN Expr
+    = IDENT LBRACKET Expr { COMMA Expr } RBRACKET
+            { LBRACKET Expr { COMMA Expr } RBRACKET } ASSIGN Expr
     ;
 
 (* A statement starting with IDENT LBRACKET Expr RBRACKET that is NOT
@@ -672,8 +682,9 @@ StaticSubscriptAssign
  *   a[0].Name := 'x';        a[i].Inner.N := 5;
  *   a[0].Bump;               a[i].Items.Add(x);
  *   a[i].Arr[j] := v;        — element write into an array-typed field
- * A terminating subscript directly over another subscript
- * (a[i][j] := v) is not yet supported on the LHS of ASSIGN. *)
+ * A terminating subscript directly over another subscript (a[i][j] := v, or
+ * the comma form a[i, j] := v) is a multi-dimensional element write — see
+ * StaticSubscriptAssign. *)
 SubscriptFieldAssign
     = IDENT LBRACKET Expr RBRACKET { SubscriptSuffix }
       DOT IDENT [ LBRACKET Expr RBRACKET ] ASSIGN Expr
@@ -684,9 +695,12 @@ SubscriptMethodCall
       DOT IDENT [ LPAREN [ ArgList ] RPAREN ]
     ;
 
+(* A subscript suffix indexes one or more dimensions.  The comma form
+ * [i, j] is desugared into chained single-index subscripts [i][j], so a
+ * multi-dimensional read a[i, j] and a[i][j] are equivalent. *)
 SubscriptSuffix
     = DOT IDENT
-    | LBRACKET Expr RBRACKET
+    | LBRACKET Expr { COMMA Expr } RBRACKET
     ;
 
 IfStmt

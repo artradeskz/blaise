@@ -377,6 +377,12 @@ type
     ArrayName: string;
     IndexExpr: TASTExpr;  { owned }
     ValueExpr: TASTExpr;  { owned }
+    BaseExpr:  TASTExpr;  { owned — when non-nil, the element being written is
+                            the IndexExpr-th element of the array yielded by
+                            BaseExpr (an l-value subscript chain whose result
+                            is an inner static-array address).  Used to lower
+                            multi-dimensional / chained writes A[i][j] := v;
+                            ArrayName is then unused for base resolution. }
     IsGlobal: Boolean;    { set by uSemantic }
     IsVarParam: Boolean;  { set by uSemantic — ArrayName is a var/out
                             parameter, so the local slot holds the ADDRESS
@@ -1981,6 +1987,7 @@ begin
     SSA_.ArrayName := TStaticSubscriptAssign(AStmt).ArrayName;
     SSA_.IndexExpr := CloneExpr(TStaticSubscriptAssign(AStmt).IndexExpr);
     SSA_.ValueExpr := CloneExpr(TStaticSubscriptAssign(AStmt).ValueExpr);
+    SSA_.BaseExpr  := CloneExpr(TStaticSubscriptAssign(AStmt).BaseExpr);
     Result := SSA_;
   end
   else if AStmt is TPointerWriteStmt then

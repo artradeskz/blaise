@@ -5731,9 +5731,12 @@ begin
       [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
-    { Record elements evaluate to their address — records are by-value via
-      pointer; loading 8 bytes here would read the first field instead. }
-    if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.Kind <> tyRecord then
+    { Record and nested static-array elements evaluate to their address —
+      records are by-value via pointer; a nested array is inline storage that
+      a further subscript A[I][J] indexes into.  Loading 8 bytes here would
+      read the first field/element instead of yielding the aggregate address. }
+    if not (TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.Kind in
+            [tyRecord, tyStaticArray]) then
       Self.EmitLoadVar('(%rax)',
         TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
@@ -10501,6 +10504,15 @@ begin
       Self.Emit(#9'popq %rbx');
       Exit;
     end;
+    { Chained / multi-dimensional write A[I][J] := V: evaluate BaseExpr (the
+      inner-array address) first and stash it on the stack so the index
+      evaluation below can clobber registers freely; the base-resolve step
+      then pops it instead of loading from a named slot. }
+    if SSA.BaseExpr <> nil then
+    begin
+      Self.EmitExprToEax(SSA.BaseExpr);
+      Self.Emit(#9'pushq %rax');             { stack: [baseaddr] }
+    end;
     if DAElemType.Kind in [tyByte, tyBoolean] then
       Self.EmitByteRhsToEax(SSA.ValueExpr)
     else
@@ -10511,7 +10523,13 @@ begin
       Self.Emit(Format(#9'subq $%d, %%rax',
         [TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound]));
     Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
-    if SSA.IsImplicitSelf then
+    if SSA.BaseExpr <> nil then
+    begin
+      { Base address was pushed before the value: it now sits at 8(%rsp)
+        (the value is on top).  Load it without disturbing the value. }
+      Self.Emit(#9'movq 8(%rsp), %rcx');
+    end
+    else if SSA.IsImplicitSelf then
     begin
       { ArrayName is a static-array field of Self: the inline storage
         starts at Self + field offset. }
@@ -10547,6 +10565,8 @@ begin
       Self.Emit(#9'popq %r15');
       Self.Emit(#9'popq %rbx');
       Self.Emit(#9'addq $8, %rsp');          { drop saved src addr }
+      if SSA.BaseExpr <> nil then
+        Self.Emit(#9'addq $8, %rsp');         { drop stashed base address }
       Exit;
     end;
     if DAElemType.Kind = tyString then
@@ -10571,6 +10591,8 @@ begin
     end;
     Self.Emit(#9'popq %rax');
     Self.EmitStoreVar('(%rcx)', DAElemType);
+    if SSA.BaseExpr <> nil then
+      Self.Emit(#9'addq $8, %rsp');           { drop stashed base address }
     Exit;
   end;
 

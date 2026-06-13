@@ -3762,3 +3762,66 @@ does not cover all cases (pointers, out-params, aliasing).
 * Definite-assignment warning — a lint diagnostic for
   read-before-explicit-assignment.  Zero-init is the hard guarantee; the
   warning is advisory and will be implemented as a separate analysis pass.
+
+== Multi-Dimensional Static Arrays
+
+=== Decision
+
+Static arrays may declare and index multiple dimensions using either a
+comma-separated form or nested single-dimension arrays, and the two are
+exactly equivalent:
+
+[source,pascal]
+----
+var
+  A: array[0..1, 0..2] of Integer;        // comma form
+  B: array[0..1] of array[0..2] of Integer; // nested form
+begin
+  A[i, j] := v;   // comma indexing
+  A[i][j] := v;   // chained indexing — identical to the line above
+end;
+----
+
+The comma form is *syntactic sugar*: the parser desugars
+`array[L1..H1, L2..H2] of T` into `array[L1..H1] of array[L2..H2] of T`,
+and a comma index list `A[i, j]` into chained subscripts `A[i][j]`.
+Dimensions extend to any depth (`array[0..1, 0..1, 0..1] of T`).
+
+=== Rationale
+
+Representing a multi-dimensional array as nested single-dimension arrays
+keeps the type system, symbol table, sizing, ARC, and the OPDF debug
+emitter free of any special "rank" concept.  An inner dimension is simply
+the element type of the outer one, so a 2-D array is laid out as a flat,
+row-major block of contiguous inline storage (no per-row indirection),
+which is the conventional Pascal layout and the most cache-friendly.
+
+The element-address computation already existed for single-dimension
+arrays; the only codegen gap was that a static-array *element* was loaded
+as a value rather than returned as an address, which broke a further
+subscript on it.  Both backends now return the inline sub-array's address
+(mirroring how record and interface elements are already handled), so a
+chained subscript indexes into it correctly.
+
+Because the comma forms desugar to the nested forms before semantic
+analysis, both notations are interchangeable in every position: a value
+declared with one form can be indexed with the other.
+
+=== Alternatives considered
+
+* *A dedicated multi-dimensional array type descriptor carrying a list of
+  bounds.* Rejected: it would duplicate the element-address logic, require
+  a new OPDF record shape, and complicate sizing/ARC for no behavioural
+  gain over the nested representation.
+* *Supporting only the comma form (no bare chained writes).* Rejected as
+  inconsistent: the desugared target `A[i][j] := v` would then be a form
+  the user could not write directly, even though the read form `A[i][j]`
+  was always legal.
+
+=== OPDF debug emission
+
+No new debug record is required.  A nested array emits one `recArray`
+(`Dimensions = 1`) per dimension, with each dimension's element type
+pointing at the next inner `recArray`.  The reference debugger (pdr)
+follows the element chain and renders the value as a true multi-dimensional
+structure, e.g. `array[0..1] of array[0..2] of Integer = [[0,0,0],[0,0,0]]`.

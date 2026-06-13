@@ -149,6 +149,8 @@ end;
 function TParser.ParseTypeName: string;
 var
   LStr, HStr, ElemTypeName: string;
+  Lows, Highs: TStringList;
+  I: Integer;
 begin
   { Array type: static 'array[L..H] of T' or dynamic 'array of T' }
   if Check(tkArray) then
@@ -156,23 +158,46 @@ begin
     Advance();  { consume 'array' }
     if Check(tkLBracket) then
     begin
-      { Static array: array[L..H] of T }
+      { Static array: array[L..H] of T, optionally multi-dimensional with
+        comma-separated dimensions: array[L1..H1, L2..H2] of T.  The
+        multi-dim form is desugared into nested single-dimension arrays
+        (array[L1..H1] of array[L2..H2] of T) so the rest of the pipeline
+        sees only the already-supported nested form. }
       Advance();  { consume '[' }
-      if not Check(tkIntLit) then
-        raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
-          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      LStr := FCurrent.Value;
-      Advance();
-      Expect(tkDotDot);
-      if not Check(tkIntLit) then
-        raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
-          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      HStr := FCurrent.Value;
-      Advance();
-      Expect(tkRBracket);
-      Expect(tkOf);
-      ElemTypeName := Self.ParseTypeName();
-      Result := Format('array[%s..%s] of %s', [LStr, HStr, ElemTypeName]);
+      Lows := TStringList.Create();
+      Highs := TStringList.Create();
+      try
+        repeat
+          if not Check(tkIntLit) then
+            raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          Lows.Add(FCurrent.Value);
+          Advance();
+          Expect(tkDotDot);
+          if not Check(tkIntLit) then
+            raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          Highs.Add(FCurrent.Value);
+          Advance();
+          if not Check(tkComma) then
+            Break;
+          Advance();  { consume ',' — next dimension }
+        until False;
+        Expect(tkRBracket);
+        Expect(tkOf);
+        ElemTypeName := Self.ParseTypeName();
+        { Build nested type from the innermost dimension outwards. }
+        Result := ElemTypeName;
+        for I := Highs.Count - 1 downto 0 do
+        begin
+          LStr := Lows.Strings[I];
+          HStr := Highs.Strings[I];
+          Result := Format('array[%s..%s] of %s', [LStr, HStr, Result]);
+        end;
+      finally
+        Lows.Free();
+        Highs.Free();
+      end;
     end
     else
     begin
@@ -2012,20 +2037,27 @@ begin
     SubAssign.ArrayName := Name;
     try
       SubAssign.IndexExpr := ParseExpr();
-      Expect(tkRBracket);
-      if Check(tkAssign) then
+      { Single-dimension simple write: Name[I] := V (no comma, no chain). }
+      if Check(tkRBracket) then
       begin
-        Advance();  { consume ':=' }
-        SubAssign.ValueExpr := ParseExpr();
-        Exit(SubAssign);
+        Advance();  { consume ']' }
+        if Check(tkAssign) then
+        begin
+          Advance();  { consume ':=' }
+          SubAssign.ValueExpr := ParseExpr();
+          Exit(SubAssign);
+        end;
       end;
     except
       SubAssign.Free();
       raise;
     end;
-    { Postfix chain on the element: rebuild Name[Index] as an expression
-      base, then consume '.' field / '[' subscript suffixes until the
-      terminating assignment or method call. }
+    { Either a comma-separated multi-dimensional write Name[I, J] := V, a
+      chained write Name[I][J] := V, or a postfix chain on the element
+      (field/method access).  Rebuild Name[Index] as an expression base, then
+      consume the remaining comma indices / '[' / '.' suffixes until the
+      terminating assignment or method call.  Multi-dim and chained element
+      writes are lowered to a TStaticSubscriptAssign carrying BaseExpr. }
     PtrIdNode := TIdentExpr.Create();
     PtrIdNode.Line := Line;
     PtrIdNode.Col := Col;
@@ -2039,6 +2071,54 @@ begin
     SubAssign.Free();
     SubAssign := nil;
     ChainBase := SubNode;
+    { Remaining comma indices inside the first bracket: Name[I, J, ...].
+      Each opens a further subscript whose base is the previous one; the
+      closing ']' is consumed here so the chain loop below sees the suffixes
+      that follow. }
+    if Check(tkComma) then
+    begin
+      try
+        while Check(tkComma) do
+        begin
+          Advance();  { consume ',' }
+          SubNode := TStringSubscriptExpr.Create();
+          SubNode.Line := FCurrent.Line;
+          SubNode.Col := FCurrent.Col;
+          SubNode.StrExpr := ChainBase;
+          ChainBase := SubNode;
+          SubNode.IndexExpr := ParseExpr();
+        end;
+        Expect(tkRBracket);
+      except
+        ChainBase.Free();
+        raise;
+      end;
+      { After Name[I, J] the next token is ':=' for a plain element write, or
+        a further suffix for a chained access.  An immediate ':=' lowers to a
+        BaseExpr element write. }
+      if Check(tkAssign) then
+      begin
+        Advance();  { consume ':=' }
+        SubNode := TStringSubscriptExpr(ChainBase);
+        SubAssign := TStaticSubscriptAssign.Create();
+        SubAssign.Line := Line;
+        SubAssign.Col := Col;
+        SubAssign.ArrayName := Name;
+        try
+          SubAssign.BaseExpr := SubNode.StrExpr;
+          SubAssign.IndexExpr := SubNode.IndexExpr;
+          SubNode.StrExpr := nil;
+          SubNode.IndexExpr := nil;
+          ChainBase := nil;
+          SubNode.Free();
+          SubAssign.ValueExpr := ParseExpr();
+          Exit(SubAssign);
+        except
+          SubAssign.Free();
+          raise;
+        end;
+      end;
+    end;
     try
       repeat
         if Check(tkLBracket) then
@@ -2075,9 +2155,28 @@ begin
               FldAssign.Expr := ParseExpr();
               Exit(FldAssign);
             end;
-            raise EParseError.Create(Format(
-              'Subscript assignment through a chained base is not yet supported at line %d col %d in %s',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+            { Chained element write into a nested array: Base[J] := value where
+              Base is itself a subscript chain (e.g. A[I][J] := V).  Lower to a
+              TStaticSubscriptAssign carrying BaseExpr = the inner-array address
+              expression and IndexExpr = the final index. }
+            Advance();  { consume ':=' }
+            SubAssign := TStaticSubscriptAssign.Create();
+            SubAssign.Line := Line;
+            SubAssign.Col := Col;
+            SubAssign.ArrayName := Name;
+            try
+              SubAssign.BaseExpr := SubNode.StrExpr;
+              SubAssign.IndexExpr := SubNode.IndexExpr;
+              SubNode.StrExpr := nil;
+              SubNode.IndexExpr := nil;
+              ChainBase := nil;
+              SubNode.Free();
+              SubAssign.ValueExpr := ParseExpr();
+              Exit(SubAssign);
+            except
+              SubAssign.Free();
+              raise;
+            end;
           end;
           Continue;
         end;
@@ -3899,20 +3998,28 @@ begin
     end
     else if Check(tkLBracket) then
     begin
-      SubNode := TStringSubscriptExpr.Create();
-      SubNode.Line := FCurrent.Line;
-      SubNode.Col  := FCurrent.Col;
-      SubNode.StrExpr := Result;
-      Result := nil;
+      { Subscript read.  A comma-separated index list A[i, j] is desugared
+        into chained single-index subscripts A[i][j] — each comma opens a
+        further TStringSubscriptExpr whose base is the previous one. }
+      Advance();  { consume '[' }
       try
-        Advance();  { consume '[' }
-        SubNode.IndexExpr := ParseExpr();
+        repeat
+          SubNode := TStringSubscriptExpr.Create();
+          SubNode.Line := FCurrent.Line;
+          SubNode.Col  := FCurrent.Col;
+          SubNode.StrExpr := Result;
+          Result := SubNode;
+          SubNode.IndexExpr := ParseExpr();
+          if not Check(tkComma) then
+            Break;
+          Advance();  { consume ',' — next dimension }
+        until False;
         Expect(tkRBracket);
       except
-        SubNode.Free();
+        Result.Free();
+        Result := nil;
         raise;
       end;
-      Result := SubNode;
     end
     else
     begin

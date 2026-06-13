@@ -13099,6 +13099,13 @@ begin
     begin
       Exit(ElemPtr);
     end;
+    { Nested static-array elements: A[I] where A: array[..] of array[..] of T.
+      The element is an inline sub-array; return its address so a further
+      subscript A[I][J] can index into it (mirrors the record case). }
+    if SAT.ElementType.Kind = tyStaticArray then
+    begin
+      Exit(ElemPtr);
+    end;
     { Interface elements: the 16-byte fat pointer lives contiguously at
       ElemPtr (obj at +0, itab at +8).  Return the address; consumers
       (assignment to another interface, method dispatch, arg passing)
@@ -13542,7 +13549,15 @@ begin
   end
   else
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
-  if AStmt.IsImplicitSelf then
+  if AStmt.BaseExpr <> nil then
+  begin
+    { Chained / multi-dimensional write A[I][J] := V: BaseExpr evaluates to
+      the address of the inner array (a static-array element returns its
+      address). }
+    PCharBase := EmitExpr(AStmt.BaseExpr);
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, Offset]));
+  end
+  else if AStmt.IsImplicitSelf then
   begin
     { ArrayName is a static-array field of Self: the inline storage starts
       at Self + field offset. }

@@ -51,6 +51,14 @@ type
     { Dynamic array for..in }
     procedure TestRun_DynArray_ForIn_IteratesAllElements;
     procedure TestRun_DynArray_ForIn_EmptyArray_NoIterations;
+
+    { Multi-dimensional arrays — run on both backends (QBE + native) }
+    procedure TestRun_MultiDim_CommaForm_ReadWrite;
+    procedure TestRun_MultiDim_ChainedForm_ReadWrite;
+    procedure TestRun_MultiDim_NonZeroBounds;
+    procedure TestRun_MultiDim_ThreeDimensions;
+    procedure TestRun_MultiDim_StringElements_ARC;
+    procedure TestRun_MultiDim_MixedNotation;
   end;
 
 implementation
@@ -516,6 +524,132 @@ const Src =
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertRunsOnAll(Src, '0' + LineEnding, 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Multi-dimensional arrays — exercised on every backend                }
+{ ------------------------------------------------------------------ }
+
+procedure TE2EStaticArrayTests.TestRun_MultiDim_CommaForm_ReadWrite;
+const Src =
+  '''
+  program P;
+  var A: array[0..1, 0..2] of Integer;
+      i, j: Integer;
+  begin
+    for i := 0 to 1 do
+      for j := 0 to 2 do
+        A[i, j] := (i * 10) + j;
+    for i := 0 to 1 do
+      for j := 0 to 2 do
+        WriteLn(A[i, j])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src,
+    '0' + LE + '1' + LE + '2' + LE + '10' + LE + '11' + LE + '12' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDim_ChainedForm_ReadWrite;
+const Src =
+  '''
+  program P;
+  var A: array[0..1] of array[0..2] of Integer;
+  begin
+    A[0][0] := 5;
+    A[1][2] := 42;
+    WriteLn(A[0][0]);
+    WriteLn(A[1][2])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '5' + LE + '42' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDim_NonZeroBounds;
+const Src =
+  '''
+  program P;
+  var A: array[1..2, 5..7] of Integer;
+      i, j: Integer;
+  begin
+    for i := 1 to 2 do
+      for j := 5 to 7 do
+        A[i, j] := (i * 100) + j;
+    WriteLn(A[1, 5]);
+    WriteLn(A[2, 7])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '105' + LE + '207' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDim_ThreeDimensions;
+const Src =
+  '''
+  program P;
+  var A: array[0..1, 0..1, 0..1] of Integer;
+  begin
+    A[0, 0, 0] := 1;
+    A[1, 1, 1] := 8;
+    A[0, 1, 0] := 3;
+    WriteLn(A[0, 0, 0]);
+    WriteLn(A[1, 1, 1]);
+    WriteLn(A[0, 1, 0])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '1' + LE + '8' + LE + '3' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDim_StringElements_ARC;
+const Src =
+  '''
+  program P;
+  var S: array[0..1, 0..1] of string;
+  begin
+    S[0, 0] := 'hello';
+    S[1, 1] := 'world';
+    WriteLn(S[0, 0]);
+    WriteLn(S[1, 1])
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, 'hello' + LE + 'world' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_MultiDim_MixedNotation;
+const Src =
+  '''
+  program P;
+  var A: array[0..1, 0..2] of Integer;
+  begin
+    A[1, 2] := 77;       { comma write }
+    WriteLn(A[1][2]);    { chained read }
+    A[0][1] := 33;       { chained write }
+    WriteLn(A[0, 1])     { comma read }
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '77' + LE + '33' + LE, 0);
 end;
 
 initialization

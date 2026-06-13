@@ -831,7 +831,8 @@ begin
     Result := EncodeLpstr('ssasn') +
               EncodeLpstr(TStaticSubscriptAssign(AStmt).ArrayName) +
               EncodeExpr (TStaticSubscriptAssign(AStmt).IndexExpr) +
-              EncodeExpr (TStaticSubscriptAssign(AStmt).ValueExpr)
+              EncodeExpr (TStaticSubscriptAssign(AStmt).ValueExpr) +
+              EncodeExpr (TStaticSubscriptAssign(AStmt).BaseExpr)
   else if AStmt is TPointerWriteStmt then
     Result := EncodeLpstr('pw') +
               EncodeExpr(TPointerWriteStmt(AStmt).PtrExpr) +
@@ -1560,6 +1561,7 @@ begin
     SSAn.ArrayName := ReadLpstrAt(AText, APos);
     SSAn.IndexExpr := ReadExpr(AText, APos);
     SSAn.ValueExpr := ReadExpr(AText, APos);
+    SSAn.BaseExpr  := ReadExpr(AText, APos);
     Result := SSAn;
   end
   else if Kind = 'pw' then

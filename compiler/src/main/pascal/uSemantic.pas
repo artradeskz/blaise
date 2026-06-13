@@ -9622,6 +9622,26 @@ var
   BaseInfo: TFieldInfo;
   ElemT:    TTypeDesc;
 begin
+  { Chained / multi-dimensional element write: BaseExpr yields the inner
+    array (A[I][J] := V, lowered from A[I, J] := V or written directly).
+    The element being written is the IndexExpr-th element of BaseExpr's
+    static-array result. }
+  if AStmt.BaseExpr <> nil then
+  begin
+    AStmt.ResolvedArrayType := AnalyseExpr(AStmt.BaseExpr);
+    if (AStmt.ResolvedArrayType = nil) or
+       (AStmt.ResolvedArrayType.Kind <> tyStaticArray) then
+      SemanticError('Multi-dimensional subscript base must be a static array',
+        AStmt.Line, AStmt.Col);
+    ArrType := TStaticArrayTypeDesc(AStmt.ResolvedArrayType);
+    IdxType := AnalyseExpr(AStmt.IndexExpr);
+    if not IdxType.IsNumeric() then
+      SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
+    ValType := AnalyseExpr(AStmt.ValueExpr);
+    CheckTypesMatch(ArrType.ElementType, ValType,
+      Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
+    Exit;
+  end;
   Sym := FTable.Lookup(AStmt.ArrayName);
   if Sym = nil then
   begin
