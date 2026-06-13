@@ -56,6 +56,7 @@ type
     FCurrentLocalBlock:    TBlock;       { block currently being stmt-analysed; for-in injects synthetic TVarDecl here }
     FForInCounter:         Integer;      { counter for generating unique __forin_N variable names }
     FArrayConstCounter:    Integer;      { counter for generating unique array-const data labels }
+    FAnonEnumCounter:      Integer;      { counter for unique anonymous-enum type names (inline 'set of (a,b,c)') }
     FCurrentUnitName:      string;       { name of the unit/program currently being analysed }
     FCurrentEnclosingDecl: TMethodDecl;  { the innermost standalone proc/func currently being analysed;
                                            nil at program level.  Used to set EnclosingDecl on nested procs. }
@@ -162,6 +163,7 @@ type
                                           const ADecl: TMethodDecl): Boolean;
     procedure AnalyseVarDecls(ABlock: TBlock);
     procedure AnalyseVarInitializer(ADecl: TVarDecl);
+    function  SynthAnonEnum(const AMemberList: string): TEnumTypeDesc;
     procedure AnalyseStmts(ABlock: TBlock);
     procedure AnalyseStmt(AStmt: TASTStmt);
     procedure AnalyseAssignment(AAssign: TAssignment);
@@ -1836,6 +1838,81 @@ begin
   Result := BasePart + '<' + OutArgs + '>';
 end;
 
+function TSemanticAnalyser.SynthAnonEnum(const AMemberList: string): TEnumTypeDesc;
+{ Synthesise (or reuse) an enum type from an inline member list encoded as
+  '(a,b,c)'.  Members become skConstant symbols, exactly as a named enum's do.
+  If the members are already defined (the same inline enum resolved earlier, or
+  a clashing identifier), the existing enum is reused when it matches, otherwise
+  a duplicate-identifier error is raised — mirroring named-enum semantics. }
+var
+  Inner:   string;
+  Members: TStringList;
+  ExistSym: TSymbol;
+  EnumName: string;
+  MSym:    TSymbol;
+  K, CPos: Integer;
+begin
+  { Strip the surrounding parentheses and split on commas. }
+  Inner := AMemberList;
+  if (Length(Inner) >= 2) and (StrAt(Inner, 0) = Ord('(')) then
+    Inner := StrCopyFrom(Inner, 1, Length(Inner) - 2);
+  Members := TStringList.Create();
+  try
+    while Inner <> '' do
+    begin
+      CPos := StrPos(',', Inner);
+      if CPos < 0 then
+      begin
+        Members.Add(Inner);
+        Inner := '';
+      end
+      else
+      begin
+        Members.Add(StrHead(Inner, CPos));
+        Inner := StrCopyTail(Inner, CPos + 1);
+      end;
+    end;
+    if Members.Count = 0 then
+      SemanticError('Empty anonymous enumeration in set type', 0, 0);
+    if Members.Count > 64 then
+      SemanticError(Format(
+        'Anonymous enumeration has %d members; set types support at most 64',
+        [Members.Count]), 0, 0);
+    { Reuse an already-synthesised identical enum: if the first member is a
+      defined enum constant whose enum has exactly these members, return it. }
+    ExistSym := FTable.Lookup(Members.Strings[0]);
+    if (ExistSym <> nil) and (ExistSym.Kind = skConstant) and
+       (ExistSym.TypeDesc <> nil) and (ExistSym.TypeDesc.Kind = tyEnum) and
+       (TEnumTypeDesc(ExistSym.TypeDesc).Members.Count = Members.Count) then
+    begin
+      Result := TEnumTypeDesc(ExistSym.TypeDesc);
+      for K := 0 to Members.Count - 1 do
+        if not SameText(Result.Members.Strings[K], Members.Strings[K]) then
+          SemanticError(Format('Duplicate identifier ''%s''',
+            [Members.Strings[K]]), 0, 0);
+      Exit;
+    end;
+    Inc(FAnonEnumCounter);
+    EnumName := Format('$anonenum_%d', [FAnonEnumCounter]);
+    Result := FTable.NewEnumType(EnumName);
+    for K := 0 to Members.Count - 1 do
+    begin
+      Result.Members.Add(Members.Strings[K]);
+      MSym            := TSymbol.Create(Members.Strings[K], skConstant, Result);
+      MSym.ConstValue := K;
+      if not FTable.Define(MSym) then
+      begin
+        MSym.Free();
+        SemanticError(Format('Duplicate identifier ''%s''',
+          [Members.Strings[K]]), 0, 0);
+      end;
+    end;
+    FTable.DefineGlobal(TSymbol.Create(EnumName, skType, Result));
+  finally
+    Members.Free();
+  end;
+end;
+
 function TSemanticAnalyser.FindTypeOrInstantiate(const AName: string): TTypeDesc;
 var
   BaseName: string;
@@ -1933,6 +2010,35 @@ begin
           FTable.NewMetaClassType(CanonName, BaseType));
         FTable.DefineGlobal(Sym);
         Result := Sym.TypeDesc;
+      end;
+    end;
+    Exit;
+  end;
+  { Inline set type: 'set of TypeName' — create on demand.  The element type
+    must resolve to an enum.  The canonical name 'set of <Enum>' matches the
+    inferred-set-constant path, so identical inline and named sets share one
+    descriptor (set types compare structurally regardless). }
+  if (Length(AName) > 7) and (StrHead(AName, 7) = 'set of ') then
+  begin
+    BaseName := StrCopyTail(AName, 7);
+    { Anonymous enum element 'set of (a,b,c)' — synthesise the enum from the
+      encoded member list; otherwise resolve a named element type. }
+    if (BaseName <> '') and (StrAt(BaseName, 0) = Ord('(')) then
+      BaseType := Self.SynthAnonEnum(BaseName)
+    else
+      BaseType := FindTypeOrInstantiate(BaseName);
+    if (BaseType <> nil) and (BaseType.Kind = tyEnum) then
+    begin
+      if TEnumTypeDesc(BaseType).Members.Count > 64 then
+        SemanticError(Format(
+          'Enumeration ''%s'' has %d members; set types support at most 64',
+          [BaseType.Name, TEnumTypeDesc(BaseType).Members.Count]), 0, 0);
+      CanonName := 'set of ' + BaseType.Name;
+      Result    := FTable.FindType(CanonName);
+      if Result = nil then
+      begin
+        Result := FTable.NewSetType(CanonName, TEnumTypeDesc(BaseType));
+        FTable.DefineGlobal(TSymbol.Create(CanonName, skType, Result));
       end;
     end;
     Exit;

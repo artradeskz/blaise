@@ -58,6 +58,7 @@ type
     function  Check(AKind: TTokenKind): Boolean;
     function  CheckUnitNamePart: Boolean;
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
+    function  ParseAnonEnumName: string;  { parse '(a,b,c)' → encoded member-list string }
 
     function  ParseProgram: TProgram;
     procedure ParseUsesList(AList: TStringList);
@@ -225,6 +226,33 @@ begin
     Expect(tkOf);
     Exit('class of ' + Self.ParseTypeName());
   end;
+  { Inline set type: 'set of <NamedEnum>' or 'set of (a, b, c)'.  The element
+    is either a named enum (encoded as 'set of <Name>') or an anonymous enum
+    written in place.  An anonymous enum is parsed and wrapped in a synthetic
+    type declaration with a minted unique name; the declaration is staged in
+    FPendingTypeDecls and flushed into the enclosing block so the normal type
+    pass registers it.  The set then references that synthetic name. }
+  if Check(tkSet) then
+  begin
+    Advance();  { consume 'set' }
+    Expect(tkOf);
+    if Check(tkLParen) then
+      { Anonymous enum element: encode the member list directly in the type
+        name as 'set of (a,b,c)'.  The semantic pass synthesises the enum and
+        the set from this string on demand — no parser-side symbol table is
+        needed, and the encoding is self-contained. }
+      Exit('set of ' + Self.ParseAnonEnumName())
+    else
+    begin
+      if not Check(tkIdent) then
+        raise EParseError.Create(Format(
+          'Expected enum type or ''('' after ''set of'' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      Result := 'set of ' + FCurrent.Value;
+      Advance();
+      Exit;
+    end;
+  end;
   if not Check(tkIdent) then
     raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
@@ -253,6 +281,32 @@ begin
     Expect(tkGreaterThan);
     Result := Result + '>';
   end;
+end;
+
+function TParser.ParseAnonEnumName: string;
+begin
+  { Encode an inline '(a, b, c)' enumeration as the literal text '(a,b,c)'
+    (no whitespace).  The semantic pass parses the member list out of this
+    string, synthesises the enum type and its member constants, and builds the
+    enclosing set — so no symbol-table access is needed here in the parser. }
+  Expect(tkLParen);
+  Result := '(';
+  if not Check(tkIdent) then
+    raise EParseError.Create(Format('Expected enum member at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  Result := Result + FCurrent.Value;
+  Advance();
+  while Check(tkComma) do
+  begin
+    Advance();
+    if not Check(tkIdent) then
+      raise EParseError.Create(Format('Expected enum member at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+    Result := Result + ',' + FCurrent.Value;
+    Advance();
+  end;
+  Expect(tkRParen);
+  Result := Result + ')';
 end;
 
 procedure TParser.Expect(AKind: TTokenKind);

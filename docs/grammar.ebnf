@@ -586,8 +586,14 @@ EnumMember
  * subsequent members without EQUALS continue incrementing from that value.
  * This matches Delphi and FPC semantics. *)
 
+(* A set's element type is an enumeration: either a named enum type or an
+ * anonymous enum written inline.  Inline set types are accepted anywhere a
+ * TypeName appears (var, parameter, record field, …), not only in a named
+ * type declaration — e.g. var S: set of TColour;  var T: set of (a, b, c);
+ * The anonymous form synthesises an enum type whose members become ordinary
+ * enum constants in scope. *)
 SetType
-    = SET OF IDENT
+    = SET OF ( IDENT | EnumDef )
     ;
 
 (* The base enumeration must have at most 64 members.  Sets with up to 32

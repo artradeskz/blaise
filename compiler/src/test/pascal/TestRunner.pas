@@ -78,6 +78,8 @@ uses
   cp.test.staticarray,
   cp.test.varinit,
   cp.test.e2e.varinit,
+  cp.test.inlineset,
+  cp.test.e2e.inlineset,
   cp.test.e2e.base,
   cp.test.bif_coverage,
   cp.test.e2e.exceptions,

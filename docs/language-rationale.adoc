@@ -3882,3 +3882,53 @@ code is generated; the loader provides the value.
   data-section path is the clean baseline.
 * *Support record/set initialisers now.*  Deferred until record-constant
   infrastructure exists; rejecting them keeps the feature honest.
+
+== Inline Set Types
+
+=== Decision
+
+A set type may be written inline anywhere a type is expected — a variable,
+parameter, record field, etc. — not only in a named type declaration.  The
+element type may be a named enumeration or an anonymous enumeration written in
+place:
+
+[source,pascal]
+----
+var
+  Days:    set of TWeekday;        // named enum element
+  Flags:   set of (fA, fB, fC);    // anonymous enum element
+----
+
+Previously a set type had to be named in the `type` section
+(`type TS = set of TWeekday; var S: TS;`).  Both inline forms now match FPC
+and Delphi.
+
+=== Rationale
+
+The implementation resolves an inline set entirely from its canonical
+type-name string, with no special parser state.  The parser encodes the type
+as `set of <Name>` (named element) or `set of (a,b,c)` (anonymous element);
+the semantic type resolver (`FindTypeOrInstantiate`) recognises the `set of `
+prefix and constructs the `TSetTypeDesc` on demand, exactly as it already does
+for `array of T`, `^T`, and `class of T`.  For the anonymous form it first
+synthesises an enum type from the encoded member list — registering each
+member as an ordinary enum constant — then builds the set over it.
+
+Because set types compare structurally, the synthetic enum's name need only be
+unique, and an identical inline enum encountered again reuses the existing one
+(keyed on its already-defined member constants).  Encoding the enum in the
+type string rather than carrying parser-side state keeps the feature
+self-contained and makes it work uniformly in every position a type can
+appear, with no ordering or ownership concerns.
+
+=== Alternatives considered
+
+* *Synthesise the enum as a side effect in the parser and stage it for
+  transfer into the enclosing block.*  Rejected: it makes `ParseTypeName`
+  mutate shared state, requires every declaration site to flush the staging
+  area, and introduces declaration-ordering hazards between the synthesised
+  enum and any type that references it.  The string-encoding approach has none
+  of these problems.
+* *Require named set types (status quo).*  Rejected: inline set types are
+  common in ported FPC/Delphi code and the named-type requirement is friction
+  with no compensating benefit.
