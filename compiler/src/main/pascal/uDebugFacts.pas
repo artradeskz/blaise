@@ -47,6 +47,12 @@ type
       (var/out params, by-reference aggregates, captured outer locals) —
       emitted as LocationExpr=3 'RBP-relative indirect'. }
     Indirect: Boolean;
+    { Open-array parameter: the slot holds the data pointer (no heap header);
+      the element count is High+1, where High lives in a separate companion
+      stack slot at HighRbpOffset.  Emitted as LocationExpr=5 'open-array'
+      with the companion offset trailing the LocationData. }
+    IsOpenArray: Boolean;
+    HighRbpOffset: Integer;
   end;
 
   { One statement-level line marker: the backend emitted LabelName ('.Ldbg_N')

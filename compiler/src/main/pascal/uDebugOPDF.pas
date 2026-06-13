@@ -71,6 +71,7 @@ type
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
     function MangledClassSym(const AClassName: string): string;
+    procedure EmitFactsTypes;
     procedure EmitFunctionScopesFromFacts;
     procedure EmitFactParameter(AVar: TDbgVar; var ADeclIdx: Integer);
     procedure EmitFactLocalVar(AVar: TDbgVar; AScopeID: Integer;
@@ -122,6 +123,8 @@ const
 
   LOC_RBP = 1;
   LOC_RBP_INDIRECT = 3;  { frame slot holds the value's address }
+  LOC_OPENARRAY = 5;     { open-array: data ptr at LocationData, element count
+                           from companion _high slot (trailing SmallInt) }
 
   PAT_FIELD  = 0;  { property accessor: direct field offset }
   PAT_METHOD = 1;  { property accessor: method call }
@@ -255,10 +258,13 @@ begin
                   CanonicalName(SA.ElementType);
     end;
     tyOpenArray:
-      if AType.Name <> '' then
-        Result := AType.Name
-      else
-        Result := 'array of ' + CanonicalName(TOpenArrayTypeDesc(AType).ElementType);
+      { An open array is a distinct kind from a dynamic array (no heap header;
+        length in a companion slot).  Give it a distinct canonical name so it
+        gets its own TypeID and recArray(ArrayKind=2) — otherwise it would
+        alias a same-element 'array of T' dynamic-array record and inherit
+        ArrayKind=1. }
+      Result := 'open array of ' +
+                CanonicalName(TOpenArrayTypeDesc(AType).ElementType);
   else
     if AType.Name = '' then
       Result := 'Pointer'
@@ -607,7 +613,13 @@ begin
   begin
     P := TMethodParam(AMethod.Params.Items[I]);
     if P.ResolvedType <> nil then
-      CName := CanonicalName(P.ResolvedType)
+    begin
+      CName := CanonicalName(P.ResolvedType);
+      { Ensure the parameter's type record is emitted (e.g. an open-array
+        param's recArray with ArrayKind=2) — otherwise the TypeID below
+        references a record that was never written. }
+      EmitTypeDesc(P.ResolvedType);
+    end
     else
       CName := 'Pointer';
     RecSize := 9 + Length(P.ParamName);
@@ -809,18 +821,21 @@ begin
   end
   else
   begin
+    { Open array: a (data ptr, high) pair with no heap header.  ArrayKind=2
+      tells the debugger to read the length from the variable's companion
+      slot, not from data-4.  (FPC's dbgopdf.pas has no open-array concept;
+      this is a Blaise extension to the OPDF format.) }
     EmitTypeDesc(TOpenArrayTypeDesc(AType).ElementType);
     ElemName := CanonicalName(TOpenArrayTypeDesc(AType).ElementType);
     ElemID   := GetOrAllocTypeID(ElemName);
-    IsDyn    := 1;
     RecSize  := 12 + Length(CName);
     L('');
-    L('    # recArray (dynamic): ' + CName);
+    L('    # recArray (open): ' + CName);
     EmitRecHdr(REC_ARRAY, RecSize);
     L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
     L('    .int  ' + IntToStr(ElemID) + '  # ElementTypeID');
     L('    .byte 1  # Dimensions');
-    L('    .byte ' + IntToStr(IsDyn) + '  # IsDynamic');
+    L('    .byte 2  # ArrayKind');
     EmitStrField(CName);
   end;
 end;
@@ -1048,6 +1063,30 @@ begin
     if (GI.TypeDesc <> nil) and (GI.TypeDesc.Kind = tyClass) then
       EmitTypeDesc(GI.TypeDesc);
   end;
+  { Facts path: parameter/local types are often anonymous (e.g. an
+    open-array param 'array of Integer') and never appear in TypeDecls,
+    so emit every frame slot's type here.  EmitTypeDesc dedupes against
+    types already written above. }
+  EmitFactsTypes();
+end;
+
+procedure TOPDFEmitter.EmitFactsTypes;
+var
+  I, J: Integer;
+  F: TDbgFunc;
+  V: TDbgVar;
+begin
+  if FFacts = nil then Exit;
+  for I := 0 to FFacts.Funcs.Count - 1 do
+  begin
+    F := TDbgFunc(FFacts.Funcs.Items[I]);
+    for J := 0 to F.Vars.Count - 1 do
+    begin
+      V := TDbgVar(F.Vars.Items[J]);
+      if V.TypeDesc <> nil then
+        EmitTypeDesc(V.TypeDesc);
+    end;
+  end;
 end;
 
 procedure TOPDFEmitter.EmitGlobalVars;
@@ -1108,13 +1147,19 @@ begin
   else
     CName := 'Pointer';
   RecSize := 15 + Length(AVar.Name);
+  { Open-array locals carry an extra trailing SmallInt: the companion
+    '_high' slot offset.  Account for it in the record size. }
+  if AVar.IsOpenArray then
+    RecSize := RecSize + 2;
   L('');
   L('    # recLocalVar: ' + AVar.Name + ' (rbp' +
     IntToStr(AVar.RbpOffset) + ')');
   EmitRecHdr(REC_LOCALVAR, RecSize);
   L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
   L('    .int  ' + IntToStr(AScopeID) + '  # ScopeID');
-  if AVar.Indirect then
+  if AVar.IsOpenArray then
+    L('    .byte ' + IntToStr(LOC_OPENARRAY) + '  # LocationExpr (open-array)')
+  else if AVar.Indirect then
     L('    .byte ' + IntToStr(LOC_RBP_INDIRECT) +
       '  # LocationExpr (RBP-relative indirect)')
   else
@@ -1122,6 +1167,9 @@ begin
   L('    .word ' + IntToStr(ADeclIdx) + '  # DeclIndex');
   EmitNameLen(AVar.Name);
   L('    .word ' + IntToStr(AVar.RbpOffset) + '  # LocationData (RBP offset)');
+  if AVar.IsOpenArray then
+    L('    .word ' + IntToStr(AVar.HighRbpOffset) +
+      '  # CompanionData (_high RBP offset)');
   EmitNameData(AVar.Name);
   ADeclIdx := ADeclIdx + 1;
 end;

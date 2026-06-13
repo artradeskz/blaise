@@ -3587,6 +3587,19 @@ begin
       DV.IsVarParam := P.IsVarParam;
       DV.IsConstParam := P.IsConstParam;
     end
+    else if P.IsOpenArray then
+    begin
+      { Open-array parameter: the named slot holds the data pointer; the
+        element count is High+1, where High lives in the companion
+        '<name>_high' slot.  Record the companion offset so the OPDF
+        emitter can locate the length — the debugger has no heap header
+        to read it from. }
+      V.IsOpenArray := True;
+      if not FFrame.TryGetValue(P.ParamName + '_high', V.HighRbpOffset) then
+        V.HighRbpOffset := 0;
+      if (V.TypeDesc = nil) and (P.ResolvedType <> nil) then
+        V.TypeDesc := P.ResolvedType;
+    end
     else if P.IsVarParam then
     begin
       { var/out parameter: the slot holds the ADDRESS of the caller's

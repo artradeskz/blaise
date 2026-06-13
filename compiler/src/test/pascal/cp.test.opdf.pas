@@ -55,6 +55,8 @@ type
     procedure TestOPDF_Pointer_RecType;
     procedure TestOPDF_Array_Static_RecType;
     procedure TestOPDF_Array_Static_IsDynamic;
+    procedure TestOPDF_Array_OpenArray_ArrayKind;
+    procedure TestOPDF_OpenArray_CompanionLocation;
     procedure TestOPDF_Set_RecType;
     procedure TestOPDF_Set_SizeInBytes;
     procedure TestOPDF_Property_RecType;
@@ -469,6 +471,66 @@ begin
   AssertTrue('IsDynamic=0 for static array', Contains(IR, '.byte 0  # IsDynamic'));
 end;
 
+procedure TOPDFTests.TestOPDF_Array_OpenArray_ArrayKind;
+var
+  IR: string;
+begin
+  { An open-array parameter is neither static nor dynamic: it is a (ptr, high)
+    pair with no heap header.  Its recArray must carry ArrayKind=2, NOT
+    IsDynamic=1 (which would make the debugger read length from data-4). }
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Bar(a: array of Integer);
+        begin end;
+        begin end.
+        ''');
+  AssertTrue('ArrayKind=2 for open array', Contains(IR, '.byte 2  # ArrayKind'));
+  AssertTrue('open array is not flagged dynamic',
+    not Contains(IR, 'array of Integer' + #10 + '    .byte 1  # ArrayKind'));
+end;
+
+procedure TOPDFTests.TestOPDF_OpenArray_CompanionLocation;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  A:  TSemanticAnalyser;
+  E:  TOPDFEmitter;
+  Facts: TDbgFacts;
+  O: string;
+begin
+  L  := TLexer.Create('program P; begin end.');
+  P  := TParser.Create(L);
+  Pr := P.Parse();
+  A  := TSemanticAnalyser.Create();
+  Facts := BuildSampleFacts();
+  try
+    A.Analyse(Pr);
+    E := TOPDFEmitter.Create(Pr, 'test.pas');
+    try
+      E.SetFacts(Facts);
+      O := E.GetOutput();
+    finally
+      E.Free();
+    end;
+    { The open-array local 'Oa' must use LocationExpr=5 (open-array) and carry
+      both its data-slot offset (-32) and the companion _high offset (-40). }
+    AssertTrue('open-array LocationExpr=5',
+      Pos('.byte 5  # LocationExpr (open-array)', O) > 0);
+    AssertTrue('open-array data offset -32',
+      Pos('.word -32  # LocationData', O) > 0);
+    AssertTrue('open-array companion _high offset -40',
+      Pos('.word -40  # CompanionData (_high RBP offset)', O) > 0);
+  finally
+    Facts.Free();
+    A.Free();
+    Pr.Free();
+    P.Free();
+    L.Free();
+  end;
+end;
+
 procedure TOPDFTests.TestOPDF_Set_RecType;
 var
   IR: string;
@@ -649,6 +711,12 @@ begin
   V := F.AddVar('By', nil, -16);
   V.IsParam := True;
   F.AddVar('Tmp', nil, -24);
+  { Open-array parameter: data slot at -32, companion _high slot at -40.
+    The OPDF emitter must locate the length via the companion offset. }
+  V := F.AddVar('Oa', nil, -32);
+  V.IsParam := True;
+  V.IsOpenArray := True;
+  V.HighRbpOffset := -40;
   LineRec := TDbgLine.Create();
   LineRec.LabelName := '.Ldbg_3';
   LineRec.Line := 10;
