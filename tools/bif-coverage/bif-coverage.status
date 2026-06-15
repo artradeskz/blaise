@@ -24,9 +24,13 @@ TStringSubscriptExpr.IndexExpr  serialise
 TArrayLiteralExpr.Elements  serialise
 TArrayLiteralExpr.IsConstArray  safe
 
-# TNilLiteral (uAST.pas:74)
+# TSetRangeExpr (uAST.pas:80)
+TSetRangeExpr.LowExpr  serialise
+TSetRangeExpr.HighExpr  serialise
 
-# TIdentExpr (uAST.pas:83)
+# TNilLiteral (uAST.pas:87)
+
+# TIdentExpr (uAST.pas:97)
 TIdentExpr.Name  serialise
 TIdentExpr.ParamMode  safe
 TIdentExpr.IsConstant  safe
@@ -39,7 +43,7 @@ TIdentExpr.IsImplicitSelfMethod  safe
 TIdentExpr.IsMetaclassRef  safe
 TIdentExpr.ConstArraySymbol  safe
 
-# TFieldAccessExpr (uAST.pas:104)
+# TFieldAccessExpr (uAST.pas:118)
 TFieldAccessExpr.RecordName  serialise
 TFieldAccessExpr.FieldName  serialise
 TFieldAccessExpr.Base  serialise
@@ -64,29 +68,29 @@ TFieldAccessExpr.PropIndexExpr  serialise
 TFieldAccessExpr.IsCharAccess  safe
 TFieldAccessExpr.IsArrayAccess  safe
 
-# TIsExpr (uAST.pas:136)
+# TIsExpr (uAST.pas:150)
 TIsExpr.Obj  serialise
 TIsExpr.TypeName  serialise
 
-# TAsExpr (uAST.pas:144)
+# TAsExpr (uAST.pas:158)
 TAsExpr.Obj  serialise
 TAsExpr.TypeName  serialise
 
-# TSupportsExpr (uAST.pas:153)
+# TSupportsExpr (uAST.pas:167)
 TSupportsExpr.Obj  serialise
 TSupportsExpr.IntfTypeName  serialise
 TSupportsExpr.OutVarName  serialise
 TSupportsExpr.OutVarIsGlobal  safe
 
-# TBinaryExpr (uAST.pas:169)
+# TBinaryExpr (uAST.pas:183)
 TBinaryExpr.Op  serialise
 TBinaryExpr.Left  serialise
 TBinaryExpr.Right  serialise
 
-# TNotExpr (uAST.pas:177)
+# TNotExpr (uAST.pas:191)
 TNotExpr.Expr  serialise
 
-# TAssignment (uAST.pas:189)
+# TAssignment (uAST.pas:203)
 TAssignment.Name  serialise
 TAssignment.Expr  serialise
 TAssignment.IsVarParam  safe
@@ -95,23 +99,23 @@ TAssignment.IsThreadVar  safe
 TAssignment.IsWeakLhs  safe
 TAssignment.ImplicitSelfField  safe
 
-# TIfStmt (uAST.pas:205)
+# TIfStmt (uAST.pas:219)
 TIfStmt.Condition  serialise
 TIfStmt.ThenStmt  serialise
 TIfStmt.ElseStmt  serialise
 
-# TCompoundStmt (uAST.pas:213)
+# TCompoundStmt (uAST.pas:227)
 TCompoundStmt.Stmts  serialise
 
-# TWhileStmt (uAST.pas:220)
+# TWhileStmt (uAST.pas:234)
 TWhileStmt.Condition  serialise
 TWhileStmt.Body  serialise
 
-# TRepeatStmt (uAST.pas:227)
+# TRepeatStmt (uAST.pas:241)
 TRepeatStmt.Body  serialise
 TRepeatStmt.Condition  serialise
 
-# TForStmt (uAST.pas:234)
+# TForStmt (uAST.pas:248)
 TForStmt.VarName  serialise
 TForStmt.IsGlobal  safe
 TForStmt.StartExpr  serialise
@@ -119,7 +123,7 @@ TForStmt.EndExpr  serialise
 TForStmt.IsDownTo  serialise
 TForStmt.Body  serialise
 
-# TForInStmt (uAST.pas:245)
+# TForInStmt (uAST.pas:259)
 TForInStmt.VarName  serialise
 TForInStmt.VarIsGlobal  safe
 TForInStmt.CollExpr  serialise
@@ -139,34 +143,34 @@ TForInStmt.SetBitCount  safe
 TForInStmt.SetMaskVarName  safe
 TForInStmt.SetIsJumbo  safe
 
-# TTryFinallyStmt (uAST.pas:282)
+# TTryFinallyStmt (uAST.pas:296)
 TTryFinallyStmt.TryBody  serialise
 TTryFinallyStmt.FinallyBody  serialise
 
-# TTryExceptStmt (uAST.pas:299)
+# TTryExceptStmt (uAST.pas:313)
 TTryExceptStmt.TryBody  serialise
 TTryExceptStmt.Handlers  serialise
 TTryExceptStmt.ElseBody  serialise
 TTryExceptStmt.ExceptBody  serialise
 
-# TRaiseStmt (uAST.pas:312)
+# TRaiseStmt (uAST.pas:326)
 TRaiseStmt.Expr  serialise
 
-# TExitStmt (uAST.pas:323)
+# TExitStmt (uAST.pas:337)
 TExitStmt.Value  safe
 TExitStmt.ResultAssign  safe
 
-# TBreakStmt (uAST.pas:331)
+# TBreakStmt (uAST.pas:345)
 
-# TContinueStmt (uAST.pas:334)
+# TContinueStmt (uAST.pas:348)
 
-# TCaseStmt (uAST.pas:345)
+# TCaseStmt (uAST.pas:359)
 TCaseStmt.Selector  serialise
 TCaseStmt.Branches  serialise
 TCaseStmt.ElseStmt  serialise
 TCaseStmt.IsStringCase  safe
 
-# TFieldAssignment (uAST.pas:356)
+# TFieldAssignment (uAST.pas:370)
 TFieldAssignment.RecordName  serialise
 TFieldAssignment.FieldName  serialise
 TFieldAssignment.Expr  serialise
@@ -180,7 +184,7 @@ TFieldAssignment.PropIndexExpr  serialise
 TFieldAssignment.PropOwnerType  safe
 TFieldAssignment.IsElemWrite  safe
 
-# TStaticSubscriptAssign (uAST.pas:383)
+# TStaticSubscriptAssign (uAST.pas:397)
 TStaticSubscriptAssign.ArrayName  serialise
 TStaticSubscriptAssign.IndexExpr  serialise
 TStaticSubscriptAssign.ValueExpr  serialise
@@ -189,18 +193,18 @@ TStaticSubscriptAssign.IsGlobal  safe
 TStaticSubscriptAssign.IsVarParam  safe
 TStaticSubscriptAssign.IsImplicitSelf  safe
 
-# TPointerWriteStmt (uAST.pas:406)
+# TPointerWriteStmt (uAST.pas:420)
 TPointerWriteStmt.PtrExpr  serialise
 TPointerWriteStmt.ValExpr  serialise
 
-# TProcCall (uAST.pas:414)
+# TProcCall (uAST.pas:428)
 TProcCall.Name  serialise
 TProcCall.Args  serialise
 TProcCall.IsImplicitSelfMethod  safe
 TProcCall.IsIndirectCall  safe
 TProcCall.IndirectCallIsGlobal  safe
 
-# TFuncCallExpr (uAST.pas:427)
+# TFuncCallExpr (uAST.pas:441)
 TFuncCallExpr.Name  serialise
 TFuncCallExpr.Args  serialise
 TFuncCallExpr.IsImplicitSelfMethod  safe
@@ -210,18 +214,18 @@ TFuncCallExpr.IsBuiltinHasClassAttr  safe
 TFuncCallExpr.HasClassAttrClass  safe
 TFuncCallExpr.HasClassAttrAttr  safe
 
-# TIndirectFuncCallExpr (uAST.pas:453)
+# TIndirectFuncCallExpr (uAST.pas:467)
 TIndirectFuncCallExpr.CalleeExpr  serialise
 TIndirectFuncCallExpr.Args  serialise
 
-# TDerefExpr (uAST.pas:463)
+# TDerefExpr (uAST.pas:477)
 TDerefExpr.Expr  serialise
 
-# TAddrOfExpr (uAST.pas:470)
+# TAddrOfExpr (uAST.pas:484)
 TAddrOfExpr.Expr  serialise
 TAddrOfExpr.ResolvedFreeRoutine  safe
 
-# TMethodCallStmt (uAST.pas:482)
+# TMethodCallStmt (uAST.pas:496)
 TMethodCallStmt.ObjectName  serialise
 TMethodCallStmt.Name  serialise
 TMethodCallStmt.Args  serialise
@@ -232,11 +236,11 @@ TMethodCallStmt.IsVarParam  safe
 TMethodCallStmt.IsBuiltinToString  safe
 TMethodCallStmt.IsProcFieldCall  safe
 
-# TInheritedCallStmt (uAST.pas:514)
+# TInheritedCallStmt (uAST.pas:528)
 TInheritedCallStmt.Name  serialise
 TInheritedCallStmt.Args  serialise
 
-# TMethodCallExpr (uAST.pas:789)
+# TMethodCallExpr (uAST.pas:803)
 TMethodCallExpr.ObjectName  serialise
 TMethodCallExpr.Name  serialise
 TMethodCallExpr.Args  serialise

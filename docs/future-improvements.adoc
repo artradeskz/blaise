@@ -34,6 +34,25 @@ prioritise them.
 - reference to function/procedure (anonymous methods)
 - cdecl/stdcall calling-convention markers on procedural types
 
+=== Ordinal-based set types (`set of byte`, `set of 0..255`)
+
+Set types currently require an enumeration base type; `set of byte` (and,
+more generally, a set over an integer subrange) is rejected with
+"Set base type 'byte' must be an enumeration type".  FPC and Delphi accept
+ordinal base types, so `set of byte` is standard Pascal.
+
+Supporting it means teaching the set machinery to treat an ordinal range as
+an implicit member set: the bit count is the range width (0..255 → 256 bits,
+the jumbo-set path), element ordinals are the integer values themselves, and
+membership/include/exclude lower exactly as they do for enum sets.  The work
+spans the semantic pass (base-type validation, bit-count derivation) and both
+codegen backends, including the jumbo-set path for `set of byte`.
+
+This was surfaced by issue #105, whose example used `set of byte`.  The set
+range syntax `[lo..hi]` requested by that issue was implemented independently
+(see `docs/language-rationale.adoc`) and is base-type-agnostic — ranges will
+work for ordinal sets automatically once this lands.
+
 === Method level attributes
 
 Blaise only has class-level attribute RTTI today — there's no per-method attribute reflection, and adding it is a layout-changing compiler change (new method-table slot, stage-2 rebuild).

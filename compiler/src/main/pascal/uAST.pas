@@ -71,6 +71,19 @@ type
     destructor Destroy; override;
   end;
 
+  { A `lo..hi` range appearing as an element of a set literal, e.g.
+    [1..3] or [Red..Blue].  Both bounds must be compile-time constants;
+    uSemantic.AnalyseSetLiteralExpr expands the range into individual
+    member nodes (so codegen never sees this node), and rejects reversed
+    or non-constant ranges.  Carried through the .bif serialiser because a
+    generic template body may contain an unexpanded range. }
+  TSetRangeExpr = class(TASTExpr)
+  public
+    LowExpr:  TASTExpr;  { owned }
+    HighExpr: TASTExpr;  { owned }
+    destructor Destroy; override;
+  end;
+
   TNilLiteral = class(TASTExpr);  { nil keyword — type is tyNil }
 
   TParamMode = (
@@ -1236,6 +1249,12 @@ begin
   inherited Destroy();
 end;
 
+destructor TSetRangeExpr.Destroy;
+begin
+  { LowExpr/HighExpr released by ARC field cleanup. }
+  inherited Destroy();
+end;
+
 { TProcCall }
 
 constructor TProcCall.Create;
@@ -1718,6 +1737,7 @@ var
   SL:  TStringLiteral;
   SS:  TStringSubscriptExpr;
   AL:  TArrayLiteralExpr;
+  SRE: TSetRangeExpr;
   IE:  TIdentExpr;
   FA:  TFieldAccessExpr;
   IsE: TIsExpr;
@@ -1770,6 +1790,13 @@ begin
       AL.Elements.Add(CloneExpr(TASTExpr(TArrayLiteralExpr(AExpr).Elements.Items[I])));
     AL.IsConstArray := TArrayLiteralExpr(AExpr).IsConstArray;
     Result := AL;
+  end
+  else if AExpr is TSetRangeExpr then
+  begin
+    SRE := TSetRangeExpr.Create();
+    SRE.LowExpr  := CloneExpr(TSetRangeExpr(AExpr).LowExpr);
+    SRE.HighExpr := CloneExpr(TSetRangeExpr(AExpr).HighExpr);
+    Result := SRE;
   end
   else if AExpr is TIdentExpr then
   begin

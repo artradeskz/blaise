@@ -714,6 +714,10 @@ begin
   else if AE is TArrayLiteralExpr then
     Result := EncodeLpstr('alit') +
               EncodeExprList(TArrayLiteralExpr(AE).Elements)
+  else if AE is TSetRangeExpr then
+    Result := EncodeLpstr('srng') +
+              EncodeExpr(TSetRangeExpr(AE).LowExpr) +
+              EncodeExpr(TSetRangeExpr(AE).HighExpr)
   else if AE is TIsExpr then
     Result := EncodeLpstr('isop') +
               EncodeExpr(TIsExpr(AE).Obj) +
@@ -1281,6 +1285,7 @@ var
   AoE:  TAddrOfExpr;
   SS:   TStringSubscriptExpr;
   AL:   TArrayLiteralExpr;
+  SRE:  TSetRangeExpr;
   IsE:  TIsExpr;
   AsE:  TAsExpr;
   SuE:  TSupportsExpr;
@@ -1384,6 +1389,13 @@ begin
     AL := TArrayLiteralExpr.Create();
     ReadExprList(AText, APos, AL.Elements);
     Result := AL;
+  end
+  else if Kind = 'srng' then
+  begin
+    SRE := TSetRangeExpr.Create();
+    SRE.LowExpr  := ReadExpr(AText, APos);
+    SRE.HighExpr := ReadExpr(AText, APos);
+    Result := SRE;
   end
   else if Kind = 'isop' then
   begin

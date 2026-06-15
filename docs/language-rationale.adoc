@@ -4277,3 +4277,63 @@ identifier.
 * *Restrict the rule to reference types (classes, interfaces) only.*  Rejected
   as arbitrary — the confusion is identical for records, enums, aliases, and
   built-ins, and a name-based rule is simpler to explain than a kind-based one.
+
+== Set Literal Ranges
+
+=== Decision
+
+A set literal element may be a range `lo..hi`, expanding to every member from
+`lo` to `hi` inclusive:
+
+[source,pascal]
+----
+type
+  TColor = (Red, Green, Blue, Yellow, Cyan);
+  TColorSet = set of TColor;
+var
+  e: TColorSet;
+begin
+  e := [Red..Blue];        // {Red, Green, Blue}
+  e := [Red, Blue..Cyan];  // {Red, Blue, Yellow, Cyan} — ranges mix with singles
+end;
+----
+
+Both bounds must be compile-time constants of the set's base type.  A reversed
+range (`[Blue..Red]`, low ordinal greater than high) is a compile-time error,
+not a silently empty set.  Variable bounds (`[lo..hi]` where `lo`/`hi` are
+variables) are rejected with "set range bound must be a constant".
+
+This matches the range form FPC and Delphi accept in set constructors, with two
+deliberate restrictions (see below).
+
+=== Rationale
+
+`[1..10]` (or `[Red..Cyan]`) is far clearer than spelling out every member, and
+the construct is standard Pascal — the reporter of issue #105 reasonably
+expected it to work.  The implementation expands each range into individual
+member nodes during semantic analysis, so the rest of the pipeline — overload
+resolution, the bitmask folder, the jumbo-set path, and both code generators —
+sees an ordinary member list and needs no range-specific logic.  A transient
+`TSetRangeExpr` AST node carries the unexpanded range from the parser to that
+expansion point; it is also wired into the `.bif` serialiser and the AST cloner
+because a generic template body may contain an unexpanded range that is
+serialised and re-instantiated later.
+
+=== Alternatives considered
+
+* *Treat a reversed constant range as an empty set (FPC behaviour).*  Rejected.
+  FPC accepts `[5..3]` as empty (with a warning); when both bounds are
+  compile-time constants there is no legitimate reason to write a reversed
+  range — it is a typo, and `[]` already expresses the empty set
+  unambiguously.  Erroring matches Blaise's preference for rejecting
+  confusing-but-legal constructs (cf. variable/type name clashes).
+* *Support variable range bounds `[lo..hi]`.*  Deferred.  Runtime-variable
+  bounds require emitting a bit-setting loop in both backends across the
+  small-set and jumbo-set paths; the constant form covers the reported case and
+  the overwhelmingly common usage.  The restriction is enforced with a clear
+  diagnostic rather than silently mis-compiling.
+* *Support ranges over an ordinal base type (`set of byte`, `[1..3]`).*  Out of
+  scope: Blaise set base types are enumerations today.  Ordinal-based set types
+  are tracked separately (see `docs/future-improvements.adoc`); because range
+  expansion is base-type-agnostic, `[1..3]` will work automatically once they
+  land.

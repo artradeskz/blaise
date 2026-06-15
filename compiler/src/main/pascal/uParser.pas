@@ -109,6 +109,7 @@ type
     function  ParseForwardDecl(IsFunction: Boolean): TMethodDecl;
     function  ParseCompoundStmt: TCompoundStmt;
     function  ParseExpr: TASTExpr;
+    function  ParseSetOrArrayElement: TASTExpr;
     function  ParseAddSub: TASTExpr;
     function  ParseTerm: TASTExpr;
     function  ParseFactor: TASTExpr;
@@ -3620,6 +3621,28 @@ end;
 { Expression parsing — standard precedence climbing                   }
 { ------------------------------------------------------------------ }
 
+{ Parse one element of a bracket literal [ ... ].  An ordinary element is a
+  plain expression; a `lo..hi` form (set range, issue #105) becomes a
+  TSetRangeExpr that uSemantic expands into individual set members.  The
+  range form is only meaningful for set literals — uSemantic rejects it in
+  array-literal context. }
+function TParser.ParseSetOrArrayElement: TASTExpr;
+var
+  LowE:  TASTExpr;
+  Range: TSetRangeExpr;
+begin
+  LowE := Self.ParseExpr();
+  if not Check(tkDotDot) then
+    Exit(LowE);
+  Range          := TSetRangeExpr.Create();
+  Range.Line     := LowE.Line;
+  Range.Col      := LowE.Col;
+  Range.LowExpr  := LowE;
+  Advance();  { consume '..' }
+  Range.HighExpr := Self.ParseExpr();
+  Result := Range;
+end;
+
 function TParser.ParseExpr: TASTExpr;
 var
   Right:    TASTExpr;
@@ -4125,11 +4148,11 @@ begin
           Advance();  { consume '[' }
           if not Check(tkRBracket) then
           begin
-            ArrNode.Elements.Add(ParseExpr());
+            ArrNode.Elements.Add(Self.ParseSetOrArrayElement());
             while Check(tkComma) do
             begin
               Advance();  { consume ',' }
-              ArrNode.Elements.Add(ParseExpr());
+              ArrNode.Elements.Add(Self.ParseSetOrArrayElement());
             end;
           end;
           Expect(tkRBracket);

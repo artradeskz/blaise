@@ -240,6 +240,11 @@ type
     function  AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
     function  AnalyseArrayLiteralExpr(AExpr: TArrayLiteralExpr): TTypeDesc;
     function  AnalyseSetLiteralExpr(AExpr: TArrayLiteralExpr; ASetType: TSetTypeDesc): TTypeDesc;
+    { Expand [lo..hi] range elements of a set literal into individual member
+      idents (issue #105).  Constant ascending ranges only. }
+    procedure ExpandSetRanges(AExpr: TArrayLiteralExpr; ABaseEnum: TEnumTypeDesc);
+    function  SetRangeBoundOrdinal(ABound: TASTExpr; ABaseEnum: TEnumTypeDesc;
+                                   const AWhich: string): Integer;
     { Width (in bits) needed for the anonymous set type of an 'X in [a,b,c]'
       literal: largest listed member ordinal + 1 when every element is a
       compile-time enum constant; otherwise the full base-enum member count
@@ -10228,15 +10233,127 @@ begin
     Result := MaxOrd + 1;
 end;
 
+function TSemanticAnalyser.SetRangeBoundOrdinal(ABound: TASTExpr;
+  ABaseEnum: TEnumTypeDesc; const AWhich: string): Integer;
+{ Resolve a set-range bound (lo or hi) to a compile-time ordinal of the
+  base enum.  Rejects non-constant and wrong-type bounds.  Issue #105. }
+var
+  BType: TTypeDesc;
+  Sym:   TSymbol;
+begin
+  BType := AnalyseExpr(ABound);
+  if BType <> ABaseEnum then
+    SemanticError(
+      Format('Set range %s bound has type ''%s''; expected ''%s''',
+        [AWhich, BType.Name, ABaseEnum.Name]),
+      ABound.Line, ABound.Col);
+  if not ((ABound is TIdentExpr) and TIdentExpr(ABound).IsConstant) then
+    SemanticError(
+      Format('Set range %s bound must be a constant', [AWhich]),
+      ABound.Line, ABound.Col);
+  Sym := FTable.Lookup(TIdentExpr(ABound).Name);
+  if (Sym = nil) or (Sym.Kind <> skConstant) then
+    SemanticError(
+      Format('Set range %s bound ''%s'' is not a constant',
+        [AWhich, TIdentExpr(ABound).Name]),
+      ABound.Line, ABound.Col);
+  Result := Sym.ConstValue;
+end;
+
+procedure TSemanticAnalyser.ExpandSetRanges(AExpr: TArrayLiteralExpr;
+  ABaseEnum: TEnumTypeDesc);
+{ Replace every TSetRangeExpr element [lo..hi] with the individual member
+  idents lo, lo+1, ..., hi.  Constant ascending ranges only; a reversed
+  range is a compile-time error (not a silent empty set).  Runs before the
+  element validation loop so the rest of the pipeline only ever sees plain
+  member idents.  Issue #105. }
+var
+  I, J:      Integer;
+  Elem:      TASTExpr;
+  Range:     TSetRangeExpr;
+  LoOrd:     Integer;
+  HiOrd:     Integer;
+  NewList:   TObjectList;
+  MemberId:  TIdentExpr;
+begin
+  { Quick scan — nothing to do if there are no ranges. }
+  J := -1;
+  for I := 0 to AExpr.Elements.Count - 1 do
+    if TASTExpr(AExpr.Elements.Items[I]) is TSetRangeExpr then
+    begin
+      J := I;
+      Break;
+    end;
+  if J < 0 then Exit;
+
+  if ABaseEnum = nil then
+    SemanticError('Set range requires an enumeration base type',
+      AExpr.Line, AExpr.Col);
+
+  { Build a fresh element list, expanding ranges into members.  NewList does
+    NOT own its items — ownership of plain elements transfers from the old
+    list, and the generated member idents are handed to it too; the swap
+    below frees the old list (with the consumed ranges) without touching the
+    surviving plain elements. }
+  NewList := TObjectList.Create(False);
+  try
+    for I := 0 to AExpr.Elements.Count - 1 do
+    begin
+      Elem := TASTExpr(AExpr.Elements.Items[I]);
+      if not (Elem is TSetRangeExpr) then
+      begin
+        NewList.Add(Elem);
+        Continue;
+      end;
+      Range := TSetRangeExpr(Elem);
+      LoOrd := SetRangeBoundOrdinal(Range.LowExpr,  ABaseEnum, 'low');
+      HiOrd := SetRangeBoundOrdinal(Range.HighExpr, ABaseEnum, 'high');
+      if HiOrd < LoOrd then
+        SemanticError(
+          Format('Set range is reversed (low ordinal %d > high ordinal %d) — ' +
+                 'an empty range is almost always a mistake; use [] for an ' +
+                 'empty set', [LoOrd, HiOrd]),
+          Range.Line, Range.Col);
+      for J := LoOrd to HiOrd do
+      begin
+        MemberId            := TIdentExpr.Create();
+        MemberId.Line       := Range.Line;
+        MemberId.Col        := Range.Col;
+        MemberId.Name       := ABaseEnum.Members.Strings[J];
+        MemberId.IsConstant := True;
+        MemberId.ConstValue := J;
+        MemberId.ResolvedType := ABaseEnum;
+        NewList.Add(MemberId);
+      end;
+    end;
+    { Transfer expanded elements into a new owning list and swap.  The old
+      Elements list owns its items; detach the survivors first so freeing it
+      only disposes the consumed TSetRangeExpr nodes. }
+    for I := AExpr.Elements.Count - 1 downto 0 do
+      if not (TASTExpr(AExpr.Elements.Items[I]) is TSetRangeExpr) then
+        AExpr.Elements.Extract(AExpr.Elements.Items[I]);
+    AExpr.Elements.Clear();   { frees the remaining TSetRangeExpr nodes }
+    for I := 0 to NewList.Count - 1 do
+      AExpr.Elements.Add(NewList.Items[I]);
+  finally
+    NewList.Free();
+  end;
+end;
+
 function TSemanticAnalyser.AnalyseSetLiteralExpr(AExpr: TArrayLiteralExpr;
   ASetType: TSetTypeDesc): TTypeDesc;
 { Validates a set literal [elem, ...] against ASetType.
   Elements must be constants or variables of the set's base enum type.
+  Range elements [lo..hi] are expanded to members first (issue #105).
   An empty literal [] is valid and yields the set type with bitmask 0. }
 var
   ElemType: TTypeDesc;
   I:        Integer;
 begin
+  if ASetType.BaseType is TEnumTypeDesc then
+    ExpandSetRanges(AExpr, TEnumTypeDesc(ASetType.BaseType))
+  else
+    ExpandSetRanges(AExpr, nil);
   for I := 0 to AExpr.Elements.Count - 1 do
   begin
     ElemType := AnalyseExpr(TASTExpr(AExpr.Elements.Items[I]));

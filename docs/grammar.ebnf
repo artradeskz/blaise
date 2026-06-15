@@ -695,9 +695,20 @@ ProceduralType
    The semantic pass distinguishes them by assignment-target type context:
    when the LHS is a set type, LBRACKET ExprList RBRACKET is a set literal;
    otherwise it is an array literal.  An empty LBRACKET RBRACKET is valid
-   only as a set literal (the empty set). *)
+   only as a set literal (the empty set).
+
+   A set element may be a single value or a range `lo .. hi` (issue #105).
+   Both range bounds must be compile-time constants of the set's base type;
+   the semantic pass expands the range into its individual members and
+   rejects a reversed range (low ordinal > high ordinal).  The range form is
+   meaningful only in set context — in array-literal context DOTDOT is a
+   syntax error. *)
 SetLiteral
-    = LBRACKET [ Expr { COMMA Expr } ] RBRACKET
+    = LBRACKET [ SetElement { COMMA SetElement } ] RBRACKET
+    ;
+
+SetElement
+    = Expr [ DOTDOT Expr ]
     ;
 
 TypeArgList

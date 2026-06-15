@@ -39,6 +39,7 @@ type
     procedure TestRun_Set_LiteralArgument;
     procedure TestRun_Set_EqualityWithLiteral;
     procedure TestRun_Set_ForIn_PrintsMembers;
+    procedure TestRun_Set_RangeLiteral_Membership;
 
     { 33..64-member sets (the QBE 'l' / 64-bit register boundary) }
     procedure TestRun_Set64_InOperator_HighBit;
@@ -168,6 +169,27 @@ const
     end.
     ''';
 
+  { Set range literal (issue #105): [m1..m3] and a mixed [m0, m2..m4, m7]. }
+  SrcSetRange = '''
+    program Prg;
+    type
+      TC = (m0, m1, m2, m3, m4, m5, m6, m7);
+      TCS = set of TC;
+    var
+      e: TCS;
+    begin
+      e := [m1..m3];
+      if m0 in e then WriteLn('y') else WriteLn('n');
+      if m2 in e then WriteLn('y') else WriteLn('n');
+      if m3 in e then WriteLn('y') else WriteLn('n');
+      if m4 in e then WriteLn('y') else WriteLn('n');
+      e := [m0, m2..m4, m7];
+      if m1 in e then WriteLn('y') else WriteLn('n');
+      if m2 in e then WriteLn('y') else WriteLn('n');
+      if m7 in e then WriteLn('y') else WriteLn('n');
+    end.
+    ''';
+
   BigEnum64 =
     '''
     type
@@ -291,6 +313,15 @@ procedure TE2ESetOpsTests.TestRun_Set_ForIn_PrintsMembers;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcForInSet, '0' + LE + '2' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_Set_RangeLiteral_Membership;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { [m1..m3]: m0=n m2=y m3=y m4=n; [m0,m2..m4,m7]: m1=n m2=y m7=y }
+  AssertRunsOnAll(SrcSetRange,
+    'n' + LE + 'y' + LE + 'y' + LE + 'n' + LE +
+    'n' + LE + 'y' + LE + 'y' + LE, 0);
 end;
 
 procedure TE2ESetOpsTests.TestRun_Set64_InOperator_HighBit;

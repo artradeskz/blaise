@@ -56,6 +56,20 @@ type
     procedure TestSemantic_Set_LiteralElementMustMatchBase;
 
     { ------------------------------------------------------------------ }
+    { ranges in set literals — [lo..hi] (issue #105)                       }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_Set_RangeLiteral;
+    procedure TestSemantic_Set_RangeLiteral_OK;
+    procedure TestSemantic_Set_RangeMixedWithSingles_OK;
+    procedure TestSemantic_Set_RangeEnum_OK;
+    procedure TestSemantic_Set_RangeReversed_Fails;
+    procedure TestSemantic_Set_RangeNonConstBound_Fails;
+    procedure TestSemantic_Set_RangeWrongBaseType_Fails;
+    procedure TestCodegen_Set_RangeExpandsToBitmask;
+    procedure TestCodegen_Set_RangeSingleElement;
+    procedure TestCodegen_Set_RangeMixed;
+
+    { ------------------------------------------------------------------ }
     { codegen                                                              }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Set_VarAllocsEmitsZero;
@@ -837,6 +851,102 @@ end;
 procedure TSetTests.TestSemantic_Set_LiteralElementMustMatchBase;
 begin
   SemanticFail(SrcSetBadLiteralElement);
+end;
+
+{ ------------------------------------------------------------------ }
+{ ranges in set literals — [lo..hi] (issue #105)                       }
+{ ------------------------------------------------------------------ }
+
+{ Blaise set base types are enumerations (set of byte is a separate, tracked
+  feature — see docs/future-improvements.adoc).  Use an enum with enough
+  members to exercise the ranges below. }
+const
+  SetEnumDecl =
+    'type TC = (m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10); ' +
+    'TCS = set of TC; ';
+  SrcSetRange =
+    'program P; ' + SetEnumDecl + 'var e: TCS; ' +
+    'begin e := [m1..m3]; end.';
+  SrcSetRangeMixed =
+    'program P; ' + SetEnumDecl + 'var e: TCS; ' +
+    'begin e := [m1, m5..m7, m10]; end.';
+  SrcSetRangeEnum =
+    'program P; type TC = (Red, Green, Blue, Yellow); TCS = set of TC; var e: TCS; ' +
+    'begin e := [Red..Blue]; end.';
+  SrcSetRangeReversed =
+    'program P; ' + SetEnumDecl + 'var e: TCS; ' +
+    'begin e := [m5..m3]; end.';
+  SrcSetRangeNonConst =
+    'program P; ' + SetEnumDecl + 'var e: TCS; lo, hi: TC; ' +
+    'begin lo := m1; hi := m4; e := [lo..hi]; end.';
+  SrcSetRangeWrongBase =
+    'program P; type TC = (Red, Green); TCS = set of TC; ' +
+    'TD = (xa, xb, xc); var e: TCS; ' +
+    'begin e := [xa..xb]; end.';
+
+procedure TSetTests.TestParse_Set_RangeLiteral;
+begin
+  ParseOK(SrcSetRange);
+end;
+
+procedure TSetTests.TestSemantic_Set_RangeLiteral_OK;
+begin
+  SemanticOK(SrcSetRange);
+end;
+
+procedure TSetTests.TestSemantic_Set_RangeMixedWithSingles_OK;
+begin
+  SemanticOK(SrcSetRangeMixed);
+end;
+
+procedure TSetTests.TestSemantic_Set_RangeEnum_OK;
+begin
+  SemanticOK(SrcSetRangeEnum);
+end;
+
+procedure TSetTests.TestSemantic_Set_RangeReversed_Fails;
+begin
+  { A constant reverse range [5..3] is a mistake, not a silent empty set. }
+  SemanticFail(SrcSetRangeReversed);
+end;
+
+procedure TSetTests.TestSemantic_Set_RangeNonConstBound_Fails;
+begin
+  { Variable bounds are not supported — both ends must be constant. }
+  SemanticFail(SrcSetRangeNonConst);
+end;
+
+procedure TSetTests.TestSemantic_Set_RangeWrongBaseType_Fails;
+begin
+  SemanticFail(SrcSetRangeWrongBase);
+end;
+
+procedure TSetTests.TestCodegen_Set_RangeExpandsToBitmask;
+var
+  IR: string;
+begin
+  { [1..3] → bits 1,2,3 → mask = 2 + 4 + 8 = 14 → "copy 14" }
+  IR := GenIR(SrcSetRange);
+  AssertTrue('range [1..3] folds to mask 14', Pos('copy 14', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set_RangeSingleElement;
+var
+  IR: string;
+begin
+  { [m3..m3] → just bit 3 → mask 8 }
+  IR := GenIR('program P; ' + SetEnumDecl + 'var e: TCS; ' +
+              'begin e := [m3..m3]; end.');
+  AssertTrue('range [m3..m3] folds to mask 8', Pos('copy 8', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_Set_RangeMixed;
+var
+  IR: string;
+begin
+  { [1, 5..7, 10] → bits 1,5,6,7,10 → 2+32+64+128+1024 = 1250 }
+  IR := GenIR(SrcSetRangeMixed);
+  AssertTrue('mixed range folds to mask 1250', Pos('copy 1250', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }
