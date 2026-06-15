@@ -101,6 +101,8 @@ type
     procedure TestRun_Native_Single_GlobalReadWrite;
     procedure TestRun_Native_Double_FuncParam;
     procedure TestRun_Native_Double_FuncReturn;
+    procedure TestRun_Native_FloatCompareInOrAnd;
+    procedure TestRun_Native_LocalFloatConst;
 
     { M7c — string operations }
     procedure TestRun_Native_String_WriteLnLiteral;
@@ -1271,6 +1273,45 @@ const
     end.
     ''';
 
+  { Issue #107: a float comparison nested inside a short-circuit and/or
+    reaches EmitExprToEax (not EmitCondBranch), whose integer path could
+    not lower the TFloatLiteral operand — "unsupported expression form
+    TFloatLiteral".  Exercise both `or` and `and`, both branches. }
+  SrcFloatCompareInOrAnd = '''
+    program Prg;
+    procedure Check(P: Double);
+    begin
+      if (P > 1.0) or (P < -1.0) then WriteLn('out') else WriteLn('in')
+    end;
+    procedure Both(P: Double);
+    begin
+      if (P > 0.0) and (P < 10.0) then WriteLn('mid') else WriteLn('off')
+    end;
+    begin
+      Check(2.0);
+      Check(0.5);
+      Check(-3.0);
+      Both(5.0);
+      Both(20.0)
+    end.
+    ''';
+
+  { Issue #107: a local float `const` was emitted as a reference to an
+    undefined symbol on the native backend — "undefined reference to
+    precalc".  Inline its value instead. }
+  SrcLocalFloatConst = '''
+    program Prg;
+    function Circ(R: Double): Double;
+    const
+      TwoPi = 6.28318530718;
+    begin
+      Result := R * TwoPi
+    end;
+    begin
+      WriteLn(Circ(2.0))
+    end.
+    ''';
+
 { Every test below runs its source through BOTH backends (beQBE, beNative)
   and asserts identical stdout/exit on each — the native backend's whole
   correctness model is parity with QBE on the same source, so this exercises
@@ -1734,6 +1775,20 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { Half(7.0) = 3.5 }
   AssertRunsOnAll(SrcDoubleFuncReturn, '3.5' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_FloatCompareInOrAnd;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcFloatCompareInOrAnd,
+    'out' + LE + 'in' + LE + 'out' + LE + 'mid' + LE + 'off' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_LocalFloatConst;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { Circ(2.0) = 2.0 * 6.28318530718 = 12.56637061436 }
+  AssertRunsOnAll(SrcLocalFloatConst, '12.56637061436' + LE, 0);
 end;
 
 { ------------------------------------------------------------------ }

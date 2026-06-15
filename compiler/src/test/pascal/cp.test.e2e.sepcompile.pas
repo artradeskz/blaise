@@ -45,6 +45,7 @@ type
   published
     procedure TestFreeRoutine_RoundTrip_WithoutSource;
     procedure TestGenericClass_RoundTrip_WithoutSource;
+    procedure TestUninstantiatedGenericFunc_InUnit_Compiles;
   end;
 
 implementation
@@ -268,6 +269,91 @@ begin
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('use_box exit code', 0, Rc);
   AssertEquals('use_box stdout', 'Box = 42' + #10, Captured)
+end;
+
+{ Regression for issue #107: a generic FUNCTION declared in a unit but never
+  instantiated was code-generated as a template, whose `T`-typed locals have
+  no resolved type — codegen raised "Variable 'MaxValue' has no resolved type
+  — semantic pass required".  EmitStandaloneDefs skipped templates, but the
+  unit-emission path (GenerateUnit/AppendUnit → EmitFuncDef) did not.  The
+  unit must compile to an .o even when nothing uses the generic. }
+procedure TSepCompileTests.TestUninstantiatedGenericFunc_InUnit_Compiles;
+const
+  DepSrc =
+    '''
+    unit MyMaxUnit;
+    interface
+    function Doubled(N: Integer): Integer;
+    function FindMaxValue<T>(arr: array of T): T;
+    implementation
+    function Doubled(N: Integer): Integer;
+    begin
+      Result := N * 2
+    end;
+    function FindMaxValue<T>(arr: array of T): T;
+    var
+      MaxValue: T;
+      x: UInt64;
+    begin
+      x := Low(arr);
+      MaxValue := arr[0];
+      while x <= High(arr) do
+      begin
+        if arr[x] > MaxValue then
+          MaxValue := arr[x];
+        Inc(x)
+      end;
+      Result := MaxValue
+    end;
+    end.
+    ''';
+  ProgSrc =
+    '''
+    program UseMyMax;
+    uses MyMaxUnit;
+    begin
+      { Use only the non-generic routine — the generic stays uninstantiated. }
+      WriteLn('Doubled(21) = ', Doubled(21))
+    end.
+    ''';
+var
+  DepPas, DepObj, ProgPas, ProgBin: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  DepPas  := FScratch + '/MyMaxUnit.pas';
+  DepObj  := FScratch + '/MyMaxUnit.o';
+  ProgPas := FScratch + '/use_mymax.pas';
+  ProgBin := FScratch + '/use_mymax';
+
+  { Step 1: compile the unit.  The uninstantiated generic template must be
+    skipped by codegen — this is the step that previously crashed. }
+  WriteFile(DepPas, DepSrc);
+  Rc := RunBlaise(['--source', DepPas, '--output', DepObj], Captured);
+  AssertEquals('blaise(MyMaxUnit) exit code 0' + #10 + Captured, 0, Rc);
+  AssertTrue('MyMaxUnit.o exists', FileExists(DepObj));
+
+  { Step 2: a consumer that never instantiates the generic links and runs. }
+  WriteFile(ProgPas, ProgSrc);
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('blaise(use_mymax) exit code 0' + #10 + Captured, 0, Rc);
+  AssertTrue('use_mymax exists', FileExists(ProgBin));
+
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('use_mymax exit code', 0, Rc);
+  AssertEquals('use_mymax stdout', 'Doubled(21) = 42' + #10, Captured)
 end;
 
 initialization

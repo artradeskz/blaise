@@ -7683,6 +7683,12 @@ var
 begin
   if ADecl.IsExternal then Exit;  { no body to emit for external declarations }
   if ADecl.Body = nil then Exit;  { forward declaration — impl appears elsewhere }
+  { Generic template — its body has unbound type parameters (locals typed `T`
+    never get a ResolvedType).  Only concrete instances are emitted, via the
+    GenericFuncInstances list.  EmitStandaloneDefs already skips templates at
+    the program level; unit emission (GenerateUnit/AppendUnit) reaches here
+    without that guard, so enforce it centrally. }
+  if ADecl.TypeParams <> nil then Exit;
 
   { Emit any nested procedures declared inside this function's body before
     emitting this function itself.  Each nested proc gets a mangled name

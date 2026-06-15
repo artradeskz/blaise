@@ -4215,6 +4215,35 @@ begin
 
   if AExpr is TIdentExpr then
   begin
+    { Float-typed named constant (const X = 6.28; ...): inline its literal
+      value.  The const has no storage — its ConstString holds the source
+      text — so loading from a symbol named after it (VarOperand) would
+      reference an undefined label.  Emit the value via .rodata exactly as
+      a TFloatLiteral does. }
+    if TIdentExpr(AExpr).IsConstant and IsFloatFamily(AExpr.ResolvedType) then
+    begin
+      IsS := (AExpr.ResolvedType <> nil) and
+             (AExpr.ResolvedType.Kind = tySingle);
+      if IsS then
+      begin
+        Self.Emit(Format(#9'movss .LF%s(%%rip), %%xmm0', [IntToStr(FLabelCount)]));
+        Self.Emit('.section .rodata');
+        Self.Emit('.balign 4');
+        Self.Emit(Format('.LF%s:', [IntToStr(FLabelCount)]));
+        Self.Emit(Format(#9'.float %s', [TIdentExpr(AExpr).ConstString]));
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movsd .LF%s(%%rip), %%xmm0', [IntToStr(FLabelCount)]));
+        Self.Emit('.section .rodata');
+        Self.Emit('.balign 8');
+        Self.Emit(Format('.LF%s:', [IntToStr(FLabelCount)]));
+        Self.Emit(Format(#9'.double %s', [TIdentExpr(AExpr).ConstString]));
+      end;
+      Self.Emit('.text');
+      Inc(FLabelCount);
+      Exit;
+    end;
     Ty := AExpr.ResolvedType;
     if (Ty = nil) and Self.IsLocal(TIdentExpr(AExpr).Name) then
       Ty := Self.LocalType(TIdentExpr(AExpr).Name);
@@ -5783,6 +5812,49 @@ begin
   if AExpr is TBinaryExpr then
   begin
     BE := TBinaryExpr(AExpr);
+    { Float comparison evaluated for its boolean value (0/1 in %rax).
+      EmitCondBranch handles float comparisons that are themselves the
+      branch condition, but when a float comparison is a sub-expression —
+      nested in `and`/`or`, assigned to a Boolean, or passed as an
+      argument — it reaches EmitExprToEax and must materialise the
+      result.  The integer comparison path below cannot, because its
+      operand emission (EmitExprToEax) has no TFloatLiteral handler. }
+    if (BE.Op in [boEQ, boNE, boLT, boGT, boLE, boGE]) and
+       (IsFloatFamily(BE.Left.ResolvedType) or
+        IsFloatFamily(BE.Right.ResolvedType)) then
+    begin
+      IsS := (BE.Left.ResolvedType <> nil) and
+             (BE.Left.ResolvedType.Kind = tySingle);
+      Self.EmitExprToXmm0(BE.Left);
+      Self.EmitXmm0WidthAdjust(BE.Left.ResolvedType, IsS);
+      Self.Emit(#9'subq $8, %rsp');
+      if IsS then Self.Emit(#9'movss %xmm0, (%rsp)')
+      else        Self.Emit(#9'movsd %xmm0, (%rsp)');
+      Self.EmitExprToXmm0(BE.Right);
+      Self.EmitXmm0WidthAdjust(BE.Right.ResolvedType, IsS);
+      if IsS then
+      begin
+        Self.Emit(#9'movss (%rsp), %xmm1');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'ucomiss %xmm0, %xmm1');  { %xmm1 - %xmm0 }
+      end
+      else
+      begin
+        Self.Emit(#9'movsd (%rsp), %xmm1');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'ucomisd %xmm0, %xmm1');
+      end;
+      case BE.Op of
+        boEQ: Self.Emit(#9'sete %al');
+        boNE: Self.Emit(#9'setne %al');
+        boLT: Self.Emit(#9'setb %al');   { below (CF set) }
+        boGT: Self.Emit(#9'seta %al');   { above }
+        boLE: Self.Emit(#9'setbe %al');
+        boGE: Self.Emit(#9'setae %al');
+      end;
+      Self.Emit(#9'movzbl %al, %eax');
+      Exit;
+    end;
     { String concatenation (boAdd on tyString): call _StringConcat(left, right). }
     if (BE.Op = boAdd) and
        (BE.Left.ResolvedType <> nil) and
