@@ -2304,10 +2304,14 @@ begin
     { Build substituted clone of the class definition }
     ClonedCD            := TClassTypeDef.Create();
     ClonedCD.ParentName := SubstTypeParam(Templ.ClassDef.ParentName, Templ.ParamNames, Args);
-    { If the substituted parent name looks like a generic interface (contains '<'),
-      try to resolve it. If it resolves to an interface, move it to ImplementsNames
-      so the implements-wiring pass can call AddImplements on RT. }
-    if StrPos('<', ClonedCD.ParentName) >= 0 then
+    { The first heritage entry (class(X)) is parsed into ParentName regardless of
+      whether X is a class or an interface.  If it resolves to an interface —
+      generic (IFoo<T>) or plain (IVal) — move it to ImplementsNames so the
+      implements-wiring pass calls AddImplements on RT; otherwise it stays as the
+      parent class.  Earlier this only handled the generic ('<') case, so a
+      generic class implementing a NON-generic interface (TBox<T> = class(IVal))
+      lost its interface and could not be assigned to an interface variable. }
+    if ClonedCD.ParentName <> '' then
     begin
       FldType := FindTypeOrInstantiate(ClonedCD.ParentName);
       if (FldType <> nil) and (FldType.Kind = tyInterface) then

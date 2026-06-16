@@ -45,6 +45,10 @@ type
       (class(TBox<Integer>)) — parent classification + symbol mangling. }
     procedure TestRun_InheritFromGenericInstance_MethodAndField;
     procedure TestRun_InheritFromGenericInstance_VirtualOverride;
+    { Generic class implementing a (non-generic) interface, used through the
+      interface — class(IVal) on a generic template must wire AddImplements. }
+    procedure TestRun_GenericClassImplementsInterface;
+    procedure TestRun_GenericClassImplementsInterface_MethodArgs;
   end;
 
 implementation
@@ -292,6 +296,51 @@ procedure TE2EGenericsTests.TestRun_InheritFromGenericInstance_VirtualOverride;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcInheritGenericVirtual, '[derived]' + LE, 0);
+end;
+
+const
+  SrcGenericImplementsIntf = '''
+    program P;
+    type
+      IVal = interface function Get: Integer; end;
+      TBox<T> = class(IVal)
+        FV: Integer;
+        constructor Create(v: Integer); begin FV := v end;
+        function Get: Integer; begin Result := FV end;
+      end;
+    var iv: IVal;
+    begin
+      iv := TBox<Integer>.Create(77);
+      WriteLn(iv.Get());
+      iv := nil
+    end.
+    ''';
+
+  SrcGenericImplementsIntfArgs = '''
+    program P;
+    type
+      IAdder = interface function Add(a, b: Integer): Integer; end;
+      TCalc<T> = class(IAdder)
+        function Add(a, b: Integer): Integer; begin Result := a + b end;
+      end;
+    var ad: IAdder;
+    begin
+      ad := TCalc<Integer>.Create;
+      WriteLn(ad.Add(15, 27));
+      ad := nil
+    end.
+    ''';
+
+procedure TE2EGenericsTests.TestRun_GenericClassImplementsInterface;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenericImplementsIntf, '77' + LE, 0);
+end;
+
+procedure TE2EGenericsTests.TestRun_GenericClassImplementsInterface_MethodArgs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenericImplementsIntfArgs, '42' + LE, 0);
 end;
 
 initialization
