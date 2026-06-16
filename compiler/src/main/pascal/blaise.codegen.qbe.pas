@@ -11549,8 +11549,13 @@ begin
       ImplFld := TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo);
       SelfT   := AllocTemp();
       EmitLine(Format('  %s =l loadl %%_var_Self', [SelfT]));
-      { Record-typed field: return the field's storage address, not a loaded value }
-      if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyRecord) then
+      { Aggregate-address fields (record, static array, jumbo set): return the
+        field's storage ADDRESS, not a loaded value.  A static-array field
+        lives inline in the object, so a bare `FD` must yield &FD — loading it
+        (as the scalar path below does) would dereference the first bytes of
+        the array as a pointer and corrupt FD[i] access. }
+      if (AExpr.ResolvedType <> nil) and
+         IsAggregateAddrType(AExpr.ResolvedType) then
       begin
         if ImplFld.Offset > 0 then
         begin
