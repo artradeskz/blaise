@@ -1,0 +1,242 @@
+name: Rolling bootstrap & tests
+
+# Triggers:
+#   - push to master  : keep the -pre binary fresh on every commit
+#   - workflow_dispatch: manual run from the Actions UI (good for testing)
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      force_full:
+        description: "Ignore cached -pre binary and bootstrap from the release tag"
+        type: boolean
+        default: false
+
+# Cancel an in-flight run on master when a newer commit lands — no point
+# bootstrapping a commit that is already superseded.
+concurrency:
+  group: bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Cold-start anchor: the newest *real* release whose binary is published as a
+  # GitHub Release asset. Used only when no cached -pre binary is available.
+  STAGE1_TAG: v0.10.0
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # full ~190-commit replay is slow; incremental is fast
+
+    steps:
+      # --------------------------------------------------------------------
+      # 1. Check out the full history. rolling-bootstrap.sh replays commits,
+      #    so a shallow clone is useless — fetch-depth: 0 gets everything.
+      # --------------------------------------------------------------------
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --------------------------------------------------------------------
+      # 2. Toolchain. The runner needs gcc + make to build QBE and link the
+      #    bootstrapped compiler. ubuntu-latest already ships both, but install
+      #    explicitly so the workflow is self-documenting and resilient.
+      # --------------------------------------------------------------------
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential unzip
+
+      # --------------------------------------------------------------------
+      # 3. Build vendored QBE (source is committed under vendor/qbe/).
+      #    rolling-bootstrap.sh and the runtime Makefile both need this binary.
+      # --------------------------------------------------------------------
+      - name: Build QBE
+        run: make -C vendor/qbe
+
+      # --------------------------------------------------------------------
+      # 4. Restore the carry-forward cache: the previous successful master run
+      #    stashes its -pre binary + a marker file recording the commit SHA it
+      #    was built at. We restore them into releases/<sha>/ so the script can
+      #    resume with --from <sha> instead of replaying from the release tag.
+      #
+      #    Keyed by run id so every run writes a fresh entry; restore-keys does
+      #    a prefix match to pull the most recent prior cache. (A fixed key
+      #    would never update — caches are immutable once written.)
+      # --------------------------------------------------------------------
+      - name: Restore bootstrap cache
+        id: cache-restore
+        if: ${{ !inputs.force_full }}
+        uses: actions/cache/restore@v4
+        with:
+          path: .bootstrap-cache
+          key: blaise-bootstrap-${{ github.run_id }}
+          restore-keys: |
+            blaise-bootstrap-
+
+      # --------------------------------------------------------------------
+      # 5. Decide the start point.
+      #    - If a cached binary exists AND its marker SHA is an ancestor of
+      #      HEAD, stage it into releases/<sha>/ and set FROM=<sha>.
+      #    - Otherwise fall back to the published release tag (cold start),
+      #      downloading its binary asset from the GitHub Release.
+      # --------------------------------------------------------------------
+      - name: Resolve start binary
+        id: resolve
+        run: |
+          set -euo pipefail
+          FROM=""
+
+          CACHE_BIN=".bootstrap-cache/blaise"
+          CACHE_RTL=".bootstrap-cache/blaise_rtl.a"
+          CACHE_MARK=".bootstrap-cache/commit.sha"
+
+          if [ -x "$CACHE_BIN" ] && [ -f "$CACHE_MARK" ]; then
+            SHA="$(cat "$CACHE_MARK")"
+            if git cat-file -e "${SHA}^{commit}" 2>/dev/null \
+               && git merge-base --is-ancestor "$SHA" HEAD 2>/dev/null; then
+              echo "Cached -pre binary found at commit $SHA — resuming from there."
+              mkdir -p "releases/$SHA"
+              cp "$CACHE_BIN" "releases/$SHA/blaise"
+              cp "$CACHE_RTL" "releases/$SHA/blaise_rtl.a"
+              chmod +x "releases/$SHA/blaise"
+              FROM="$SHA"
+            else
+              echo "Cached binary's commit ($SHA) is not an ancestor of HEAD — ignoring it."
+            fi
+          else
+            echo "No cached binary present."
+          fi
+
+          if [ -z "$FROM" ]; then
+            echo "Cold start from release tag $STAGE1_TAG."
+            DEST="releases/$STAGE1_TAG"
+            mkdir -p "$DEST"
+            # The stage-1 release ships as a versioned tarball, not bare assets.
+            curl -fsSL -o /tmp/stage1.tar.gz \
+              "https://github.com/graemeg/blaise/releases/download/${STAGE1_TAG}/blaise-${STAGE1_TAG}-linux-x86_64.tar.gz"
+            mkdir -p /tmp/stage1
+            tar -xzf /tmp/stage1.tar.gz -C /tmp/stage1
+            # Normalise to the names rolling-bootstrap.sh expects, wherever the
+            # files landed inside the archive.
+            BIN="$(find /tmp/stage1 -type f -name blaise | head -1)"
+            RTL="$(find /tmp/stage1 -type f -name blaise_rtl.a | head -1)"
+            if [ -z "$BIN" ] || [ -z "$RTL" ]; then
+              echo "::error::blaise / blaise_rtl.a not found inside the stage-1 tarball."
+              find /tmp/stage1 -maxdepth 2 -type f | sed 's/^/  /'
+              exit 1
+            fi
+            cp "$BIN" "$DEST/blaise"
+            cp "$RTL" "$DEST/blaise_rtl.a"
+            chmod +x "$DEST/blaise"
+            FROM="$STAGE1_TAG"
+          fi
+
+          echo "from=$FROM" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------------------------
+      # 6. Run the rolling bootstrap. Installs the final -pre binary under
+      #    releases/v<version>-pre/ (the script computes the dir from
+      #    Blaise.pas's Version constant).
+      # --------------------------------------------------------------------
+      - name: Rolling bootstrap
+        run: |
+          set -euo pipefail
+          ./scripts/rolling-bootstrap.sh --from "${{ steps.resolve.outputs.from }}" --to HEAD
+
+      # --------------------------------------------------------------------
+      # 7. Locate the freshly-installed -pre binary for the steps that follow.
+      # --------------------------------------------------------------------
+      - name: Locate -pre binary
+        id: pre
+        run: |
+          set -euo pipefail
+          PRE_DIR="$(ls -d releases/v*-pre 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$PRE_DIR" ] || [ ! -x "$PRE_DIR/blaise" ]; then
+            echo "No -pre binary produced — bootstrap must have failed." >&2
+            exit 1
+          fi
+          echo "Using $PRE_DIR/blaise"
+          echo "dir=$PRE_DIR" >> "$GITHUB_OUTPUT"
+          echo "bin=$PWD/$PRE_DIR/blaise" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------------------------
+      # 8. Install RTL + build the test runner with the -pre binary, then run
+      #    the full test suite. PasBuild is NOT on the runner, so we mirror the
+      #    documented manual build path: make install for the RTL, then
+      #    pasbuild only if available — otherwise we fall back to the binary's
+      #    own test-compile. (Adjust here if PasBuild gets installed below.)
+      # --------------------------------------------------------------------
+      - name: Build RTL with -pre binary
+        run: |
+          set -euo pipefail
+          BLAISE="${{ steps.pre.outputs.bin }}"
+          ( cd runtime && make BLAISE="$BLAISE" QBE="$PWD/../vendor/qbe/qbe" \
+              && make BLAISE="$BLAISE" QBE="$PWD/../vendor/qbe/qbe" install )
+
+      - name: Install PasBuild
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pasbuild.zip \
+            https://github.com/graemeg/PasBuild/releases/download/v1.9.0/pasbuild-1.9.0-x86_64-linux.zip
+          unzip -o -q /tmp/pasbuild.zip -d /tmp/pasbuild
+          # The binary may sit at the zip root or inside a subdir — find it.
+          PB="$(find /tmp/pasbuild -type f -name pasbuild | head -1)"
+          if [ -z "$PB" ]; then
+            echo "::error::pasbuild binary not found inside the release zip."
+            find /tmp/pasbuild -maxdepth 2 -type f | sed 's/^/  /'
+            exit 1
+          fi
+          chmod +x "$PB"
+          sudo install -m 0755 "$PB" /usr/local/bin/pasbuild
+          pasbuild --version || true
+
+      - name: Build test runner & run tests
+        run: |
+          set -euo pipefail
+          BLAISE="${{ steps.pre.outputs.bin }}"
+          pasbuild test-compile -m blaise-compiler --compiler "$BLAISE"
+          compiler/target/TestRunner
+
+      # --------------------------------------------------------------------
+      # 9. Save the carry-forward cache for the next run: the -pre binary, its
+      #    rtl, and a marker recording the HEAD SHA it was built at.
+      #    always() so we still cache a good binary even if tests later flake,
+      #    but only after a successful bootstrap (guarded by needs of step 7).
+      # --------------------------------------------------------------------
+      - name: Stage carry-forward cache
+        if: success()
+        run: |
+          set -euo pipefail
+          rm -rf .bootstrap-cache
+          mkdir -p .bootstrap-cache
+          cp "${{ steps.pre.outputs.dir }}/blaise"        .bootstrap-cache/blaise
+          cp "${{ steps.pre.outputs.dir }}/blaise_rtl.a"  .bootstrap-cache/blaise_rtl.a
+          git rev-parse HEAD > .bootstrap-cache/commit.sha
+          echo "Marked cache at $(cat .bootstrap-cache/commit.sha)"
+
+      - name: Save bootstrap cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: .bootstrap-cache
+          key: blaise-bootstrap-${{ github.run_id }}
+
+      # --------------------------------------------------------------------
+      # 10. Publish the -pre binary + rtl as downloadable workflow artifacts.
+      # --------------------------------------------------------------------
+      - name: Upload -pre binary artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blaise-pre-${{ github.sha }}
+          path: |
+            ${{ steps.pre.outputs.dir }}/blaise
+            ${{ steps.pre.outputs.dir }}/blaise_rtl.a
+          retention-days: 30
+          if-no-files-found: error
