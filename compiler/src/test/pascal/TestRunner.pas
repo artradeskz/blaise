@@ -146,6 +146,7 @@ uses
   cp.test.e2e.generics,
   cp.test.e2e.interfaces,
   cp.test.e2e.properties,
+  cp.test.e2e.varparams,
   cp.test.linker;
 
 begin

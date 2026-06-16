@@ -4698,6 +4698,7 @@ var
   Deref:    TDerefExpr;
   FldAcc:   TFieldAccessExpr;
   BaseAddr: string;
+  AddrWrap: TAddrOfExpr;
   RT:       TRecordTypeDesc;
   FldInfo:  TFieldInfo;
   T:        string;
@@ -4775,6 +4776,20 @@ begin
     end
     else
       Result := BaseAddr;
+    Exit;
+  end;
+  { Array element a[i] as a var/out actual — its address is what @a[i] would
+    compute, so reuse EmitAddrOfExpr via a transient TAddrOfExpr wrapper. }
+  if AExpr is TStringSubscriptExpr then
+  begin
+    AddrWrap := TAddrOfExpr.Create();
+    try
+      AddrWrap.Expr := AExpr;
+      Result := EmitAddrOfExpr(AddrWrap);
+    finally
+      AddrWrap.Expr := nil;   { do not free AExpr — owned by the caller }
+      AddrWrap.Free();
+    end;
     Exit;
   end;
   raise ECodeGenError.Create('Unsupported L-value form for var argument');

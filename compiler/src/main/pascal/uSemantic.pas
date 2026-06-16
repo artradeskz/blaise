@@ -231,6 +231,10 @@ type
       const AMethName: string): TTypeDesc;
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     function  AnalyseInheritedCallExpr(ACall: TInheritedCallExpr): TTypeDesc;
+    { True when AExpr is a valid actual for a var/out parameter (an addressable
+      l-value): a variable, a field access, a pointer deref, or an array
+      element subscript a[i]. }
+    function  IsVarArgLValue(AExpr: TASTExpr): Boolean;
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
     function  AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
     function  AnalyseFuncCallExpr(AExpr: TFuncCallExpr): TTypeDesc;
@@ -6351,6 +6355,26 @@ begin
   ACall.ResolvedMethod     := MDecl;
 end;
 
+function TSemanticAnalyser.IsVarArgLValue(AExpr: TASTExpr): Boolean;
+var
+  BaseKind: TTypeKind;
+begin
+  if (AExpr is TIdentExpr) or (AExpr is TFieldAccessExpr) or
+     (AExpr is TDerefExpr) then
+    Exit(True);
+  { Array element a[i] (a TStringSubscriptExpr over an array base) is a
+    valid var/out actual.  String / PChar subscripts yield a char by value,
+    not a standalone addressable element, so they are not accepted. }
+  if AExpr is TStringSubscriptExpr then
+  begin
+    if (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType = nil) then
+      Exit(False);
+    BaseKind := TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind;
+    Exit(BaseKind in [tyStaticArray, tyDynArray, tyOpenArray]);
+  end;
+  Result := False;
+end;
+
 function TSemanticAnalyser.AnalyseInheritedCallExpr(
   ACall: TInheritedCallExpr): TTypeDesc;
 var
@@ -7282,9 +7306,7 @@ begin
       { Var-param actual must be an L-value; check before the type match
         so the diagnostic matches the regular-call path. }
       if PPar.IsVarParam and
-         not ((TASTExpr(ACall.Args.Items[I]) is TIdentExpr) or
-              (TASTExpr(ACall.Args.Items[I]) is TFieldAccessExpr) or
-              (TASTExpr(ACall.Args.Items[I]) is TDerefExpr)) then
+         not IsVarArgLValue(TASTExpr(ACall.Args.Items[I])) then
         SemanticError(
           Format('var argument %d of ''%s'' must be a variable',
             [I + 1, ACall.Name]),
@@ -7345,9 +7367,7 @@ begin
       begin
         { Var argument must be an L-value: simple ident, field access,
           pointer-deref-then-field (P^.F), or pointer deref (P^). }
-        if not ((TASTExpr(ACall.Args.Items[I]) is TIdentExpr) or
-                (TASTExpr(ACall.Args.Items[I]) is TFieldAccessExpr) or
-                (TASTExpr(ACall.Args.Items[I]) is TDerefExpr)) then
+        if not IsVarArgLValue(TASTExpr(ACall.Args.Items[I])) then
           SemanticError(
             Format('var argument %d of ''%s'' must be a variable',
               [I + 1, ACall.Name]),
@@ -7733,9 +7753,7 @@ begin
       ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
       PPar    := TProcParamInfo(PT.Params.Items[I]);
       if PPar.IsVarParam and
-         not ((TASTExpr(AExpr.Args.Items[I]) is TIdentExpr) or
-              (TASTExpr(AExpr.Args.Items[I]) is TFieldAccessExpr) or
-              (TASTExpr(AExpr.Args.Items[I]) is TDerefExpr)) then
+         not IsVarArgLValue(TASTExpr(AExpr.Args.Items[I])) then
         SemanticError(
           Format('var argument %d of ''%s'' must be a variable',
             [I + 1, AExpr.Name]),

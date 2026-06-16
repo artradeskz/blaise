@@ -1,0 +1,200 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: Apache-2.0 WITH Swift-exception
+  Licensed under the Apache License v2.0 with Runtime Library Exception.
+  See LICENSE file in the project root for full license terms.
+}
+
+unit cp.test.e2e.varparams;
+
+{ End-to-end tests for var/out parameters — compile + run on BOTH backends.
+  Grew out of the test-hardening sweep.  Includes array-element actuals
+  (a[i] passed to a var param), which semantic+codegen previously rejected. }
+
+interface
+
+uses
+  SysUtils, blaise.testing, cp.test.e2e.base;
+
+type
+  TE2EVarParamTests = class(TE2ETestCase)
+  protected
+    procedure SetUp; override;
+  published
+    procedure TestRun_VarInt;
+    procedure TestRun_VarSwap;
+    procedure TestRun_VarString;
+    procedure TestRun_OutParams;
+    procedure TestRun_VarRecord;
+    procedure TestRun_VarNestedCall;
+    procedure TestRun_VarClassField;
+    { Array element as a var/out actual. }
+    procedure TestRun_StaticArrayElemVarArg;
+    procedure TestRun_DynArrayElemVarArg;
+    procedure TestRun_SwapArrayElements;
+    procedure TestRun_VarStringArrayElem;
+  end;
+
+implementation
+
+const
+  LE = #10;
+
+procedure TE2EVarParamTests.SetUp;
+begin
+  inherited SetUp();
+  SetUpScratch('compiler/target/test-e2e-varparams');
+end;
+
+const
+  SrcVarInt = '''
+    program Prg;
+    procedure Inc2(var X: Integer); begin X := X + 2 end;
+    var a: Integer;
+    begin a := 10; Inc2(a); WriteLn(a) end.
+    ''';
+
+  SrcVarSwap = '''
+    program Prg;
+    procedure Swap(var A, B: Integer); var t: Integer; begin t := A; A := B; B := t end;
+    var x, y: Integer;
+    begin x := 1; y := 9; Swap(x, y); WriteLn(x, ' ', y) end.
+    ''';
+
+  SrcVarString = '''
+    program Prg;
+    procedure App(var S: string); begin S := S + '!' end;
+    var s: string;
+    begin s := 'hi'; App(s); App(s); WriteLn(s) end.
+    ''';
+
+  SrcOut = '''
+    program Prg;
+    procedure GetVals(out A, B: Integer); begin A := 100; B := 200 end;
+    var x, y: Integer;
+    begin GetVals(x, y); WriteLn(x + y) end.
+    ''';
+
+  SrcVarRecord = '''
+    program Prg;
+    type TP = record X, Y: Integer; end;
+    procedure Bump(var R: TP); begin R.X := R.X + 1; R.Y := R.Y + 1 end;
+    var r: TP;
+    begin r.X := 5; r.Y := 7; Bump(r); WriteLn(r.X, ',', r.Y) end.
+    ''';
+
+  SrcVarNested = '''
+    program Prg;
+    procedure Inner(var X: Integer); begin X := X * 2 end;
+    procedure Outer(var Y: Integer); begin Inner(Y); Inner(Y) end;
+    var a: Integer;
+    begin a := 3; Outer(a); WriteLn(a) end.
+    ''';
+
+  SrcVarField = '''
+    program Prg;
+    type TC = class FX: Integer; end;
+    procedure Set5(var X: Integer); begin X := 5 end;
+    var c: TC;
+    begin c := TC.Create(); Set5(c.FX); WriteLn(c.FX); c.Free() end.
+    ''';
+
+  SrcStaticArrElem = '''
+    program Prg;
+    procedure S9(var X: Integer); begin X := 9 end;
+    var a: array[0..3] of Integer;
+    begin a[2] := 0; S9(a[2]); WriteLn(a[2]) end.
+    ''';
+
+  SrcDynArrElem = '''
+    program Prg;
+    procedure S9(var X: Integer); begin X := 9 end;
+    var a: array of Integer;
+    begin SetLength(a, 4); a[2] := 0; S9(a[2]); WriteLn(a[2]) end.
+    ''';
+
+  SrcSwapElems = '''
+    program Prg;
+    procedure Swap(var A, B: Integer); var t: Integer; begin t := A; A := B; B := t end;
+    var a: array[0..3] of Integer;
+    begin a[0] := 1; a[1] := 2; Swap(a[0], a[1]); WriteLn(a[0], ' ', a[1]) end.
+    ''';
+
+  SrcVarStrElem = '''
+    program Prg;
+    procedure App(var S: string); begin S := S + 'x' end;
+    var a: array[0..1] of string;
+    begin a[0] := 'q'; App(a[0]); WriteLn(a[0]) end.
+    ''';
+
+procedure TE2EVarParamTests.TestRun_VarInt;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarInt, '12' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_VarSwap;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarSwap, '9 1' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_VarString;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarString, 'hi!!' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_OutParams;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcOut, '300' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_VarRecord;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarRecord, '6,8' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_VarNestedCall;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarNested, '12' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_VarClassField;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarField, '5' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_StaticArrayElemVarArg;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcStaticArrElem, '9' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_DynArrayElemVarArg;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDynArrElem, '9' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_SwapArrayElements;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcSwapElems, '2 1' + LE, 0);
+end;
+
+procedure TE2EVarParamTests.TestRun_VarStringArrayElem;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVarStrElem, 'qx' + LE, 0);
+end;
+
+initialization
+  RegisterTest(TE2EVarParamTests);
+
+end.

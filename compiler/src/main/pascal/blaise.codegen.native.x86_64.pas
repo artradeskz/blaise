@@ -7332,6 +7332,7 @@ end;
 procedure TX86_64Backend.EmitVarArgAddrToRax(AArg: TASTExpr);
 var
   FAE: TFieldAccessExpr;
+  SubAddrWrap: TAddrOfExpr;
 begin
   if (AArg is TIdentExpr) and (TIdentExpr(AArg).ParamMode <> pmNone) then
     Self.Emit(Format(#9'movq %s, %%rax',
@@ -7394,6 +7395,20 @@ begin
       Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [FAE.RecordName]));
     if FAE.FieldInfo.Offset > 0 then
       Self.Emit(Format(#9'addq $%d, %%rax', [FAE.FieldInfo.Offset]));
+  end
+  else if AArg is TStringSubscriptExpr then
+  begin
+    { Array element a[i] as a var/out actual.  Its address is what @a[i]
+      computes, so evaluate a transient TAddrOfExpr (leaves the element
+      address in %rax). }
+    SubAddrWrap := TAddrOfExpr.Create();
+    try
+      SubAddrWrap.Expr := AArg;
+      Self.EmitExprToEax(SubAddrWrap);
+    finally
+      SubAddrWrap.Expr := nil;   { AArg owned by the caller }
+      SubAddrWrap.Free();
+    end;
   end
   else
     raise ENativeCodeGenError.Create(
