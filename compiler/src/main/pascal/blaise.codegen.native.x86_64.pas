@@ -178,6 +178,10 @@ type
 
     { Allocate a fresh local assembly label (".L<prefix><N>"). }
     function NewLabel(const APrefix: string): string;
+    { True when a catchable EDivByZero can be raised (SysUtils, which declares
+      EDivByZero + _RaiseDivByZero, is in scope).  Gates the div/mod zero
+      guard; without it a zero divisor traps in hardware as before. }
+    function DivGuardAvailable(): Boolean;
     { Register a global integer slot of the given type (idempotent; the first
       registration's type wins).  The width and signedness drive both the
       .data directive and every load/store of the slot. }
@@ -791,6 +795,11 @@ function TX86_64Backend.NewLabel(const APrefix: string): string;
 begin
   Result := '.L' + APrefix + IntToStr(FLabelCount);
   Inc(FLabelCount);
+end;
+
+function TX86_64Backend.DivGuardAvailable(): Boolean;
+begin
+  Result := (FSymTable <> nil) and (FSymTable.Lookup('EDivByZero') <> nil);
 end;
 
 procedure TX86_64Backend.AddGlobal(const AName: string; AType: TTypeDesc);
@@ -4779,6 +4788,7 @@ var
   SetElem: TASTExpr;
   ScEndLbl: string;
   IsS: Boolean;
+  DivOkLbl: string;
 begin
   if AExpr is TNilLiteral then
   begin
@@ -6196,6 +6206,18 @@ begin
       boMul: Self.Emit(#9'imulq %rcx, %rax');
       boDiv, boMod:
         begin
+          { Divisor-zero guard: when SysUtils is in scope, a zero divisor
+            raises a catchable EDivByZero instead of trapping (SIGFPE).
+            The divisor is in %rcx; SysUtils__RaiseDivByZero longjmps and
+            never returns. }
+          if Self.DivGuardAvailable() then
+          begin
+            DivOkLbl := Self.NewLabel('divok');
+            Self.Emit(#9'testq %rcx, %rcx');
+            Self.Emit(#9'jne ' + DivOkLbl);
+            Self.Emit(#9'callq SysUtils__RaiseDivByZero');
+            Self.Emit(DivOkLbl + ':');
+          end;
           { 64-bit divide.  Choose signed vs unsigned by the operand types:
             if either side is an unsigned 64-bit type, use unsigned division
             so the top bit is a magnitude bit, not a sign.  cqto sign-extends

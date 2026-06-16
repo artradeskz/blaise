@@ -44,6 +44,14 @@ type
     function RunCompiler(const AArgs: array of string;
       out ACombined: string): Integer;
     function WriteScratchSource(const ASrc: string): string;
+    { Run a produced binary, capturing stdout/stderr; returns its exit code. }
+    function RunBinary(const AExe: string; out ACombined: string): Integer;
+    { Compile ASrc with the given backend (empty = default QBE), link against
+      the full RTL, run it, and report stdout + exit code.  Used for features
+      that need stdlib units loaded + linked, which the in-process e2e harness
+      cannot do. }
+    function CompileRunFull(const ASrc, ABackend: string;
+      out AStdout: string; out AExitCode: Integer): Boolean;
   protected
     procedure SetUp; override;
   published
@@ -60,6 +68,11 @@ type
     procedure TestWrongBackendAssemblerRejected;   { addendum 2: qbe + --assembler }
     procedure TestEmitIrStillValidatesAssembler;   { addendum 1: validate runs in stdout mode }
     procedure TestAssemblerLineInHelp;             { DescribeOptions drives --help }
+    { ---- div/mod by zero raises a catchable EDivByZero (needs stdlib) ---- }
+    procedure TestDivByZeroCaught_QBE;
+    procedure TestDivByZeroCaught_Native;
+    procedure TestModByZeroCaught_QBE;
+    procedure TestModByZeroCaught_Native;
   end;
 
 implementation
@@ -346,6 +359,123 @@ begin
   AssertEquals('--help exits 0', 0, EC);
   AssertTrue('--help must list --assembler (via DescribeOptions)',
     Pos('--assembler', Out_) >= 0);
+end;
+
+function TCLIContractTests.RunBinary(const AExe: string;
+  out ACombined: string): Integer;
+var
+  Proc: TProcess;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    Proc.Execute();
+    ACombined := '';
+    repeat
+      Chunk := Proc.ReadOutput();
+      ACombined := ACombined + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free();
+  end;
+end;
+
+function TCLIContractTests.CompileRunFull(const ASrc, ABackend: string;
+  out AStdout: string; out AExitCode: Integer): Boolean;
+var
+  SrcPath, BinPath, CompileOut: string;
+  EC: Integer;
+begin
+  Result := False;
+  SrcPath := WriteScratchSource(ASrc);
+  BinPath := FScratch + 'cli_run_' + IntToStr(FCounter);
+  if ABackend = '' then
+    EC := RunCompiler(['--source', SrcPath,
+      '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
+      '--output', BinPath], CompileOut)
+  else
+    EC := RunCompiler(['--source', SrcPath, '--backend', ABackend,
+      '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
+      '--output', BinPath], CompileOut);
+  if EC <> 0 then
+  begin
+    AStdout := 'compile failed: ' + CompileOut;
+    AExitCode := EC;
+    Exit;
+  end;
+  AExitCode := RunBinary(BinPath, AStdout);
+  Result := True;
+end;
+
+const
+  SrcDivByZeroCaught =
+    'program P;' + LineEnding +
+    'uses SysUtils;' + LineEnding +
+    'var a, b: Integer;' + LineEnding +
+    'begin' + LineEnding +
+    '  a := 10; b := 0;' + LineEnding +
+    '  try' + LineEnding +
+    '    WriteLn(a div b)' + LineEnding +
+    '  except' + LineEnding +
+    '    on E: EDivByZero do WriteLn(''caught: '' + E.Message)' + LineEnding +
+    '  end;' + LineEnding +
+    '  WriteLn(''after'')' + LineEnding +
+    'end.';
+
+  SrcModByZeroCaught =
+    'program P;' + LineEnding +
+    'uses SysUtils;' + LineEnding +
+    'var a, b: Integer;' + LineEnding +
+    'begin' + LineEnding +
+    '  a := 10; b := 0;' + LineEnding +
+    '  try' + LineEnding +
+    '    WriteLn(a mod b)' + LineEnding +
+    '  except' + LineEnding +
+    '    on E: EDivByZero do WriteLn(''mod caught'')' + LineEnding +
+    '  end' + LineEnding +
+    'end.';
+
+procedure TCLIContractTests.TestDivByZeroCaught_QBE;
+var Out_: string; EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  AssertTrue('compile+run', CompileRunFull(SrcDivByZeroCaught, '', Out_, EC));
+  AssertEquals('exit code 0 (exception caught, not SIGFPE)', 0, EC);
+  AssertTrue('EDivByZero caught with message',
+    Pos('caught: Division by zero', Out_) >= 0);
+  AssertTrue('execution continued past the catch', Pos('after', Out_) >= 0);
+end;
+
+procedure TCLIContractTests.TestDivByZeroCaught_Native;
+var Out_: string; EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  AssertTrue('compile+run', CompileRunFull(SrcDivByZeroCaught, 'native', Out_, EC));
+  AssertEquals('exit code 0 (exception caught, not SIGFPE)', 0, EC);
+  AssertTrue('EDivByZero caught with message',
+    Pos('caught: Division by zero', Out_) >= 0);
+  AssertTrue('execution continued past the catch', Pos('after', Out_) >= 0);
+end;
+
+procedure TCLIContractTests.TestModByZeroCaught_QBE;
+var Out_: string; EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  AssertTrue('compile+run', CompileRunFull(SrcModByZeroCaught, '', Out_, EC));
+  AssertEquals('exit code 0', 0, EC);
+  AssertTrue('mod by zero caught', Pos('mod caught', Out_) >= 0);
+end;
+
+procedure TCLIContractTests.TestModByZeroCaught_Native;
+var Out_: string; EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  AssertTrue('compile+run', CompileRunFull(SrcModByZeroCaught, 'native', Out_, EC));
+  AssertEquals('exit code 0', 0, EC);
+  AssertTrue('mod by zero caught', Pos('mod caught', Out_) >= 0);
 end;
 
 { ---- Registration ---- }

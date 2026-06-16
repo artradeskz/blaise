@@ -54,6 +54,12 @@ type
     { Exit inside the second try block of a function must pop its exc frame;
       a later raise must still dispatch correctly (stale-frame regression). }
     procedure TestRun_ExitInSecondTry_LaterRaiseStillWorks;
+
+    { The div/mod zero guard (emitted when SysUtils is in scope) must not
+      disturb normal division.  Catchable-EDivByZero behaviour needs the
+      stdlib loaded + linked, which the in-process harness cannot do; that
+      is covered by the shell-out test in cp.test.cli.pas. }
+    procedure TestRun_DivNonZero_StillWorks;
   end;
 
 implementation
@@ -213,6 +219,19 @@ const
       finally
         N.Free()
       end
+    end.
+    ''';
+
+  { Non-zero divisor: the SysUtils-gated div/mod zero guard must not disturb
+    normal division on either backend. }
+  SrcDivNonZeroStillWorks = '''
+    program P;
+    uses SysUtils;
+    var a, b: Integer;
+    begin
+      a := 20; b := 4;
+      WriteLn(a div b);
+      WriteLn(a mod 7)
     end.
     ''';
 
@@ -524,6 +543,12 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcExitInSecondTry,
     '100' + LE + '50' + LE + 'caught' + LE + 'done' + LE, 0);
+end;
+
+procedure TE2EExceptionTests.TestRun_DivNonZero_StillWorks;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDivNonZeroStillWorks, '5' + LE + '6' + LE, 0);
 end;
 
 initialization

@@ -264,6 +264,13 @@ type
     procedure EmitTryFinallyStmt(AStmt: TTryFinallyStmt);
     procedure EmitTryExceptStmt(AStmt: TTryExceptStmt);
     procedure EmitRaiseStmt(AStmt: TRaiseStmt);
+    { Returns True when a catchable EDivByZero can be raised, i.e. SysUtils
+      (which declares EDivByZero + _RaiseDivByZero) is in scope.  When False
+      the div/mod guard is omitted and a zero divisor traps in hardware. }
+    function  DivGuardAvailable(): Boolean;
+    { Emit a divisor==0 check before an integer div/rem.  ADivisor is the QBE
+      temp holding the right operand; AIsLong selects l vs w comparison. }
+    procedure EmitDivZeroGuard(const ADivisor: string; AIsLong: Boolean);
     procedure EmitCompoundStmt(AStmt: TCompoundStmt);
     procedure EmitAssignment(AAssign: TAssignment);
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
@@ -2714,6 +2721,39 @@ begin
     EmitLine(Format('  %s =l call $_CurrentException()', [ObjTemp]));
     EmitLine(Format('  call $_Reraise(l %s)', [ObjTemp]));
   end;
+end;
+
+function TCodeGenQBE.DivGuardAvailable(): Boolean;
+begin
+  { EDivByZero is declared in SysUtils.  If it resolves through the active
+    symbol table, SysUtils is in scope and $SysUtils_RaiseDivByZero is
+    linkable, so the guard can raise a catchable exception.  Otherwise the
+    divisor-zero path must fall through to the hardware trap. }
+  Result := (FSymTable <> nil) and (FSymTable.Lookup('EDivByZero') <> nil);
+end;
+
+procedure TCodeGenQBE.EmitDivZeroGuard(const ADivisor: string; AIsLong: Boolean);
+var
+  CmpTemp:  string;
+  RaiseLbl: string;
+  OkLbl:    string;
+begin
+  if not Self.DivGuardAvailable() then
+    Exit;
+  CmpTemp  := AllocTemp();
+  RaiseLbl := AllocLabel('divzero_raise');
+  OkLbl    := AllocLabel('divzero_ok');
+  if AIsLong then
+    EmitLine(Format('  %s =w ceql %s, 0', [CmpTemp, ADivisor]))
+  else
+    EmitLine(Format('  %s =w ceqw %s, 0', [CmpTemp, ADivisor]));
+  EmitLine(Format('  jnz %s, @%s, @%s', [CmpTemp, RaiseLbl, OkLbl]));
+  EmitLine(Format('@%s', [RaiseLbl]));
+  EmitLine('  call $SysUtils__RaiseDivByZero()');
+  { _RaiseDivByZero longjmps and never returns; the jmp keeps QBE happy by
+    giving the block a terminator. }
+  EmitLine(Format('  jmp @%s', [OkLbl]));
+  EmitLine(Format('@%s', [OkLbl]));
 end;
 
 procedure TCodeGenQBE.EmitForStmt(AStmt: TForStmt);
@@ -12206,6 +12246,8 @@ begin
           Op := 'add';
         end;
       end;
+      if BinExpr.Op in [boDiv, boMod] then
+        Self.EmitDivZeroGuard(R, True);
       EmitLine(Format('  %s =l %s %s, %s', [T, Op, L, R]));
     end
     { Float arithmetic/comparison: QBE uses d/s typed instructions.
@@ -12345,6 +12387,8 @@ begin
       else
         Op := 'add';
       end;
+      if BinExpr.Op in [boDiv, boMod] then
+        Self.EmitDivZeroGuard(R, False);
       EmitLine(Format('  %s =w %s %s, %s', [T, Op, L, R]));
     end;
     Result := T;

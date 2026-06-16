@@ -38,6 +38,20 @@ type
   EConvertError = class(Exception)
   end;
 
+  { Raised by integer `div`/`mod` when the divisor is zero.  The compiler
+    emits a divisor==0 guard before each integer division that calls
+    _RaiseDivByZero (below) when SysUtils is in scope; without SysUtils the
+    division traps in hardware (SIGFPE) as before.  Matches Delphi, where
+    EDivByZero lives in System.SysUtils. }
+  EDivByZero = class(Exception)
+  end;
+
+{ _RaiseDivByZero — raises EDivByZero('Division by zero').  Called by the
+  compiler-emitted div/mod guard; not intended for direct use.  Declared in
+  the interface so the code generator can reference the $SysUtils_RaiseDivByZero
+  symbol. }
+procedure _RaiseDivByZero;
+
 { BoolToStr — not a compiler built-in; pure Pascal implementation }
 function BoolToStr(B: Boolean; AUseBoolStrs: Boolean = False): string;
 
@@ -55,6 +69,11 @@ implementation
 constructor Exception.Create(AMessage: string);
 begin
   Self.FMessage := AMessage
+end;
+
+procedure _RaiseDivByZero;
+begin
+  raise EDivByZero.Create('Division by zero')
 end;
 
 function BoolToStr(B: Boolean; AUseBoolStrs: Boolean): string;

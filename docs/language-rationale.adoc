@@ -1720,6 +1720,45 @@ OnClause      = "on" [ IDENT ":" ] TypeRef DO Stmt ;
 * *Requiring `on E: T` to always have a variable binding* — Delphi and FPC
   both permit the no-binding form `on T do`; Blaise follows suit.
 
+=== Integer division by zero
+
+==== Decision
+
+Integer `div` and `mod` by zero raise a catchable `EDivByZero` exception
+(declared in `SysUtils`, a subclass of `Exception`) rather than trapping in
+hardware.  The code generator emits a divisor-equals-zero check before each
+integer `idiv`; when the divisor is zero it calls the runtime helper
+`_RaiseDivByZero`, which raises `EDivByZero('Division by zero')` through the
+normal exception machinery.  Both backends (QBE and native x86-64) emit the
+guard.
+
+The guard is emitted *only when `SysUtils` is in scope* — i.e. when
+`EDivByZero` resolves through the active symbol table.  A program that does
+not use `SysUtils` cannot name the exception class anyway, and its integer
+division falls through to the hardware behaviour (a `SIGFPE` trap) as before.
+This mirrors Delphi, where `EDivByZero` lives in `System.SysUtils` and the
+catchable behaviour is tied to that unit.
+
+==== Rationale
+
+A bare hardware trap is uncatchable: a `try`/`except` around `a div b`
+cannot recover from a zero divisor, so a single bad input terminates the
+whole process.  Routing division by zero through the exception system makes
+it recoverable, matching standard Pascal/Delphi semantics and the
+expectations of code that validates input by catching the exception rather
+than pre-checking every divisor.
+
+==== Alternatives Rejected
+
+* *Leave it as a hardware trap* — zero runtime cost, but a zero divisor
+  crashes hard and uncatchably; unacceptable for code that handles untrusted
+  input.
+* *Define `EDivByZero` in the always-linked runtime so the guard is
+  unconditional* — the runtime (`blaise_exc.pas`) deliberately does not
+  depend on stdlib, and exception classes (with their vtable + TypeInfo) are
+  a stdlib concern.  Gating the guard on `SysUtils` keeps the runtime free of
+  class machinery and matches Delphi's unit placement.
+
 ---
 
 == Project Governance
