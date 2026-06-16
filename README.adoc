@@ -2,6 +2,8 @@
 :icons: font
 :source-highlighter: rouge
 
+image:https://github.com/graemeg/blaise/actions/workflows/bootstrap.yml/badge.svg["Build status", link="https://github.com/graemeg/blaise/actions/workflows/bootstrap.yml"]
+
 **The Pascal you love, reimagined for the modern era.**
 
 Blaise is a next-generation Object Pascal compiler built from the ground up to eliminate decades of legacy baggage. It prioritizes developer productivity, memory safety, and high-performance execution.
