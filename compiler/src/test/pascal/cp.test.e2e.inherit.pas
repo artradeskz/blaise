@@ -34,6 +34,10 @@ type
     procedure TestRun_FourLevelFieldInherit;
     procedure TestRun_DoubleDispatchInherited;
     procedure TestRun_VirtualDestructorChain;
+    { A property whose getter/setter is virtual must dispatch through the
+      vtable, exactly like a direct accessor call does. }
+    procedure TestRun_VirtualPropertyGetter_Dispatches;
+    procedure TestRun_VirtualPropertySetter_Dispatches;
   end;
 
 implementation
@@ -226,6 +230,49 @@ const
     end.
     ''';
 
+  { A read property backed by a VIRTUAL getter: read through a base-typed
+    variable holding a derived instance must reach the override (99), just as
+    a direct b.GetVal() call does. }
+  SrcVirtualGetter = '''
+    program P;
+    type
+      TBase = class
+        function GetVal: Integer; virtual; begin Result := 1; end;
+        property Val: Integer read GetVal;
+      end;
+      TDerived = class(TBase)
+        function GetVal: Integer; override; begin Result := 99; end;
+      end;
+    var b: TBase;
+    begin
+      b := TDerived.Create;
+      WriteLn(b.Val);
+      b := nil;
+    end.
+    ''';
+
+  { A write property backed by a VIRTUAL setter: assigning through a base-typed
+    variable must reach the override, which records double the value. }
+  SrcVirtualSetter = '''
+    program P;
+    type
+      TBase = class
+        FStore: Integer;
+        procedure SetVal(AValue: Integer); virtual; begin FStore := AValue; end;
+        property Val: Integer write SetVal;
+      end;
+      TDerived = class(TBase)
+        procedure SetVal(AValue: Integer); override; begin FStore := AValue * 2; end;
+      end;
+    var b: TBase;
+    begin
+      b := TDerived.Create;
+      b.Val := 21;
+      WriteLn(b.FStore);
+      b := nil;
+    end.
+    ''';
+
 procedure TE2EInheritTests.TestRun_ThreeLevelVirtualOverride;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
@@ -278,6 +325,18 @@ procedure TE2EInheritTests.TestRun_VirtualDestructorChain;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDestructorChain, 'derived-destroy' + LE + 'base-destroy' + LE, 0);
+end;
+
+procedure TE2EInheritTests.TestRun_VirtualPropertyGetter_Dispatches;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVirtualGetter, '99' + LE, 0);
+end;
+
+procedure TE2EInheritTests.TestRun_VirtualPropertySetter_Dispatches;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcVirtualSetter, '42' + LE, 0);
 end;
 
 initialization

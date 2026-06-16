@@ -56,6 +56,7 @@ TFieldAccessExpr.IsConstructorCall  safe
 TFieldAccessExpr.IsClassAccess  safe
 TFieldAccessExpr.PropRead  safe
 TFieldAccessExpr.PropOwnerType  safe
+TFieldAccessExpr.PropAccessorVSlot  safe
 TFieldAccessExpr.IsImplicitSelf  safe
 TFieldAccessExpr.IsMethodCall  safe
 TFieldAccessExpr.IsInterfaceCall  safe
@@ -182,6 +183,7 @@ TFieldAssignment.IsGlobal  safe
 TFieldAssignment.IsVarParam  safe
 TFieldAssignment.PropIndexExpr  serialise
 TFieldAssignment.PropOwnerType  safe
+TFieldAssignment.PropAccessorVSlot  safe
 TFieldAssignment.IsElemWrite  safe
 
 # TStaticSubscriptAssign (uAST.pas:397)

@@ -130,6 +130,7 @@ type
     IsClassAccess:     Boolean;       { set by uSemantic — pointer deref needed }
     PropRead:          TPropertyInfo; { non-nil if this is a method-backed property read }
     PropOwnerType:     string;        { class type name for method-backed property calls }
+    PropAccessorVSlot: Integer;       { set by uSemantic — getter vtable slot, -1 = static call }
     IsImplicitSelf:    Boolean;       { set by uSemantic — RecordName is a field of Self }
     [Unretained] ImplicitBaseInfo:  TFieldInfo;    { non-owned — the field of Self holding the record/class }
     IsMethodCall:        Boolean;     { set by uSemantic — FieldName is a zero-arg method }
@@ -398,6 +399,7 @@ type
                                 OR (IsElemWrite) the element index into an array-typed field }
     [Unretained] PropWriteInfo: TPropertyInfo;  { non-owned — set by semantic when PropIndexExpr is set }
     PropOwnerType: string;  { owner class name for setter call; valid when PropIndexExpr set }
+    PropAccessorVSlot: Integer;  { set by uSemantic — setter vtable slot, -1 = static call }
     IsElemWrite: Boolean;   { set by uSemantic — FieldName is an array-typed field and
                               PropIndexExpr selects the element to store into }
     [Unretained] IntfWriteDesc: TTypeDesc;  { set by uSemantic — non-nil = interface

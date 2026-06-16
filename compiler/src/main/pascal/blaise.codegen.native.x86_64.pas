@@ -246,6 +246,14 @@ type
       unit prefix when the type is defined in a non-system unit.  Mirrors the
       QBE backend's ClassSymName logic. }
     function ClassSymName(const AClassName: string): string;
+    { Emit a property accessor (getter/setter) call.  The receiver instance
+      must already be in %rdi.  When AVSlot >= 0 the accessor is virtual and
+      the call dispatches through the vtable so an overridden accessor is
+      reached; otherwise it is a static call to <ClassSymName>_<method>.  The
+      slot is computed by the semantic pass (PropAccessorVSlot).  Mirrors
+      EmitPropAccessorCall in the QBE backend. }
+    procedure EmitPropAccessorCallNative(const AOwnerType, AMethod: string;
+      AVSlot: Integer);
     function IntfTypeInfoName(const AIntfName: string): string;
     { True when AName is a captured outer-scope variable in the current
       nested function (accessed via an implicit pointer param). }
@@ -1467,6 +1475,22 @@ begin
     end;
   end;
   Result := Result + NativeMangle(AClassName);
+end;
+
+procedure TX86_64Backend.EmitPropAccessorCallNative(
+  const AOwnerType, AMethod: string; AVSlot: Integer);
+begin
+  if AVSlot >= 0 then
+  begin
+    { Virtual dispatch: receiver in %rdi.  Load vptr, then the function
+      pointer from vtable[(Slot+1)*8] (slot 0 reserved for typeinfo). }
+    Self.Emit(#9'movq (%rdi), %rax');
+    Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(AVSlot + 1) * 8]));
+    Self.Emit(#9'callq *%rax');
+  end
+  else
+    Self.Emit(#9'callq ' + Self.ClassSymName(AOwnerType) + '_'
+      + NativeMangle(AMethod));
 end;
 
 function TX86_64Backend.IntfTypeInfoName(const AIntfName: string): string;
@@ -6306,8 +6330,8 @@ begin
       Self.Emit(#9'popq %rdi');
       Self.Emit(#9'movq %rax, %rsi');
     end;
-    Self.Emit(#9'callq ' + Self.ClassSymName(FAE.PropOwnerType) + '_'
-      + NativeMangle(FAE.PropRead.ReadMethod));
+    Self.EmitPropAccessorCallNative(FAE.PropOwnerType, FAE.PropRead.ReadMethod,
+      FAE.PropAccessorVSlot);
     if (FAE.ResolvedType <> nil) and
        not IsIntFamily(FAE.ResolvedType) and
        not IsFloatFamily(FAE.ResolvedType) and
@@ -10210,8 +10234,8 @@ begin
       end
       else
         Self.Emit(#9'popq %rsi');
-      Self.Emit(#9'callq ' + Self.ClassSymName(FA.PropOwnerType) + '_'
-        + NativeMangle(FA.PropWriteInfo.WriteMethod));
+      Self.EmitPropAccessorCallNative(FA.PropOwnerType,
+        FA.PropWriteInfo.WriteMethod, FA.PropAccessorVSlot);
       Exit;
     end;
     if FA.FieldInfo = nil then

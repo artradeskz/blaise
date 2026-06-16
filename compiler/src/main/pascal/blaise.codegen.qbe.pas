@@ -464,6 +464,14 @@ type
       for the class's TSymbol.OwningUnit, then applies the same
       allowlist semantics as uSemantic.MangleUnitPrefix. }
     function  ClassUnitPrefix(const AClassName: string): string;
+    { Compute the QBE call target for a property accessor.  When AVSlot >= 0
+      the accessor is virtual: emit the vptr+slot loads and return the
+      function-pointer temp.  Otherwise return the static mangled symbol
+      $<prefix><Owner>_<Method>.  The slot is computed by the semantic pass
+      (PropAccessorVSlot) so codegen needs no symbol-table access.  Each call
+      site then emits its own `call <target>(...)` with the right signature. }
+    function  PropAccessorTarget(const AOwnerType, AMethod: string;
+      AVSlot: Integer; ASelfTemp: string): string;
     { ClassUnitPrefix(AClassName) + AClassName — used as the
       identifying suffix of class data symbols: $typeinfo_<sym>,
       $vtable_<sym>, $__cn_<sym>, $_FieldCleanup_<sym>. }
@@ -5828,6 +5836,7 @@ var
   SelfPtr: string;
   IdxTemp: string;
   IdxQType: string;
+  PropTgt: string;
   IntfDesc: TInterfaceTypeDesc;
   SlotOff: Integer;
 begin
@@ -5896,16 +5905,18 @@ begin
     begin
       IdxTemp  := EmitExpr(AAssign.PropIndexExpr);
       IdxQType := QbeTypeOf(AAssign.PropWriteInfo.IndexTypeDesc);
-      EmitLine(Format('  call $%s%s_%s(l %s, %s %s, %s %s)',
-        [ClassUnitPrefix(AAssign.PropOwnerType),
-         QBEMangle(AAssign.PropOwnerType), AAssign.PropWriteInfo.WriteMethod,
-         SelfPtr, IdxQType, IdxTemp, QType, ValTemp]));
+      PropTgt := PropAccessorTarget(AAssign.PropOwnerType,
+        AAssign.PropWriteInfo.WriteMethod, AAssign.PropAccessorVSlot, SelfPtr);
+      EmitLine(Format('  call %s(l %s, %s %s, %s %s)',
+        [PropTgt, SelfPtr, IdxQType, IdxTemp, QType, ValTemp]));
     end
     else
-      EmitLine(Format('  call $%s%s_%s(l %s, %s %s)',
-        [ClassUnitPrefix(AAssign.PropOwnerType),
-         QBEMangle(AAssign.PropOwnerType), AAssign.PropWriteInfo.WriteMethod,
-         SelfPtr, QType, ValTemp]));
+    begin
+      PropTgt := PropAccessorTarget(AAssign.PropOwnerType,
+        AAssign.PropWriteInfo.WriteMethod, AAssign.PropAccessorVSlot, SelfPtr);
+      EmitLine(Format('  call %s(l %s, %s %s)',
+        [PropTgt, SelfPtr, QType, ValTemp]));
+    end;
     Exit;
   end;
 
@@ -8894,6 +8905,7 @@ function TCodeGenQBE.EmitExpr(AExpr: TASTExpr): string;
 var
   T, L, R, T2: string;
   Op:          string;
+  PropTgt:     string;
   BinExpr:     TBinaryExpr;
   FldAccess:  TFieldAccessExpr;
   MCallExpr:  TMethodCallExpr;
@@ -10846,22 +10858,19 @@ begin
           EmitLine(Format('  %s =l loadl %s', [L, Ptr]));
         end;
         QType := QbeTypeOf(FldAccess.PropRead.TypeDesc);
+        PropTgt := PropAccessorTarget(FldAccess.PropOwnerType,
+          FldAccess.PropRead.ReadMethod, FldAccess.PropAccessorVSlot, L);
         T := AllocTemp();
         if FldAccess.PropIndexExpr <> nil then
         begin
           IdxTemp  := EmitExpr(FldAccess.PropIndexExpr);
           IdxQType := QbeTypeOf(FldAccess.PropRead.IndexTypeDesc);
-          EmitLine(Format('  %s =%s call $%s%s_%s(l %s, %s %s)',
-            [T, QType,
-             ClassUnitPrefix(FldAccess.PropOwnerType),
-             FldAccess.PropOwnerType, FldAccess.PropRead.ReadMethod,
-             L, IdxQType, IdxTemp]));
+          EmitLine(Format('  %s =%s call %s(l %s, %s %s)',
+            [T, QType, PropTgt, L, IdxQType, IdxTemp]));
         end
         else
-          EmitLine(Format('  %s =%s call $%s%s_%s(l %s)',
-            [T, QType,
-             ClassUnitPrefix(FldAccess.PropOwnerType),
-             FldAccess.PropOwnerType, FldAccess.PropRead.ReadMethod, L]));
+          EmitLine(Format('  %s =%s call %s(l %s)',
+            [T, QType, PropTgt, L]));
         Exit(T);
       end;
       if FldAccess.FieldInfo = nil then
@@ -10988,24 +10997,20 @@ begin
       if FldAccess.PropRead <> nil then
       begin
         { Method-backed property read via implicit-Self field }
-        T     := AllocTemp();
         QType := QbeTypeOf(FldAccess.PropRead.TypeDesc);
+        PropTgt := PropAccessorTarget(FldAccess.PropOwnerType,
+          FldAccess.PropRead.ReadMethod, FldAccess.PropAccessorVSlot, L);
+        T     := AllocTemp();
         if FldAccess.PropIndexExpr <> nil then
         begin
           IdxTemp  := EmitExpr(FldAccess.PropIndexExpr);
           IdxQType := QbeTypeOf(FldAccess.PropRead.IndexTypeDesc);
-          EmitLine(Format('  %s =%s call $%s%s_%s(l %s, %s %s)',
-            [T, QType,
-             ClassUnitPrefix(FldAccess.PropOwnerType),
-             QBEMangle(FldAccess.PropOwnerType),
-             FldAccess.PropRead.ReadMethod, L, IdxQType, IdxTemp]));
+          EmitLine(Format('  %s =%s call %s(l %s, %s %s)',
+            [T, QType, PropTgt, L, IdxQType, IdxTemp]));
         end
         else
-          EmitLine(Format('  %s =%s call $%s%s_%s(l %s)',
-            [T, QType,
-             ClassUnitPrefix(FldAccess.PropOwnerType),
-             QBEMangle(FldAccess.PropOwnerType),
-             FldAccess.PropRead.ReadMethod, L]));
+          EmitLine(Format('  %s =%s call %s(l %s)',
+            [T, QType, PropTgt, L]));
         Exit(T);
       end;
       if FldAccess.FieldInfo.Offset > 0 then
@@ -11396,24 +11401,20 @@ begin
         L := AllocTemp();
         EmitLine(Format('  %s =l loadl %s', [L, Ptr]));
       end;
-      T     := AllocTemp();
       QType := QbeTypeOf(FldAccess.PropRead.TypeDesc);
+      PropTgt := PropAccessorTarget(FldAccess.PropOwnerType,
+        FldAccess.PropRead.ReadMethod, FldAccess.PropAccessorVSlot, L);
+      T     := AllocTemp();
       if FldAccess.PropIndexExpr <> nil then
       begin
         IdxTemp  := EmitExpr(FldAccess.PropIndexExpr);
         IdxQType := QbeTypeOf(FldAccess.PropRead.IndexTypeDesc);
-        EmitLine(Format('  %s =%s call $%s%s_%s(l %s, %s %s)',
-          [T, QType,
-           ClassUnitPrefix(FldAccess.PropOwnerType),
-           QBEMangle(FldAccess.PropOwnerType),
-           FldAccess.PropRead.ReadMethod, L, IdxQType, IdxTemp]));
+        EmitLine(Format('  %s =%s call %s(l %s, %s %s)',
+          [T, QType, PropTgt, L, IdxQType, IdxTemp]));
       end
       else
-        EmitLine(Format('  %s =%s call $%s%s_%s(l %s)',
-          [T, QType,
-           ClassUnitPrefix(FldAccess.PropOwnerType),
-           QBEMangle(FldAccess.PropOwnerType),
-           FldAccess.PropRead.ReadMethod, L]));
+        EmitLine(Format('  %s =%s call %s(l %s)',
+          [T, QType, PropTgt, L]));
       Result := T;
     end
     else if FldAccess.IsClassAccess then
@@ -12755,6 +12756,28 @@ begin
     else                Result := Result + Ch;
   end;
   Result := Result + '_';
+end;
+
+function TCodeGenQBE.PropAccessorTarget(const AOwnerType, AMethod: string;
+  AVSlot: Integer; ASelfTemp: string): string;
+var
+  VTbl:    string;
+  SlotPtr: string;
+  FPtr:    string;
+begin
+  if AVSlot >= 0 then
+  begin
+    VTbl := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [VTbl, ASelfTemp]));
+    SlotPtr := AllocTemp();
+    EmitLine(Format('  %s =l add %s, %d', [SlotPtr, VTbl, (AVSlot + 1) * 8]));
+    FPtr := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [FPtr, SlotPtr]));
+    Result := FPtr;
+  end
+  else
+    Result := Format('$%s%s_%s',
+      [ClassUnitPrefix(AOwnerType), QBEMangle(AOwnerType), AMethod]);
 end;
 
 function TCodeGenQBE.QbeEscapeString(const AStr: string): string;
