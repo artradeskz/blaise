@@ -53,12 +53,13 @@ type
     procedure TestRun_IndexStr_NotFound;
     procedure TestRun_IndexText_CaseInsensitive;
 
-    { ReplaceStr / ReplaceText }
-    procedure TestRun_ReplaceStr_SingleOccurrence;
-    procedure TestRun_ReplaceStr_MultipleOccurrences;
-    procedure TestRun_ReplaceText_CaseInsensitive;
-    procedure TestRun_ReplaceStr_EmptyOld;
-    procedure TestRun_ReplaceStr_EmptyNew;
+    { Replace (first) / ReplaceAll }
+    procedure TestRun_Replace_FirstOnly;
+    procedure TestRun_Replace_NotFound;
+    procedure TestRun_ReplaceAll_SingleOccurrence;
+    procedure TestRun_ReplaceAll_MultipleOccurrences;
+    procedure TestRun_ReplaceAll_EmptyOld;
+    procedure TestRun_ReplaceAll_EmptyNew;
 
     { DupeString / ReverseString / StuffString }
     procedure TestRun_DupeString;
@@ -407,65 +408,77 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
-{ ReplaceStr / ReplaceText                                             }
+{ Replace (first) / ReplaceAll                                         }
 { ------------------------------------------------------------------ }
 
-procedure TE2EStrUtilsTests.TestRun_ReplaceStr_SingleOccurrence;
+procedure TE2EStrUtilsTests.TestRun_Replace_FirstOnly;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(
     '''
     program P; uses StrUtils;
-    begin WriteLn(ReplaceStr('hello world', 'world', 'Blaise')) end.
+    begin WriteLn(Replace('aabbaa', 'aa', 'X')) end.
+    ''', Output, RCode));
+  AssertEquals('only the first match replaced', 'Xbbaa', Trim(Output));
+end;
+
+procedure TE2EStrUtilsTests.TestRun_Replace_NotFound;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(
+    '''
+    program P; uses StrUtils;
+    begin WriteLn(Replace('hello', 'z', 'X')) end.
+    ''', Output, RCode));
+  AssertEquals('unchanged when not found', 'hello', Trim(Output));
+end;
+
+procedure TE2EStrUtilsTests.TestRun_ReplaceAll_SingleOccurrence;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(
+    '''
+    program P; uses StrUtils;
+    begin WriteLn(ReplaceAll('hello world', 'world', 'Blaise')) end.
     ''', Output, RCode));
   AssertEquals('hello Blaise', 'hello Blaise', Trim(Output));
 end;
 
-procedure TE2EStrUtilsTests.TestRun_ReplaceStr_MultipleOccurrences;
+procedure TE2EStrUtilsTests.TestRun_ReplaceAll_MultipleOccurrences;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(
     '''
     program P; uses StrUtils;
-    begin WriteLn(ReplaceStr('aabbaa', 'aa', 'X')) end.
+    begin WriteLn(ReplaceAll('aabbaa', 'aa', 'X')) end.
     ''', Output, RCode));
   AssertEquals('XbbX', 'XbbX', Trim(Output));
 end;
 
-procedure TE2EStrUtilsTests.TestRun_ReplaceText_CaseInsensitive;
+procedure TE2EStrUtilsTests.TestRun_ReplaceAll_EmptyOld;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(
     '''
     program P; uses StrUtils;
-    begin WriteLn(ReplaceText('Hello World', 'WORLD', 'Blaise')) end.
-    ''', Output, RCode));
-  AssertEquals('Hello Blaise', 'Hello Blaise', Trim(Output));
-end;
-
-procedure TE2EStrUtilsTests.TestRun_ReplaceStr_EmptyOld;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRunWithRTL(
-    '''
-    program P; uses StrUtils;
-    begin WriteLn(ReplaceStr('hello', '', 'X')) end.
+    begin WriteLn(ReplaceAll('hello', '', 'X')) end.
     ''', Output, RCode));
   AssertEquals('empty old returns unchanged', 'hello', Trim(Output));
 end;
 
-procedure TE2EStrUtilsTests.TestRun_ReplaceStr_EmptyNew;
+procedure TE2EStrUtilsTests.TestRun_ReplaceAll_EmptyNew;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(
     '''
     program P; uses StrUtils;
-    begin WriteLn(ReplaceStr('hello', 'l', '')) end.
+    begin WriteLn(ReplaceAll('hello', 'l', '')) end.
     ''', Output, RCode));
   AssertEquals('heo', 'heo', Trim(Output));
 end;

@@ -246,6 +246,32 @@ replacements.  `Extended` maps to `Double` with a precision-loss warning.
 *Effort.* Medium — primarily RTL/stdlib work once operator overloading is in place.
 No compiler changes needed.
 
+== StdLib — String operations
+
+=== Regular-expression search and replace
+
+`StrUtils` provides literal (non-pattern) replacement only: `Replace` (first
+occurrence) and `ReplaceAll` (every occurrence), both case-sensitive.  A
+pattern-based API — `regex` search, `ReplaceMatches`/`ReplaceFirstMatch`, and
+capture-group substitution — is deliberately deferred because it requires a
+regular-expression engine (parser + NFA/DFA matcher) that does not yet exist
+in the stdlib.
+
+*Why deferred.*  A correct, reasonably performant regex engine is a
+substantial component in its own right.  The literal `Replace`/`ReplaceAll`
+functions cover the common cases without it.
+
+*Current workarounds.*
+
+- Case-insensitive replace: lower-case the inputs with the built-in
+  `LowerCase` (or `UpperCase`) before calling `Replace`/`ReplaceAll`.  Note
+  that this also folds the case of the surrounding text in the result; a
+  case-*preserving* insensitive replace is a regex-engine feature.
+- Fixed multi-pattern replacement: chain `ReplaceAll` calls.
+
+*Effort.*  Large — a regex engine is the bulk of the work; the replace API on
+top of it is small.
+
 == macOS — Debugging and Code-Signing
 
 === Debugger entitlement requirements

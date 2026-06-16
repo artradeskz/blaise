@@ -60,10 +60,10 @@ type
     procedure TestSemantic_IndexText_OK;
     procedure TestSemantic_IndexStr_ReturnsInteger;
 
-    { ReplaceStr / ReplaceText }
-    procedure TestSemantic_ReplaceStr_OK;
-    procedure TestSemantic_ReplaceText_OK;
-    procedure TestSemantic_ReplaceStr_ReturnsString;
+    { Replace / ReplaceAll }
+    procedure TestSemantic_Replace_OK;
+    procedure TestSemantic_ReplaceAll_OK;
+    procedure TestSemantic_ReplaceAll_ReturnsString;
 
     { DupeString / ReverseString / StuffString }
     procedure TestSemantic_DupeString_OK;
@@ -104,7 +104,7 @@ type
 
     { Codegen — unit-level function calls appear in IR }
     procedure TestCodegen_ContainsStr_InIR;
-    procedure TestCodegen_ReplaceStr_InIR;
+    procedure TestCodegen_ReplaceAll_InIR;
     procedure TestCodegen_TrimLeft_InIR;
     procedure TestCodegen_PosEx_InIR;
     procedure TestCodegen_LeftStr_InIR;
@@ -542,30 +542,30 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
-{ ReplaceStr / ReplaceText                                             }
+{ Replace / ReplaceAll                                                 }
 { ------------------------------------------------------------------ }
 
-procedure TStrUtilsTests.TestSemantic_ReplaceStr_OK;
+procedure TStrUtilsTests.TestSemantic_Replace_OK;
 begin
   SemanticOK(
     '''
     program P; uses StrUtils;
     var S, T: string;
-    begin T := ReplaceStr(S, 'x', 'y') end.
+    begin T := Replace(S, 'x', 'y') end.
     ''');
 end;
 
-procedure TStrUtilsTests.TestSemantic_ReplaceText_OK;
+procedure TStrUtilsTests.TestSemantic_ReplaceAll_OK;
 begin
   SemanticOK(
     '''
     program P; uses StrUtils;
     var S, T: string;
-    begin T := ReplaceText(S, 'x', 'y') end.
+    begin T := ReplaceAll(S, 'x', 'y') end.
     ''');
 end;
 
-procedure TStrUtilsTests.TestSemantic_ReplaceStr_ReturnsString;
+procedure TStrUtilsTests.TestSemantic_ReplaceAll_ReturnsString;
 var
   Lexer:       TLexer;
   Parser:      TParser;
@@ -580,7 +580,7 @@ begin
   Lexer  := nil; Parser := nil; Prog := nil; Semantic := nil;
   Loader := nil; Units  := nil; SearchPaths := nil;
   try
-    Lexer       := TLexer.Create('program P; uses StrUtils; var S, T: string; begin T := ReplaceStr(S, ''x'', ''y'') end.');
+    Lexer       := TLexer.Create('program P; uses StrUtils; var S, T: string; begin T := ReplaceAll(S, ''x'', ''y'') end.');
     Parser      := TParser.Create(Lexer);
     Prog        := Parser.Parse();
     Semantic    := TSemanticAnalyser.Create();
@@ -593,7 +593,7 @@ begin
       Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
     Semantic.Analyse(Prog);
     Assign := TAssignment(Prog.Block.Stmts[0]);
-    AssertEquals('ReplaceStr returns string',
+    AssertEquals('ReplaceAll returns string',
       Ord(tyString), Ord(Assign.Expr.ResolvedType.Kind));
   finally
     Semantic.Free();
@@ -1042,16 +1042,16 @@ begin
   AssertTrue('ContainsStr appears in IR', IRContains(IR, '$StrUtils_ContainsStr'));
 end;
 
-procedure TStrUtilsTests.TestCodegen_ReplaceStr_InIR;
+procedure TStrUtilsTests.TestCodegen_ReplaceAll_InIR;
 var IR: string;
 begin
   IR := GenIR(
     '''
     program P; uses StrUtils;
     var S, T: string;
-    begin T := ReplaceStr(S, 'x', 'y') end.
+    begin T := ReplaceAll(S, 'x', 'y') end.
     ''');
-  AssertTrue('ReplaceStr appears in IR', IRContains(IR, '$StrUtils_ReplaceStr'));
+  AssertTrue('ReplaceAll appears in IR', IRContains(IR, '$StrUtils_ReplaceAll'));
 end;
 
 procedure TStrUtilsTests.TestCodegen_TrimLeft_InIR;

@@ -80,11 +80,15 @@ function IndexText(const Str: string; const Arr: array of string): Integer;
 { Replacement                                                          }
 { ------------------------------------------------------------------ }
 
-{ Replaces all occurrences of OldPattern with NewPattern (case-sensitive). }
-function ReplaceStr(const S, OldPattern, NewPattern: string): string;
+{ Replaces the FIRST occurrence of OldPattern with NewPattern.  Returns S
+  unchanged if OldPattern is empty or not found.  Matching is case-sensitive;
+  for a case-insensitive replace, lower-case the inputs as you pass them in. }
+function Replace(const S, OldPattern, NewPattern: string): string;
 
-{ Replaces all occurrences of OldPattern with NewPattern (case-insensitive). }
-function ReplaceText(const S, OldPattern, NewPattern: string): string;
+{ Replaces ALL occurrences of OldPattern with NewPattern.  Matching is
+  case-sensitive; for a case-insensitive replace, lower-case the inputs as
+  you pass them in. }
+function ReplaceAll(const S, OldPattern, NewPattern: string): string;
 
 { ------------------------------------------------------------------ }
 { Manipulation                                                         }
@@ -386,15 +390,15 @@ end;
 { Replacement                                                          }
 { ------------------------------------------------------------------ }
 
-{ Internal: replace all occurrences of OldP with NewP; Fold=True for case-insensitive. }
-function ReplaceAll(const S, OldP, NewP: string; Fold: Boolean): string;
+{ Internal worker for Replace/ReplaceAll.  Matching is case-sensitive;
+  FirstOnly=True stops after the first match (the rest is copied verbatim). }
+function DoReplace(const S, OldP, NewP: string; FirstOnly: Boolean): string;
 var
   SLen, OldLen, NewLen: Integer;
   SB: TStringBuilder;
   I, J: Integer;
-  Match: Boolean;
+  Match, Done: Boolean;
   SP, OP: PChar;
-  C1, C2: Integer;
 begin
   SLen   := Length(S);
   OldLen := Length(OldP);
@@ -406,29 +410,22 @@ begin
   SP := PChar(S);
   OP := PChar(OldP);
   SB := TStringBuilder.Create();
-  I  := 0;
-  while I <= SLen - OldLen do
+  I    := 0;
+  Done := False;
+  while (not Done) and (I <= SLen - OldLen) do
   begin
     Match := True;
     for J := 0 to OldLen - 1 do
     begin
-      if Fold then
-      begin
-        C1 := FoldLower(SP[I + J]);
-        C2 := FoldLower(OP[J]);
-      end
-      else
-      begin
-        C1 := SP[I + J];
-        C2 := OP[J];
-      end;
-      if C1 <> C2 then begin Match := False; Break; end;
+      if SP[I + J] <> OP[J] then begin Match := False; Break; end;
     end;
     if Match then
     begin
       if NewLen > 0 then
         SB.Append(NewP);
       I := I + OldLen;
+      if FirstOnly then
+        Done := True;
     end
     else
     begin
@@ -446,14 +443,14 @@ begin
   SB.Free();
 end;
 
-function ReplaceStr(const S, OldPattern, NewPattern: string): string;
+function Replace(const S, OldPattern, NewPattern: string): string;
 begin
-  Result := ReplaceAll(S, OldPattern, NewPattern, False);
+  Result := DoReplace(S, OldPattern, NewPattern, True);
 end;
 
-function ReplaceText(const S, OldPattern, NewPattern: string): string;
+function ReplaceAll(const S, OldPattern, NewPattern: string): string;
 begin
-  Result := ReplaceAll(S, OldPattern, NewPattern, True);
+  Result := DoReplace(S, OldPattern, NewPattern, False);
 end;
 
 { ------------------------------------------------------------------ }
