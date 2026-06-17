@@ -23,6 +23,10 @@ type
   protected
     procedure SetUp; override;
   published
+    { Boolean xor (GitHub #123) }
+    procedure TestRun_BoolXor_TrueXorTrue_IsFalse;
+    procedure TestRun_BoolXor_AllCombinations;
+
     { Packed records }
     procedure TestRun_PackedRecord_ByteIntOffsets;
     procedure TestRun_PackedRecord_SizeOfPacked;
@@ -64,6 +68,38 @@ procedure TE2EGapTests.SetUp;
 begin
   inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-gaps');
+end;
+
+{ ---- Boolean xor ---- }
+
+procedure TE2EGapTests.TestRun_BoolXor_TrueXorTrue_IsFalse;
+const Src = '''
+    program T;
+    var A, B: Boolean;
+    begin
+      A := True;
+      B := True;
+      WriteLn(A xor B)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, 'False' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_BoolXor_AllCombinations;
+const Src = '''
+    program T;
+    var A, B: Boolean;
+    begin
+      A := False; B := False; WriteLn(A xor B);
+      A := False; B := True;  WriteLn(A xor B);
+      A := True;  B := False; WriteLn(A xor B);
+      A := True;  B := True;  WriteLn(A xor B)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, 'False' + Chr(10) + 'True' + Chr(10) +
+                       'True' + Chr(10) + 'False' + Chr(10), 0);
 end;
 
 { ---- Packed records ---- }

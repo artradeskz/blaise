@@ -42,6 +42,8 @@ type
     procedure TestCodegen_Or_EmitsOr;
     procedure TestCodegen_Not_EmitsXor;
     procedure TestCodegen_Not_IntEmitsXorNeg1;
+    procedure TestCodegen_Xor_EmitsXor;
+    procedure TestSemantic_Xor_TypeIsBoolean;
   end;
 
 implementation
@@ -312,6 +314,38 @@ begin
       ''');
   AssertTrue('emits xor with -1', Pos('xor ', IR) > 0);
   AssertTrue('mask is -1', Pos(', -1', IR) > 0);
+end;
+
+procedure TBooleanOpsTests.TestSemantic_Xor_TypeIsBoolean;
+var Prog: TProgram;
+begin
+  Prog := AnalyseSrc(
+      '''
+      program P;
+      var A, B, R: Boolean;
+      begin
+        A := True;
+        B := True;
+        R := A xor B
+      end.
+      ''');
+  Prog.Free();
+end;
+
+procedure TBooleanOpsTests.TestCodegen_Xor_EmitsXor;
+var IR: string;
+begin
+  IR := GenIR(
+      '''
+      program P;
+      var A, B, R: Boolean;
+      begin
+        A := True;
+        B := True;
+        R := A xor B
+      end.
+      ''');
+  AssertTrue('emits xor', Pos('xor ', IR) >= 0);
 end;
 
 initialization

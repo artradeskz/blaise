@@ -12397,6 +12397,9 @@ begin
           boGT:  Op := 'csgtw';
           boLE:  Op := 'cslew';
           boGE:  Op := 'csgew';
+          boAnd: Op := 'and';
+          boOr:  Op := 'or';
+          boXor: Op := 'xor';
         else     Op := 'ceqw';
         end;
         EmitLine(Format('  %s =w %s %s, %s', [T, Op, L, R]));
