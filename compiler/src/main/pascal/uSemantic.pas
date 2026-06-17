@@ -22,7 +22,7 @@ interface
 
 uses
   SysUtils, Classes, contnrs, uAST, uSymbolTable, uStrCompat,
-  uUnitInterface;
+  uUnitInterface, uLexer, uParser;
 
 type
   ESemanticError = class(Exception);
@@ -165,6 +165,7 @@ type
     function  EvalConstIntExpr(AExpr: TASTExpr; ALine, ACol: Integer): Int64;
     function  EvalConstFloatExpr(AExpr: TASTExpr; ALine, ACol: Integer): string;
     function  IsFloatConstExpr(AExpr: TASTExpr): Boolean;
+    function  ResolveArrayBound(const ABoundText: string): Integer;
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
@@ -2270,6 +2271,7 @@ var
   DDotPos, RBrPos, OfPos: Integer;
   LStr, HStr, ElemName: string;
   CanonName: string;
+  LVal, HVal: Integer;
   SAT: TStaticArrayTypeDesc;
   DAT: TDynArrayTypeDesc;
 begin
@@ -2296,7 +2298,9 @@ begin
     end;
     Exit;
   end;
-  { Static array: 'array[L..H] of TypeName' — create on demand. }
+  { Static array: 'array[L..H] of TypeName' — create on demand.
+    L and H may be integer literals, named constants, or constant
+    expressions (e.g. N-1).  ResolveArrayBound folds them to integers. }
   if (Length(AName) > 6) and (StrHead(AName, 6) = 'array[') then
   begin
     DDotPos  := StrPos('..', AName);
@@ -2308,11 +2312,13 @@ begin
     BaseType := FindTypeOrInstantiate(ElemName);
     if BaseType <> nil then
     begin
-      CanonName := 'array[' + LStr + '..' + HStr + '] of ' + BaseType.Name;
+      LVal := ResolveArrayBound(LStr);
+      HVal := ResolveArrayBound(HStr);
+      CanonName := Format('array[%d..%d] of %s', [LVal, HVal, BaseType.Name]);
       Result    := FTable.FindType(CanonName);
       if Result = nil then
       begin
-        SAT := FTable.NewStaticArrayType(BaseType, StrToInt(LStr), StrToInt(HStr));
+        SAT := FTable.NewStaticArrayType(BaseType, LVal, HVal);
         Sym := TSymbol.Create(CanonName, skType, SAT);
         FTable.DefineGlobal(Sym);
         Result := SAT;
@@ -3775,6 +3781,66 @@ begin
     'Constant expression is not a compile-time float', ALine, ACol);
 end;
 
+function IsPlainInt(const S: string): Boolean;
+var
+  I, Start: Integer;
+begin
+  Result := False;
+  if Length(S) = 0 then Exit;
+  if S[0] = '-' then
+    Start := 1
+  else
+    Start := 0;
+  if Start >= Length(S) then Exit;
+  for I := Start to Length(S) - 1 do
+    if (S[I] < '0') or (S[I] > '9') then Exit;
+  Result := True;
+end;
+
+function TSemanticAnalyser.ResolveArrayBound(const ABoundText: string): Integer;
+var
+  Src: string;
+  Lx: TLexer;
+  Px: TParser;
+  Prog: TProgram;
+  CD: TConstDecl;
+  Expr: TASTExpr;
+  Sym: TSymbol;
+begin
+  if IsPlainInt(ABoundText) then
+    Exit(Integer(StrToInt(ABoundText)));
+  Sym := FTable.Lookup(ABoundText);
+  if (Sym <> nil) and (Sym.Kind = skConstant) then
+    Exit(Integer(Sym.ConstValue));
+  Src := 'program _ab; const _ab_val = ' + ABoundText + '; begin end.';
+  Lx := TLexer.Create(Src);
+  Px := TParser.Create(Lx);
+  try
+    Prog := Px.Parse();
+    try
+      if Prog.Block.ConstDecls.Count = 0 then
+        raise ESemanticError.Create(
+          Format('Cannot resolve array bound ''%s''', [ABoundText]));
+      CD := TConstDecl(Prog.Block.ConstDecls.Items[0]);
+      if CD.IntValueExpr <> nil then
+      begin
+        Expr := CD.IntValueExpr;
+        Result := Integer(EvalConstIntExpr(Expr, 0, 0));
+      end
+      else if CD.IntExprTokens <> nil then
+        Result := Integer(FoldConstBitOpExpr(CD.IntExprTokens, 0, 0))
+      else
+        raise ESemanticError.Create(
+          Format('Cannot resolve array bound ''%s''', [ABoundText]));
+    finally
+      Prog.Free();
+    end;
+  finally
+    Px.Free();
+    Lx.Free();
+  end;
+end;
+
 procedure TSemanticAnalyser.AnalyseSetConstDecl(ACD: TConstDecl);
 var
   I:         Integer;
@@ -4026,8 +4092,8 @@ begin
     Expected := 1;
     for D := 0 to ACD.ArrayDimLows.Count - 1 do
     begin
-      Lo := StrToInt(ACD.ArrayDimLows.Strings[D]);
-      Hi := StrToInt(ACD.ArrayDimHighs.Strings[D]);
+      Lo := ResolveArrayBound(ACD.ArrayDimLows.Strings[D]);
+      Hi := ResolveArrayBound(ACD.ArrayDimHighs.Strings[D]);
       Expected := Expected * (Hi - Lo + 1);
     end;
     if ACD.ArrayElements.Count <> Expected then
@@ -4038,14 +4104,19 @@ begin
     Inner := AElemTD;
     for D := ACD.ArrayDimLows.Count - 1 downto 0 do
     begin
-      Lo := StrToInt(ACD.ArrayDimLows.Strings[D]);
-      Hi := StrToInt(ACD.ArrayDimHighs.Strings[D]);
+      Lo := ResolveArrayBound(ACD.ArrayDimLows.Strings[D]);
+      Hi := ResolveArrayBound(ACD.ArrayDimHighs.Strings[D]);
       Inner := FTable.NewStaticArrayType(Inner, Lo, Hi);
     end;
     Result := TStaticArrayTypeDesc(Inner);
     Exit;
   end;
-  { Single dimension. }
+  { Single dimension — resolve from dim lists (parser stores raw text). }
+  if (ACD.ArrayDimLows <> nil) and (ACD.ArrayDimLows.Count = 1) then
+  begin
+    ACD.ArrayLowBound  := ResolveArrayBound(ACD.ArrayDimLows.Strings[0]);
+    ACD.ArrayHighBound := ResolveArrayBound(ACD.ArrayDimHighs.Strings[0]);
+  end;
   Expected := ACD.ArrayHighBound - ACD.ArrayLowBound + 1;
   if ACD.ArrayElements.Count <> Expected then
     SemanticError(Format(

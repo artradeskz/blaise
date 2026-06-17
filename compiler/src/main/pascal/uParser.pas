@@ -58,6 +58,7 @@ type
     function  Check(AKind: TTokenKind): Boolean;
     function  CheckUnitNamePart: Boolean;
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
+    function  ReadConstBoundText: string;  { read an array bound: literal, ident, or expr }
     function  ParseAnonEnumName: string;  { parse '(a,b,c)' → encoded member-list string }
 
     function  ParseProgram: TProgram;
@@ -153,6 +154,85 @@ begin
   Result := FLookahead2.Kind;
 end;
 
+function TParser.ReadConstBoundText: string;
+var
+  Depth: Integer;
+begin
+  Result := '';
+  Depth := 0;
+  while True do
+  begin
+    if (Depth = 0) and ((Check(tkDotDot)) or (Check(tkRBracket))
+       or (Check(tkComma))) then
+      Break;
+    if Check(tkLParen) then
+    begin
+      Depth := Depth + 1;
+      Result := Result + '(';
+      Advance();
+    end
+    else if Check(tkRParen) then
+    begin
+      Depth := Depth - 1;
+      Result := Result + ')';
+      Advance();
+    end
+    else if Check(tkIntLit) then
+    begin
+      Result := Result + FCurrent.Value;
+      Advance();
+    end
+    else if Check(tkIdent) then
+    begin
+      Result := Result + FCurrent.Value;
+      Advance();
+    end
+    else if Check(tkMinus) then
+    begin
+      Result := Result + '-';
+      Advance();
+    end
+    else if Check(tkPlus) then
+    begin
+      Result := Result + '+';
+      Advance();
+    end
+    else if Check(tkStar) then
+    begin
+      Result := Result + '*';
+      Advance();
+    end
+    else if Check(tkDiv) then
+    begin
+      Result := Result + ' div ';
+      Advance();
+    end
+    else if Check(tkMod) then
+    begin
+      Result := Result + ' mod ';
+      Advance();
+    end
+    else if Check(tkShl) then
+    begin
+      Result := Result + ' shl ';
+      Advance();
+    end
+    else if Check(tkShr) then
+    begin
+      Result := Result + ' shr ';
+      Advance();
+    end
+    else
+      raise EParseError.Create(Format(
+        'Expected constant bound expression at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  end;
+  if Result = '' then
+    raise EParseError.Create(Format(
+      'Expected constant bound expression at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+end;
+
 { Parse a type name, including generic instantiations.
   Returns 'Integer', 'TBox<Integer>', 'TPair<string,Integer>', etc.
   Spaces around commas are stripped for a canonical representation. }
@@ -178,17 +258,9 @@ begin
       Highs := TStringList.Create();
       try
         repeat
-          if not Check(tkIntLit) then
-            raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-          Lows.Add(FCurrent.Value);
-          Advance();
+          Lows.Add(Self.ReadConstBoundText());
           Expect(tkDotDot);
-          if not Check(tkIntLit) then
-            raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-          Highs.Add(FCurrent.Value);
-          Advance();
+          Highs.Add(Self.ReadConstBoundText());
           if not Check(tkComma) then
             Break;
           Advance();  { consume ',' — next dimension }
@@ -946,19 +1018,13 @@ end;
   it cannot be mixed with multi-dimensional ranges. }
 procedure TParser.ReadConstArrayDim(CD: TConstDecl);
 var
-  Lo, Hi: Integer;
+  LoText, HiText: string;
 begin
-  Lo := ParseIntLiteral(FCurrent.Value);
-  Advance();
+  LoText := Self.ReadConstBoundText();
   Expect(tkDotDot);
-  if not Check(tkIntLit) then
-    raise EParseError.Create(Format(
-      'Expected integer high bound in array const at line %d col %d in %s',
-      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-  Hi := ParseIntLiteral(FCurrent.Value);
-  Advance();
-  CD.ArrayDimLows.Add(IntToStr(Lo));
-  CD.ArrayDimHighs.Add(IntToStr(Hi));
+  HiText := Self.ReadConstBoundText();
+  CD.ArrayDimLows.Add(LoText);
+  CD.ArrayDimHighs.Add(HiText);
   CD.ArrayIsRangeIndexed := True;
 end;
 
@@ -974,22 +1040,9 @@ begin
   begin
     Expect(tkArray);
     Expect(tkLBracket);
-    if Check(tkIntLit) then
+    if Check(tkIdent) and (PeekKind() = tkRBracket) then
     begin
-      Self.ReadConstArrayDim(CD);
-      while Check(tkComma) do
-      begin
-        Advance();
-        if not Check(tkIntLit) then
-          raise EParseError.Create(Format(
-            'Expected integer low bound in array const at line %d col %d in %s',
-            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        Self.ReadConstArrayDim(CD);
-      end;
-    end
-    else if Check(tkIdent) then
-    begin
-      { Enum-indexed: only valid as a lone single dimension. }
+      { Enum-indexed: 'array[TEnum]' — ident alone followed by ']'. }
       if (CD.ArrayDimLows.Count > 0) or (CD.ArrayIndexType <> '') then
         raise EParseError.Create(Format(
           'Enum-indexed dimension cannot be combined with other dimensions ' +
@@ -997,6 +1050,16 @@ begin
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       CD.ArrayIndexType := FCurrent.Value;
       Advance();
+    end
+    else if Check(tkIntLit) or Check(tkIdent) or Check(tkMinus)
+         or Check(tkLParen) then
+    begin
+      Self.ReadConstArrayDim(CD);
+      while Check(tkComma) do
+      begin
+        Advance();
+        Self.ReadConstArrayDim(CD);
+      end;
     end
     else
       raise EParseError.Create(Format(
@@ -1016,13 +1079,9 @@ begin
     Advance();
     Break;
   end;
-  { Mirror dim-0 bounds onto the legacy single-dim fields so the existing
-    range-indexed semantic/codegen path is unchanged for 1-D constants. }
-  if CD.ArrayDimLows.Count > 0 then
-  begin
-    CD.ArrayLowBound  := StrToInt(CD.ArrayDimLows.Strings[0]);
-    CD.ArrayHighBound := StrToInt(CD.ArrayDimHighs.Strings[0]);
-  end;
+  { Legacy single-dim fields (ArrayLowBound / ArrayHighBound) are resolved
+    from ArrayDimLows/ArrayDimHighs by the semantic pass, which can evaluate
+    named constants and constant expressions. }
 end;
 
 { Parse a constant value (everything after '=', up to but excluding the

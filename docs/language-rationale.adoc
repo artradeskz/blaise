@@ -4723,3 +4723,46 @@ exactly as bare float literals are stored.
   (`and`, `or`, `xor`, `shl`, `shr`) have no meaningful float semantics.  The
   `mod` operator could theoretically map to `fmod`, but there is no demonstrated
   need.  Integer-only operators remain available in integer constant expressions.
+
+== Named Constants as Static-Array Bounds
+
+=== Decision
+
+Static-array bounds accept named constants and compile-time integer expressions,
+not only integer literals.  The following forms are all valid:
+
+[source,pascal]
+----
+const N = 10;
+const Lo = 1;
+const Hi = 100;
+type
+  TBuf  = array[0..N-1] of Byte;     { expression as bound }
+  TArr  = array[Lo..Hi] of Integer;  { named constants as both bounds }
+var
+  A: array[0..N] of Integer;         { named constant as upper bound }
+const
+  Days: array[0..N-1] of string = (...);  { const-array declarations too }
+----
+
+=== Rationale
+
+Before this change, all array bounds had to be integer literals.  This forced
+users to duplicate magic numbers and prevented writing self-sizing array types
+based on named constants — a fundamental use case in systems programming.
+
+The parser now reads a constant expression (integer literals, named identifiers,
+and the arithmetic operators `+`, `-`, `*`, `div`, `mod`, `shl`, `shr` with
+parentheses) as each array bound, embedding the text in the type-name string.
+The semantic pass resolves each bound to a concrete integer: plain integers are
+converted directly, named constants are looked up in the symbol table, and
+expressions are parsed and folded via the existing `EvalConstIntExpr` machinery.
+
+=== Alternatives considered
+
+* *Accept only bare named constants, not expressions.*  Rejected.  `array[0..N-1]`
+  is the most common idiom; supporting `array[0..N]` but not `array[0..N-1]`
+  would be a constant source of frustration.
+* *Resolve bounds at parse time.*  Rejected.  The parser runs before the semantic
+  pass, so named constants are not yet resolved.  Deferring to the semantic pass
+  is the natural point where all constant values are available.

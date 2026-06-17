@@ -72,6 +72,11 @@ type
     procedure TestRun_MultiDimConst_CommaForm_ReadsValues;
     procedure TestRun_MultiDimConst_NestedForm_ReadsValues;
     procedure TestRun_MultiDimConst_ThreeDimensions;
+
+    { Named constant array bounds (issue #109) }
+    procedure TestRun_NamedConstBound_Simple;
+    procedure TestRun_NamedConstBound_Expression;
+    procedure TestRun_NamedConstBound_TypeAlias;
   end;
 
 implementation
@@ -785,6 +790,55 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   LE := LineEnding;
   AssertRunsOnAll(Src, '1' + LE + '6' + LE + '8' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_NamedConstBound_Simple;
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll('''
+    program P;
+    const N = 3;
+    var A: array[0..N] of Integer;
+    begin
+      A[0] := 10; A[1] := 20; A[2] := 30; A[3] := 40;
+      WriteLn(A[0]); WriteLn(A[3])
+    end.
+    ''', '10' + LE + '40' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_NamedConstBound_Expression;
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll('''
+    program P;
+    const N = 10;
+    var A: array[0..N-1] of Integer;
+    begin
+      A[0] := 1; A[9] := 99;
+      WriteLn(A[0]); WriteLn(A[9])
+    end.
+    ''', '1' + LE + '99' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_NamedConstBound_TypeAlias;
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll('''
+    program P;
+    const MaxItems = 5;
+    type TBuf = array[0..MaxItems-1] of Integer;
+    var B: TBuf;
+    begin
+      B[0] := 100; B[4] := 500;
+      WriteLn(B[0]); WriteLn(B[4])
+    end.
+    ''', '100' + LE + '500' + LE, 0);
 end;
 
 initialization

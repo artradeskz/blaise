@@ -101,6 +101,15 @@ type
     { ------------------------------------------------------------------ }
     procedure TestCodegen_ReturnStaticArray_SretParam;
     procedure TestCodegen_ReturnStaticArray_VoidReturn;
+
+    { ------------------------------------------------------------------ }
+    { Named constant array bounds (issue #109)                           }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_NamedConstBound_Simple;
+    procedure TestSemantic_NamedConstBound_BothBounds;
+    procedure TestSemantic_NamedConstBound_Expression;
+    procedure TestSemantic_NamedConstBound_TypeDecl;
+    procedure TestCodegen_NamedConstBound_CorrectSize;
   end;
 
 implementation
@@ -882,6 +891,101 @@ var IR: string;
 begin
   IR := GenIR(SrcArrayReturn);
   AssertTrue('void return', Pos('ret', IR) >= 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Named constant array bounds (issue #109)                           }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestSemantic_NamedConstBound_Simple;
+var P: TProgram; VD: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc('''
+    program P;
+    const N = 5;
+    var A: array[0..N] of Integer;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    AssertTrue('resolved type', VD.ResolvedType <> nil);
+    AssertTrue('is static array', VD.ResolvedType.Kind = tyStaticArray);
+    SAT := TStaticArrayTypeDesc(VD.ResolvedType);
+    AssertEquals('low', 0, SAT.LowBound);
+    AssertEquals('high', 5, SAT.HighBound);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_NamedConstBound_BothBounds;
+var P: TProgram; VD: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc('''
+    program P;
+    const Lo = 1; Hi = 10;
+    var A: array[Lo..Hi] of Integer;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    SAT := TStaticArrayTypeDesc(VD.ResolvedType);
+    AssertEquals('low', 1, SAT.LowBound);
+    AssertEquals('high', 10, SAT.HighBound);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_NamedConstBound_Expression;
+var P: TProgram; VD: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc('''
+    program P;
+    const N = 10;
+    var A: array[0..N-1] of Integer;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    SAT := TStaticArrayTypeDesc(VD.ResolvedType);
+    AssertEquals('low', 0, SAT.LowBound);
+    AssertEquals('high', 9, SAT.HighBound);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_NamedConstBound_TypeDecl;
+var P: TProgram; VD: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc('''
+    program P;
+    const MaxItems = 8;
+    type TBuf = array[0..MaxItems-1] of Byte;
+    var Buf: TBuf;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    SAT := TStaticArrayTypeDesc(VD.ResolvedType);
+    AssertEquals('low', 0, SAT.LowBound);
+    AssertEquals('high', 7, SAT.HighBound);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestCodegen_NamedConstBound_CorrectSize;
+var IR: string;
+begin
+  IR := GenIR('''
+    program P;
+    const N = 4;
+    var A: array[0..N] of Integer;
+    begin A[0] := 42 end.
+    ''');
+  AssertTrue('alloc for 5 ints (20 bytes)', Pos('20', IR) >= 0);
 end;
 
 initialization
