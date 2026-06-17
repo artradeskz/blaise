@@ -5959,8 +5959,8 @@ begin
        (IsFloatFamily(BE.Left.ResolvedType) or
         IsFloatFamily(BE.Right.ResolvedType)) then
     begin
-      IsS := (BE.Left.ResolvedType <> nil) and
-             (BE.Left.ResolvedType.Kind = tySingle);
+      IsS := (BE.Left.ResolvedType <> nil) and (BE.Left.ResolvedType.Kind = tySingle) and
+             (BE.Right.ResolvedType <> nil) and (BE.Right.ResolvedType.Kind = tySingle);
       Self.EmitExprToXmm0(BE.Left);
       Self.EmitXmm0WidthAdjust(BE.Left.ResolvedType, IsS);
       Self.Emit(#9'subq $8, %rsp');
@@ -5972,7 +5972,7 @@ begin
       begin
         Self.Emit(#9'movss (%rsp), %xmm1');
         Self.Emit(#9'addq $8, %rsp');
-        Self.Emit(#9'ucomiss %xmm0, %xmm1');  { %xmm1 - %xmm0 }
+        Self.Emit(#9'ucomiss %xmm0, %xmm1');
       end
       else
       begin
@@ -6265,6 +6265,7 @@ begin
       boXor: Self.Emit(#9'xorq %rcx, %rax');
       boShl: Self.Emit(#9'shlq %cl, %rax');
       boShr: Self.Emit(#9'shrq %cl, %rax');
+      boSar: Self.Emit(#9'sarq %cl, %rax');
       boEQ, boNE, boLT, boGT, boLE, boGE:
         begin
           if (BE.Left.ResolvedType <> nil) and
@@ -6273,14 +6274,29 @@ begin
             Self.Emit(#9'cmpq %rcx, %rax')
           else
             Self.Emit(#9'cmpl %ecx, %eax');
-          case BE.Op of
-            boEQ: Self.Emit(#9'sete %al');
-            boNE: Self.Emit(#9'setne %al');
-            boLT: Self.Emit(#9'setl %al');
-            boGT: Self.Emit(#9'setg %al');
-            boLE: Self.Emit(#9'setle %al');
-            boGE: Self.Emit(#9'setge %al');
-          end;
+          Unsigned := IsUnsignedInt(BE.Left.ResolvedType) or
+                      IsUnsignedInt(BE.Right.ResolvedType) or
+                      ((BE.Left.ResolvedType <> nil) and
+                       (BE.Left.ResolvedType.Kind in [tyPointer, tyClass,
+                          tyInterface, tyString, tyDynArray, tyProcedural]));
+          if Unsigned then
+            case BE.Op of
+              boEQ: Self.Emit(#9'sete %al');
+              boNE: Self.Emit(#9'setne %al');
+              boLT: Self.Emit(#9'setb %al');
+              boGT: Self.Emit(#9'seta %al');
+              boLE: Self.Emit(#9'setbe %al');
+              boGE: Self.Emit(#9'setae %al');
+            end
+          else
+            case BE.Op of
+              boEQ: Self.Emit(#9'sete %al');
+              boNE: Self.Emit(#9'setne %al');
+              boLT: Self.Emit(#9'setl %al');
+              boGT: Self.Emit(#9'setg %al');
+              boLE: Self.Emit(#9'setle %al');
+              boGE: Self.Emit(#9'setge %al');
+            end;
           Self.Emit(#9'movzbl %al, %eax');  { 0/1 in %rax (movzbl zero-extends) }
         end;
     else
@@ -8167,17 +8183,20 @@ begin
     BE  := TBinaryExpr(AExpr);
     if IsFloatFamily(BE.Left.ResolvedType) or IsFloatFamily(BE.Right.ResolvedType) then
     begin
-      IsS := (BE.Left.ResolvedType <> nil) and (BE.Left.ResolvedType.Kind = tySingle);
+      IsS := (BE.Left.ResolvedType <> nil) and (BE.Left.ResolvedType.Kind = tySingle) and
+             (BE.Right.ResolvedType <> nil) and (BE.Right.ResolvedType.Kind = tySingle);
       Self.EmitExprToXmm0(BE.Left);
+      Self.EmitXmm0WidthAdjust(BE.Left.ResolvedType, IsS);
       Self.Emit(#9'subq $8, %rsp');
       if IsS then Self.Emit(#9'movss %xmm0, (%rsp)')
       else        Self.Emit(#9'movsd %xmm0, (%rsp)');
       Self.EmitExprToXmm0(BE.Right);
+      Self.EmitXmm0WidthAdjust(BE.Right.ResolvedType, IsS);
       if IsS then
       begin
         Self.Emit(#9'movss (%rsp), %xmm1');
         Self.Emit(#9'addq $8, %rsp');
-        Self.Emit(#9'ucomiss %xmm0, %xmm1');  { compare left(%xmm1) vs right(%xmm0) }
+        Self.Emit(#9'ucomiss %xmm0, %xmm1');
       end
       else
       begin
