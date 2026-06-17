@@ -27,7 +27,7 @@
   When invoked by 'pasbuild test' no arguments are passed, so all
   registered tests run.
 
-  ARC: TTestCase instances created via ClassCreate are released at
+  ARC: TTestCase instances created via Cls.Create are released at
   loop-iteration end via the standard scope-based _ClassRelease the
   codegen emits for class-typed locals.  No explicit Free calls.
 }
@@ -434,7 +434,7 @@ begin
         if MethName = '' then Continue;
         if not MatchesFilters(AFilters, CName, MethName) then
           Continue;
-        Inst := ClassCreate(Cls, MethName);
+        Inst := Cls.Create(MethName);
         Inst.SetClassName(CName);
         Inst.Run(Result);
       end;
