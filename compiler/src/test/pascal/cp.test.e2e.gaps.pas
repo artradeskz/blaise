@@ -61,6 +61,10 @@ type
     { Named-type alias array const (GitHub #113) }
     procedure TestRun_NamedArrayAlias_IntConst;
 
+    { Static array return by value (GitHub #112) }
+    procedure TestRun_StaticArrayReturn_12Bytes;
+    procedure TestRun_StaticArrayReturn_16Bytes;
+
     { Multi-arg WriteLn }
     procedure TestRun_WriteLn_MultipleArgs_MixedTypes;
   end;
@@ -611,6 +615,52 @@ begin
 end;
 
 { ---- Multi-arg WriteLn ---- }
+
+procedure TE2EGapTests.TestRun_StaticArrayReturn_12Bytes;
+const
+  Src =
+    '''
+    program P;
+    type TVec3 = array[0..2] of Integer;
+    function MakeVec(A, B, C: Integer): TVec3;
+    begin
+      Result[0] := A;
+      Result[1] := B;
+      Result[2] := C
+    end;
+    var V: TVec3;
+    begin
+      V := MakeVec(10, 20, 30);
+      WriteLn(V[0]);
+      WriteLn(V[1]);
+      WriteLn(V[2])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '10' + Chr(10) + '20' + Chr(10) + '30' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_StaticArrayReturn_16Bytes;
+const
+  Src =
+    '''
+    program P;
+    type TPair = array[0..1] of Int64;
+    function MakePair(A, B: Int64): TPair;
+    begin
+      Result[0] := A;
+      Result[1] := B
+    end;
+    var P2: TPair;
+    begin
+      P2 := MakePair(111, 222);
+      WriteLn(P2[0]);
+      WriteLn(P2[1])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '111' + Chr(10) + '222' + Chr(10), 0);
+end;
 
 procedure TE2EGapTests.TestRun_WriteLn_MultipleArgs_MixedTypes;
 const Src = '''

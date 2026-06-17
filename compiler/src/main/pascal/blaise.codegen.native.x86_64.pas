@@ -3547,6 +3547,11 @@ begin
       FSretFunc := True;
       Self.AddSlot('Result', nil, Offset);
     end
+    else if ADecl.ResolvedReturnType.Kind = tyStaticArray then
+    begin
+      FSretFunc := True;
+      Self.AddSlot('Result', nil, Offset);
+    end
     else if ADecl.ResolvedReturnType.Kind = tyRecord then
     begin
       FRecRetClass := ClassifyRecordReturn(
@@ -9610,11 +9615,13 @@ begin
       record/jumbo-set-returning call.  Pass the destination buffer address as
       the hidden first arg (%rdi). }
     if (Asgn.ResolvedLhsType <> nil) and
-       ((Asgn.ResolvedLhsType.Kind = tyRecord) or IsJumboSet(Asgn.ResolvedLhsType)) and
+       ((Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) or
+        IsJumboSet(Asgn.ResolvedLhsType)) and
        (Asgn.Expr is TFuncCallExpr) and
        (TFuncCallExpr(Asgn.Expr).ResolvedDecl <> nil) and
        (TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType <> nil) and
-       ((TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) or
+       ((TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType.Kind in
+          [tyRecord, tyStaticArray]) or
         IsJumboSet(TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType)) then
     begin
       { For a local jumbo set the dest is leaq'd; EmitSretCall's caller passes
@@ -9651,11 +9658,13 @@ begin
     { sret assignment: method call returning a record (or jumbo set).
       %rdi = sret ptr, %rsi = Self, %rdx.. = user args. }
     if (Asgn.ResolvedLhsType <> nil) and
-       ((Asgn.ResolvedLhsType.Kind = tyRecord) or IsJumboSet(Asgn.ResolvedLhsType)) and
+       ((Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) or
+        IsJumboSet(Asgn.ResolvedLhsType)) and
        (Asgn.Expr is TMethodCallExpr) and
        (TMethodCallExpr(Asgn.Expr).ResolvedMethod <> nil) and
        (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType <> nil) and
-       ((TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) or
+       ((TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind in
+          [tyRecord, tyStaticArray]) or
         IsJumboSet(TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType)) then
     begin
       if FSretFunc and SameText(Asgn.Name, 'Result') then
@@ -11480,8 +11489,8 @@ begin
         if SSA.ImplicitFieldInfo.Offset > 0 then
           Self.Emit(Format(#9'addq $%d, %%rcx', [SSA.ImplicitFieldInfo.Offset]));
       end
-      else if SSA.IsVarParam then
-        { var/out param: the slot HOLDS the caller array's address. }
+      else if SSA.IsVarParam or
+              (FSretFunc and SameText(SSA.ArrayName, 'Result')) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
       else if Self.IsLocal(SSA.ArrayName) then
         Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
@@ -11536,8 +11545,8 @@ begin
       if SSA.ImplicitFieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rcx', [SSA.ImplicitFieldInfo.Offset]));
     end
-    else if SSA.IsVarParam then
-      { var/out param: the slot HOLDS the caller array's address. }
+    else if SSA.IsVarParam or
+            (FSretFunc and SameText(SSA.ArrayName, 'Result')) then
       Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
     else if Self.IsLocal(SSA.ArrayName) then
       Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
@@ -13930,9 +13939,10 @@ begin
   if (ADecl.ResolvedReturnType <> nil) and
      not IsIntFamily(ADecl.ResolvedReturnType) and
      not IsFloatFamily(ADecl.ResolvedReturnType) and
-     not (ADecl.ResolvedReturnType.Kind in [tyRecord, tyString, tyPChar, tyPointer,
-                                          tyClass, tyMetaClass, tyDynArray,
-                                          tyInterface, tyProcedural, tySet]) then
+     not (ADecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray, tyString,
+                                          tyPChar, tyPointer, tyClass, tyMetaClass,
+                                          tyDynArray, tyInterface, tyProcedural,
+                                          tySet]) then
     raise ENativeCodeGenError.Create(
       'native backend: unsupported return type (function ' + ADecl.Name + ')');
 

@@ -4250,15 +4250,17 @@ begin
        TSetTypeDesc(AAssign.ResolvedLhsType).RawSize()]));
   end
   else if (AAssign.ResolvedLhsType <> nil) and
+          (AAssign.ResolvedLhsType.Kind = tyStaticArray) and
+          IsRecordCall(AAssign.Expr) then
+  begin
+    EmitRecordCallSret(AAssign.Expr, VarRef(AAssign.Name, AAssign.IsGlobal));
+  end
+  else if (AAssign.ResolvedLhsType <> nil) and
           (AAssign.ResolvedLhsType.Kind = tyRecord) then
   begin
-    { Record assignment (non-var-param LHS — the var/out case is handled in the
-      IsVarParam branch above): use sret (directly into dest) or field-by-field
-      copy. }
     ClassRT := TRecordTypeDesc(AAssign.ResolvedLhsType);
     if IsRecordCall(AAssign.Expr) then
     begin
-      { Release old ARC fields, zero the slot, then call function with dest as sret }
       EmitRecordReleaseFields(ClassRT, VarRef(AAssign.Name, AAssign.IsGlobal));
       EmitLine(Format('  call $memset(l %s, w 0, l %d)',
         [VarRef(AAssign.Name, AAssign.IsGlobal), ClassRT.TotalSize()]));
@@ -4266,7 +4268,6 @@ begin
     end
     else
     begin
-      { RHS is a record variable: get its address then ARC-copy field-by-field }
       ValTemp := EmitExpr(AAssign.Expr);
       EmitRecordCopy(ClassRT, VarRef(AAssign.Name, AAssign.IsGlobal), ValTemp);
     end;
@@ -4857,14 +4858,14 @@ begin
     if TFuncCallExpr(AExpr).ResolvedDecl = nil then Exit;
     MDecl := TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl);
     Result := (MDecl.ResolvedReturnType <> nil) and
-              (MDecl.ResolvedReturnType.Kind = tyRecord);
+              (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
   end
   else if AExpr is TMethodCallExpr then
   begin
     if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
     MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
     Result := (MDecl.ResolvedReturnType <> nil) and
-              (MDecl.ResolvedReturnType.Kind = tyRecord);
+              (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
   end
   else if AExpr is TFieldAccessExpr then
   begin
@@ -4873,7 +4874,7 @@ begin
     if FldA.ResolvedMethod = nil then Exit;
     MDecl := TMethodDecl(FldA.ResolvedMethod);
     Result := (MDecl.ResolvedReturnType <> nil) and
-              (MDecl.ResolvedReturnType.Kind = tyRecord);
+              (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
   end;
 end;
 
@@ -5309,7 +5310,8 @@ begin
   { Jumbo set returns always use the plain sret path (a hidden dest pointer +
     void return); they share this call helper with records but must not go
     through ClassifyRecordReturn (which reads record-specific size fields). }
-  if (ARetType <> nil) and (TTypeDesc(ARetType).Kind = tySet) then
+  if (ARetType <> nil) and
+     (TTypeDesc(ARetType).Kind in [tySet, tyStaticArray]) then
   begin
     if AVisibleArgs <> '' then
       ArgLine := Format('l %s, %s', [ADestAddr, AVisibleArgs])
@@ -7016,7 +7018,7 @@ begin
     RC := Self.ClassifyRecordReturn(TRecordTypeDesc(AMethod.ResolvedReturnType));
 
   Sig := 'l %_par_Self';
-  if IsFunc and ((AMethod.ResolvedReturnType.Kind = tyInterface) or
+  if IsFunc and ((AMethod.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
      ((AMethod.ResolvedReturnType.Kind = tySet) and
       TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo())) then
     Sig := 'l %_par__sret, l %_par_Self'
@@ -7046,10 +7048,9 @@ begin
   if IsFunc then
   begin
     RetQType := QbeTypeOf(AMethod.ResolvedReturnType);
-    if (AMethod.ResolvedReturnType.Kind = tyInterface) or
+    if (AMethod.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
        ((AMethod.ResolvedReturnType.Kind = tySet) and
         TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo()) then
-      { sret aggregate return — void function. }
       EmitLine(Format('%sfunction %s(%s) {', [ExportPrefix(), FuncName, Sig]))
     else if AMethod.ResolvedReturnType.Kind = tyRecord then
     begin
@@ -7116,10 +7117,15 @@ begin
   begin
     if AMethod.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnPrologue(TRecordTypeDesc(AMethod.ResolvedReturnType), RC)
+    else if AMethod.ResolvedReturnType.Kind = tyStaticArray then
+    begin
+      EmitLine('  %_var_Result =l copy %_par__sret');
+      EmitLine(Format('  call $memset(l %%_var_Result, w 0, l %d)',
+        [AMethod.ResolvedReturnType.ByteSize()]));
+    end
     else if (AMethod.ResolvedReturnType.Kind = tySet) and
             TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo() then
     begin
-      { sret: jumbo-set Result aliases the caller's buffer; zero-init it. }
       EmitLine('  %_var_Result =l copy %_par__sret');
       EmitLine(Format('  call $memset(l %%_var_Result, w 0, l %d)',
         [TSetTypeDesc(AMethod.ResolvedReturnType).RawSize()]));
@@ -7200,10 +7206,9 @@ begin
   begin
     if AMethod.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnEpilogue(TRecordTypeDesc(AMethod.ResolvedReturnType), RC)
-    else if (AMethod.ResolvedReturnType.Kind = tyInterface) or
+    else if (AMethod.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
             ((AMethod.ResolvedReturnType.Kind = tySet) and
              TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo()) then
-      { sret aggregate return — written through %_par__sret; return void. }
       EmitLine('  ret')
     else
     begin
@@ -7965,12 +7970,12 @@ begin
   if IsFunc then
   begin
     RetQType := QbeTypeOf(ADecl.ResolvedReturnType);
-    if (ADecl.ResolvedReturnType.Kind = tyInterface) or
+    if (ADecl.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
        ((ADecl.ResolvedReturnType.Kind = tySet) and
         TSetTypeDesc(ADecl.ResolvedReturnType).IsJumbo()) then
     begin
-      { Interface and jumbo-set returns use a hidden sret pointer (the callee
-        writes the aggregate through it) and return void. }
+      { Interface, static-array, and jumbo-set returns use a hidden sret
+        pointer (the callee writes the aggregate through it) and return void. }
       if Sig <> '' then Sig := 'l %_par__sret, ' + Sig
       else Sig := 'l %_par__sret';
       EmitLine(Format('%sfunction %s(%s) {', [Prefix, FuncName, Sig]));
@@ -8124,6 +8129,12 @@ begin
   begin
     if ADecl.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnPrologue(TRecordTypeDesc(ADecl.ResolvedReturnType), RC)
+    else if ADecl.ResolvedReturnType.Kind = tyStaticArray then
+    begin
+      EmitLine('  %_var_Result =l copy %_par__sret');
+      EmitLine(Format('  call $memset(l %%_var_Result, w 0, l %d)',
+        [ADecl.ResolvedReturnType.ByteSize()]));
+    end
     else if (ADecl.ResolvedReturnType.Kind = tySet) and
             TSetTypeDesc(ADecl.ResolvedReturnType).IsJumbo() then
     begin
@@ -8216,10 +8227,9 @@ begin
   begin
     if ADecl.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnEpilogue(TRecordTypeDesc(ADecl.ResolvedReturnType), RC)
-    else if (ADecl.ResolvedReturnType.Kind = tyInterface) or
+    else if (ADecl.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
             ((ADecl.ResolvedReturnType.Kind = tySet) and
              TSetTypeDesc(ADecl.ResolvedReturnType).IsJumbo()) then
-      { sret: the aggregate was written through %_par__sret — return void. }
       EmitLine('  ret')
     else
     begin

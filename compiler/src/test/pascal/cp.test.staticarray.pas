@@ -95,6 +95,12 @@ type
     procedure TestCodegen_MultiDim_CommaWrite_EmitsRowOffset;
     procedure TestCodegen_MultiDim_ChainedWrite_SameAsComma;
     procedure TestCodegen_MultiDim_CommaRead_NestedSubscript;
+
+    { ------------------------------------------------------------------ }
+    { Function returning static array by value (issue #112)              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_ReturnStaticArray_SretParam;
+    procedure TestCodegen_ReturnStaticArray_VoidReturn;
   end;
 
 implementation
@@ -845,6 +851,37 @@ begin
     element off base + row offset + col offset). }
   IR := GenIR(SrcMultiDimRead);
   AssertTrue('emits a word load for the element', Pos('loadw', IR) >= 0);
+end;
+
+const
+  SrcArrayReturn =
+    '''
+    program P;
+    type TVec3 = array[0..2] of Integer;
+    function MakeVec(A, B, C: Integer): TVec3;
+    begin
+      Result[0] := A;
+      Result[1] := B;
+      Result[2] := C
+    end;
+    var V: TVec3;
+    begin
+      V := MakeVec(1, 2, 3)
+    end.
+    ''';
+
+procedure TStaticArrayTests.TestCodegen_ReturnStaticArray_SretParam;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayReturn);
+  AssertTrue('sret hidden param', Pos('_par__sret', IR) >= 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_ReturnStaticArray_VoidReturn;
+var IR: string;
+begin
+  IR := GenIR(SrcArrayReturn);
+  AssertTrue('void return', Pos('ret', IR) >= 0);
 end;
 
 initialization
