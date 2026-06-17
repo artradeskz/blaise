@@ -98,6 +98,12 @@ type
 
 implementation
 
+{ Print the "tests skipped" note at most once per suite run, so a CI
+  environment that lacks the QBE compiler binary surfaces the skip loudly
+  instead of silently reporting green with ~12 ignored tests. }
+var
+  GInternalAsmSkipNoted: Boolean = False;
+
 { ---- TAsmEncodingTests ---- }
 
 function TAsmEncodingTests.ContainsBytes(const ABuf, APat: string): Boolean;
@@ -553,6 +559,13 @@ end;
 function TInternalAsmE2ETests.CompilerAvailable: Boolean;
 begin
   Result := FileExists(FCompiler) and FileExists(FRTL);
+  if (not Result) and (not GInternalAsmSkipNoted) then
+  begin
+    GInternalAsmSkipNoted := True;
+    WriteLn(StdErr, 'note: TInternalAsmE2ETests skipped — compiler binary "',
+            FCompiler, '" or RTL "', FRTL, '" not found ',
+            '(set BLAISE_QBE_COMPILER to a QBE-backend blaise binary to run them)');
+  end;
 end;
 
 function TInternalAsmE2ETests.RunProc(const AExe: string;

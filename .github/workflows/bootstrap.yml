@@ -214,7 +214,11 @@ jobs:
           set -euo pipefail
           BLAISE="${{ steps.pre.outputs.bin }}"
           pasbuild test-compile -m blaise-compiler --compiler "$BLAISE"
-          compiler/target/TestRunner
+          # Point the CLI-contract and internal-assembler suites at the
+          # bootstrapped -pre binary.  Without this they fall back to the
+          # /tmp/fp_blaise* fixpoint binaries (which only exist after a local
+          # fixpoint.sh run) and silently Ignore ~24 tests in CI.
+          BLAISE_QBE_COMPILER="$BLAISE" compiler/target/TestRunner
 
       # --------------------------------------------------------------------
       # 9. Save the carry-forward cache for the next run: the -pre binary, its
