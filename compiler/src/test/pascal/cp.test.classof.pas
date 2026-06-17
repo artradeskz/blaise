@@ -50,6 +50,12 @@ type
     procedure TestSemantic_ClassCreate_RejectsNonMetaclassFirstArg;
     procedure TestCodegen_ClassCreate_EmitsAllocAndCtorCall;
     procedure TestCodegen_ClassCreate_NoCtor_OnlyAllocCalled;
+
+    { Metaclass-var dispatch: C.Create() emits _ClassCreate + indirect
+      ctor call via vtable, not a static call to the base Create. }
+    procedure TestSemantic_MetaclassVar_Create_Accepted;
+    procedure TestCodegen_MetaclassVar_Create_IndirectCtor;
+    procedure TestCodegen_MetaclassVar_Create_NoCtor_NoIndirectCall;
   end;
 
 implementation
@@ -454,8 +460,8 @@ var IR: string;
 begin
   IR := GenIR(Src);
   AssertTrue('emits call to $_ClassCreate', Pos('call $_ClassCreate(', IR) > 0);
-  AssertTrue('emits static call to TFoo_Create after alloc',
-    Pos('call $TFoo_Create(', IR) > 0);
+  AssertTrue('emits indirect ctor call via vtable (no static TFoo_Create call)',
+    Pos('call $TFoo_Create(', IR) < 0);
 end;
 
 procedure TClassOfTests.TestCodegen_ClassCreate_NoCtor_OnlyAllocCalled;
@@ -475,6 +481,70 @@ begin
   IR := GenIR(Src);
   AssertTrue('emits call to $_ClassCreate', Pos('call $_ClassCreate(', IR) > 0);
   AssertTrue('no constructor call emitted when class declares none',
+    Pos('TFoo_Create', IR) < 0);
+end;
+
+{ ---------- Metaclass-var C.Create() dispatch tests ---------- }
+
+procedure TClassOfTests.TestSemantic_MetaclassVar_Create_Accepted;
+const Src = '''
+    program P;
+    type
+      TFoo = class(TObject)
+        constructor Create;
+      end;
+    constructor TFoo.Create; begin end;
+    var C: class of TFoo; F: TFoo;
+    begin
+      C := TFoo;
+      F := C.Create()
+    end.
+    ''';
+begin
+  AnalyseSrc(Src);
+end;
+
+procedure TClassOfTests.TestCodegen_MetaclassVar_Create_IndirectCtor;
+const Src = '''
+    program P;
+    type
+      TFoo = class(TObject)
+        constructor Create;
+      end;
+    constructor TFoo.Create; begin end;
+    var C: class of TFoo; F: TFoo;
+    begin
+      C := TFoo;
+      F := C.Create()
+    end.
+    ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('emits _ClassCreate for runtime alloc',
+    Pos('call $_ClassCreate(', IR) > 0);
+  AssertTrue('emits indirect ctor call via vtable (loadl from vtable slot)',
+    Pos('loadl', IR) > 0);
+  AssertTrue('does NOT emit a static TFoo_Create call',
+    Pos('call $TFoo_Create(', IR) < 0);
+end;
+
+procedure TClassOfTests.TestCodegen_MetaclassVar_Create_NoCtor_NoIndirectCall;
+const Src = '''
+    program P;
+    type TFoo = class(TObject) end;
+    var C: class of TFoo; F: TFoo;
+    begin
+      C := TFoo;
+      F := C.Create()
+    end.
+    ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('emits _ClassCreate for runtime alloc',
+    Pos('call $_ClassCreate(', IR) > 0);
+  AssertTrue('no ctor call when class declares no Create',
     Pos('TFoo_Create', IR) < 0);
 end;
 

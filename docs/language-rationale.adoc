@@ -2198,7 +2198,8 @@ if A.ClassType = EError then …            // identity match
 
 The compiler exposes a built-in function `ClassCreate(Cls, ...args)` that
 allocates an instance of the class denoted by `Cls` (a value of type `class
-of T`) and invokes the resolved constructor on that class's `BaseClass`.
+of T`) and dispatches the constructor body via vtable, so the most-derived
+override runs.
 
 [source,pascal]
 ----
@@ -2207,7 +2208,7 @@ var
   Inst: TTestCase;
 begin
   Cls  := TFooTests;                       // metaclass = typeinfo pointer
-  Inst := ClassCreate(Cls, 'TestSomething'); // calls TTestCase.Create(string)
+  Inst := ClassCreate(Cls, 'TestSomething'); // vtable dispatch → TFooTests.Create
 end;
 ----
 
@@ -2215,6 +2216,9 @@ The first argument is required and must be of type `tyMetaClass`.  Any
 remaining arguments are passed to the constructor on `Cls.BaseClass`.
 The result type is `Cls.BaseClass`, so the call expression assigns
 cleanly to a variable of the base class type.
+
+`ClassCreate` is the lower-level primitive; for most code the
+`MetaclassVar.Create(args)` syntax (see next section) is preferred.
 
 === Rationale
 
@@ -2226,10 +2230,11 @@ the concrete TotalSize, vtable label, and field-cleanup label into the
 emitted IR, all of which must come from the runtime class value.
 
 The split design — a generic RTL helper `_ClassCreate(TInfo)` that
-allocates and installs the vtable, plus a static call to the
-constructor — avoids stuffing every constructor signature through the
-RTL.  The helper reads the three additional typeinfo slots (totalsize,
-fieldcleanup, vtable) added in Step 11e for exactly this purpose.
+allocates and installs the vtable, plus a vtable-indirect call to the
+constructor body — dispatches to the most-derived constructor without
+the caller knowing the concrete class.  The helper reads the three
+additional typeinfo slots (totalsize, fieldcleanup, vtable) added in
+Step 11e for exactly this purpose.
 
 The constructor lookup is by name (`Create`).  Overload resolution on
 the constructor signature is not yet implemented; in practice the only
@@ -2245,17 +2250,88 @@ ClassCreate surface.
   `RegisterTest` call site, polluting the cp.test.* migration
   mechanically required by Step 11f.  The runtime construction path
   exists either way; this just moves where the boilerplate lives.
-* *Make `metaclassVar.Create(args)` a special method-call shape in the
-  parser.*  Requires the metaclass to know its own constructor symbol
-  table, which doesn't fit the current `class of T` lowering (a value
-  of `class of T` is just a typeinfo pointer; the constructor symbols
-  belong to T, not to the metaclass type).  A dedicated builtin is
-  honest about what's actually a runtime dispatch.
-* *Add a new vtable slot for the constructor and dispatch through
-  it.*  Constructors in Blaise are not virtual; introducing a virtual
-  constructor would break the static `TFoo.Create` codegen invariant.
-  Keeping ClassCreate as a separate path leaves the existing
-  constructor lowering untouched.
+
+---
+
+== Implicit-Virtual Constructor Dispatch via Metaclass
+
+=== Decision
+
+When a constructor is called through a metaclass-typed variable
+(`C.Create(args)` where `C: class of TBase`), the compiler emits
+runtime vtable dispatch so the most-derived constructor body runs.
+Direct calls (`TFoo.Create(args)` where `TFoo` is a concrete type
+name) remain fully static.
+
+Constructors are auto-slotted into the vtable by the semantic pass.
+A constructor name that matches an ancestor's constructor overrides
+the ancestor's vtable slot; new constructor names get a fresh slot.
+No `virtual` or `override` keywords are required on constructors —
+the dispatch is implicit and transparent.
+
+[source,pascal]
+----
+type
+  TAnimal = class(TObject)
+    constructor Create;
+  end;
+  TDog = class(TAnimal)
+    constructor Create;             // implicitly overrides TAnimal.Create's vtable slot
+  end;
+var
+  C: class of TAnimal;
+begin
+  C := TDog;
+  C.Create();                       // dispatches to TDog.Create via vtable
+  TAnimal.Create();                 // static call to TAnimal.Create (no dispatch)
+end;
+----
+
+The lowering is:
+
+1. `_ClassCreate(C)` — reads totalsize, fieldcleanup, and vtable from the
+   typeinfo pointer `C`; allocates and zeroes the instance; installs the
+   vtable; calls `_ClassAddRef`.
+2. Load the vtable pointer from the new instance (`[instance+0]`), index
+   into the constructor's slot, and call indirectly.
+
+Both the `C.Create(args)` syntax and `ClassCreate(C, args)` use this path.
+
+=== Rationale
+
+The xUnit test runner instantiates fixtures through `class of TTestCase`
+and must run the derived class's constructor, not the base.  Without
+virtual dispatch, `ClassCreate` called the base constructor statically —
+a derived class with initialisation in its own `Create` would silently
+skip it.
+
+Making constructors implicitly virtual only through metaclass-typed
+receivers preserves the zero-overhead guarantee for direct
+`TFoo.Create` calls (the overwhelming majority) while giving metaclass
+dispatch the polymorphic behaviour users expect.  Requiring explicit
+`virtual`/`override` on constructors was considered and rejected: it
+would force boilerplate on every class in the hierarchy, and the mental
+model of "metaclass dispatch = polymorphic" is intuitive without it.
+
+The vtable slot is assigned by constructor name (same name = same slot,
+new name = new slot), matching the existing virtual-method slot
+assignment algorithm.
+
+=== Alternatives rejected
+
+* *Require `virtual`/`override` on constructors.* Imposes annotation
+  burden on every class for a behaviour that only manifests through
+  metaclass dispatch.  Direct `TFoo.Create` does not benefit from the
+  annotation.  The implicit model is simpler and matches Delphi's
+  `virtual constructor` behaviour without the keyword noise.
+* *Dispatch constructors through a separate RTTI table instead of the
+  vtable.*  Adds a parallel lookup mechanism that must be kept in sync.
+  Constructors are regular methods with a `Self` parameter; the vtable
+  is the natural dispatch vector.
+* *Keep constructors static even through metaclass dispatch.*  This was
+  the original `ClassCreate` implementation.  It fails the test-runner
+  use case: the derived fixture's constructor never runs, so the test
+  fixture is uninitialised.
 
 ---
 

@@ -536,6 +536,8 @@ type
     IsGlobal:           Boolean;     { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;     { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:  Boolean;     { set by uSemantic — built-in TObject.ToString virtual dispatch }
+    IsConstructorCall:  Boolean;     { set by uSemantic — metaclass-var Create in stmt position }
+    IsMetaclassDispatch: Boolean;    { set by uSemantic — receiver is a metaclass var }
     IsProcFieldCall:    Boolean;     { set by uSemantic — Name is a procedural-typed field of
                                        the receiver, invoked directly (F.Handler;).  Codegen
                                        loads the (Code, Data) pair from the field slot and
@@ -833,6 +835,7 @@ type
     [Unretained] ResolvedClassType:  TTypeDesc;   { not owned; set by uSemantic }
     [Unretained] ResolvedMethod:     TObject;     { TMethodDecl — not owned }
     IsConstructorCall:  Boolean;    { set by uSemantic — TypeName.Create(args) }
+    IsMetaclassDispatch: Boolean;  { set by uSemantic — receiver is a metaclass var }
     IsGlobal:           Boolean;    { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;    { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:    Boolean;  { set by uSemantic — built-in TObject.ToString virtual dispatch }

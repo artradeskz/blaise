@@ -1004,8 +1004,8 @@ ArrayLiteral
  *   ClassCreate  ( Cls, ...args ) : Cls.BaseClass
  *                              — runtime construction from a metaclass
  *                                value; lowers to _ClassCreate(Cls)
- *                                followed by a static call to the
- *                                resolved constructor on Cls.BaseClass.
+ *                                followed by a vtable-indirect call to
+ *                                the constructor on Cls.BaseClass.
  *   Low  ( Ordinal | Array | String ) : T  — for ordinal type/expression
  *                                             returns lower bound of T;
  *                                             0 for open/dynamic arrays and
@@ -1061,6 +1061,9 @@ ArrayLiteral
  *
  * IDENT DOT IDENT in Factor:
  *   - Left IDENT resolves to a type symbol → constructor call (TypeName.Create)
+ *   - Left IDENT resolves to a metaclass variable and right IDENT is a
+ *     constructor name → metaclass constructor dispatch (_ClassCreate +
+ *     vtable-indirect call to the most-derived Create body)
  *   - Left IDENT resolves to a class variable → class field read
  *   - Left IDENT resolves to a record variable → record field read
  *

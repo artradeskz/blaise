@@ -5385,9 +5385,17 @@ begin
         for SetI := FC.Args.Count - 1 downto 1 do
           Self.Emit(Format(#9'popq %s', [SysVArg64(SetI)]));
         Self.Emit(#9'movq %rbx, %rdi');
-        Self.Emit(Format(#9'callq %s',
-          [MethodEmitNameNative(TMethodDecl(FC.ResolvedDecl),
-            TMethodDecl(FC.ResolvedDecl).OwnerTypeName, 'Create')]));
+        if TMethodDecl(FC.ResolvedDecl).VTableSlot >= 0 then
+        begin
+          Self.Emit(#9'movq (%rdi), %rax');
+          Self.Emit(Format(#9'movq %d(%%rax), %%rax',
+            [(TMethodDecl(FC.ResolvedDecl).VTableSlot + 1) * 8]));
+          Self.Emit(#9'callq *%rax');
+        end
+        else
+          Self.Emit(Format(#9'callq %s',
+            [MethodEmitNameNative(TMethodDecl(FC.ResolvedDecl),
+              TMethodDecl(FC.ResolvedDecl).OwnerTypeName, 'Create')]));
         Self.Emit(#9'movq %rbx, %rax');
         Self.Emit(#9'popq %rbx');
       end
@@ -5396,9 +5404,17 @@ begin
         Self.Emit(#9'pushq %rbx');
         Self.Emit(#9'movq %rax, %rbx');
         Self.Emit(#9'movq %rax, %rdi');
-        Self.Emit(Format(#9'callq %s',
-          [MethodEmitNameNative(TMethodDecl(FC.ResolvedDecl),
-            TMethodDecl(FC.ResolvedDecl).OwnerTypeName, 'Create')]));
+        if TMethodDecl(FC.ResolvedDecl).VTableSlot >= 0 then
+        begin
+          Self.Emit(#9'movq (%rdi), %rax');
+          Self.Emit(Format(#9'movq %d(%%rax), %%rax',
+            [(TMethodDecl(FC.ResolvedDecl).VTableSlot + 1) * 8]));
+          Self.Emit(#9'callq *%rax');
+        end
+        else
+          Self.Emit(Format(#9'callq %s',
+            [MethodEmitNameNative(TMethodDecl(FC.ResolvedDecl),
+              TMethodDecl(FC.ResolvedDecl).OwnerTypeName, 'Create')]));
         Self.Emit(#9'movq %rbx, %rax');
         Self.Emit(#9'popq %rbx');
       end;
@@ -7329,13 +7345,21 @@ begin
   if ACall.IsConstructorCall then
   begin
     RT := TRecordTypeDesc(ACall.ResolvedClassType);
-    Self.Emit(Format(#9'movq $%d, %%rdi', [RT.TotalSize()]));
-    Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi', [Self.ClassSymName(RT.Name)]));
-    Self.Emit(#9'callq _ClassAlloc');
-    if RT.HasVTable() then
+    if ACall.IsMetaclassDispatch then
     begin
-      Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx', [Self.ClassSymName(RT.Name)]));
-      Self.Emit(#9'movq %rcx, (%rax)');
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(ACall.ObjectName)]));
+      Self.Emit(#9'callq _ClassCreate');
+    end
+    else
+    begin
+      Self.Emit(Format(#9'movq $%d, %%rdi', [RT.TotalSize()]));
+      Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi', [Self.ClassSymName(RT.Name)]));
+      Self.Emit(#9'callq _ClassAlloc');
+      if RT.HasVTable() then
+      begin
+        Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx', [Self.ClassSymName(RT.Name)]));
+        Self.Emit(#9'movq %rcx, (%rax)');
+      end;
     end;
     if FDebugMode then
     begin
@@ -7370,7 +7394,14 @@ begin
         for I := UserSlots - 1 downto 0 do
           Self.Emit(#9'popq ' + SysVArg64(I + 1));
         Self.Emit(#9'movq %rbx, %rdi');
-        Self.Emit(#9'callq ' + Sym);
+        if ACall.IsMetaclassDispatch and (MD.VTableSlot >= 0) then
+        begin
+          Self.Emit(#9'movq (%rdi), %rax');
+          Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+          Self.Emit(#9'callq *%rax');
+        end
+        else
+          Self.Emit(#9'callq ' + Sym);
         Self.EndCallArgs();
         Self.Emit(#9'movq %rbx, %rax');
         Self.Emit(#9'popq %rbx');
@@ -7406,7 +7437,14 @@ begin
         for I := 0 to 5 do
           Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArg64(I)]));
         Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
-        Self.Emit(#9'callq ' + Sym);
+        if ACall.IsMetaclassDispatch and (MD.VTableSlot >= 0) then
+        begin
+          Self.Emit(#9'movq (%rdi), %rax');
+          Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+          Self.Emit(#9'callq *%rax');
+        end
+        else
+          Self.Emit(#9'callq ' + Sym);
         Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
         HD.Free();
         HK.Free();

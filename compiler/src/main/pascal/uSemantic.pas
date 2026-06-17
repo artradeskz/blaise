@@ -2465,7 +2465,17 @@ begin
       else if NewMDecl.IsOverride then
         RT.OverrideVTableSlot(
           RT.FindVTableSlot(NewMDecl.Name),
-          '$' + CurrentUnitPrefix() + ATypeName + '_' + NewMDecl.Name);
+          '$' + CurrentUnitPrefix() + ATypeName + '_' + NewMDecl.Name)
+      else if (SameText(NewMDecl.Name, 'Create') or
+               (StrPos('Create', NewMDecl.Name) = 0)) and
+              (not NewMDecl.IsVirtual) and (not NewMDecl.IsOverride) then
+      begin
+        if RT.FindVTableSlot(NewMDecl.Name) >= 0 then
+          RT.OverrideVTableSlot(RT.FindVTableSlot(NewMDecl.Name),
+            '$' + CurrentUnitPrefix() + ATypeName + '_' + NewMDecl.Name)
+        else
+          RT.AddVTableSlot(NewMDecl.Name, '$' + CurrentUnitPrefix() + ATypeName + '_' + NewMDecl.Name);
+      end;
     end;
 
     { Resolve fields }
@@ -2513,7 +2523,8 @@ begin
           RT.DestroyResolvedQbeName := NewMDecl.ResolvedQbeName;
       end;
 
-      if NewMDecl.IsVirtual or NewMDecl.IsOverride then
+      if NewMDecl.IsVirtual or NewMDecl.IsOverride or
+         (SameText(NewMDecl.Name, 'Create') or (StrPos('Create', NewMDecl.Name) = 0)) then
         NewMDecl.VTableSlot := RT.FindVTableSlot(NewMDecl.Name);
 
       for K := 0 to NewMDecl.Params.Count - 1 do
@@ -4317,6 +4328,16 @@ begin
             { Override clears the abstract flag on the inherited slot }
             if Slot >= 0 then
               RT.VTableEntryAt(Slot).IsAbstract := False;
+          end
+          else if (SameText(MDecl.Name, 'Create') or
+                   (StrPos('Create', MDecl.Name) = 0)) and
+                  (not MDecl.IsVirtual) and (not MDecl.IsOverride) then
+          begin
+            Slot := RT.FindVTableSlot(MangledKey);
+            if Slot >= 0 then
+              RT.OverrideVTableSlot(Slot, '$' + CurrentUnitPrefix() + TD.Name + '_' + MangledKey)
+            else
+              RT.AddVTableSlot(MangledKey, '$' + CurrentUnitPrefix() + TD.Name + '_' + MangledKey);
           end;
         end;
     end;
@@ -4425,8 +4446,10 @@ begin
             RT.DestroyResolvedQbeName := MDecl.ResolvedQbeName;
         end;
 
-        { Retrieve the vtable slot assigned in the pre-pass above. }
-        if MDecl.IsVirtual or MDecl.IsOverride then
+        { Retrieve the vtable slot assigned in the pre-pass above.
+          Constructors get implicit vtable slots (metaclass dispatch). }
+        if MDecl.IsVirtual or MDecl.IsOverride or
+           (SameText(MDecl.Name, 'Create') or (StrPos('Create', MDecl.Name) = 0)) then
         begin
           MDecl.VTableSlot := RT.FindVTableSlot(MangledKey);
           if MDecl.IsOverride and (MDecl.VTableSlot < 0) then
@@ -6451,6 +6474,26 @@ begin
     SemanticError(
       Format('''%s'' is not a variable', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
+  { Metaclass-var constructor dispatch in statement position. }
+  if (ObjSym.TypeDesc.Kind = tyMetaClass) and
+     (SameText(ACall.Name, 'Create') or (StrPos('Create', ACall.Name) = 0)) then
+  begin
+    RT := TRecordTypeDesc(TMetaClassTypeDesc(ObjSym.TypeDesc).BaseClass);
+    for I := 0 to ACall.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+    MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
+      ACall.Line, ACall.Col);
+    if MDecl = nil then
+      MDecl := FindMethodDecl(RT.Name, ACall.Name);
+    ACall.ResolvedClassType   := RT;
+    ACall.ResolvedMethod      := MDecl;
+    ACall.IsConstructorCall   := True;
+    ACall.IsMetaclassDispatch := True;
+    ACall.IsGlobal            := ObjSym.IsGlobal;
+    ACall.IsVarParam          := (ObjSym.Kind = skVarParameter);
+    Exit;
+  end;
+
   if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface, tyRecord]) then
     SemanticError(
       Format('''%s'' is not a class, interface, or record variable', [ACall.ObjectName]),
@@ -9060,6 +9103,30 @@ begin
     Result := FTable.TypeBoolean;
     AExpr.ResolvedType := Result;
     Exit;
+  end;
+
+  { Metaclass-var constructor dispatch: C.Create(args) where C is a
+    metaclass variable.  Resolve against the BaseClass and flag for
+    indirect ctor dispatch via vtable at codegen time. }
+  if (ObjSym.TypeDesc.Kind = tyMetaClass) and
+     (SameText(AExpr.Name, 'Create') or (StrPos('Create', AExpr.Name) = 0)) then
+  begin
+    RT := TRecordTypeDesc(TMetaClassTypeDesc(ObjSym.TypeDesc).BaseClass);
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+    MDecl := ResolveMethodOverload(RT.Name, AExpr.Name,
+      AExpr.Args, AExpr.Line, AExpr.Col);
+    if MDecl = nil then
+      MDecl := FindMethodDecl(RT.Name, AExpr.Name);
+    if MDecl <> nil then
+      AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
+    AExpr.ResolvedMethod      := MDecl;
+    AExpr.ResolvedClassType   := RT;
+    AExpr.IsConstructorCall   := True;
+    AExpr.IsMetaclassDispatch := True;
+    AExpr.IsGlobal            := ObjSym.IsGlobal;
+    AExpr.IsVarParam          := (ObjSym.Kind = skVarParameter);
+    Exit(RT);
   end;
 
   if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface, tyRecord]) then

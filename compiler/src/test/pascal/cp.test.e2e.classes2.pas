@@ -117,6 +117,17 @@ type
     { var-param interface: method dispatch and reassignment through the
       var param must reach the caller's variable. }
     procedure TestRun_VarParamInterface_DispatchAndReassign;
+
+    { Metaclass-var constructor dispatch: cls.Create() runs the most-derived
+      ctor body via vtable (implicitly virtual), not the base ctor statically. }
+    procedure TestRun_MetaclassCreate_DispatchesToDerived;
+    { Metaclass-var ctor with args: cls.Create(N) passes args correctly. }
+    procedure TestRun_MetaclassCreate_WithArgs;
+    { Direct TFoo.Create stays static (no vtable dispatch). }
+    procedure TestRun_DirectCreate_StaysStatic;
+    { ClassCreate builtin still works (backwards compat) and now dispatches
+      the ctor body via vtable too. }
+    procedure TestRun_ClassCreate_StillWorks;
   end;
 
 implementation
@@ -1741,6 +1752,131 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcVarParamIntf,
     'hello 1' + LE + 'hello 2' + LE + '2' + LE + 'hello 101' + LE + '101' + LE, 0);
+end;
+
+{ ---------- Metaclass-var constructor dispatch tests ---------- }
+
+const SrcMetaclassCreateDerived = '''
+    program Prg;
+    type
+      TAnimal = class(TObject)
+        constructor Create;
+      end;
+      TDog = class(TAnimal)
+        constructor Create;
+      end;
+      TAnimalClass = class of TAnimal;
+    constructor TAnimal.Create;
+    begin WriteLn('animal') end;
+    constructor TDog.Create;
+    begin WriteLn('dog') end;
+    procedure MakeAndGreet(C: TAnimalClass);
+    var A: TAnimal;
+    begin
+      A := C.Create();
+      A.Free()
+    end;
+    begin
+      MakeAndGreet(TAnimal);
+      MakeAndGreet(TDog)
+    end.
+    ''';
+
+const SrcMetaclassCreateArgs = '''
+    program Prg;
+    type
+      TBase = class(TObject)
+        FVal: Integer;
+        constructor Create(N: Integer);
+      end;
+      TChild = class(TBase)
+        constructor Create(N: Integer);
+      end;
+      TBaseClass = class of TBase;
+    constructor TBase.Create(N: Integer);
+    begin FVal := N end;
+    constructor TChild.Create(N: Integer);
+    begin FVal := N * 10 end;
+    procedure Run(C: TBaseClass; N: Integer);
+    var B: TBase;
+    begin
+      B := C.Create(N);
+      WriteLn(B.FVal);
+      B.Free()
+    end;
+    begin
+      Run(TBase, 3);
+      Run(TChild, 3)
+    end.
+    ''';
+
+const SrcDirectCreateStatic = '''
+    program Prg;
+    type
+      TBase = class(TObject)
+        constructor Create;
+      end;
+      TChild = class(TBase)
+        constructor Create;
+      end;
+    constructor TBase.Create;
+    begin WriteLn('base') end;
+    constructor TChild.Create;
+    begin WriteLn('child') end;
+    begin
+      TBase.Create().Free();
+      TChild.Create().Free()
+    end.
+    ''';
+
+const SrcClassCreateStillWorks = '''
+    program Prg;
+    type
+      TFoo = class(TObject)
+        constructor Create;
+      end;
+      TBar = class(TFoo)
+        constructor Create;
+      end;
+      TFooClass = class of TFoo;
+    constructor TFoo.Create;
+    begin WriteLn('foo') end;
+    constructor TBar.Create;
+    begin WriteLn('bar') end;
+    var C: TFooClass;
+    begin
+      C := TBar;
+      ClassCreate(C).Free();
+      ClassCreate(TFoo).Free()
+    end.
+    ''';
+
+procedure TE2EClasses2Tests.TestRun_MetaclassCreate_DispatchesToDerived;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcMetaclassCreateDerived,
+    'animal' + LE + 'dog' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_MetaclassCreate_WithArgs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcMetaclassCreateArgs,
+    '3' + LE + '30' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_DirectCreate_StaysStatic;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDirectCreateStatic,
+    'base' + LE + 'child' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ClassCreate_StillWorks;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassCreateStillWorks,
+    'bar' + LE + 'foo' + LE, 0);
 end;
 
 initialization

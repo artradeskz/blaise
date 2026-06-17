@@ -9698,8 +9698,20 @@ begin
             ArgLine := ArgLine + Format(', %s %s',
               [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
-          EmitLine(Format('  call $%s(%s)',
-            [MethodEmitName(MDecl, MDecl.OwnerTypeName, 'Create'), ArgLine]));
+          if MDecl.VTableSlot >= 0 then
+          begin
+            VTblTemp := AllocTemp();
+            EmitLine(Format('  %s =l loadl %s', [VTblTemp, T]));
+            FPtrTemp := AllocTemp();
+            SlotOff  := (MDecl.VTableSlot + 1) * 8;
+            ArgTemp  := AllocTemp();
+            EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+            EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+            EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+          end
+          else
+            EmitLine(Format('  call $%s(%s)',
+              [MethodEmitName(MDecl, MDecl.OwnerTypeName, 'Create'), ArgLine]));
         end;
         Exit(T);
       end;
@@ -10484,15 +10496,24 @@ begin
     if MCallExpr.IsConstructorCall then
     begin
       SelfTemp := AllocTemp();
-      EmitLine(Format('  %s =l call $_ClassAlloc(l %d, l $_FieldCleanup_%s)',
-        [SelfTemp, RT.TotalSize(), ClassSymName(QBEMangle(RT.Name))]));
-      if RT.HasVTable() then
-        EmitLine(Format('  storel $vtable_%s, %s',
-          [ClassSymName(QBEMangle(RT.Name)), SelfTemp]));
-      { No _ClassAddRef here — the assignment site (EmitAssignment) is
-        responsible for the retain on the receiving slot.  Adding it here
-        as well produces a double-AddRef that prevents the object from
-        ever reaching refcount zero. }
+      if MCallExpr.IsMetaclassDispatch then
+      begin
+        { Metaclass-var dispatch: C.Create(args).  Load the metaclass value
+          (a typeinfo pointer) and call _ClassCreate which reads size/cleanup/
+          vtable from the typeinfo at runtime. }
+        L := AllocTemp();
+        EmitLine(Format('  %s =l loadl %s',
+          [L, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+        EmitLine(Format('  %s =l call $_ClassCreate(l %s)', [SelfTemp, L]));
+      end
+      else
+      begin
+        EmitLine(Format('  %s =l call $_ClassAlloc(l %d, l $_FieldCleanup_%s)',
+          [SelfTemp, RT.TotalSize(), ClassSymName(QBEMangle(RT.Name))]));
+        if RT.HasVTable() then
+          EmitLine(Format('  storel $vtable_%s, %s',
+            [ClassSymName(QBEMangle(RT.Name)), SelfTemp]));
+      end;
       if FDebugMode then
       begin
         L := AllocTemp();
@@ -10529,8 +10550,6 @@ begin
             else if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
             begin
               ArgTemps.Add('');
-              { Class expression passed to an interface param: emit obj and
-                look up the static itab using the known target interface name. }
               if TASTExpr(MCallExpr.Args.Items[I]).ResolvedType.Kind = tyClass then
               begin
                 ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
@@ -10553,11 +10572,27 @@ begin
                 [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
             end;
           end;
-          if MDecl.OwnerTypeName <> '' then
-            FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name)
+          if MCallExpr.IsMetaclassDispatch and (MDecl.VTableSlot >= 0) then
+          begin
+            { Indirect ctor call via vtable: load vptr from instance[0],
+              then load ctor address from vtable[ctorSlot]. }
+            VTblTemp := AllocTemp();
+            EmitLine(Format('  %s =l loadl %s', [VTblTemp, SelfTemp]));
+            FPtrTemp := AllocTemp();
+            SlotOff  := (MDecl.VTableSlot + 1) * 8;
+            ArgTemp  := AllocTemp();
+            EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+            EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+            EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+          end
           else
-            FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
-          EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+          begin
+            if MDecl.OwnerTypeName <> '' then
+              FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name)
+            else
+              FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
+            EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+          end;
           FlushPendingReleases(PMark);
           EmitOwnedArgReleases(MCallExpr.Args, ArgTemps, MDecl.Params);
           ReleaseConstStringArgs(MCallExpr.Args, ArgTemps, MDecl.Params);
