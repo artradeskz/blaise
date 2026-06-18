@@ -44,7 +44,7 @@ const
   CompilerName = 'Blaise';
 
 { Build the --backend usage fragment from the registered drivers, with
-  the default (bkNative) entry marked.  Keeps the flag parser and the usage
+  the default (bkQBE) entry marked.  Keeps the flag parser and the usage
   text from drifting out of sync with the registry when a backend is
   added. }
 function BackendUsageLine: string;
@@ -61,7 +61,7 @@ begin
       if I > 0 then
         Result := Result + ' | ';
       Result := Result + Names.Strings[I];
-      if ParseBackendName(Names.Strings[I], K) and (K = bkNative) then
+      if ParseBackendName(Names.Strings[I], K) and (K = bkQBE) then
         Result := Result + ' (default)';
     end;
   finally
@@ -150,7 +150,7 @@ begin
   AFront.EmitIR         := False;
   AFront.EmitAsm        := False;
   AFront.DumpAST        := False;
-  AFront.Backend        := bkNative;   { native is the default backend; QBE is opt-in via --backend qbe }
+  AFront.Backend        := bkQBE;
   AFront.BackendExplicit := False;
   AFront.SkipDepCodegen := False;
   AFront.EmitIfaceDir   := '';
