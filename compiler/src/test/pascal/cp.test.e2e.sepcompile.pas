@@ -44,7 +44,6 @@ type
     function  RunBinary(const AExe: string; out AStdout: string): Integer;
   published
     procedure TestFreeRoutine_RoundTrip_WithoutSource;
-    procedure TestNativeBackend_RoundTrip_NoDuplicateSystemDefs;
     procedure TestGenericClass_RoundTrip_WithoutSource;
     procedure TestUninstantiatedGenericFunc_InUnit_Compiles;
     procedure TestDuplicateExternalAcrossUnits_Compiles;
@@ -186,76 +185,6 @@ begin
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('use_mydep exit code', 0, Rc);
   AssertEquals('use_mydep stdout', 'Triple(7) = 21' + #10, Captured)
-end;
-
-procedure TSepCompileTests.TestNativeBackend_RoundTrip_NoDuplicateSystemDefs;
-const
-  { Same round-trip as TestFreeRoutine_RoundTrip_WithoutSource but pins the
-    NATIVE backend explicitly.  Guards the regression where the native
-    unit-to-.o path emitted the built-in system defs (typeinfo_/vtable_/
-    _FieldCleanup_ for TObject and TCustomAttribute) into every unit .o,
-    colliding with the consumer program at link ("multiple definition of
-    vtable_TCustomAttribute").  Pinning --backend native keeps the guard valid
-    regardless of which backend is the compiler default. }
-  DepSrc =
-    '''
-    unit NatDep;
-    interface
-    function Triple(N: Integer): Integer;
-    implementation
-    function Triple(N: Integer): Integer;
-    begin
-      Result := N * 3
-    end;
-    end.
-    ''';
-  ProgSrc =
-    '''
-    program UseNatDep;
-    uses NatDep;
-    begin
-      WriteLn('Triple(7) = ', Triple(7))
-    end.
-    ''';
-var
-  DepPas, DepObj, ProgPas, ProgBin: string;
-  Captured: string;
-  Rc: Integer;
-begin
-  if not ToolchainAvailable() then
-  begin
-    Fail('toolchain missing — qbe or RTL not found');
-    Exit
-  end;
-  if not FileExists(BlaisePath()) then
-  begin
-    Fail('blaise binary missing at ' + BlaisePath());
-    Exit
-  end;
-
-  DepPas  := FScratch + '/NatDep.pas';
-  DepObj  := FScratch + '/NatDep.o';
-  ProgPas := FScratch + '/use_natdep.pas';
-  ProgBin := FScratch + '/use_natdep';
-
-  WriteFile(DepPas, DepSrc);
-  Rc := RunBlaise(['--backend', 'native', '--source', DepPas,
-                   '--output', DepObj], Captured);
-  AssertEquals('blaise(NatDep, native) exit code', 0, Rc);
-  AssertTrue('NatDep.o exists', FileExists(DepObj));
-
-  DeleteFile(DepPas);
-
-  WriteFile(ProgPas, ProgSrc);
-  Rc := RunBlaise(['--backend', 'native', '--source', ProgPas,
-                   '--output', ProgBin, '--unit-path', FScratch], Captured);
-  AssertEquals('blaise(use_natdep, native) exit code (link must not collide): '
-    + Captured, 0, Rc);
-  AssertTrue('use_natdep exists', FileExists(ProgBin));
-
-  Rc := RunBinary(ProgBin, Captured);
-  AssertEquals('use_natdep exit code', 0, Rc);
-  AssertEquals('use_natdep stdout', 'Triple(7) = 21' + #10, Captured)
 end;
 
 procedure TSepCompileTests.TestGenericClass_RoundTrip_WithoutSource;

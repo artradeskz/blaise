@@ -812,18 +812,7 @@ begin
         QBE for fixpoint / RTL Makefile compatibility; --emit-asm implies
         native); the per-backend construction details — class to
         instantiate, knobs to wire — live behind Driver.CreateCodeGen. }
-      { Unit-as-top-level uses the UNIT codegen so the per-unit .o suppresses
-        the built-in system defs (typeinfo_/vtable_/_FieldCleanup_ for TObject
-        and TCustomAttribute); CreateCodeGen (the program path) would emit them
-        and the .o would then collide with the consumer program at link
-        ("multiple definition of vtable_TCustomAttribute").  Falls back to
-        CreateCodeGen for a backend that does not provide a unit codegen. }
-      if IsUnitMode then
-        CG := Driver.CreateUnitCodeGen(Opts)
-      else
-        CG := Driver.CreateCodeGen(Opts);
-      if CG = nil then
-        CG := Driver.CreateCodeGen(Opts);
+      CG := Driver.CreateCodeGen(Opts);
       if IsUnitMode then
       begin
         { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }

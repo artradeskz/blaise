@@ -166,13 +166,6 @@ begin
   Self.EnsureBackend();
   FBackend.SetSymbolTable(FSymTable);
   FBackend.SetDebugMode(FDebugMode);
-  { Propagate separate-compile so the per-unit .o suppresses the built-in
-    system defs (typeinfo_/vtable_/_FieldCleanup_ for TObject and
-    TCustomAttribute).  Without this the unit .o redefines them and the link
-    against the consumer program fails with "multiple definition of
-    vtable_TCustomAttribute".  AppendUnit already does this; GenerateUnit (the
-    --output <unit>.o path) was missing it. }
-  FBackend.SetSeparateCompile(FSeparateCompile);
   FBackend.SetDebugFacts(FDbgFacts);
   FOutput := FBackend.GenerateUnit(AUnit);
 end;
