@@ -8,14 +8,17 @@
 
 unit cp.test.linker;
 
-{ Tests for the internal linker's input layer (Phase A):
-  blaise.elfreader — ELF relocatable-object parsing and ar-archive
-  parsing with GNU long-name support. }
+{ Tests for the internal linker:
+  Phase A — blaise.elfreader (ELF relocatable-object parsing and
+  ar-archive parsing with GNU long-name support) and TSectionMerger.
+  Phase B — TLinker symbol resolution, static PC-relative relocations,
+  and non-PIE ET_EXEC emission, including a hand-written syscall-only
+  fixture that is linked internally, run, and asserted. }
 
 interface
 
 uses
-  SysUtils, blaise.testing, Generics.Collections,
+  SysUtils, process, blaise.testing, Generics.Collections,
   blaise.elfreader, blaise.linker.elf, blaise.assembler.x86_64;
 
 type
@@ -40,6 +43,37 @@ type
     procedure TestMerge_AlignmentPadding;
     procedure TestMerge_BssSizesAccumulate;
     procedure TestMerge_SkipsBookkeepingSections;
+  end;
+
+  TLinkerTests = class(TTestCase)
+  private
+    function LinkObjs(AObjAsm: array of string;
+      const AEntry: string; out ABytes: string): TLinker;
+  published
+    { Symbol resolution }
+    procedure TestSym_GlobalResolvesToVaddr;
+    procedure TestSym_TwoGlobalsDuplicate_Raises;
+    procedure TestSym_StrongUndefined_Raises;
+    procedure TestSym_WeakUndefinedResolvesToZero;
+    procedure TestSym_SynthesisedSymbolsDefined;
+    { Static relocations }
+    procedure TestReloc_PC32CrossObjectCall;
+    procedure TestReloc_Quad64_Raises;
+    { Executable structure }
+    procedure TestExe_ElfHeaderIsExec;
+    procedure TestExe_EntryPointMatchesSymbol;
+    procedure TestExe_MissingEntry_Raises;
+  end;
+
+  TLinkerE2ETests = class(TTestCase)
+  private
+    FScratch: string;
+    function ProjectRoot: string;
+    function RunBin(const AExe: string; out AStdout: string): Integer;
+  protected
+    procedure SetUp; override;
+  published
+    procedure TestRun_SyscallHelloWorld;
   end;
 
 implementation
@@ -403,8 +437,449 @@ begin
   end;
 end;
 
+{ ---- TLinkerTests ---- }
+
+{ Assemble each asm string to a relocatable object, hand them all to a
+  fresh TLinker (which takes ownership), link to bytes, and return the
+  linker so the caller can query resolved addresses.  Caller frees. }
+function TLinkerTests.LinkObjs(AObjAsm: array of string;
+  const AEntry: string; out ABytes: string): TLinker;
+var
+  Lk: TLinker;
+  I: Integer;
+  Obj: TElfObjectFile;
+begin
+  Lk := TLinker.Create();
+  try
+    for I := 0 to High(AObjAsm) do
+    begin
+      Obj := ParseElfObject(AssembleToBytes(AObjAsm[I]),
+        'obj' + IntToStr(I) + '.o');
+      Lk.AddOwnedObject(Obj);
+    end;
+    ABytes := Lk.LinkToBytes(AEntry);
+    Result := Lk;
+  except
+    Lk.Free();
+    raise;
+  end;
+end;
+
+procedure TLinkerTests.TestSym_GlobalResolvesToVaddr;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Addr: Int64;
+begin
+  Lk := LinkObjs(
+    ['.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
+  try
+    Addr := Lk.AddrOfSymbol('_start');
+    { _start lands in the executable run just past ELF + 2 phdrs at base
+      0x400000; its exact value is layout-dependent but must be a real
+      mapped code address above the base. }
+    AssertTrue('_start resolved', Addr > $400000);
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestSym_TwoGlobalsDuplicate_Raises;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Raised: Boolean;
+begin
+  Raised := False;
+  Lk := nil;
+  try
+    Lk := LinkObjs(
+      ['.globl dup' + LineEnding + 'dup:' + LineEnding + 'ret' + LineEnding,
+       '.globl dup' + LineEnding + 'dup:' + LineEnding + 'ret' + LineEnding +
+       '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+      '_start', Bytes);
+  except
+    on E: ELinker do
+      Raised := True;
+  end;
+  Lk.Free();
+  AssertTrue('duplicate global symbol must raise ELinker', Raised);
+end;
+
+procedure TLinkerTests.TestSym_StrongUndefined_Raises;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Raised: Boolean;
+begin
+  Raised := False;
+  Lk := nil;
+  try
+    { _start calls an undefined strong symbol. }
+    Lk := LinkObjs(
+      ['.globl _start' + LineEnding + '_start:' + LineEnding +
+       'callq missing_fn' + LineEnding + 'ret' + LineEnding],
+      '_start', Bytes);
+  except
+    on E: ELinker do
+      Raised := True;
+  end;
+  Lk.Free();
+  AssertTrue('strong undefined reference must raise ELinker', Raised);
+end;
+
+procedure TLinkerTests.TestSym_WeakUndefinedResolvesToZero;
+var
+  Lk: TLinker;
+  Obj: TElfObjectFile;
+  Sec: TRdSection;
+  SymNull, SymStart, SymWeak: TRdSymbol;
+  Rel: TRdReloc;
+  TextSec: TMergedSection;
+  StartAddr: Int64;
+  PatchOff, Disp: Integer;
+  Expected: Int64;
+begin
+  { The internal assembler always emits an undefined reference as
+    STB_GLOBAL (no STB_WEAK support yet), so weak handling is exercised
+    with a hand-built object: a .text holding `E8 00 00 00 00` (a call
+    with a zero displacement) plus a PC32 reloc against a weak-undef
+    symbol.  A strong undef would raise; the weak one must resolve to 0,
+    giving disp = 0 + (-4) - P. }
+  Obj := TElfObjectFile.Create();
+  Obj.SourceName := 'weak.o';
+  { Section 0 is the reserved ELF NULL section, mirroring real objects
+    (so a symbol's Shndx=0 means SHN_UNDEF, not "the first section"). }
+  Sec := TRdSection.Create();
+  Sec.Name := '';
+  Sec.ShType := SHT_NULL;
+  Obj.Sections.Add(Sec);                 { section index 0 = NULL }
+
+  Sec := TRdSection.Create();
+  Sec.Name := '.text';
+  Sec.ShType := SHT_PROGBITS;
+  Sec.Flags := SHF_ALLOC or SHF_EXECINSTR;
+  Sec.AddrAlign := 1;
+  Sec.Data := Chr($E8) + Chr(0) + Chr(0) + Chr(0) + Chr(0) + Chr($C3);
+  Sec.Size := 6;
+  Obj.Sections.Add(Sec);                 { section index 1 = .text }
+
+  SymNull := TRdSymbol.Create();
+  SymNull.Name := '';
+  Obj.Symbols.Add(SymNull);              { symtab[0] reserved }
+
+  SymStart := TRdSymbol.Create();
+  SymStart.Name := '_start';
+  SymStart.Bind := STB_GLOBAL;
+  SymStart.SymType := STT_FUNC;
+  SymStart.Shndx := 1;                   { defined in .text }
+  SymStart.Value := 0;
+  Obj.Symbols.Add(SymStart);             { symtab[1] }
+
+  SymWeak := TRdSymbol.Create();
+  SymWeak.Name := 'maybe_absent';
+  SymWeak.Bind := STB_WEAK;
+  SymWeak.Shndx := SHN_UNDEF;
+  Obj.Symbols.Add(SymWeak);              { symtab[2] }
+
+  Rel := TRdReloc.Create();
+  Rel.TargetSection := 1;                { patches .text (section 1) }
+  Rel.Offset := 1;                       { displacement after 0xE8 }
+  Rel.SymIndex := 2;                     { -> maybe_absent }
+  Rel.RelocType := R_X86_64_PC32;
+  Rel.Addend := -4;
+  Obj.Relocs.Add(Rel);
+
+  Lk := TLinker.Create();
+  try
+    Lk.AddOwnedObject(Obj);
+    Lk.LinkToBytes('_start');           { must NOT raise }
+    StartAddr := Lk.AddrOfSymbol('_start');
+    TextSec := Lk.FindMergedText();
+    PatchOff := 1;                       { only object, .text offset 1 }
+    Disp := (Ord(TextSec.Data[PatchOff]) and $FF)
+         or ((Ord(TextSec.Data[PatchOff + 1]) and $FF) shl 8)
+         or ((Ord(TextSec.Data[PatchOff + 2]) and $FF) shl 16)
+         or ((Ord(TextSec.Data[PatchOff + 3]) and $FF) shl 24);
+    { S=0, A=-4, P = StartAddr+1 → disp = -4 - (StartAddr+1). }
+    Expected := Int64(0) - 4 - (StartAddr + 1);
+    AssertEquals('weak-undef PC32 disp (S=0)',
+      Integer(Expected and $FFFFFFFF), Disp);
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestSym_SynthesisedSymbolsDefined;
+var
+  Lk: TLinker;
+  Bytes: string;
+begin
+  Lk := LinkObjs(
+    ['.data' + LineEnding + '.globl gv' + LineEnding + 'gv:' + LineEnding +
+     '.quad 7' + LineEnding +
+     '.text' + LineEnding + '.globl _start' + LineEnding + '_start:' +
+     LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
+  try
+    AssertTrue('__bss_start defined', Lk.AddrOfSymbol('__bss_start') > 0);
+    AssertTrue('_edata defined', Lk.AddrOfSymbol('_edata') > 0);
+    AssertTrue('_end defined', Lk.AddrOfSymbol('_end') > 0);
+    AssertTrue('_GLOBAL_OFFSET_TABLE_ defined',
+      Lk.AddrOfSymbol('_GLOBAL_OFFSET_TABLE_') > 0);
+    { _edata (end of .data) must not exceed _end (end of bss). }
+    AssertTrue('_edata <= _end',
+      Lk.AddrOfSymbol('_edata') <= Lk.AddrOfSymbol('_end'));
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestReloc_PC32CrossObjectCall;
+var
+  Lk: TLinker;
+  Bytes: string;
+  TextSec: TMergedSection;
+  CalleeAddr, StartAddr: Int64;
+  CallSiteVaddr, CallEnd: Int64;
+  PatchOff: Integer;
+  Disp: Integer;
+  Expected: Int64;
+begin
+  { Object 0 defines callee; object 1's _start does `call callee`.
+    The 4-byte displacement after the 0xE8 opcode must equal
+    callee - (addr_of_displacement + 4). }
+  Lk := LinkObjs(
+    ['.globl callee' + LineEnding + 'callee:' + LineEnding + 'ret' + LineEnding,
+     '.globl _start' + LineEnding + '_start:' + LineEnding +
+     'callq callee' + LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
+  try
+    CalleeAddr := Lk.AddrOfSymbol('callee');
+    StartAddr  := Lk.AddrOfSymbol('_start');
+    AssertTrue('callee resolved', CalleeAddr > 0);
+    AssertTrue('_start resolved', StartAddr > 0);
+
+    { The call opcode (0xE8) is the first byte of _start; the 4-byte
+      relative displacement follows it.  The patched bytes live in the
+      merged .text data at an offset relative to .text's own base —
+      callee is the first thing in .text, so its address is that base. }
+    TextSec := Lk.FindMergedText();
+    AssertTrue('.text present', TextSec <> nil);
+    CallSiteVaddr := StartAddr;           { 0xE8 here }
+    CallEnd := CallSiteVaddr + 5;         { next insn after the 5-byte call }
+    Expected := CalleeAddr - CallEnd;
+
+    PatchOff := Integer(StartAddr - CalleeAddr) + 1; { skip 0xE8 }
+    Disp := (Ord(TextSec.Data[PatchOff]) and $FF)
+         or ((Ord(TextSec.Data[PatchOff + 1]) and $FF) shl 8)
+         or ((Ord(TextSec.Data[PatchOff + 2]) and $FF) shl 16)
+         or ((Ord(TextSec.Data[PatchOff + 3]) and $FF) shl 24);
+    AssertEquals('PC32 call displacement', Integer(Expected and $FFFFFFFF), Disp);
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestReloc_Quad64_Raises;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Raised: Boolean;
+begin
+  { An absolute 64-bit pointer to a symbol needs dynamic linking under
+    a real PIE; Phase B rejects R_X86_64_64 explicitly. }
+  Raised := False;
+  Lk := nil;
+  try
+    Lk := LinkObjs(
+      ['.data' + LineEnding + 'ptr:' + LineEnding + '.quad target' + LineEnding +
+       '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
+       LineEnding + 'ret' + LineEnding +
+       '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+      '_start', Bytes);
+  except
+    on E: ELinker do
+      Raised := True;
+  end;
+  Lk.Free();
+  AssertTrue('R_X86_64_64 must raise ELinker in Phase B', Raised);
+end;
+
+procedure TLinkerTests.TestExe_ElfHeaderIsExec;
+var
+  Lk: TLinker;
+  Bytes: string;
+begin
+  Lk := LinkObjs(
+    ['.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
+  try
+    AssertTrue('output too small', Length(Bytes) >= 64);
+    AssertEquals('ELF magic 0', $7F, Ord(Bytes[0]));
+    AssertEquals('ELF magic E', Ord('E'), Ord(Bytes[1]));
+    AssertEquals('ELFCLASS64', 2, Ord(Bytes[4]));
+    AssertEquals('little-endian', 1, Ord(Bytes[5]));
+    { e_type at offset 16 must be ET_EXEC (2). }
+    AssertEquals('e_type ET_EXEC', 2,
+      (Ord(Bytes[16]) and $FF) or ((Ord(Bytes[17]) and $FF) shl 8));
+    { e_machine at offset 18 must be EM_X86_64 (62). }
+    AssertEquals('e_machine x86-64', 62,
+      (Ord(Bytes[18]) and $FF) or ((Ord(Bytes[19]) and $FF) shl 8));
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestExe_EntryPointMatchesSymbol;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Entry, I: Int64;
+begin
+  Lk := LinkObjs(
+    ['.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
+  try
+    { e_entry is an 8-byte LE field at offset 24. }
+    Entry := 0;
+    for I := 0 to 7 do
+      Entry := Entry or (Int64(Ord(Bytes[24 + Integer(I)]) and $FF) shl (I * 8));
+    AssertEquals('e_entry == addr(_start)', Lk.AddrOfSymbol('_start'), Entry);
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestExe_MissingEntry_Raises;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Raised: Boolean;
+begin
+  Raised := False;
+  Lk := nil;
+  try
+    Lk := LinkObjs(
+      ['.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+      'no_such_entry', Bytes);
+  except
+    on E: ELinker do
+      Raised := True;
+  end;
+  Lk.Free();
+  AssertTrue('missing entry symbol must raise ELinker', Raised);
+end;
+
+{ ---- TLinkerE2ETests ---- }
+
+function TLinkerE2ETests.ProjectRoot: string;
+var
+  Dir, Parent: string;
+  Steps: Integer;
+begin
+  Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
+  if Result <> '' then
+  begin
+    Result := IncludeTrailingPathDelimiter(Result);
+    Exit;
+  end;
+  Dir := GetCurrentDir();
+  for Steps := 0 to 5 do
+  begin
+    if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
+       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'runtime') then
+    begin
+      Result := IncludeTrailingPathDelimiter(Dir);
+      Exit;
+    end;
+    Parent := ExtractFileDir(Dir);
+    if (Parent = '') or (Parent = Dir) then Break;
+    Dir := Parent;
+  end;
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir());
+end;
+
+procedure TLinkerE2ETests.SetUp;
+begin
+  inherited SetUp();
+  FScratch := ProjectRoot() + 'compiler/target/linker-e2e';
+  ForceDirectories(FScratch);
+end;
+
+function TLinkerE2ETests.RunBin(const AExe: string;
+  out AStdout: string): Integer;
+var
+  Proc:  TProcess;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    Proc.Execute();
+    AStdout := '';
+    repeat
+      Chunk := Proc.ReadOutput();
+      AStdout := AStdout + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free();
+  end;
+end;
+
+procedure TLinkerE2ETests.TestRun_SyscallHelloWorld;
+const
+  { A freestanding program that talks straight to the kernel: it needs
+    no libc, no RTL, and no dynamic linker, so Phase B links and runs
+    it on its own.  write(1, msg, 14); exit(7).  The exit code (7)
+    plus the stdout both prove the executable loaded and ran with the
+    correct entry point, segment permissions, and a PC-relative
+    `leaq msg(%rip)` resolved against the merged .rodata. }
+  FixtureAsm =
+    '.text' + LineEnding +
+    '.globl _start' + LineEnding +
+    '_start:' + LineEnding +
+    '  movq $1, %rax' + LineEnding +        { SYS_write }
+    '  movq $1, %rdi' + LineEnding +        { fd = stdout }
+    '  leaq msg(%rip), %rsi' + LineEnding + { buf (PC-relative) }
+    '  movq $15, %rdx' + LineEnding +       { count (14 chars + newline) }
+    '  .byte 15' + LineEnding + '  .byte 5' + LineEnding +  { syscall }
+    '  movq $60, %rax' + LineEnding +       { SYS_exit }
+    '  movq $7, %rdi' + LineEnding +        { exit code }
+    '  .byte 15' + LineEnding + '  .byte 5' + LineEnding +  { syscall }
+    '.section .rodata' + LineEnding +
+    'msg:' + LineEnding +
+    '  .ascii "Hello, linker!\n"' + LineEnding;
+var
+  Lk: TLinker;
+  Obj: TElfObjectFile;
+  BinPath, Output: string;
+  Rc: Integer;
+begin
+  BinPath := FScratch + '/hello_syscall';
+  Lk := TLinker.Create();
+  try
+    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'hello.o');
+    Lk.AddOwnedObject(Obj);
+    Lk.Link('_start', BinPath);
+  finally
+    Lk.Free();
+  end;
+
+  AssertTrue('linked binary missing', FileExists(BinPath));
+  Rc := RunBin(BinPath, Output);
+  AssertEquals('exit code from internally-linked binary', 7, Rc);
+  AssertEquals('stdout from internally-linked binary',
+    'Hello, linker!' + Chr(10), Output);
+end;
+
 initialization
   RegisterTest(TElfReaderTests);
   RegisterTest(TSectionMergerTests);
+  RegisterTest(TLinkerTests);
+  RegisterTest(TLinkerE2ETests);
 
 end.
