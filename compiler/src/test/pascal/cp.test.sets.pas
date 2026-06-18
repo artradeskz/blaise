@@ -720,11 +720,11 @@ begin
     Prog.Free();
     Fail('Expected ESemanticError but none was raised');
   except
-    on ESE: ESemanticError do
+    on E: ESemanticError do
     begin
       Prog.Free();
     end;
-    on EEx: Exception do
+    on E: Exception do
     begin
       Prog.Free();
       raise;

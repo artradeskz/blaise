@@ -405,8 +405,8 @@ begin
     on E: Exception do
       if Pos('Unknown attribute', E.Message) >= 0 then
         OK := True;
-    on ETO: TObject do
-      if Pos('Unknown attribute', ETO.ClassName) >= 0 then
+    on E: TObject do
+      if Pos('Unknown attribute', E.ClassName) >= 0 then
         OK := True;
   end;
   AssertTrue('unknown attribute raises semantic error', OK);

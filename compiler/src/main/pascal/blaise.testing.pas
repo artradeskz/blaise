@@ -522,25 +522,25 @@ begin
       try
         Self.RunTest();
       except
-        on EAF: EAssertionFailed do
+        on E: EAssertionFailed do
         begin
           Outcome := 'FAIL';
-          AResult.AddFailure(Self.FName, EAF.ToString());
+          AResult.AddFailure(Self.FName, E.ToString());
         end;
-        on EIT: EIgnoredTest do
+        on E: EIgnoredTest do
         begin
           Outcome := 'IGNORED';
-          AResult.AddIgnored(Self.FName, EIT.FMessage);
+          AResult.AddIgnored(Self.FName, E.FMessage);
         end;
         on E: Exception do
         begin
           Outcome := 'ERROR';
           AResult.AddError(Self.FName, E.ClassName + ': ' + E.Message);
         end;
-        on ETO: TObject do
+        on E: TObject do
         begin
           Outcome := 'ERROR';
-          AResult.AddError(Self.FName, 'Unhandled exception: ' + ETO.ClassName);
+          AResult.AddError(Self.FName, 'Unhandled exception: ' + E.ClassName);
         end;
       end;
     finally
