@@ -50,6 +50,11 @@ type
       refers to the template source), not the instantiating unit. }
     procedure TestDebug_GenericAllocSite_ReportsDefiningUnit;
     procedure TestDebug_GenericAllocSite_ReportsDefiningUnit_Native;
+    { An interface-returning call passed directly as an argument — Show(Make())
+      — hands the callee an owned (+1) fat pointer it borrows; the caller must
+      release it after the call or one instance leaks. }
+    procedure TestDebug_IntfCallResultArg_NoLeak;
+    procedure TestDebug_IntfCallResultArg_NoLeak_Native;
   end;
 
 implementation
@@ -561,6 +566,65 @@ begin
   AssertEquals('exit 0 (native)', 0, ExitCode);
   AssertEquals('stdout (native)', '42' + LE, Output);
   AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
+end;
+
+const
+  { Interface-returning call result passed positionally — Show(MakeFoo(42)).
+    MakeFoo returns an owned (+1) interface; the borrowing parameter does not
+    release it, so the caller must.  One TFoo leaked on native before the
+    akIntfConsume hoist released it after the call. }
+  SrcIntfCallResultArg = '''
+    program P;
+    type
+      IFoo = interface
+        function Val: Integer;
+      end;
+      TFoo = class(TObject, IFoo)
+        FN: Integer;
+        function Val: Integer;
+      end;
+    function TFoo.Val: Integer;
+    begin Result := FN end;
+    function MakeFoo(N: Integer): IFoo;
+    var F: TFoo;
+    begin
+      F := TFoo.Create();
+      F.FN := N;
+      Result := F
+    end;
+    procedure Show(F: IFoo);
+    begin
+      WriteLn(F.Val())
+    end;
+    begin
+      Show(MakeFoo(42))
+    end.
+    ''';
+
+procedure TE2ELeakCheckTests.TestDebug_IntfCallResultArg_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcIntfCallResultArg, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertEquals('stdout', '42' + LE, Output);
+  AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_IntfCallResultArg_NoLeak_Native;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebugOn(beNative, SrcIntfCallResultArg, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertEquals('stdout', '42' + LE, Output);
+  AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
 end;
 
 initialization

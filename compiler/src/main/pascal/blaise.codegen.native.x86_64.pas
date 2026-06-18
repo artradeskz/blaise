@@ -40,6 +40,8 @@ const
   akRecCall = 2;     { record-returning call arg: sret buffer + saved ptr }
   akStrPin = 3;      { const-string pin: saved value, AddRef'd; released after }
   akStrConsume = 4;  { const-string consume: saved +1 value; released after }
+  akIntfConsume = 5; { interface-returning-call arg: owned (+1) fat pointer
+                       saved (itab then obj, obj on top); obj released after }
 
 type
   { Per-call bookkeeping for hoisted call arguments — see EmitArgHoist.
@@ -12284,6 +12286,31 @@ begin
       Continue;
     end;
 
+    { Interface-returning call argument (Show(MakeFoo(42))): the callee hands
+      back an OWNED (+1) fat pointer that the borrowing parameter does not
+      release.  Hoist it here so EmitHoistEpilogue can release the obj after the
+      call (mirrors akStrConsume).  EmitIntfSretCall leaves the fat pointer at
+      (%rsp) over a 16-byte buffer: obj@0, itab@8.  Save it as a contiguous
+      16-byte pair (itab pushed first, obj on top); depth records the obj. }
+    if (not IsVarPos) and
+       ((Arg is TFuncCallExpr) or (Arg is TMethodCallExpr)) and
+       (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    begin
+      if Arg is TFuncCallExpr then
+        Self.EmitIntfSretCall(TFuncCallExpr(Arg))
+      else
+        Self.EmitIntfSretMethodCall(TMethodCallExpr(Arg));
+      Self.Emit(#9'movq (%rsp), %rax');     { obj }
+      Self.Emit(#9'movq 8(%rsp), %rcx');    { itab }
+      Self.Emit(#9'addq $16, %rsp');        { drop the sret buffer }
+      Self.Emit(#9'pushq %rcx');            { save itab }
+      Self.Emit(#9'pushq %rax');            { save obj (on top) }
+      Result := Result + 16;
+      ADepths.Add(Result);
+      AKinds.Add(akIntfConsume);
+      Continue;
+    end;
+
     { Const-string argument needing caller protection. }
     ConstStr := False;
     if Par <> nil then
@@ -12357,6 +12384,12 @@ begin
         Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [Off]));
         Self.Emit(#9'callq _StringRelease');
       end
+      else if K = akIntfConsume then
+      begin
+        { Release the owned (+1) obj of a hoisted interface-call argument. }
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [Off]));
+        Self.Emit(#9'callq _ClassRelease');
+      end
       else
       begin
         { Hoisted record temp: release its managed fields; the buffer
@@ -12387,6 +12420,21 @@ begin
     Self.Emit(#9'pushq %rax');
     Self.Emit(Format(#9'pushq $%d',
       [TArrayLiteralExpr(AArg).Elements.Count - 1]));
+    APushed := APushed + 16;
+    Exit;
+  end;
+  if AKind = akIntfConsume then
+  begin
+    { Hoisted interface-returning-call argument: the saved 16-byte fat pointer
+      has obj on top (at depth) and itab just below.  Push both as the two
+      interface arg slots (obj first, itab on top), matching the layout
+      EmitMethodArgPush emits for an interface argument. }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+      [ATotal - ADepth + APushed]));         { obj }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rcx',
+      [ATotal - ADepth + APushed + 8]));     { itab }
+    Self.Emit(#9'pushq %rax');               { push obj }
+    Self.Emit(#9'pushq %rcx');               { push itab }
     APushed := APushed + 16;
     Exit;
   end;
@@ -12564,7 +12612,19 @@ begin
         ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
       if ParamType = nil then
         ParamType := Arg.ResolvedType;
-      if (not IsOA) and (OALK.Get(I) >= akRecCall) then
+      if (not IsOA) and (OALK.Get(I) = akIntfConsume) then
+      begin
+        { Hoisted interface-returning-call argument — reload the saved 16-byte
+          fat pointer (obj on top at depth, itab just below) and push both as
+          the two interface arg slots (obj first, itab on top). }
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [OALTotal - OALD.Get(I) + OALPushed]));        { obj }
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rcx',
+          [OALTotal - OALD.Get(I) + OALPushed + 8]));    { itab }
+        Self.Emit(#9'pushq %rax');
+        Self.Emit(#9'pushq %rcx');
+      end
+      else if (not IsOA) and (OALK.Get(I) >= akRecCall) then
       begin
         { Hoisted record-call or const-string argument — reload the saved
           value from the pre-pass region. }
