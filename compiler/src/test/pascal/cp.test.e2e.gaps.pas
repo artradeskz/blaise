@@ -61,6 +61,14 @@ type
     { Named-type alias array const (GitHub #113) }
     procedure TestRun_NamedArrayAlias_IntConst;
 
+    { Boolean / enum / named-const array-const elements fold to ordinals }
+    procedure TestRun_BoolArrayConst_FoldsToOrdinals;
+    procedure TestRun_EnumArrayConst_FoldsToOrdinals;
+    { Array-const element widths: Byte/Int64/Word stride matches the read }
+    procedure TestRun_ArrayConst_ElementWidths;
+    procedure TestRun_ArrayConst_NegativeInts;
+    procedure TestRun_ArrayConst_EnumIndexedBool;
+
     { Static array return by value (GitHub #112) }
     procedure TestRun_StaticArrayReturn_12Bytes;
     procedure TestRun_StaticArrayReturn_16Bytes;
@@ -795,6 +803,116 @@ const
     ''';
 begin
   AssertRunsOnAll(Src, '10' + Chr(10) + '20' + Chr(10) + '30' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_BoolArrayConst_FoldsToOrdinals;
+{ Boolean literals as array-const elements were emitted as symbol references
+  (undefined `False'/`True' at link time on native; "unknown keyword False" on
+  QBE) and at the wrong element width.  Now folded to 0/1 with 1-byte stride. }
+const
+  Src =
+    '''
+    program P;
+    const Flags: array[0..3] of Boolean = (False, True, False, True);
+    var I: Integer;
+    begin
+      for I := 0 to 3 do
+        if Flags[I] then WriteLn('T') else WriteLn('F')
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    'F' + Chr(10) + 'T' + Chr(10) + 'F' + Chr(10) + 'T' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_EnumArrayConst_FoldsToOrdinals;
+{ Enum members and named integer constants as array-const elements fold to their
+  ordinal/value rather than emitting a symbol reference. }
+const
+  Src =
+    '''
+    program P;
+    type TColor = (Red, Green, Blue);
+    const N = 7;
+    const
+      Palette: array[0..2] of TColor = (Blue, Red, Green);
+      WithConst: array[0..1] of Integer = (N, 99);
+    var I: Integer;
+    begin
+      for I := 0 to 2 do WriteLn(Integer(Palette[I]));
+      WriteLn(WithConst[0]);
+      WriteLn(WithConst[1])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    '2' + Chr(10) + '0' + Chr(10) + '1' + Chr(10) +
+    '7' + Chr(10) + '99' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_ArrayConst_ElementWidths;
+{ Edge case: non-4-byte element widths must emit the matching stride.  Byte (1),
+  Word (2) and Int64 (8) all read back correctly — a fixed .long/w stride would
+  scramble these. }
+const
+  Src =
+    '''
+    program P;
+    const
+      B: array[0..2] of Byte = (0, 255, 128);
+      W: array[0..2] of Word = (1, 65535, 256);
+      L: array[0..1] of Int64 = (9000000000, 5);
+    var I: Integer;
+    begin
+      for I := 0 to 2 do WriteLn(B[I]);
+      for I := 0 to 2 do WriteLn(W[I]);
+      WriteLn(L[0]);
+      WriteLn(L[1])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    '0' + Chr(10) + '255' + Chr(10) + '128' + Chr(10) +
+    '1' + Chr(10) + '65535' + Chr(10) + '256' + Chr(10) +
+    '9000000000' + Chr(10) + '5' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_ArrayConst_NegativeInts;
+{ Edge case: negative integer literals in an array const pass through the
+  element-folding unchanged (they are not identifiers). }
+const
+  Src =
+    '''
+    program P;
+    const Vals: array[0..2] of Integer = (-1, -100, 42);
+    var I: Integer;
+    begin
+      for I := 0 to 2 do WriteLn(Vals[I])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    '-1' + Chr(10) + '-100' + Chr(10) + '42' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_ArrayConst_EnumIndexedBool;
+{ Edge case: a Boolean array INDEXED BY an enum — combines enum-indexing with
+  Boolean element folding + 1-byte stride. }
+const
+  Src =
+    '''
+    program P;
+    type TDay = (Mon, Tue, Wed);
+    const Open: array[TDay] of Boolean = (True, False, True);
+    var D: TDay;
+    begin
+      for D := Mon to Wed do
+        if Open[D] then WriteLn('open') else WriteLn('closed')
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    'open' + Chr(10) + 'closed' + Chr(10) + 'open' + Chr(10), 0);
 end;
 
 procedure TE2EGapTests.TestRun_IntfSret_SixArgs_DirectClassCall;

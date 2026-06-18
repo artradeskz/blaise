@@ -244,6 +244,7 @@ type
     procedure EmitGlobalVarData(ABlock: TBlock);
     procedure EmitGlobalVarInit(const AVarName: string; AType: TTypeDesc;
                                 CD: TConstDecl; const APrefix: string);
+    function ConstElemQbeDataType(const AElemType: string): string;
     procedure EmitArrayConstData(CD: TConstDecl; const APrefix: string);
     procedure EmitClassConstData(AClassDef: TClassTypeDef; const AClassName: string);
     procedure EmitGlobalConstData(ABlock: TBlock);
@@ -2032,6 +2033,43 @@ begin
   end;
 end;
 
+function TCodeGenQBE.ConstElemQbeDataType(const AElemType: string): string;
+{ QBE data-definition type letter for one non-string array-const element,
+  honouring the element's real width: 1-byte -> b, 2 -> h, 8 -> l, else w.
+  The built-in scalar names are mapped directly so the result is correct even
+  when FSymTable is not set (some callers create a codegen without a table);
+  user types (enums etc.) fall back to the table, defaulting to w (4-byte). }
+var
+  TD: TTypeDesc;
+  Sz: Integer;
+begin
+  if SameText(AElemType, 'Boolean') or SameText(AElemType, 'Byte') or
+     SameText(AElemType, 'ShortInt') or SameText(AElemType, 'AnsiChar') then
+    Exit('b');
+  if SameText(AElemType, 'SmallInt') or SameText(AElemType, 'Word') then
+    Exit('h');
+  if SameText(AElemType, 'Int64') or SameText(AElemType, 'UInt64') or
+     SameText(AElemType, 'Pointer') or SameText(AElemType, 'Double') then
+    Exit('l');
+  if SameText(AElemType, 'Integer') or SameText(AElemType, 'UInt32') or
+     SameText(AElemType, 'LongInt') or SameText(AElemType, 'Cardinal') or
+     SameText(AElemType, 'Single') then
+    Exit('w');
+  Sz := 4;
+  if FSymTable <> nil then
+  begin
+    TD := FSymTable.FindType(AElemType);
+    if TD <> nil then Sz := TD.RawSize();
+  end;
+  case Sz of
+    1: Result := 'b';
+    2: Result := 'h';
+    8: Result := 'l';
+  else
+    Result := 'w';
+  end;
+end;
+
 procedure TCodeGenQBE.EmitArrayConstData(CD: TConstDecl; const APrefix: string);
 var
   J:          Integer;
@@ -2090,7 +2128,11 @@ begin
       Parts := Parts + Format('l $__s%d + 12', [StrIdx]);
     end
     else
-      Parts := Parts + Format('w %s', [ElemVal]);
+      { Honour the element width: Boolean/Byte are 1-byte (b), Int64/pointer
+        8-byte (l), etc.  A fixed 'w' (4-byte) emitted a stride the 1-byte
+        subscript read could not follow (every Boolean element read 0). }
+      Parts := Parts + Format('%s %s', [ConstElemQbeDataType(CD.ArrayElemType),
+                                        ElemVal]);
   end;
   { Class/record consts keep an exported, type-qualified label (referenced as
     TFoo.Const across the compilation).  Block-local and program/unit array

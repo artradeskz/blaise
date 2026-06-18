@@ -211,6 +211,7 @@ type
     procedure EmitClassSection(ATypeDecls: TObjectList;
                                AGenericInstances: TObjectList;
                                ASymTable: TSymbolTable);
+    function ConstElemAsmDir(const AElemType: string): string;
     procedure EmitArrayConstData(ABlock: TBlock; const APrefix: string);
     { Escape a Pascal string for use inside an AS .ascii directive. }
     function AsmEscapeString(const AStr: string): string;
@@ -1222,6 +1223,45 @@ end;
 
 { Evaluate a string literal: register it in the pool if new, then emit
   leaq __sN+12(%rip), %rax so %rax holds the Blaise data pointer. }
+{ Assembler data directive for one non-string array-const element of the named
+  element type.  Honours the element's real width (Boolean/Byte -> .byte,
+  Int64/pointer -> .quad, ...) so the emitted stride matches the subscript-read
+  stride.  Defaults to .long (4-byte Integer) when the type is unknown. }
+function TX86_64Backend.ConstElemAsmDir(const AElemType: string): string;
+var
+  TD: TTypeDesc;
+  Sz: Integer;
+begin
+  { Map built-in scalar names directly so the result is correct even when
+    FSymTable is unset (some callers build a codegen without a table); user
+    types fall back to the table, defaulting to .long (4-byte). }
+  if SameText(AElemType, 'Boolean') or SameText(AElemType, 'Byte') or
+     SameText(AElemType, 'ShortInt') or SameText(AElemType, 'AnsiChar') then
+    Exit(#9'.byte');
+  if SameText(AElemType, 'SmallInt') or SameText(AElemType, 'Word') then
+    Exit(#9'.word');
+  if SameText(AElemType, 'Int64') or SameText(AElemType, 'UInt64') or
+     SameText(AElemType, 'Pointer') or SameText(AElemType, 'Double') then
+    Exit(#9'.quad');
+  if SameText(AElemType, 'Integer') or SameText(AElemType, 'UInt32') or
+     SameText(AElemType, 'LongInt') or SameText(AElemType, 'Cardinal') or
+     SameText(AElemType, 'Single') then
+    Exit(#9'.long');
+  Sz := 4;
+  if FSymTable <> nil then
+  begin
+    TD := FSymTable.FindType(AElemType);
+    if TD <> nil then Sz := TD.RawSize();
+  end;
+  case Sz of
+    1: Result := #9'.byte';
+    2: Result := #9'.word';
+    8: Result := #9'.quad';
+  else
+    Result := #9'.long';
+  end;
+end;
+
 procedure TX86_64Backend.EmitArrayConstData(ABlock: TBlock;
   const APrefix: string);
 var
@@ -1285,7 +1325,8 @@ begin
       Self.Emit('.balign 4');
       Self.Emit(Lbl + ':');
       for J := 0 to CD.ArrayElements.Count - 1 do
-        Self.Emit(Format(#9'.long %s', [CD.ArrayElements[J]]));
+        Self.Emit(Format('%s %s',
+          [Self.ConstElemAsmDir(CD.ArrayElemType), CD.ArrayElements[J]]));
     end;
   end;
   for I := 0 to ABlock.ProcDecls.Count - 1 do
@@ -1322,7 +1363,8 @@ begin
         Self.Emit('.balign 4');
         Self.Emit(Lbl + ':');
         for K := 0 to CD.ArrayElements.Count - 1 do
-          Self.Emit(Format(#9'.long %s', [CD.ArrayElements[K]]));
+          Self.Emit(Format('%s %s',
+            [Self.ConstElemAsmDir(CD.ArrayElemType), CD.ArrayElements[K]]));
       end;
     end;
   end;
@@ -1359,7 +1401,8 @@ begin
         Self.Emit('.globl ' + Lbl);
         Self.Emit(Lbl + ':');
         for K := 0 to CD.ArrayElements.Count - 1 do
-          Self.Emit(Format(#9'.long %s', [CD.ArrayElements[K]]));
+          Self.Emit(Format('%s %s',
+            [Self.ConstElemAsmDir(CD.ArrayElemType), CD.ArrayElements[K]]));
       end;
     end;
     for J := 0 to TClassTypeDef(TD.Def).Methods.Count - 1 do
@@ -1396,7 +1439,8 @@ begin
           Self.Emit('.balign 4');
           Self.Emit(Lbl + ':');
           for M := 0 to CD.ArrayElements.Count - 1 do
-            Self.Emit(Format(#9'.long %s', [CD.ArrayElements[M]]));
+            Self.Emit(Format('%s %s',
+              [Self.ConstElemAsmDir(CD.ArrayElemType), CD.ArrayElements[M]]));
         end;
       end;
     end;

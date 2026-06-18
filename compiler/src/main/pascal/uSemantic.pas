@@ -177,6 +177,8 @@ type
     function  EvalConstFloatExpr(AExpr: TASTExpr; ALine, ACol: Integer): string;
     function  IsFloatConstExpr(AExpr: TASTExpr): Boolean;
     function  ResolveArrayBound(const ABoundText: string): Integer;
+    function  ResolveConstArrayElem(const AElem: string; AElemType: TTypeDesc;
+                                    ALine, ACol: Integer): string;
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
@@ -3935,6 +3937,37 @@ begin
   end;
 end;
 
+function TSemanticAnalyser.ResolveConstArrayElem(const AElem: string;
+  AElemType: TTypeDesc; ALine, ACol: Integer): string;
+{ Resolve one array-const element to the numeric string codegen needs.  The
+  parser stores identifiers verbatim because it does not yet know the element
+  type; with the type now known, fold bare identifiers — Boolean True/False,
+  enum members, and named integer/boolean constants — to their ordinal value.
+  Numeric and float literals (and already-folded integers) pass through. }
+var
+  Sym: TSymbol;
+begin
+  Result := AElem;
+  if AElem = '' then Exit;
+  { Already a numeric literal (int, negative int, or float) — leave as is. }
+  if IsPlainInt(AElem) then Exit;
+  if (AElem[0] >= '0') and (AElem[0] <= '9') then Exit;
+  if (AElem[0] = '-') or (AElem[0] = '+') or (AElem[0] = '.') then Exit;
+  { Boolean literals. }
+  if SameText(AElem, 'True') then Exit('1');
+  if SameText(AElem, 'False') then Exit('0');
+  { Named constant or enum member — both are skConstant symbols carrying their
+    ordinal/value in ConstValue. }
+  Sym := FTable.Lookup(AElem);
+  if (Sym <> nil) and (Sym.Kind = skConstant) then
+    Exit(IntToStr(Sym.ConstValue));
+  { Unresolved identifier in a numeric/boolean/enum array — a real error;
+    leaving it would emit an undefined symbol reference at link time. }
+  SemanticError(Format(
+    'Cannot resolve array-const element ''%s'' to a constant value', [AElem]),
+    ALine, ACol);
+end;
+
 procedure TSemanticAnalyser.AnalyseSetConstDecl(ACD: TConstDecl);
 var
   I:         Integer;
@@ -4301,6 +4334,18 @@ begin
            (J < CD.ArrayElements.Count) then
           CD.ArrayElements.Put(J, IntToStr(FoldConstBitOpExpr(
             TStringList(CD.ArrayElementParts.Items[J]), CD.Line, CD.Col)));
+    { Resolve bare-identifier elements to their numeric values so codegen emits
+      integer constants, not symbol references.  The parser stores identifiers
+      verbatim (it does not know the element type yet); here ElemTD is known.
+      Covers Boolean literals (False/True -> 0/1), enum members (-> ordinal),
+      and named integer/boolean constants. }
+    if (ElemTD <> nil) and
+       ((ElemTD.Kind in [tyBoolean, tyEnum]) or
+        (ElemTD.IsNumeric() and not (ElemTD.Kind in [tyDouble, tySingle]))) then
+      for J := 0 to CD.ArrayElements.Count - 1 do
+        CD.ArrayElements.Put(J,
+          Self.ResolveConstArrayElem(CD.ArrayElements[J], ElemTD,
+                                     CD.Line, CD.Col));
     if CD.ResolvedQbeName = '' then
       CD.ResolvedQbeName := Self.NewArrayConstLabel(CD.Name);
     Sym := TSymbol.Create(CD.Name, skConstant, ArrTD);
