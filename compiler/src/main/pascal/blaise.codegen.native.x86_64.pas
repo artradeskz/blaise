@@ -4830,6 +4830,7 @@ var
   SuppOut: string;
   LSuppNo: string;
   LSuppEnd: string;
+  SCAT: TStaticArrayTypeDesc;
 begin
   if AExpr is TNilLiteral then
   begin
@@ -6477,6 +6478,41 @@ begin
   if (AExpr is TFieldAccessExpr) and TFieldAccessExpr(AExpr).IsConstant then
   begin
     FAE := TFieldAccessExpr(AExpr);
+    { Class-level const ARRAY element access (T.Days[I]): semantic folds the
+      subscript into the field-access node, setting ConstArraySymbol (the global
+      data label), ConstArrayType (the static-array type) and PropIndexExpr (the
+      index).  Compute base + (idx - LowBound)*ElemSize and load — mirrors the
+      QBE EmitSupportsExpr/IsConstant ConstArraySymbol path.  Without this the
+      access fell through to the scalar-string branch and read an empty literal. }
+    if (FAE.ConstArraySymbol <> '') and (FAE.PropIndexExpr <> nil) and
+       (FAE.ConstArrayType <> nil) then
+    begin
+      SCAT := TStaticArrayTypeDesc(FAE.ConstArrayType);
+      Self.EmitExprToEax(FAE.PropIndexExpr);          { index -> %rax }
+      if SCAT.LowBound <> 0 then
+        Self.Emit(Format(#9'subq $%d, %%rax', [SCAT.LowBound]));
+      Self.Emit(Format(#9'imulq $%d, %%rax', [SCAT.ElementType.RawSize()]));
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rcx',
+        [NativeMangle(FAE.ConstArraySymbol)]));
+      Self.Emit(#9'addq %rcx, %rax');
+      if (SCAT.ElementType <> nil) and IsFloatFamily(SCAT.ElementType) then
+        Self.EmitLoadFloat('(%rax)', SCAT.ElementType)
+      else if (SCAT.ElementType <> nil) and SCAT.ElementType.IsString() then
+        Self.Emit(#9'movq (%rax), %rax')
+      else
+      begin
+        Self.Emit(#9'movq (%rax), %rax');
+        Self.EmitNarrowToType(SCAT.ElementType);
+      end;
+      Exit;
+    end;
+    { Bare class-const array reference (no subscript): the data label address. }
+    if FAE.ConstArraySymbol <> '' then
+    begin
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+        [NativeMangle(FAE.ConstArraySymbol)]));
+      Exit;
+    end;
     if (FAE.ResolvedType <> nil) and FAE.ResolvedType.IsString() then
       Self.EmitStrLitAddr(FAE.ConstString)
     else
