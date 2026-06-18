@@ -131,6 +131,14 @@ type
     procedure TestCodegen_SetOfByte_IsJumbo;
 
     { ------------------------------------------------------------------ }
+    { Integer-subrange base type: set of 0..255 / set of lo..hi           }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_SetOfSubrange_VarDecl_OK;
+    procedure TestSemantic_SetOfSubrange_TypeDecl_OK;
+    procedure TestSemantic_SetOfSubrange_OverBound_Fails;
+    procedure TestSemantic_SetOfSubrange_Descending_Fails;
+
+    { ------------------------------------------------------------------ }
     { 64-bit sets (>32 members)                                            }
     { ------------------------------------------------------------------ }
     procedure TestSemantic_Set64_TypeRegistered;
@@ -1380,6 +1388,28 @@ const
         end.
         ''';
 
+  SrcSetOfSubrangeVar =
+    '''
+        program P;
+        var s: set of 0..255;
+        begin
+          s := [10, 200]
+        end.
+        ''';
+  SrcSetOfSubrangeType =
+    '''
+        program P;
+        type TS = set of 0..63;
+        var s: TS;
+        begin
+          s := [3, 63]
+        end.
+        ''';
+  SrcSetOfSubrangeOverBound =
+    'program P; var s: set of 0..1000; begin s := [1] end.';
+  SrcSetOfSubrangeDescending =
+    'program P; var s: set of 5..3; begin s := [] end.';
+
   SrcSetOfByteRange =
     '''
         program P;
@@ -1575,6 +1605,30 @@ begin
   finally
     Prog.Free();
   end;
+end;
+
+procedure TSetTests.TestSemantic_SetOfSubrange_VarDecl_OK;
+begin
+  { 'set of 0..255' (integer-subrange base) is accepted. }
+  SemanticOK(SrcSetOfSubrangeVar);
+end;
+
+procedure TSetTests.TestSemantic_SetOfSubrange_TypeDecl_OK;
+begin
+  { 'type TS = set of 0..63' is accepted. }
+  SemanticOK(SrcSetOfSubrangeType);
+end;
+
+procedure TSetTests.TestSemantic_SetOfSubrange_OverBound_Fails;
+begin
+  { A set has at most 256 elements (ordinals 0..255); 0..1000 is rejected. }
+  SemanticFail(SrcSetOfSubrangeOverBound);
+end;
+
+procedure TSetTests.TestSemantic_SetOfSubrange_Descending_Fails;
+begin
+  { A descending subrange (5..3) is a mistake, not a silent empty set. }
+  SemanticFail(SrcSetOfSubrangeDescending);
 end;
 
 initialization

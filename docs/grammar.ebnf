@@ -673,7 +673,11 @@ EnumMember
  * The anonymous enum form synthesises an enum type whose members become
  * ordinary enum constants in scope. *)
 SetType
-    = SET OF ( IDENT | EnumDef )
+    = SET OF ( IDENT | EnumDef | Subrange )
+    ;
+
+Subrange
+    = ConstExpr DOTDOT ConstExpr
     ;
 
 (* The base type must have at most 256 ordinal values.  Storage scales with
@@ -685,9 +689,14 @@ SetType
  *                   aggregate (record/static array)
  * Value ordinal N maps to bit (N mod 8) of byte (N div 8) in all forms.
  * Types with more than 256 possible values (e.g. Integer, Word) are rejected
- * by the semantic analyser — only Byte (256 values), Boolean (2 values), and
- * enumerations with at most 256 members are accepted.  Set literals with
- * ordinal base types accept integer literals and ranges: [1, 2, 10..20]. *)
+ * by the semantic analyser — only Byte (256 values), Boolean (2 values),
+ * enumerations with at most 256 members, and integer subranges within
+ * 0..255 are accepted.  The subrange form `set of L..H` (e.g. `set of 0..255`,
+ * `set of 1..10`) sizes the bitmap to H+1 bits; both bounds may be integer
+ * literals, named constants, or constant expressions.  L must be >= 0, H must
+ * be <= 255, and the range must be ascending (H >= L) — a descending or
+ * out-of-range subrange is a semantic error.  Set literals with ordinal base
+ * types accept integer literals and ranges: [1, 2, 10..20]. *)
 
 (* Procedural type — bare or method pointer.
  *

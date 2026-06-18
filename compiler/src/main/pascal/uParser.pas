@@ -347,16 +347,36 @@ begin
         the set from this string on demand — no parser-side symbol table is
         needed, and the encoding is self-contained. }
       Exit('set of ' + Self.ParseAnonEnumName())
-    else
+    else if Check(tkIdent) and (PeekKind() <> tkDotDot) then
     begin
-      if not Check(tkIdent) then
-        raise EParseError.Create(Format(
-          'Expected enum type or ''('' after ''set of'' at line %d col %d in %s',
-          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      { Named base type: 'set of Byte', 'set of Boolean', 'set of TEnum'. }
       Result := 'set of ' + FCurrent.Value;
       Advance();
       Exit;
-    end;
+    end
+    else if Check(tkIntLit) or Check(tkIdent) then
+    begin
+      { Integer subrange base type: 'set of 0..255', 'set of 1..10', or a named
+        constant bound ('set of Lo..Hi').  Each bound is a single integer literal
+        or identifier; encode as 'set of lo..hi' for the semantic pass to
+        validate (0..255) and size.  (A bracket-context bound reader is wrong
+        here — the subrange is not delimited by ']'/','.) }
+      LStr := FCurrent.Value;
+      Advance();
+      Expect(tkDotDot);
+      if not (Check(tkIntLit) or Check(tkIdent)) then
+        raise EParseError.Create(Format(
+          'Expected set subrange upper bound at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      HStr := FCurrent.Value;
+      Advance();
+      Exit('set of ' + LStr + '..' + HStr);
+    end
+    else
+      raise EParseError.Create(Format(
+        'Expected enum type, integer subrange, or ''('' after ''set of'' ' +
+        'at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   end;
   if not Check(tkIdent) then
     raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
@@ -1508,6 +1528,8 @@ begin
 end;
 
 function TParser.ParseSetDef: TSetTypeDef;
+var
+  Lo, Hi: string;
 begin
   Result := TSetTypeDef.Create();
   try
@@ -1515,12 +1537,32 @@ begin
     Result.Col  := FCurrent.Col;
     Expect(tkSet);
     Expect(tkOf);
-    if not Check(tkIdent) then
+    if Check(tkIdent) and (PeekKind() <> tkDotDot) then
+    begin
+      { Named base type: set of Byte / Boolean / TEnum. }
+      Result.BaseTypeName := FCurrent.Value;
+      Advance();
+    end
+    else if Check(tkIntLit) or Check(tkIdent) then
+    begin
+      { Integer subrange base type: set of 0..255 / 1..10 / Lo..Hi.  Stored as
+        'lo..hi' in BaseTypeName; the semantic pass resolves and validates it. }
+      Lo := FCurrent.Value;
+      Advance();
+      Expect(tkDotDot);
+      if not (Check(tkIntLit) or Check(tkIdent)) then
+        raise EParseError.Create(Format(
+          'Expected set subrange upper bound at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      Hi := FCurrent.Value;
+      Advance();
+      Result.BaseTypeName := Lo + '..' + Hi;
+    end
+    else
       raise EParseError.Create(Format(
-        'Expected base type name after ''set of'' at line %d col %d in %s',
+        'Expected base type or integer subrange after ''set of'' ' +
+        'at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-    Result.BaseTypeName := FCurrent.Value;
-    Advance();
   except
     Result.Free();
     raise;

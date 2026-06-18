@@ -60,6 +60,13 @@ type
     procedure TestRun_ConstSet_MixedRangeAndLiteral;
     procedure TestRun_ConstSet_JumboWithRange;
     procedure TestRun_ConstSet_EnumStillWorks;
+
+    { Integer-subrange base type: set of 0..255 / set of 1..10 (issue from
+      future-improvements) + set of Boolean membership }
+    procedure TestRun_SetOfSubrange_0to255;
+    procedure TestRun_SetOfSubrange_TypeDecl;
+    procedure TestRun_SetOfSubrange_NamedConstBounds;
+    procedure TestRun_SetOfBoolean_Membership;
   end;
 
 implementation
@@ -562,6 +569,79 @@ const Src = '''
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, 'y' + LE + 'n' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_SetOfSubrange_0to255;
+{ Integer-subrange base type 'set of 0..255' — equivalent to set of Byte. }
+const Src = '''
+    program P;
+    var s: set of 0..255;
+    begin
+      s := [10, 20, 200];
+      if 20 in s then WriteLn('y') else WriteLn('n');
+      if 50 in s then WriteLn('y') else WriteLn('n');
+      Include(s, 50);
+      if 50 in s then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'n' + LE + 'y' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_SetOfSubrange_TypeDecl;
+{ 'type T = set of 0..63' (small, <=64-bit path) + range literal. }
+const Src = '''
+    program P;
+    type TS = set of 0..63;
+    var s: TS;
+    begin
+      s := [3..7];
+      if 5 in s then WriteLn('y') else WriteLn('n');
+      if 63 in s then WriteLn('y') else WriteLn('n');
+      Include(s, 63);
+      if 63 in s then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'n' + LE + 'y' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_SetOfSubrange_NamedConstBounds;
+{ Subrange bounds may be named constants: set of Lo..Hi. }
+const Src = '''
+    program P;
+    const Lo = 0; Hi = 100;
+    var s: set of Lo..Hi;
+    begin
+      s := [50];
+      if 50 in s then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_SetOfBoolean_Membership;
+{ set of Boolean: a Boolean operand on the left of 'in' (True in s) and as the
+  Include/Exclude element. }
+const Src = '''
+    program P;
+    var s: set of Boolean; b: Boolean;
+    begin
+      s := [True];
+      if True in s then WriteLn('y') else WriteLn('n');
+      if False in s then WriteLn('y') else WriteLn('n');
+      Include(s, False);
+      b := False;
+      if b in s then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'n' + LE + 'y' + LE, 0);
 end;
 
 initialization

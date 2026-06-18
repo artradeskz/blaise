@@ -34,29 +34,50 @@ prioritise them.
 - reference to function/procedure (anonymous methods)
 - cdecl/stdcall calling-convention markers on procedural types
 
-=== Set types over an integer subrange (`set of 0..255`)
-
-`set of byte` and `set of Boolean` are *implemented* (issue #105): the named
-ordinal base types lower to a bit set — `set of byte` uses the 256-bit jumbo
-path, membership/Include/Exclude and `[lo..hi]` range literals all work on both
-backends.  See `docs/language-rationale.adoc` and the `set of Byte` tests in
-`cp.test.sets.pas` / `cp.test.e2e.sets.pas`.
-
-What remains is the *anonymous integer-subrange* base form,
-`set of 0..255` / `set of 1..10`, which is still rejected at parse time
-("Expected enum type or '(' after 'set of'").  Standard Pascal accepts a
-subrange there; the bit count is the range width and element ordinals are the
-integer values themselves — the same machinery `set of byte` already uses, so
-this is mostly parser + base-type-resolution work, not new codegen.
-
-Minor follow-on: for `set of Boolean`, a Boolean operand on the left of `in`
-(e.g. `True in s`) is rejected by the `in` type-check ("operand must be
-numeric"); `Ord(b) in s` works.  The check should accept a Boolean (or any
-ordinal) operand against a matching ordinal-base set.
-
 === Method level attributes
 
 Blaise only has class-level attribute RTTI today — there's no per-method attribute reflection, and adding it is a layout-changing compiler change (new method-table slot, stage-2 rebuild).
+
+=== If Conditional Operator (Ternary Conditional Operator)
+
+More details here: https://en.wikipedia.org/wiki/Ternary_conditional_operator
+
+Many languages use the ?: syntax as follows:
+
+`result = condition ? value_if_true : value_if_false`
+
+But that's not very pascal-like. Oxygene language has implemented this years
+ago with te following syntax:
+
+For instance
+
+[source]
+----
+var s := if (a<>0) then Sin(1/a) else 1;
+----
+
+being equivalent to
+
+[source,pascal]
+----
+var s : Float;
+if (a<>0) then
+   s := Sin(1/a)
+else s := 1;
+----
+
+So for Blaise we could do similar:
+
+X := if Left < 100 then 22 else 45;
+// the operator can be used as part of any expression, as follows:
+ShowMessage(if Left < 100 then 'Small' else 'Big');
+
+NOTE: If the two types do not match and are incompatible, the compiler should issue an error message
+
+NOTE: It is important to note that the if-then-else expression differs from the if-then-else statement, the expression has a single type. When the type of the then and else expressions differ, the expression's type is the common type of the two expressions' types; also known as the Least Upper Bound (LUB) type.
+
+See also Delphi's documentation: https://docwiki.embarcadero.com/RADStudio/Florence/en/Conditional_Operators_(Delphi)
+
 
 == Language — Features Required to Complete the punit Port
 
@@ -142,7 +163,7 @@ record's own memory.  Used before `FreeMem` when the record was heap-allocated.
 allocated records that contain strings leak the string's reference count.
 
 *Current workaround in punit.* The `Finalize` calls were dropped.  In Blaise,
-ARC on assignment should automatically manage string fields inside records, so
+ARC on assfignment should automatically manage string fields inside records, so
 the string is released when the record's string field is overwritten or when the
 last reference to the containing heap block is released.  The correctness of
 this assumption depends on the ARC implementation for record fields — if the
@@ -156,46 +177,6 @@ local record variables at scope exit.
 
 *Effort.* Small to moderate — shares infrastructure with ARC scope-exit emit.
 
-
-=== If Conditional Operator (Ternary Conditional Operator)
-
-More details here: https://en.wikipedia.org/wiki/Ternary_conditional_operator
-
-Many languages use the ?: syntax as follows:
-
-`result = condition ? value_if_true : value_if_false`
-
-But that's not very pascal-like. Oxygene language has implemented this years
-ago with te following syntax:
-
-For instance
-
-[source]
-----
-var s := if (a<>0) then Sin(1/a) else 1;
-----
-
-being equivalent to
-
-[source,pascal]
-----
-var s : Float;
-if (a<>0) then
-   s := Sin(1/a)
-else s := 1;
-----
-
-So for Blaise we could do similar:
-
-X := if Left < 100 then 22 else 45;
-// the operator can be used as part of any expression, as follows:
-ShowMessage(if Left < 100 then 'Small' else 'Big');
-
-NOTE: If the two types do not match and are incompatible, the compiler should issue an error message
-
-NOTE: It is important to note that the if-then-else expression differs from the if-then-else statement, the expression has a single type. When the type of the then and else expressions differ, the expression's type is the common type of the two expressions' types; also known as the Least Upper Bound (LUB) type.
-
-See also Delphi's documentation: https://docwiki.embarcadero.com/RADStudio/Florence/en/Conditional_Operators_(Delphi)
 
 == StdLib Packages — Numeric Types
 

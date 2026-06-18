@@ -1293,15 +1293,16 @@ code.
 _Deferred to Phase 6 (LLVM backend + Windows target). No implementation
 required for the current Linux x86_64 target._
 
-=== Set Types (`set of TEnum` / `set of Byte`)
+=== Set Types (`set of TEnum` / `set of Byte` / `set of 0..255`)
 
 ==== Decision
 
 Blaise supports Pascal bit-set types declared as `set of BaseType`, where
-`BaseType` is either a previously-defined enumeration or one of the small
-ordinal types `Byte` (256 values, 0..255) or `Boolean` (2 values).  A set
-variable holds a bitmask in which bit N is set when the member with ordinal N
-is included.
+`BaseType` is a previously-defined enumeration, one of the small ordinal
+types `Byte` (256 values, 0..255) or `Boolean` (2 values), or an integer
+subrange within 0..255 (e.g. `0..9`, `1..10`, `0..255`).  A set variable
+holds a bitmask in which bit N is set when the member with ordinal N is
+included.
 
 ==== Ordinal-based sets
 
@@ -1328,8 +1329,44 @@ Integer range expressions `[lo..hi]` are expanded to individual members at
 compile time using `EvalConstIntExpr`.  Bounds are validated against the
 set's bit count (0..255 for Byte, 0..1 for Boolean).
 
+A Boolean operand is accepted on either side of `in` and as the second
+argument of `Include`/`Exclude` for a `set of Boolean`; the operand only
+needs to be ordinal-compatible with the set's base type, not strictly
+numeric.  `True in s` and `Include(s, False)` therefore work directly,
+without an intervening `Ord()`.
+
 Larger ordinal types (`Integer`, `Word`, `Int64`) are rejected because they
 would require impractically large bitmaps.
+
+==== Integer-subrange base (`set of 0..255`)
+
+The set base may also be an anonymous integer subrange, `set of L..H`, as
+in standard Pascal, Delphi, and FPC:
+
+[source,pascal]
+----
+type TDigits = set of 0..9;          (* type-declaration form *)
+var Small: set of 1..10;             (* inline form in a var declaration *)
+begin
+  Small := [1, 5, 8];
+  if 5 in Small then WriteLn('yes');
+end.
+----
+
+The subrange lowers to the same bitmap machinery as `set of Byte`: the
+bitmap is sized to `H + 1` bits (member ordinals are the integer values
+themselves), so `set of 0..63` is a 64-bit small set and `set of 0..255` is
+a 256-bit jumbo set.  Both bounds may be integer literals, named constants,
+or constant expressions, resolved through the same `ResolveArrayBound` path
+used for static-array bounds.
+
+The lower bound must be `>= 0`, the upper bound `<= 255`, and the range must
+be ascending (`H >= L`).  A descending subrange (`set of 5..3`) is a
+semantic error rather than a silently-empty set, and an upper bound above
+255 is rejected for the same 256-element ceiling that applies to every set.
+The bitmap always starts at ordinal 0 — `set of 1..10` still reserves bits
+for 0 — which keeps the representation identical to `set of Byte` and avoids
+a base-offset in the `_Set*` RTL helpers.
 
 ==== Storage model
 

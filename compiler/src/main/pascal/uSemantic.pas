@@ -179,6 +179,7 @@ type
     function  EvalConstFloatExpr(AExpr: TASTExpr; ALine, ACol: Integer): string;
     function  IsFloatConstExpr(AExpr: TASTExpr): Boolean;
     function  ResolveArrayBound(const ABoundText: string): Integer;
+    function  ResolveSubrangeSetType(const ASubrange: string): TSetTypeDesc;
     function  ResolveConstArrayElem(const AElem: string; AElemType: TTypeDesc;
                                     ALine, ACol: Integer): string;
     procedure AnalyseTypeDecls(ABlock: TBlock);
@@ -2474,6 +2475,16 @@ begin
   if (Length(AName) > 7) and (StrHead(AName, 7) = 'set of ') then
   begin
     BaseName := StrCopyTail(AName, 7);
+    { Integer-subrange base type 'set of lo..hi' (e.g. set of 0..255).  Like
+      Delphi/FPC, the element ordinals are the integer values themselves and the
+      type is capped at 256 elements (ordinals 0..255).  Resolve and validate
+      the bounds, then build an ordinal set sized by the high bound — reusing the
+      same Byte-set machinery (bits 0..hi). }
+    if StrPos('..', BaseName) >= 0 then
+    begin
+      Result := Self.ResolveSubrangeSetType(BaseName);
+      Exit;
+    end;
     { Anonymous enum element 'set of (a,b,c)' — synthesise the enum from the
       encoded member list; otherwise resolve a named element type. }
     if (BaseName <> '') and (StrAt(BaseName, 0) = Ord('(')) then
@@ -3951,6 +3962,40 @@ begin
   end;
 end;
 
+function TSemanticAnalyser.ResolveSubrangeSetType(const ASubrange: string): TSetTypeDesc;
+{ Resolve a 'set of lo..hi' integer-subrange set type, e.g. 'set of 0..255'.
+  Element ordinals are the integer values themselves; like Delphi/FPC the type is
+  capped at 256 elements (ordinals 0..255).  The bitmap is sized by the high
+  bound (bits 0..hi), reusing the Byte-backed ordinal-set machinery — a low bound
+  > 0 simply leaves the lower bits unused, matching FPC. }
+var
+  DDotPos, Lo, Hi: Integer;
+  LStr, HStr, CanonName: string;
+begin
+  DDotPos := StrPos('..', ASubrange);
+  LStr := StrCopyFrom(ASubrange, 0, DDotPos);
+  HStr := StrCopyTail(ASubrange, DDotPos + 2);
+  Lo := ResolveArrayBound(LStr);
+  Hi := ResolveArrayBound(HStr);
+  if Lo < 0 then
+    SemanticError(Format(
+      'Set subrange ''%s'': lower bound must be >= 0', [ASubrange]), 0, 0);
+  if Hi > 255 then
+    SemanticError(Format(
+      'Set subrange ''%s'': upper bound must be <= 255 (a set has at most 256 ' +
+      'elements)', [ASubrange]), 0, 0);
+  if Hi < Lo then
+    SemanticError(Format(
+      'Set subrange ''%s'' is descending', [ASubrange]), 0, 0);
+  CanonName := Format('set of %d..%d', [Lo, Hi]);
+  Result := TSetTypeDesc(FTable.FindType(CanonName));
+  if Result = nil then
+  begin
+    Result := FTable.NewOrdinalSetType(CanonName, FTable.TypeByte, Hi + 1);
+    FTable.DefineGlobal(TSymbol.Create(CanonName, skType, Result));
+  end;
+end;
+
 function TSemanticAnalyser.ResolveConstArrayElem(const AElem: string;
   AElemType: TTypeDesc; ALine, ACol: Integer): string;
 { Resolve one array-const element to the numeric string codegen needs.  The
@@ -4460,6 +4505,7 @@ var
   EnumDesc:   TEnumTypeDesc;
   EnumDef:    TEnumTypeDef;
   SetDesc:    TSetTypeDesc;
+  SetSubDesc: TSetTypeDesc;
   SetDef:     TSetTypeDef;
   AttrIdx:    Integer;
   RawAttr:    string;
@@ -4549,6 +4595,23 @@ begin
     else if TD.Def is TSetTypeDef then
     begin
       SetDef   := TSetTypeDef(TD.Def);
+      { Integer-subrange base type ('lo..hi', e.g. set of 0..255): build an
+        ordinal set sized by the high bound (validated 0..255), bound to this
+        type's name. }
+      if StrPos('..', SetDef.BaseTypeName) >= 0 then
+      begin
+        SetSubDesc := Self.ResolveSubrangeSetType(SetDef.BaseTypeName);
+        SetDesc := FTable.NewOrdinalSetType(TD.Name, SetSubDesc.BaseType,
+                                            SetSubDesc.BitCount);
+        Sym := TSymbol.Create(TD.Name, skType, SetDesc);
+        if not FTable.Define(Sym) then
+        begin
+          Sym.Free();
+          SemanticError(Format('Duplicate type name ''%s''', [TD.Name]),
+            TD.Line, TD.Col);
+        end;
+        Continue;
+      end;
       BaseSym  := FTable.Lookup(SetDef.BaseTypeName);
       if (BaseSym = nil) or (BaseSym.Kind <> skType) then
         SemanticError(
@@ -8507,9 +8570,13 @@ begin
           if TSetTypeDesc(TASTExpr(ACall.Args.Items[0]).ResolvedType).BaseType.Kind
              in [tyByte, tyBoolean] then
           begin
-            if not ArgType.IsNumeric() then
+            { Ordinal-base set: accept a numeric ordinal, and a Boolean operand
+              for a Boolean-base set (Include(s, True)). }
+            if not (ArgType.IsNumeric() or
+                    ((TSetTypeDesc(TASTExpr(ACall.Args.Items[0]).ResolvedType).BaseType.Kind = tyBoolean) and
+                     (ArgType.Kind = tyBoolean))) then
               SemanticError(
-                Format('Second argument of ''%s'' must be numeric for ''set of %s'', got ''%s''',
+                Format('Second argument of ''%s'' must be ordinal for ''set of %s'', got ''%s''',
                   [ACall.Name,
                    TSetTypeDesc(TASTExpr(ACall.Args.Items[0]).ResolvedType).BaseType.Name,
                    ArgType.Name]),
@@ -10725,10 +10792,16 @@ begin
         ABin.Line, ABin.Col);
     if TSetTypeDesc(RType).BaseType.Kind in [tyByte, tyBoolean] then
     begin
-      if not LType.IsNumeric() then
+      { Ordinal-base set (Byte/Boolean or an integer subrange): the left operand
+        is the element ordinal.  Accept a numeric operand, and — for a Boolean
+        base — a Boolean operand (True/False), since `True in s` is the natural
+        form.  Both lower to the operand's ordinal. }
+      if not (LType.IsNumeric() or
+              ((TSetTypeDesc(RType).BaseType.Kind = tyBoolean) and
+               (LType.Kind = tyBoolean))) then
         SemanticError(
-          Format('Left operand of ''in'' must be numeric for ''set of %s'', got ''%s''',
-            [TSetTypeDesc(RType).BaseType.Name, LType.Name]),
+          Format('Left operand of ''in'' must be %s for ''set of %s'', got ''%s''',
+            ['ordinal', TSetTypeDesc(RType).BaseType.Name, LType.Name]),
           ABin.Line, ABin.Col);
     end
     else if LType <> TSetTypeDesc(RType).BaseType then
