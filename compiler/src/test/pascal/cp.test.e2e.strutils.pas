@@ -116,6 +116,10 @@ type
     procedure TestRun_CodePointPos_Found;
     procedure TestRun_CodePointFromByteIndex;
     procedure TestRun_CodePointByteIndex_Roundtrip;
+    procedure TestRun_CodePointToString_ASCII;
+    procedure TestRun_CodePointToString_TwoByteBytes;
+    procedure TestRun_CodePointToString_Roundtrip;
+    procedure TestRun_CodePointToString_OutOfRange;
   end;
 
 implementation
@@ -1040,6 +1044,55 @@ const
     end.
     ''';
 
+  { ASCII codepoint 'A' (65) must encode to a single byte. }
+  SrcCodePointToStringASCII = '''
+    program P;
+    uses StrUtils;
+    var S: string;
+    begin
+      S := CodePointToString(65);
+      WriteLn(Length(S));
+      WriteLn(OrdAt(S, 0))
+    end.
+    ''';
+
+  { Codepoint U+00B1 (177, '±') must encode to the two UTF-8 bytes
+    0xC2 0xB1 = 194, 177. }
+  SrcCodePointToStringTwoByteBytes = '''
+    program P;
+    uses StrUtils;
+    var S: string;
+    begin
+      S := CodePointToString(177);
+      WriteLn(Length(S));
+      WriteLn(OrdAt(S, 0));
+      WriteLn(OrdAt(S, 1))
+    end.
+    ''';
+
+  { CodePointToString is the inverse of CodePointFromByteIndex across a
+    representative codepoint from each UTF-8 length class. }
+  SrcCodePointToStringRoundtrip = '''
+    program P;
+    uses StrUtils;
+    begin
+      WriteLn(CodePointFromByteIndex(CodePointToString(65), 0));
+      WriteLn(CodePointFromByteIndex(CodePointToString(177), 0));
+      WriteLn(CodePointFromByteIndex(CodePointToString(8364), 0));
+      WriteLn(CodePointFromByteIndex(CodePointToString(128512), 0))
+    end.
+    ''';
+
+  { Out-of-range codepoints yield an empty string. }
+  SrcCodePointToStringOutOfRange = '''
+    program P;
+    uses StrUtils;
+    begin
+      WriteLn(Length(CodePointToString(-1)));
+      WriteLn(Length(CodePointToString(1114112)))
+    end.
+    ''';
+
 procedure TE2EStrUtilsTests.TestRun_CodePointSize;
 var Output: string; RCode: Integer;
 begin
@@ -1102,6 +1155,39 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcCodePointByteIndexRoundtrip, Output, RCode));
   AssertEquals('byte indices', '0' + Chr(10) + '1' + Chr(10) + '3', Trim(Output));
+end;
+
+procedure TE2EStrUtilsTests.TestRun_CodePointToString_ASCII;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCodePointToStringASCII, Output, RCode));
+  AssertEquals('len+byte', '1' + Chr(10) + '65', Trim(Output));
+end;
+
+procedure TE2EStrUtilsTests.TestRun_CodePointToString_TwoByteBytes;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCodePointToStringTwoByteBytes, Output, RCode));
+  AssertEquals('len+bytes', '2' + Chr(10) + '194' + Chr(10) + '177', Trim(Output));
+end;
+
+procedure TE2EStrUtilsTests.TestRun_CodePointToString_Roundtrip;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCodePointToStringRoundtrip, Output, RCode));
+  AssertEquals('codepoints',
+    '65' + Chr(10) + '177' + Chr(10) + '8364' + Chr(10) + '128512', Trim(Output));
+end;
+
+procedure TE2EStrUtilsTests.TestRun_CodePointToString_OutOfRange;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcCodePointToStringOutOfRange, Output, RCode));
+  AssertEquals('empty', '0' + Chr(10) + '0', Trim(Output));
 end;
 
 initialization

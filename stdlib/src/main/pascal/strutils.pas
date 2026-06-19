@@ -174,6 +174,15 @@ function CodePointByteIndex(const S: string; CPIndex: Integer): Integer;
   performed; the caller must ensure ByteIndex is within range. }
 function CodePointFromByteIndex(const S: string; ByteIndex: Integer): Integer;
 
+{ Encodes a single Unicode codepoint (0..U+10FFFF) as its UTF-8 byte
+  sequence and returns it as a 1..4 byte string.  This is the inverse of
+  CodePointAt / CodePointFromByteIndex.  It is the codepoint-aware
+  replacement for the Char(n) cast found in other Pascal dialects: Chr(n)
+  only writes a single raw byte, which is invalid for codepoints above 127,
+  whereas CodePointToString emits the correct multi-byte form.  Out-of-range
+  values (negative or above U+10FFFF) yield an empty string. }
+function CodePointToString(CP: Integer): string;
+
 { ------------------------------------------------------------------ }
 { TStringBuilder — efficient incremental string construction           }
 { ------------------------------------------------------------------ }
@@ -896,6 +905,26 @@ begin
     Inc(Count);
   end;
   Result := Count;
+end;
+
+function CodePointToString(CP: Integer): string;
+begin
+  if (CP < 0) or (CP > $10FFFF) then
+    Result := ''
+  else if CP < $80 then
+    Result := Chr(CP)
+  else if CP < $800 then
+    Result := Chr($C0 or (CP shr 6)) +
+              Chr($80 or (CP and $3F))
+  else if CP < $10000 then
+    Result := Chr($E0 or (CP shr 12)) +
+              Chr($80 or ((CP shr 6) and $3F)) +
+              Chr($80 or (CP and $3F))
+  else
+    Result := Chr($F0 or (CP shr 18)) +
+              Chr($80 or ((CP shr 12) and $3F)) +
+              Chr($80 or ((CP shr 6) and $3F)) +
+              Chr($80 or (CP and $3F));
 end;
 
 end.
