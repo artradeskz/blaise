@@ -518,6 +518,7 @@ type
     { Append program IR to existing output (companion to AppendUnit).
       Emits any remaining string literals and the $main function. }
     procedure AppendProgram(AProg: TProgram);
+    procedure NoteDepInitUnit(const AUnitName: string; AHasInit: Boolean);
     function  GetOutput: string;
   end;
 
@@ -13873,6 +13874,15 @@ begin
   finally
     IntfNames.Free();
   end;
+end;
+
+procedure TCodeGenQBE.NoteDepInitUnit(const AUnitName: string; AHasInit: Boolean);
+begin
+  { Separate-compilation: the dep's body (and its $<Unit>_init) is emitted in
+    its own object; record the name so AppendProgram's $main calls it.  The
+    QBE init symbol is the bare unit name + '_init' (see AppendUnit). }
+  if AHasInit then
+    FUnitInitNames.Add(AUnitName);
 end;
 
 procedure TCodeGenQBE.AppendProgram(AProg: TProgram);

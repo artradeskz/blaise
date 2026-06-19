@@ -75,6 +75,17 @@ type
     { Append program IR after one or more AppendUnit calls. }
     procedure AppendProgram(AProg: TProgram);
 
+    { Incremental / separate-compilation: when a dependency unit's BODY is
+      compiled elsewhere (its own .o) and therefore NOT emitted here via
+      AppendUnit, the program startup must still call that unit's
+      <Unit>_init() if it has an initialization section.  This registers the
+      unit name into the init-call list (in dependency order) WITHOUT emitting
+      any body, so AppendProgram's $main emits `call $<Unit>_init()` and the
+      call resolves against the symbol exported by the per-unit object.
+      AHasInit selects whether the unit actually has an init section; units
+      without one are skipped (no spurious call). }
+    procedure NoteDepInitUnit(const AUnitName: string; AHasInit: Boolean);
+
     { Retrieve the complete generated output (QBE IR text for the QBE
       backend; target assembly text for the native backend). }
     function GetOutput: string;

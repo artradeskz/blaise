@@ -120,10 +120,10 @@ begin
     'Write each unit''s TUnitInterface as <dir>/<unit>.bif'));
   WriteLn(FormatFlagLine('--skip-dep-codegen',
     'Omit dep unit bodies from emitted IR (separate-compilation path)'));
-  WriteLn(FormatFlagLine('--incremental',
-    'Compile each dep to its own .o as a side effect'));
+  WriteLn(FormatFlagLine('--no-incremental',
+    'Disable per-unit .o emission; build a single whole-program object'));
   WriteLn(FormatFlagLine('--unit-cache <dir>',
-    'Where --incremental writes per-unit .o (default: alongside output)'));
+    'Where per-unit .o files are written (default: alongside output)'));
   WriteLn(FormatFlagLine('--dump-ast',
     'Print the resolved AST to stdout after semantic analysis'));
   WriteLn(FormatFlagLine('--debug',
@@ -159,7 +159,7 @@ begin
   AFront.BackendExplicit := False;
   AFront.SkipDepCodegen := False;
   AFront.EmitIfaceDir   := '';
-  AFront.Incremental    := False;
+  AFront.Incremental    := True;   { default-on; --no-incremental opts out }
   AFront.UnitCacheDir   := '';
   AOpts.OPDFEnabled     := False;
   AOpts.DebugMode       := False;
@@ -197,14 +197,15 @@ begin
       Inc(I);
       AFront.EmitIfaceDir := ParamStr(I);
     end
-    else if Arg = '--incremental' then
-      { Phase 6c-H: compile each source-loaded dep to a stand-alone
-        .o (with embedded iface) as a side effect of the program
-        build.  Implies --skip-dep-codegen for the main IR (deps
-        are not inlined; they're linked from the per-unit .o
-        files instead).  Next compile auto-discovers the .o's
-        and skips parsing the .pas entirely. }
-      AFront.Incremental := True
+    else if Arg = '--no-incremental' then
+      { Incremental compilation is the default: each source-loaded dep
+        is compiled to a stand-alone .o (with embedded iface) as a side
+        effect of the program build, implying --skip-dep-codegen for the
+        main IR (deps are not inlined; they're linked from the per-unit
+        .o files instead) and letting the next compile auto-discover the
+        .o's and skip parsing the .pas.  --no-incremental disables that
+        and builds a single whole-program object instead. }
+      AFront.Incremental := False
     else if (Arg = '--unit-cache') and (I < ParamCount()) then
     begin
       Inc(I);
@@ -428,7 +429,7 @@ var
   PendingArgs:  TStringList;  { lookahead token per pending flag ('' if none) }
   PendIdx:   Integer;         { drain cursor over the pending lists }
   PendFlag:  string;
-  WorkerDriver: TBackendDriver;  { driver for the --incremental worker pool }
+  WorkerDriver: TBackendDriver;  { driver for the incremental worker pool }
   OE:        TOPDFEmitter;
   Loader:   TUnitLoader;
   Units:    TObjectList;
@@ -446,7 +447,7 @@ var
   IR:       string;
   IRFile:   string;
   LinkErr:  string;      { Driver.LinkProgram result ('' on success) }
-  UnitOPath:   string;   { per-dep .o output path in --incremental mode }
+  UnitOPath:   string;   { per-dep .o output path in incremental mode }
   Workers:  TObjectList; { TCompileWorker threads for parallel incremental }
   Worker:   TCompileWorker;
 
@@ -761,7 +762,8 @@ begin
       Each unit is compiled in a separate worker thread for parallel
       codegen + qbe + cc.  The symbol table is read-only at this point
       (semantic analysis is complete), so concurrent reads are safe. }
-    if Incremental and (Units <> nil) and (Units.Count > 0) then
+    if Incremental and (not EmitIR) and (not EmitAsm) and (not DumpAST)
+       and (Units <> nil) and (Units.Count > 0) then
     begin
       { Pick a driver for the workers.  Prefer the top-program backend
         when it supports per-unit emission; otherwise fall back to QBE —
@@ -835,7 +837,19 @@ begin
         CG.SetSymbolTable(Prog.SymbolTable);
         if not SkipDepCodegen then
           for I := 0 to Units.Count - 1 do
-            CG.AppendUnit(TUnit(Units.Items[I]));
+            CG.AppendUnit(TUnit(Units.Items[I]))
+        else
+          { Incremental / separate-compilation: dep bodies are compiled into
+            their own objects, so AppendUnit is skipped here.  But the program
+            startup must still call each dep unit's <Unit>_init if it has an
+            initialization section, in dependency order — otherwise unit
+            initialization silently never runs.  Register the init-unit names
+            so AppendProgram's $main emits the calls (they resolve against the
+            <Unit>_init symbols exported by the per-unit objects). }
+          for I := 0 to Units.Count - 1 do
+            CG.NoteDepInitUnit(TUnit(Units.Items[I]).Name,
+              (TUnit(Units.Items[I]).InitStmts <> nil) and
+              (TUnit(Units.Items[I]).InitStmts.Count > 0));
         CG.AppendProgram(Prog);
       end
       else

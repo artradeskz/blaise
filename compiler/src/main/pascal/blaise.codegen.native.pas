@@ -65,6 +65,7 @@ type
     function  GetDebugFacts: TDbgFacts;
     procedure AppendUnit(AUnit: TUnit);
     procedure AppendProgram(AProg: TProgram);
+    procedure NoteDepInitUnit(const AUnitName: string; AHasInit: Boolean);
     function  GetOutput: string;
   end;
 
@@ -185,6 +186,12 @@ begin
   FBackend.SetDebugMode(FDebugMode);
   FBackend.SetDebugFacts(FDbgFacts);
   FBackend.AppendProgram(AProg);
+end;
+
+procedure TCodeGenNative.NoteDepInitUnit(const AUnitName: string; AHasInit: Boolean);
+begin
+  Self.EnsureBackend();
+  FBackend.NoteDepInitUnit(AUnitName, AHasInit);
 end;
 
 function TCodeGenNative.GetOutput: string;

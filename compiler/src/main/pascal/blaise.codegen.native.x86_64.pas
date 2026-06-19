@@ -353,6 +353,8 @@ type
 
     procedure EmitProgram(AProg: TProgram); override;
     procedure EmitUnit(AUnit: TUnit); override;
+    procedure NoteDepInitUnit(const AUnitName: string;
+      AHasInit: Boolean); override;
     procedure FinalizeEmit; override;
     { Emit a standalone procedure/function definition.  AExported controls
       whether the symbol gets .globl visibility (True by default).  In
@@ -15417,6 +15419,16 @@ begin
   Self.Emit('.data');
   Self.EmitInterfaceDefs(AUnit.IntfBlock.TypeDecls, AUnit.GenericInstances,
                          AUnit.GenericIntfInstances, UnitSym);
+end;
+
+procedure TX86_64Backend.NoteDepInitUnit(const AUnitName: string;
+  AHasInit: Boolean);
+begin
+  { Separate-compilation: the dep's body (and its <Unit>_init) is in its own
+    object; record the mangled name so EmitProgram's $main calls it.  Mangling
+    matches EmitUnit's FUnitInitNames.Add(NativeMangle(AUnit.Name)). }
+  if AHasInit then
+    FUnitInitNames.Add(NativeMangle(AUnitName));
 end;
 
 procedure TX86_64Backend.FinalizeEmit;

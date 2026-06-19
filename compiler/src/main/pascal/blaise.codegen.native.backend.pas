@@ -88,6 +88,12 @@ type
       into one assembly text retrieved via GetOutput. }
     procedure AppendUnit(AUnit: TUnit);
     procedure AppendProgram(AProg: TProgram);
+    { Separate-compilation init-call registration: record a dep unit whose body
+      is compiled elsewhere so $main still calls its <Unit>_init.  Concrete
+      backends that maintain an init-call list override this; the default is a
+      no-op. }
+    procedure NoteDepInitUnit(const AUnitName: string;
+      AHasInit: Boolean); virtual;
     function  GetOutput: string;
 
     procedure SetSymbolTable(ASymTable: TSymbolTable);
@@ -343,6 +349,12 @@ procedure TNativeBackend.AppendProgram(AProg: TProgram);
 begin
   { No clear — emit the program after the already-appended units. }
   Self.EmitProgram(AProg);
+end;
+
+procedure TNativeBackend.NoteDepInitUnit(const AUnitName: string;
+  AHasInit: Boolean);
+begin
+  { Default: no init-call list to maintain.  The x86_64 backend overrides. }
 end;
 
 function TNativeBackend.GetOutput: string;
