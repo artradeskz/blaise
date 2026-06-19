@@ -4958,3 +4958,73 @@ suspected internal-assembler or internal-linker defect:
 
 The default native build emits a single whole-program object; `--incremental`
 opts in to per-unit object emission with a warm cache.
+
+== Decimal Arithmetic — One `TDecimal`, No `Currency` Primitive
+
+=== Decision
+
+Exact decimal arithmetic is provided by a single StdLib type, `TDecimal`
+(`Numerics.Decimal`), not by a compiler primitive and not by a family of types.
+There is deliberately no fixed-point `Currency`/`Comp` type and no separate
+`BigDecimal`; the one `TDecimal` serves money, billing, tax and every other
+exact-decimal need.  Scientific and engineering computation is explicitly out of
+scope for `TDecimal` and remains the domain of `Double` and the `Math` unit.
+
+`TDecimal` is a value-type record holding an unsigned magnitude, a signed scale,
+and a sign, with a compact `Int64` fast path that inflates to an arbitrary-
+precision decimal-digit magnitude only when a value exceeds `Int64` range.
+Equality is value-based: `2.0` and `2.00` are equal and hash identically.
+
+=== Rationale
+
+The string-consolidation precedent applies directly.  Just as Blaise replaced
+the `string`/`AnsiString`/`WideString`/`ShortString` family with one `string`,
+it replaces the `Currency`/`Comp`/`Extended`/`Real` numeric proliferation — which
+came from hardware limitations and legacy concerns that no longer apply — with
+one exact-decimal type plus the two float primitives (`Double`, `Single`).
+
+The single-type choice matches the dominant industry pattern.  .NET (`decimal`),
+Swift (`Decimal`), Rust (`rust_decimal`) and Python (`decimal.Decimal`) each ship
+exactly one decimal type and treat "money" as decimal + a currency tag in a
+separate library layer.  Java is the outlier in having no built-in money type at
+all (`java.util.Currency` is only an ISO-4217 descriptor); `BigDecimal` is its
+de-facto money type, and even Java has no second fixed type.
+
+A value-type record gives immutable value semantics without Java `BigDecimal`'s
+per-operation heap garbage: the common money case lives entirely in the inline
+`Int64` and allocates nothing, while still presenting a pure, immutable API.
+
+The design deliberately fixes the well-known `BigDecimal` pitfalls: value-based
+equality (so the type is safe in hash containers), a safe-by-default float
+constructor (`DecFromFloat` takes the shortest decimal; the binary-exact path is
+the explicitly-named `DecFromFloatExact`), mandatory explicit rounding on every
+division (no throw-on-`1/3` and no silent truncation), and plain-string
+formatting that never emits scientific notation.
+
+Rounding is injected through a layered design — a `TRoundingMode` enum for the
+eight standard modes (banker's rounding the default) over an `IRoundingStrategy`
+interface for custom algorithms — so jurisdiction-specific rules (e.g. cash
+rounding) need no change to the library.
+
+=== Alternatives considered
+
+* *A fixed-point `Currency` type (Int64 scaled by 10000), as in Delphi/FPC.*
+  Rejected as a separate type.  Hard-coding four decimal places is a footgun
+  (JPY has zero, crypto/FX want eight), and a hidden `*10000` representation
+  invites scale confusion.  Its one virtue — speed — is captured instead by the
+  compact `Int64` fast path inside the single `TDecimal`, with no second type
+  and no cross-type conversion friction.
+
+* *A separate arbitrary-precision `BigDecimal` alongside `Currency`.*  Rejected.
+  Two types double the API surface and force conversions at their boundary for
+  no functional gain; one type with an internal fast path covers both roles.
+
+* *Making `TDecimal` cover scientific use too.*  Rejected.  Scientific work wants
+  hardware floating point and transcendental functions over irrational results,
+  where exact decimal representation is impossible and pointless.  `Double` +
+  `Math` already serve this; `TDecimal` ships no such functions.
+
+* *Baking currency (ISO-4217) into the numeric core.*  Deferred to a future
+  `Numerics.Money` wrapper.  Currency is a policy layer (which currencies, how to
+  format, per-jurisdiction rounding) that should not be frozen into the numeric
+  type — matching Moneta / money-gem / rusty-money, which all wrap a decimal.

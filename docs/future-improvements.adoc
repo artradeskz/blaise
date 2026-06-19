@@ -180,53 +180,34 @@ local record variables at scope exit.
 
 == StdLib Packages — Numeric Types
 
-=== `Currency` and `BigDecimal` as StdLib units
+The exact-decimal type itself (`TDecimal` in `Numerics.Decimal`) is implemented;
+the design decision — one `TDecimal`, no separate `Currency`/`BigDecimal` — is
+recorded in `docs/language-rationale.adoc` ("Decimal Arithmetic — One `TDecimal`,
+No `Currency` Primitive").  The following numeric items remain genuinely future
+work.
 
-*What.* Two numeric types useful in financial and high-precision contexts that
-were deliberately omitted from the Blaise primitive type set:
+=== `Numerics.Money` — currency-aware wrapper
 
-* `Currency` — a fixed-point decimal type represented as a 64-bit integer
-  scaled by 10,000.  Exact decimal arithmetic with four decimal places;
-  fast (integer operations), bounded range (~±922 trillion).  Equivalent to
-  Delphi's `Currency` type.
+A thin type layering currency onto `TDecimal`: a `TMoney` carrying an amount plus
+an ISO-4217 currency tag, with mismatched-currency arithmetic raising and a
+per-currency default scale (JPY 0, USD 2, KWD 3).  This is the universal pattern —
+Moneta (Java), the `money` gem (Ruby) and `rusty-money` (Rust) all wrap a decimal
+rather than baking currency into the numeric core.  Deferred so currency/locale
+policy stays out of `TDecimal`.
 
-* `BigDecimal` — arbitrary-precision decimal arithmetic, heap-allocated.
-  Exact representation of any decimal value; no rounding error.  Equivalent
-  to Java's `java.math.BigDecimal`.
+=== Operator overloading for `TDecimal`
 
-*Why deferred.* Both are library-level concerns, not compiler primitives.  The
-string-type consolidation precedent (all string variants → a single `string`)
-applies equally here: the proliferation of `Currency`, `Comp`, `Extended`, and
-`Real` came from hardware limitations and legacy concerns that no longer apply.
-Blaise's two float primitives (`Double` and `Single`) cover the vast majority
-of numeric use cases.
+`TDecimal` currently exposes arithmetic as named methods (`A.Add(B)`,
+`A.Multiply(B)`, `A.Divide(B, Scale, Mode)`) because operator overloading is not
+yet a language feature.  Once it lands, `A + B` / `A * B` / comparisons can layer
+on additively (division stays a named method — it requires an explicit scale and
+rounding mode).  Operator overloading is a compiler feature in its own right and
+warrants a separate design document.
 
-*Where they belong.* Once the StdLib (`stdlib/`) exists:
+=== Migration-analyser rule for legacy numeric types
 
-* `numerics.fixed` — `TFixedDecimal` (Currency semantics, operator
-  overloading, 4 decimal places).
-* `numerics.bigdecimal` — `TBigDecimal` (arbitrary precision, operator
-  overloading).
-
-With operator overloading, both types will look like builtins from user code:
-
-[source,pascal]
-----
-uses numerics.fixed;
-var Price, Tax: TFixedDecimal;
-begin
-  Price := TFixedDecimal.FromStr('19.99');
-  Tax   := Price * TFixedDecimal.FromStr('0.20');
-  WriteLn(Tax.ToString);   { '4.0000' }
-end.
-----
-
-*Migration path from FPC.* The migration analyser (future phase) will flag
-`Currency` and `Comp` types and suggest `TFixedDecimal` or `TBigDecimal` as
-replacements.  `Extended` maps to `Double` with a precision-loss warning.
-
-*Effort.* Medium — primarily RTL/stdlib work once operator overloading is in place.
-No compiler changes needed.
+The migration analyser should flag FPC/Delphi `Currency` and `Comp` and suggest
+`TDecimal`; `Extended` maps to `Double` with a precision-loss warning.
 
 == StdLib — String operations
 
