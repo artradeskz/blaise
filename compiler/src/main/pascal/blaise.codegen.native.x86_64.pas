@@ -419,6 +419,8 @@ type
     procedure EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
     procedure EmitMethodSretCall(ACall: TMethodCallExpr; const ASretAddr: string;
                                  ASretIsIndirect: Boolean);
+    { Free a record-call-receiver buffer materialised by EmitMethodSretCall. }
+    procedure EmitMethodSretRecvCleanup(ABytes: Integer);
     { Emit the base ADDRESS of a NAMED LOCAL record into AReg (e.g.
       '%rcx', '%rax').  Normally a stack value record, so leaq the slot.
       The one exception is the sret-function Result: its frame slot holds
@@ -7615,6 +7617,7 @@ var
   HD:            TList<Integer>;
   HK:            TList<Integer>;
   HTotal:        Integer;
+  RecvBufBytes:  Integer;
 begin
   { Interface method dispatch: receiver is an interface fat pointer; route
     through the itab rather than a static method symbol. }
@@ -7791,6 +7794,22 @@ begin
 
   if TotalSlots <= 6 then
   begin
+    { Record-returning-call receiver (e.g. A.Plus(B).Val()): the receiver is a
+      transient record value with no home, but a record method needs Self as an
+      ADDRESS.  Materialise the call result into a stack buffer FIRST (before any
+      args are pushed) and carry its address in callee-saved %rbx, which survives
+      the arg push/pop sequence.  %rbx is saved/restored around the whole call. }
+    RecvBufBytes := 0;
+    if (ACall.ObjExpr <> nil) and MD.IsRecordMethod and
+       Self.IsNativeRecordCall(ACall.ObjExpr) then
+    begin
+      RecvBufBytes := Self.RecArgBufBytes(ACall.ObjExpr);
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(Format(#9'subq $%d, %%rsp', [RecvBufBytes]));
+      Self.EmitRecordCallSretAt(ACall.ObjExpr, '(%rsp)');
+      Self.Emit(#9'movq %rsp, %rbx');     { receiver address -> callee-saved }
+    end;
+
     Self.BeginCallArgs(MD.Params, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
     begin
@@ -7822,6 +7841,8 @@ begin
           Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
       end;
     end
+    else if (ACall.ObjExpr <> nil) and (RecvBufBytes > 0) then
+      Self.Emit(#9'movq %rbx, %r10')      { record-call receiver address }
     else if ACall.ObjExpr <> nil then
     begin
       Self.EmitExprToEax(ACall.ObjExpr);
@@ -7842,9 +7863,29 @@ begin
     else
       Self.Emit(#9'callq ' + Sym);
     Self.EndCallArgs();
+    if RecvBufBytes > 0 then
+    begin
+      { Free the receiver buffer and restore %rbx (does not touch the return
+        registers %rax/%rdx/%xmm0/%xmm1). }
+      Self.Emit(Format(#9'addq $%d, %%rsp', [RecvBufBytes]));
+      Self.Emit(#9'popq %rbx');
+    end;
   end
   else
   begin
+    { Record-returning-call receiver on the >6-slot path: materialise the result
+      into a stack buffer and carry its address in callee-saved %rbx (immune to
+      the hoist/alloc %rsp movement below).  See the <=6 path for the rationale. }
+    RecvBufBytes := 0;
+    if (ACall.ObjExpr <> nil) and MD.IsRecordMethod and
+       Self.IsNativeRecordCall(ACall.ObjExpr) then
+    begin
+      RecvBufBytes := Self.RecArgBufBytes(ACall.ObjExpr);
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(Format(#9'subq $%d, %%rsp', [RecvBufBytes]));
+      Self.EmitRecordCallSretAt(ACall.ObjExpr, '(%rsp)');
+      Self.Emit(#9'movq %rsp, %rbx');
+    end;
     OverflowSlots := TotalSlots - 6;
     CleanUp := ((OverflowSlots * 8 + 15) and (-16));
     AllocSz := 6 * 8 + CleanUp;
@@ -7895,6 +7936,8 @@ begin
           Self.Emit(Format(#9'movq %s(%%rip), %%rax', [ACall.ObjectName]));
       end;
     end
+    else if (ACall.ObjExpr <> nil) and (RecvBufBytes > 0) then
+      Self.Emit(#9'movq %rbx, %rax')      { record-call receiver address }
     else if ACall.ObjExpr <> nil then
       Self.EmitExprToEax(ACall.ObjExpr)
     else
@@ -7916,6 +7959,11 @@ begin
     Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
     HD.Free();
     HK.Free();
+    if RecvBufBytes > 0 then
+    begin
+      Self.Emit(Format(#9'addq $%d, %%rsp', [RecvBufBytes]));
+      Self.Emit(#9'popq %rbx');
+    end;
   end;
 end;
 
@@ -13918,6 +13966,21 @@ begin
   HK.Free();
 end;
 
+{ Free a record-call-receiver buffer materialised by EmitMethodSretCall (see
+  the RecvBufBytes prologue there).  No-op when ABytes = 0.  Does not touch the
+  sret destination (written via its own pointer) nor any return register. }
+procedure TX86_64Backend.EmitMethodSretRecvCleanup(ABytes: Integer);
+begin
+  if ABytes > 0 then
+  begin
+    { Mirror the prologue's pushes: subq buffer, pushq %rbx, pushq %r14
+      (in that order) -> free buffer, popq %rbx, popq %r14. }
+    Self.Emit(Format(#9'addq $%d, %%rsp', [ABytes]));
+    Self.Emit(#9'popq %rbx');
+    Self.Emit(#9'popq %r14');
+  end;
+end;
+
 { Emit a method call that returns a record via the sret convention.
   Register layout: %rdi = sret ptr, %rsi = Self, %rdx.. = user args.
   The destination buffer is at ASretAddr (AT&T operand, already allocated). }
@@ -13938,12 +14001,54 @@ var
   HasFloat: Boolean;
   ParamType: TTypeDesc;
   IntIdx, XmmIdx, SlotOff: Integer;
+  RecvBufBytes: Integer;
+  LSretAddr: string;
+  LSretIndirect: Boolean;
 begin
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then
     raise ENativeCodeGenError.Create(
       'native backend: method-sret call has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
+
+  { Record-returning-call receiver (e.g. A.Plus(B).Scale(2), where the OUTER
+    method Scale itself returns a record via sret): materialise the inner call
+    result into a stack buffer up front and carry its address in callee-saved
+    %rbx, which survives all the arg-evaluation %rsp movement below.  Every
+    ObjExpr-receiver site loads %rbx instead of evaluating the call value as a
+    pointer; the buffer + %rbx are freed at each exit (EmitMethodSretCleanup).
+
+    Because this prologue moves %rsp, a caller-supplied %rsp-relative ASretAddr
+    (the recursive EmitRecordCallSretAt('(%rsp)') case in a nested chain like
+    A.Plus(B).Plus(A)) would drift.  Resolve the destination to an ABSOLUTE
+    pointer FIRST, save it in callee-saved %r14, and re-express the rest of the
+    routine as an indirect store through %r14. }
+  RecvBufBytes := 0;
+  LSretAddr := ASretAddr;
+  LSretIndirect := ASretIsIndirect;
+  if (ACall.ObjExpr <> nil) and MD.IsRecordMethod and
+     Self.IsNativeRecordCall(ACall.ObjExpr) then
+  begin
+    RecvBufBytes := Self.RecArgBufBytes(ACall.ObjExpr);
+    { Resolve the destination to an absolute pointer BEFORE pushing anything —
+      a %rsp-relative ASretAddr (the recursive EmitRecordCallSretAt('(%rsp)')
+      case) must be read while %rsp still has its caller value. }
+    if ASretIsIndirect then
+      Self.Emit(Format(#9'movq %s, %%rax', [ASretAddr]))
+    else
+      Self.Emit(Format(#9'leaq %s, %%rax', [ASretAddr]));
+    Self.Emit(#9'pushq %r14');
+    Self.Emit(#9'movq %rax, %r14');
+    { %r14 now HOLDS the destination address.  Express it as a non-indirect
+      operand so consumers do `leaq (%r14), %reg` (i.e. %reg := %r14), not a
+      double dereference. }
+    LSretAddr := '(%r14)';
+    LSretIndirect := False;
+    Self.Emit(#9'pushq %rbx');
+    Self.Emit(Format(#9'subq $%d, %%rsp', [RecvBufBytes]));
+    Self.EmitRecordCallSretAt(ACall.ObjExpr, '(%rsp)');
+    Self.Emit(#9'movq %rsp, %rbx');
+  end;
 
   { Check for register-return: no hidden sret param, Self goes in %rdi,
     args in %rsi onwards. }
@@ -13953,10 +14058,10 @@ begin
     RC := ClassifyRecordReturn(TRecordTypeDesc(MD.ResolvedReturnType));
   if RC <> rcSret then
   begin
-    if ASretIsIndirect then
-      Self.Emit(Format(#9'movq %s, %%r10', [ASretAddr]))
+    if LSretIndirect then
+      Self.Emit(Format(#9'movq %s, %%r10', [LSretAddr]))
     else
-      Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));
+      Self.Emit(Format(#9'leaq %s, %%r10', [LSretAddr]));
     Self.Emit(#9'movq %r10, %rdi');
     Self.Emit(#9'xorl %esi, %esi');
     Self.Emit(Format(#9'movq $%d, %%rdx',
@@ -13992,6 +14097,8 @@ begin
           Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [ACall.ObjectName]));
       end;
     end
+    else if (ACall.ObjExpr <> nil) and (RecvBufBytes > 0) then
+      Self.Emit(#9'movq %rbx, %rdi')      { record-call receiver address }
     else if ACall.ObjExpr <> nil then
     begin
       Self.EmitExprToEax(ACall.ObjExpr);
@@ -14010,18 +14117,19 @@ begin
     else
       Self.Emit(#9'callq ' + Sym);
     Self.EndCallArgs();
-    Self.EmitRecordRegReturnCapture(ASretAddr,
-      TRecordTypeDesc(MD.ResolvedReturnType), RC, ASretIsIndirect);
+    Self.EmitRecordRegReturnCapture(LSretAddr,
+      TRecordTypeDesc(MD.ResolvedReturnType), RC, LSretIndirect);
+    Self.EmitMethodSretRecvCleanup(RecvBufBytes);
     Exit;
   end;
 
   { Save the destination address below the hoist region — no caller-saved
     register survives argument evaluation, and a %rsp-relative ASretAddr
     would drift once the region is live. }
-  if ASretIsIndirect then
-    Self.Emit(Format(#9'movq %s, %%rax', [ASretAddr]))
+  if LSretIndirect then
+    Self.Emit(Format(#9'movq %s, %%rax', [LSretAddr]))
   else
-    Self.Emit(Format(#9'leaq %s, %%rax', [ASretAddr]));
+    Self.Emit(Format(#9'leaq %s, %%rax', [LSretAddr]));
   Self.Emit(#9'pushq %rax');
   if (MD.ResolvedReturnType <> nil) then
   begin
@@ -14117,6 +14225,8 @@ begin
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rax', [ACall.ObjectName]));
     end
+    else if (ACall.ObjExpr <> nil) and (RecvBufBytes > 0) then
+      Self.Emit(#9'movq %rbx, %rax')      { record-call receiver address }
     else if ACall.ObjExpr <> nil then
       Self.EmitExprToEax(ACall.ObjExpr)
     else
@@ -14168,6 +14278,7 @@ begin
     HD.Free();
     HK.Free();
     Self.Emit(#9'addq $8, %rsp');   { reclaim the saved dest slot }
+    Self.EmitMethodSretRecvCleanup(RecvBufBytes);
     Exit;
   end;
 
@@ -14204,6 +14315,8 @@ begin
           Self.Emit(Format(#9'movq %s(%%rip), %%rsi', [ACall.ObjectName]));
       end;
     end
+    else if (ACall.ObjExpr <> nil) and (RecvBufBytes > 0) then
+      Self.Emit(#9'movq %rbx, %rsi')      { record-call receiver address }
     else if ACall.ObjExpr <> nil then
     begin
       Self.EmitExprToEax(ACall.ObjExpr);
@@ -14254,6 +14367,8 @@ begin
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rax', [ACall.ObjectName]));
     end
+    else if (ACall.ObjExpr <> nil) and (RecvBufBytes > 0) then
+      Self.Emit(#9'movq %rbx, %rax')      { record-call receiver address }
     else if ACall.ObjExpr <> nil then
       Self.EmitExprToEax(ACall.ObjExpr)
     else
@@ -14271,6 +14386,7 @@ begin
   end;
   { Reclaim the saved dest slot. }
   Self.Emit(#9'addq $8, %rsp');
+  Self.EmitMethodSretRecvCleanup(RecvBufBytes);
 end;
 
 { Emit a standalone function call that returns an interface via sret.

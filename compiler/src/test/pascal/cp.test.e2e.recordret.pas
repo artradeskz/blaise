@@ -86,6 +86,17 @@ type
     procedure TestRun_FloatArg_ManagedRecordReturn_Func;
     procedure TestRun_TwoFloatArgs_ManagedRecordReturn_Func;
     procedure TestRun_FloatArg_ManagedRecordReturn_Method;
+    { Regression: a method call whose RECEIVER is itself a record-returning
+      call — A.Plus(B).Val().  The native backend used the record VALUE (the
+      reg-return payload, or the sret buffer's first bytes) as the Self POINTER,
+      dereferencing garbage and crashing.  It now materialises the receiver
+      result into a stack buffer and passes its address as Self.  QBE was always
+      correct; both backends asserted equal. }
+    procedure TestRun_ChainedRecvRegReturn_ScalarResult;
+    procedure TestRun_ChainedRecvSretReturn_RecordResult;
+    procedure TestRun_ChainedRecvManyArgs;
+    procedure TestRun_ChainedRecvDoubleChain;
+    procedure TestRun_ChainedRecvManagedRecord_TDecimalLike;
   end;
 
 implementation
@@ -609,6 +620,144 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, '0.25' + LE, 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Chained record-call receiver (A.Plus(B).Method())                   }
+{ ------------------------------------------------------------------ }
+
+procedure TE2ERecordReturnTests.TestRun_ChainedRecvRegReturn_ScalarResult;
+const
+  Src = '''
+    program P;
+    type
+      TR = record
+        V: Integer;
+        function Plus(const B: TR): TR;
+        function Val: Integer;
+      end;
+    function TR.Plus(const B: TR): TR; begin Result.V := Self.V + B.V end;
+    function TR.Val: Integer; begin Result := Self.V end;
+    var A, B: TR; N: Integer;
+    begin
+      A.V := 10; B.V := 5;
+      N := A.Plus(B).Val();
+      WriteLn(N)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '15' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_ChainedRecvSretReturn_RecordResult;
+const
+  { The OUTER method (Scale) itself returns a record via sret, and its receiver
+    is the transient result of Plus — exercises the sret-call receiver path. }
+  Src = '''
+    program P;
+    type
+      TR = record
+        V: Integer;
+        function Plus(const B: TR): TR;
+        function Scale(F: Integer): TR;
+        function Val: Integer;
+      end;
+    function TR.Plus(const B: TR): TR; begin Result.V := Self.V + B.V end;
+    function TR.Scale(F: Integer): TR; begin Result.V := Self.V * F end;
+    function TR.Val: Integer; begin Result := Self.V end;
+    var A, B, C: TR;
+    begin
+      A.V := 10; B.V := 5;
+      C := A.Plus(B).Scale(2);
+      WriteLn(C.Val())
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '30' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_ChainedRecvManyArgs;
+const
+  { >5 user args forces the overflow (stack-arg) call path with a chained
+    record-call receiver. }
+  Src = '''
+    program P;
+    type
+      TR = record
+        V: Integer;
+        function Plus(const B: TR): TR;
+        function Sum6(A1,A2,A3,A4,A5,A6: Integer): Integer;
+      end;
+    function TR.Plus(const B: TR): TR; begin Result.V := Self.V + B.V end;
+    function TR.Sum6(A1,A2,A3,A4,A5,A6: Integer): Integer;
+    begin Result := Self.V + A1+A2+A3+A4+A5+A6 end;
+    var A, B: TR; N: Integer;
+    begin
+      A.V := 10; B.V := 5;
+      N := A.Plus(B).Sum6(1,2,3,4,5,6);
+      WriteLn(N)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '36' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_ChainedRecvDoubleChain;
+const
+  { Nested chain: the receiver of .Plus(A) is itself A.Plus(B).  Catches a
+    %rsp-drift bug where the forwarded sret destination was resolved after a
+    push had already moved the stack. }
+  Src = '''
+    program P;
+    type
+      TR = record
+        V: Integer;
+        function Plus(const B: TR): TR;
+        function Val: Integer;
+      end;
+    function TR.Plus(const B: TR): TR; begin Result.V := Self.V + B.V end;
+    function TR.Val: Integer; begin Result := Self.V end;
+    var A, B: TR; N: Integer;
+    begin
+      A.V := 10; B.V := 5;
+      N := A.Plus(B).Plus(A).Val();
+      WriteLn(N)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '25' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_ChainedRecvManagedRecord_TDecimalLike;
+const
+  { A managed-field record (dynamic array) returned by value, then chained —
+    the shape TDecimal uses.  Single and double chain both checked. }
+  Src = '''
+    program P;
+    type
+      TR = record
+        V: Integer;
+        M: array of UInt32;
+        function Plus(const B: TR): TR;
+        function Val: Integer;
+      end;
+    function TR.Plus(const B: TR): TR;
+    begin SetLength(Result.M, 1); Result.M[0] := 0; Result.V := Self.V + B.V end;
+    function TR.Val: Integer; begin Result := Self.V end;
+    var A, B: TR;
+    begin
+      A.V := 10; B.V := 5;
+      WriteLn(A.Plus(B).Val());
+      WriteLn(A.Plus(B).Plus(A).Val())
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '15' + LE + '25' + LE, 0);
 end;
 
 initialization
