@@ -54,6 +54,11 @@ type
     procedure TestChain_MethodThenMethodThenField;
     procedure TestChain_FuncCallThenSubscript;
 
+    { Named integer subrange types (issue #130 bug1) }
+    procedure TestSubrange_NamedType_Parses;
+    procedure TestSubrange_NegativeBounds_Parses;
+    procedure TestSubrange_Descending_Error;
+
     { Error cases }
     procedure TestError_MissingProgramKeyword;
     procedure TestError_MissingDot;
@@ -522,6 +527,29 @@ begin
   try
     ParseSource('program P; begin end').Free();
     Fail('Expected EParseError');
+  except
+    on E: EParseError do ; { expected }
+  end;
+end;
+
+procedure TParserTests.TestSubrange_NamedType_Parses;
+begin
+  { type TByte = 0..255; must parse (issue #130 bug1). }
+  ParseSource('program P; type TByte = 0..255; var b: TByte; ' +
+    'begin b := 5 end.').Free();
+end;
+
+procedure TParserTests.TestSubrange_NegativeBounds_Parses;
+begin
+  ParseSource('program P; type TIdx = -10..10; var i: TIdx; ' +
+    'begin i := -3 end.').Free();
+end;
+
+procedure TParserTests.TestSubrange_Descending_Error;
+begin
+  try
+    ParseSource('program P; type TBad = 10..0; begin end.').Free();
+    Fail('Expected EParseError for descending subrange');
   except
     on E: EParseError do ; { expected }
   end;

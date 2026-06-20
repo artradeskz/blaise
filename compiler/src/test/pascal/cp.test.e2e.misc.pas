@@ -112,6 +112,12 @@ type
     { Nested generic type arguments: TList<TList<Integer>>. Was a parser gap
       (type-arg list did not recurse, in both type and constructor position). }
     procedure TestRun_NestedGenericTypeArgs;
+
+    { Named integer subrange type (issue #130 bug1): the type-decl parser had
+      no integer-literal subrange case.  A named subrange aliases the narrowest
+      standard integer type and carries no range checking. }
+    procedure TestRun_Subrange_NamedType;
+    procedure TestRun_Subrange_InRecordAndArray;
   end;
 
 implementation
@@ -1175,6 +1181,43 @@ procedure TE2EMiscTests.TestRun_NestedGenericTypeArgs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcNestedGeneric, '7' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Subrange_NamedType;
+const
+  Src = '''
+    program P;
+    type TByte = 0..255;
+    var b: TByte;
+    begin b := 5; WriteLn(b) end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '5' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Subrange_InRecordAndArray;
+const
+  { A subrange as a record field and as an array element type, plus a negative
+    subrange — exercises that the aliased base type sizes layout correctly. }
+  Src = '''
+    program P;
+    type
+      TByte = 0..255;
+      TIdx  = -10..10;
+      TRec  = record b: TByte; i: TIdx; end;
+    var
+      r: TRec;
+      a: array[0..2] of TByte;
+    begin
+      r.b := 200; r.i := -7;
+      a[0] := 1; a[1] := 250; a[2] := 99;
+      WriteLn(r.b, ' ', r.i, ' ', a[1])
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '200 -7 250' + LE, 0);
 end;
 
 initialization

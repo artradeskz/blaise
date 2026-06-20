@@ -58,6 +58,8 @@ type
     function  Check(AKind: TTokenKind): Boolean;
     function  CheckUnitNamePart: Boolean;
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
+    function  SubrangeAhead: Boolean; { current token starts an integer-literal subrange: IntLit.. or -IntLit.. }
+    function  ParseIntegerSubrangeBaseType: string; { parse lo..hi, return narrowest fitting standard integer type }
     function  ReadConstBoundText: string;  { read an array bound: literal, ident, or expr }
     function  ParseAnonEnumName: string;  { parse '(a,b,c)' → encoded member-list string }
 
@@ -406,6 +408,70 @@ begin
     end;
     Expect(tkGreaterThan);
     Result := Result + '>';
+  end;
+end;
+
+function TParser.SubrangeAhead: Boolean;
+begin
+  { An integer-literal subrange in a type RHS: `0..255` or `-10..10`.
+    Recognised by a leading integer literal (optionally a minus sign) followed
+    by the '..' token.  Pure lookahead — consumes nothing. }
+  if Check(tkIntLit) then
+    Result := (PeekKind() = tkDotDot)
+  else if Check(tkMinus) then
+    Result := (PeekKind() = tkIntLit) and (PeekKind2() = tkDotDot)
+  else
+    Result := False;
+end;
+
+function TParser.ParseIntegerSubrangeBaseType: string;
+var
+  Lo, Hi: Int64;
+  Neg: Boolean;
+begin
+  { Parse `lo..hi` (each an integer literal, lo optionally negative) and return
+    the name of the narrowest STANDARD integer type that holds both bounds.
+    Blaise performs no range checking, so a named subrange is just an alias to
+    this base type; the choice keeps record/array element layout correct
+    (e.g. 0..255 is byte-sized). }
+  Neg := False;
+  if Check(tkMinus) then begin Neg := True; Advance(); end;
+  if not Check(tkIntLit) then
+    raise EParseError.Create(Format(
+      'Expected integer literal as subrange lower bound at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  Lo := ParseIntLiteral(FCurrent.Value);
+  if Neg then Lo := -Lo;
+  Advance();
+  Expect(tkDotDot);
+  Neg := False;
+  if Check(tkMinus) then begin Neg := True; Advance(); end;
+  if not Check(tkIntLit) then
+    raise EParseError.Create(Format(
+      'Expected integer literal as subrange upper bound at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  Hi := ParseIntLiteral(FCurrent.Value);
+  if Neg then Hi := -Hi;
+  Advance();
+  if Hi < Lo then
+    raise EParseError.Create(Format(
+      'Subrange %d..%d is descending at line %d col %d in %s',
+      [Lo, Hi, FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  { Pick the narrowest standard type covering [Lo, Hi]. }
+  if Lo >= 0 then
+  begin
+    if Hi <= 255 then               Result := 'Byte'
+    else if Hi <= 65535 then        Result := 'Word'
+    else if Hi <= 4294967295 then   Result := 'Cardinal'
+    else                            Result := 'UInt64';
+  end
+  else
+  begin
+    { Blaise has no 8-bit signed alias name (no ShortInt), so the narrowest
+      signed alias target is SmallInt (16-bit). }
+    if (Lo >= -32768) and (Hi <= 32767) then        Result := 'SmallInt'
+    else if (Lo >= -2147483648) and (Hi <= 2147483647) then Result := 'Integer'
+    else                                            Result := 'Int64';
   end;
 end;
 
@@ -784,6 +850,17 @@ begin
         TD.Def := ParseSetDef()
       else if Check(tkFunction) or Check(tkProcedure) then
         TD.Def := ParseProceduralTypeDef()
+      else if (Check(tkIntLit) or Check(tkMinus)) and SubrangeAhead() then
+      begin
+        { Named integer subrange:  type TByte = 0..255;  type TIdx = -10..10;
+          Blaise does not range-check, so a subrange is an alias to the
+          narrowest standard integer type that holds both bounds.  This keeps
+          record/array layout correct (TByte is byte-sized) while the value
+          behaves as an ordinary integer. }
+        AD := TTypeAliasDef.Create();
+        AD.TypeName := Self.ParseIntegerSubrangeBaseType();
+        TD.Def := AD;
+      end
       else if Check(tkArray) or Check(tkCaret) or Check(tkIdent) then
       begin
         { Array alias:   type TArr = array[L..H] of T;
@@ -795,7 +872,7 @@ begin
       end
       else
         raise EParseError.Create(Format(
-          'Expected ''record'', ''class'', ''interface'', ''('', ''set'', ''function'', ''procedure'', or type name at line %d col %d in %s',
+          'Expected ''record'', ''class'', ''interface'', ''('', ''set'', ''function'', ''procedure'', subrange, or type name at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     end;
     Expect(tkSemicolon);
