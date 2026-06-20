@@ -13699,6 +13699,9 @@ var
   HD:       TList<Integer>;
   HK:       TList<Integer>;
   HTotal:   Integer;
+  HasFloat: Boolean;
+  ParamType: TTypeDesc;
+  IntIdx, XmmIdx, SlotOff: Integer;
 begin
   { Check if the callee returns a small POD record via registers. }
   RC := rcSret;
@@ -13750,7 +13753,111 @@ begin
     HTotal := Self.EmitArgHoist(ADecl.Params, nil, True, '', AArgs, HD, HK)
   else
     HTotal := Self.EmitArgHoist(nil, nil, True, '', AArgs, HD, HK);
-  if AArgs.Count <= 5 then
+  { Detect a float-typed by-value argument: the integer push/pop path below
+    cannot carry one (it would route the float through %rax and an integer arg
+    register).  When present, use the slot-based scheme that places each float
+    arg in an %xmm register per the SysV ABI (mirrors EmitCall's float path). }
+  HasFloat := False;
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    ParamType := nil;
+    if (ADecl <> nil) and (I < ADecl.Params.Count) then
+      ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+    if ParamType = nil then
+      ParamType := TASTExpr(AArgs.Items[I]).ResolvedType;
+    IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+             TMethodParam(ADecl.Params.Items[I]).IsVarParam;
+    if IsFloatFamily(ParamType) and not IsVar then
+      HasFloat := True;
+  end;
+
+  if HasFloat then
+  begin
+    { Slot-based: sret = slot 0 (%rdi), explicit args = slots 1..Count.  Each
+      arg is evaluated into its 8-byte slot (float via movsd/movss, integer via
+      movq), then int slots load into %rsi.. and float slots into %xmm0.., each
+      stream counted independently.  Args beyond the 5 int / 8 xmm registers
+      would need stack spill — record-returning functions with that many float
+      args do not occur yet, so guard the integer overflow loudly via SysVArg64. }
+    AllocSz := (((AArgs.Count + 1) * 8 + 15) and (-16));
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    { Reload the saved sret dest (pushed just below the hoist region). }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [AllocSz + HTotal]));
+    Self.Emit(#9'movq %rax, 0(%rsp)');
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      ParamType := nil;
+      if (ADecl <> nil) and (I < ADecl.Params.Count) then
+        ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := Arg.ResolvedType;
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
+      if HK.Get(I) >= akRecCall then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]));
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));
+      end
+      else if IsFloatFamily(ParamType) and not IsVar then
+      begin
+        Self.EmitExprToXmm0(Arg);
+        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %%xmm0, %d(%%rsp)', [(I + 1) * 8]))
+        else
+          Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [(I + 1) * 8]));
+      end
+      else
+      begin
+        if IsVar then
+          Self.EmitVarArgAddrToRax(Arg)
+        else
+          Self.EmitExprToEax(Arg);
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));
+      end;
+    end;
+    { Load sret ptr into %rdi, then int args into %rsi.. and float args into
+      %xmm0.., each stream advancing its own register index. }
+    Self.Emit(#9'movq 0(%rsp), %rdi');
+    IntIdx := 1;   { %rdi consumed by sret }
+    XmmIdx := 0;
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      ParamType := nil;
+      if (ADecl <> nil) and (I < ADecl.Params.Count) then
+        ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := TASTExpr(AArgs.Items[I]).ResolvedType;
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
+      SlotOff := (I + 1) * 8;
+      if IsFloatFamily(ParamType) and not IsVar then
+      begin
+        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]))
+        else
+          Self.Emit(Format(#9'movsd %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]));
+        Inc(XmmIdx);
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArg64(IntIdx)]));
+        Inc(IntIdx);
+      end;
+    end;
+    { %al = number of vector registers used (SysV varargs/AL convention; the
+      callee ignores it for a fixed prototype but the ABI requires it set). }
+    Self.Emit(Format(#9'movb $%d, %%al', [XmmIdx]));
+    { Drop the (Count+1) register-bound slots so any overflow sits at the top;
+      with <=5 args there is no overflow, so this reclaims the whole region
+      except the alignment padding. }
+    Self.Emit(Format(#9'addq $%d, %%rsp', [(AArgs.Count + 1) * 8]));
+    Self.Emit(#9'callq ' + AFuncSym);
+    CleanUp := AllocSz - (AArgs.Count + 1) * 8;
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, CleanUp, True);
+  end
+  else if AArgs.Count <= 5 then
   begin
     for I := 0 to AArgs.Count - 1 do
     begin
@@ -13828,6 +13935,9 @@ var
   HD:       TList<Integer>;
   HK:       TList<Integer>;
   HTotal:   Integer;
+  HasFloat: Boolean;
+  ParamType: TTypeDesc;
+  IntIdx, XmmIdx, SlotOff: Integer;
 begin
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then
@@ -13920,6 +14030,145 @@ begin
     Self.Emit(Format(#9'movq $%d, %%rdx',
       [MD.ResolvedReturnType.RawSize()]));
     Self.Emit(#9'callq memset');
+  end;
+
+  { Detect a float-typed by-value argument.  The integer push/pop path below
+    cannot carry one to an %xmm register, so route the whole call through a
+    slot-based scheme: sret = slot 0 (%rdi), Self = slot 1 (%rsi), explicit
+    args = slots 2..Count+1, int args load into %rdx.. and float args into
+    %xmm0.. per the SysV ABI. }
+  HasFloat := False;
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    ParamType := nil;
+    if I < MD.Params.Count then
+      ParamType := TMethodParam(MD.Params.Items[I]).ResolvedType;
+    if ParamType = nil then
+      ParamType := TASTExpr(ACall.Args.Items[I]).ResolvedType;
+    if IsFloatFamily(ParamType) and
+       not ((I < MD.Params.Count) and TMethodParam(MD.Params.Items[I]).IsVarParam) then
+      HasFloat := True;
+  end;
+
+  if HasFloat then
+  begin
+    HD := TList<Integer>.Create();
+    HK := TList<Integer>.Create();
+    HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
+    AllocSz := (((ACall.Args.Count + 2) * 8 + 15) and (-16));
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    { sret into slot 0. }
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [AllocSz + HTotal]));
+    Self.Emit(#9'movq %rax, 0(%rsp)');
+    { Evaluate each explicit arg into slot I+2 (float kept in its slot for the
+      xmm load below; int/record-ptr via movq). }
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      ParamType := nil;
+      if I < MD.Params.Count then
+        ParamType := TMethodParam(MD.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := Arg.ResolvedType;
+      if HK.Get(I) >= akRecCall then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]));
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 2) * 8]));
+      end
+      else if IsFloatFamily(ParamType) and
+              not ((I < MD.Params.Count) and
+                   TMethodParam(MD.Params.Items[I]).IsVarParam) then
+      begin
+        Self.EmitExprToXmm0(Arg);
+        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %%xmm0, %d(%%rsp)', [(I + 2) * 8]))
+        else
+          Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [(I + 2) * 8]));
+      end
+      else
+      begin
+        if (I < MD.Params.Count) and TMethodParam(MD.Params.Items[I]).IsVarParam then
+          Self.EmitVarArgAddrToRax(Arg)
+        else
+          Self.EmitExprToEax(Arg);
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 2) * 8]));
+      end;
+    end;
+    { Self pointer into slot 1. }
+    if ACall.ObjectName <> '' then
+    begin
+      if MD.IsRecordMethod and ACall.IsVarParam then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+      else if MD.IsRecordMethod then
+      begin
+        if Self.IsLocal(ACall.ObjectName) then
+          Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+        else
+          Self.EmitLeaqGlobal(ACall.ObjectName, '%rax');
+      end
+      else if ACall.IsVarParam then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]));
+        Self.Emit(#9'movq (%rax), %rax');
+      end
+      else if Self.IsLocal(ACall.ObjectName) then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rax', [ACall.ObjectName]));
+    end
+    else if ACall.ObjExpr <> nil then
+      Self.EmitExprToEax(ACall.ObjExpr)
+    else
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+    Self.Emit(Format(#9'movq %%rax, 8(%%rsp)', []));
+    { Load registers: %rdi = sret, %rsi = Self, then int args into %rdx.. and
+      float args into %xmm0.. }
+    Self.Emit(#9'movq 0(%rsp), %rdi');
+    Self.Emit(#9'movq 8(%rsp), %rsi');
+    IntIdx := 2;   { %rdi (sret), %rsi (Self) consumed }
+    XmmIdx := 0;
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      ParamType := nil;
+      if I < MD.Params.Count then
+        ParamType := TMethodParam(MD.Params.Items[I]).ResolvedType;
+      if ParamType = nil then
+        ParamType := TASTExpr(ACall.Args.Items[I]).ResolvedType;
+      SlotOff := (I + 2) * 8;
+      if IsFloatFamily(ParamType) and
+         not ((I < MD.Params.Count) and TMethodParam(MD.Params.Items[I]).IsVarParam) then
+      begin
+        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+          Self.Emit(Format(#9'movss %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]))
+        else
+          Self.Emit(Format(#9'movsd %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]));
+        Inc(XmmIdx);
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArg64(IntIdx)]));
+        Inc(IntIdx);
+      end;
+    end;
+    Self.Emit(Format(#9'movb $%d, %%al', [XmmIdx]));
+    Self.Emit(Format(#9'addq $%d, %%rsp', [(ACall.Args.Count + 2) * 8]));
+    if MD.VTableSlot >= 0 then
+    begin
+      Self.Emit(#9'movq (%rsi), %rax');
+      Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+      { %al was clobbered by the vtable load; for a fixed prototype the callee
+        ignores it, so this is benign. }
+      Self.Emit(#9'callq *%rax');
+    end
+    else
+      Self.Emit(#9'callq ' + Sym);
+    CleanUp := AllocSz - (ACall.Args.Count + 2) * 8;
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, CleanUp, True);
+    HD.Free();
+    HK.Free();
+    Self.Emit(#9'addq $8, %rsp');   { reclaim the saved dest slot }
+    Exit;
   end;
 
   if ACall.Args.Count <= 4 then

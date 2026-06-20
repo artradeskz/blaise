@@ -76,6 +76,16 @@ type
       %rsp so the already-pushed string argument was reloaded from the wrong
       slot and lost.  Both backends. }
     procedure TestRun_RecordCallFieldArg_WithStringArg;
+    { Regression: a FLOAT argument to a function/method that returns a record
+      with a managed (dynamic-array) field.  The native sret call path
+      materialised every argument via EmitExprToEax (integer-only), so a float
+      literal raised "unsupported expression form TFloatLiteral" and a float
+      variable would have gone through an integer register.  The sret arg path
+      now routes float args through %xmm registers per the SysV ABI.  QBE was
+      always correct, so these run on both backends. }
+    procedure TestRun_FloatArg_ManagedRecordReturn_Func;
+    procedure TestRun_TwoFloatArgs_ManagedRecordReturn_Func;
+    procedure TestRun_FloatArg_ManagedRecordReturn_Method;
   end;
 
 implementation
@@ -539,6 +549,66 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, 'vals 1 1' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_FloatArg_ManagedRecordReturn_Func;
+const
+  Src = '''
+    program P;
+    type TR = record X: Double; M: array of UInt32; end;
+    function Make(V: Double): TR;
+    begin Result.X := V end;
+    var R: TR;
+    begin
+      R := Make(0.25);
+      WriteLn(R.X)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '0.25' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_TwoFloatArgs_ManagedRecordReturn_Func;
+const
+  Src = '''
+    program P;
+    type TR = record X, Y: Double; M: array of UInt32; end;
+    function Make2(A, B: Double): TR;
+    begin Result.X := A; Result.Y := B end;
+    var R: TR;
+    begin
+      R := Make2(0.25, 0.75);
+      WriteLn(R.X, ' ', R.Y)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '0.25 0.75' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_FloatArg_ManagedRecordReturn_Method;
+const
+  Src = '''
+    program P;
+    type
+      TR = record X: Double; M: array of UInt32; end;
+      TMaker = class
+        function Make(V: Double): TR;
+      end;
+    function TMaker.Make(V: Double): TR;
+    begin Result.X := V end;
+    var K: TMaker; R: TR;
+    begin
+      K := TMaker.Create;
+      R := K.Make(0.25);
+      WriteLn(R.X);
+      K.Free
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '0.25' + LE, 0);
 end;
 
 initialization
