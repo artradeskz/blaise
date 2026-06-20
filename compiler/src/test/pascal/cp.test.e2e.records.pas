@@ -57,6 +57,14 @@ type
     procedure TestRun_RecordReturnFieldInline;
     procedure TestRun_RecordWithStaticArrayField_DeepCopy;
     procedure TestRun_NestedRecordMethod;
+    { Regression: copying a record whose layout has a sub-word field (Boolean /
+      Byte / SmallInt) immediately before a managed field.  EmitRecordCopy used
+      loadw/storew unconditionally, so the 4-byte store over a 1-byte Boolean
+      clobbered the low bytes of the following pointer field — a later
+      _StringRelease / _DynArrayRelease then crashed on QBE.  Native was always
+      width-correct.  This is the shape of TDecimal (Boolean flags before a
+      string-bearing carrier), which blocked Numerics.Money on QBE. }
+    procedure TestRun_RecordCopy_BooleanBeforeManagedField;
   end;
 
 implementation
@@ -1136,6 +1144,37 @@ procedure TE2ERecordsTests.TestRun_NestedRecordMethod;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcNestedRecMethod, '88' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_RecordCopy_BooleanBeforeManagedField;
+const
+  { TDec mirrors TDecimal's shape: a dynarray and Boolean flags packed before
+    the outer record's managed (string) field.  Mk copies a LOCAL TDec into the
+    sret Result's record field, then sets a string field — exactly the path that
+    over-wrote the string pointer with a wide store. }
+  Src = '''
+    program P;
+    type
+      TDec = record FC: Int64; FM: array of UInt32; FS: Integer; FN: Boolean; FI: Boolean; end;
+      TM   = record A: TDec; C: string; end;
+    function MkDec: TDec;
+    begin SetLength(Result.FM, 2); Result.FM[0] := 5; Result.FC := 99; Result.FI := True end;
+    function Mk: TM;
+    var L: TDec;
+    begin
+      L := MkDec();
+      Result.A := L;
+      Result.C := 'USD';
+    end;
+    var M: TM;
+    begin
+      M := Mk();
+      WriteLn(M.C, ' ', M.A.FC, ' ', M.A.FM[0], ' ', M.A.FI)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'USD 99 5 True' + LE, 0);
 end;
 
 initialization

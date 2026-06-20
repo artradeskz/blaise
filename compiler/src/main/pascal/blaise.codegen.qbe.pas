@@ -5051,17 +5051,26 @@ begin
     else if F.TypeDesc.Kind = tyRecord then
       { Nested record field: recurse into sub-fields }
       Self.EmitRecordCopy(TRecordTypeDesc(F.TypeDesc), DstField, SrcField)
-    else if QbeTypeOf(F.TypeDesc) = 'w' then
+    else if (F.TypeDesc.Kind = tyStaticArray) or
+            ((F.TypeDesc.Kind = tySet) and (F.TypeDesc.RawSize() > 8)) then
     begin
-      ValTemp := AllocTemp();
-      EmitLine(Format('  %s =w loadw %s', [ValTemp, SrcField]));
-      EmitLine(Format('  storew %s, %s', [ValTemp, DstField]));
+      { Inline aggregate field (fixed-size array / jumbo-set bitmap): copy the
+        raw bytes — there is no single scalar load/store width. }
+      EmitLine(Format('  call $memcpy(l %s, l %s, l %d)',
+        [DstField, SrcField, F.TypeDesc.RawSize()]));
     end
     else
     begin
+      { Scalar field: use the width-correct load/store so a sub-word field
+        (Boolean/Byte = 1 byte, SmallInt/Word = 2 bytes) does NOT over-write
+        the adjacent field.  Using loadw/storew unconditionally corrupted the
+        next field (e.g. a Boolean at offset 21 clobbering a string pointer at
+        offset 24), which surfaced as a double-free in _StringRelease. }
       ValTemp := AllocTemp();
-      EmitLine(Format('  %s =l loadl %s', [ValTemp, SrcField]));
-      EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
+      EmitLine(Format('  %s =%s %s %s',
+        [ValTemp, QbeTypeOf(F.TypeDesc), Self.LoadInstrFor(F.TypeDesc), SrcField]));
+      EmitLine(Format('  %s %s, %s',
+        [Self.StoreInstrFor(F.TypeDesc), ValTemp, DstField]));
     end;
   end;
 end;
