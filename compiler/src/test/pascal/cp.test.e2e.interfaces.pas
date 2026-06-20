@@ -41,6 +41,13 @@ type
       interface (needs the class to emit an itab for the inherited base). }
     procedure TestRun_ClassImplDerived_ToBaseVar;
     procedure TestRun_ClassImplDerived_ToBaseParam;
+    { A class that INHERITS an interface from its ancestor (the ancestor
+      declares the interface; the descendant does not re-list it).  The
+      descendant must be assignable/passable as that interface, dispatching to
+      its own overrides and to inherited (non-overridden) methods alike
+      (issue #130 bug3). }
+    procedure TestRun_InheritedInterface_DescendantToVar;
+    procedure TestRun_InheritedInterface_OverrideAndInheritedMethod;
   end;
 
 implementation
@@ -304,6 +311,67 @@ procedure TE2EInterfaceTests.TestRun_ClassImplDerived_ToBaseParam;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcClassImplDerivedToBaseParam, 'A:Rex' + LE, 0);
+end;
+
+procedure TE2EInterfaceTests.TestRun_InheritedInterface_DescendantToVar;
+const
+  { TLoud inherits IGreeter from TPerson; assigning a TLoud to an IGreeter var
+    must work and dispatch to TLoud's override (issue #130 bug3 — the repro). }
+  Src = '''
+    program P;
+    type
+      IGreeter = interface function Greet: string; end;
+      TPerson = class(IGreeter) function Greet: string; virtual; end;
+      TLoud   = class(TPerson)  function Greet: string; override; end;
+    function TPerson.Greet: string; begin Result := 'hi' end;
+    function TLoud.Greet: string;   begin Result := 'HI' end;
+    var g: IGreeter;
+    begin
+      g := TPerson.Create; WriteLn(g.Greet());
+      g := TLoud.Create;   WriteLn(g.Greet());
+      g := nil
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'hi' + LE + 'HI' + LE, 0);
+end;
+
+procedure TE2EInterfaceTests.TestRun_InheritedInterface_OverrideAndInheritedMethod;
+const
+  { Three-level chain through an interface parameter: each level's itab must
+    resolve overridden methods to the level's own body and NON-overridden
+    methods to the inherited ancestor body (Who is never overridden). }
+  Src = '''
+    program P;
+    type
+      IGreeter = interface
+        function Greet: string;
+        function Who: string;
+      end;
+      TPerson = class(IGreeter)
+        function Greet: string; virtual;
+        function Who: string; virtual;
+      end;
+      TLoud     = class(TPerson) function Greet: string; override; end;
+      TVeryLoud = class(TLoud)   function Greet: string; override; end;
+    function TPerson.Greet: string; begin Result := 'hi' end;
+    function TPerson.Who: string;   begin Result := 'person' end;
+    function TLoud.Greet: string;     begin Result := 'HI' end;
+    function TVeryLoud.Greet: string; begin Result := 'HI!!!' end;
+    procedure Use(g: IGreeter);
+    begin WriteLn(g.Greet(), ' / ', g.Who()) end;
+    var per: TPerson; lou: TLoud; vl: TVeryLoud;
+    begin
+      per := TPerson.Create; Use(per); per.Free;
+      lou := TLoud.Create;   Use(lou); lou.Free;
+      vl := TVeryLoud.Create; Use(vl); vl.Free
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src,
+    'hi / person' + LE + 'HI / person' + LE + 'HI!!! / person' + LE, 0);
 end;
 
 initialization

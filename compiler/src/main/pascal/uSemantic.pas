@@ -759,8 +759,9 @@ end;
 procedure TSemanticAnalyser.CheckTypesMatch(AExpected, AActual: TTypeDesc;
   const AContext: string; ALine, ACol: Integer);
 var
-  RT: TRecordTypeDesc;
-  I:  Integer;
+  RT:   TRecordTypeDesc;
+  Walk: TRecordTypeDesc;
+  I:    Integer;
 begin
   if AExpected = AActual then
     Exit;
@@ -838,17 +839,24 @@ begin
     if InterfaceInheritsFrom(TInterfaceTypeDesc(AActual),
                              TInterfaceTypeDesc(AExpected)) then
       Exit;
-  { class → interface: allowed when the class implements that interface (or a
-    descendant of it — implementing IDog also satisfies IAnimal). }
+  { class → interface: allowed when the class — or ANY of its ancestors —
+    implements that interface (or a descendant of it: implementing IDog also
+    satisfies IAnimal).  A descendant inherits its parent's interface
+    implementations, so the whole parent chain must be scanned, not just the
+    class's own ImplementsList (issue #130 bug3). }
   if (AExpected.Kind = tyInterface) and (AActual.Kind = tyClass) then
   begin
-    RT := TRecordTypeDesc(AActual);
-    for I := 0 to RT.ImplementsCount() - 1 do
-      if (RT.ImplementsIntfAt(I) = AExpected) or
-         ((RT.ImplementsIntfAt(I) is TInterfaceTypeDesc) and
-          InterfaceInheritsFrom(TInterfaceTypeDesc(RT.ImplementsIntfAt(I)),
-                                TInterfaceTypeDesc(AExpected))) then
-        Exit;
+    Walk := TRecordTypeDesc(AActual);
+    while Walk <> nil do
+    begin
+      for I := 0 to Walk.ImplementsCount() - 1 do
+        if (Walk.ImplementsIntfAt(I) = AExpected) or
+           ((Walk.ImplementsIntfAt(I) is TInterfaceTypeDesc) and
+            InterfaceInheritsFrom(TInterfaceTypeDesc(Walk.ImplementsIntfAt(I)),
+                                  TInterfaceTypeDesc(AExpected))) then
+          Exit;
+      Walk := Walk.Parent;
+    end;
   end;
   { Untyped pointer accepts any class/interface/string/PChar reference and vice-versa }
   if (AExpected.Kind = tyPointer) and

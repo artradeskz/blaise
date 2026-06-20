@@ -337,6 +337,12 @@ type
       must then point at _AbstractMethodError). }
     function IsAbstractClassMethod(ARec: TRecordTypeDesc;
                                    const AMethName: string): Boolean;
+    { True when the class or any ancestor implements an interface. }
+    function ClassOrAncestorImplements(AClassRT: TRecordTypeDesc): Boolean;
+    { Native label for a class's implementation of an interface method,
+      resolved via the vtable (inherited + overridden both work). }
+    function ItabMethodRefNative(AClassRT: TRecordTypeDesc;
+      ATD: TTypeDecl; const AMethName: string): string;
     { Load an integer-family value from AOperand into %rax, extended to 64
       bits per AType (sign/zero-extend by width and signedness). }
     procedure EmitLoadVar(const AOperand: string; AType: TTypeDesc);
@@ -1959,7 +1965,10 @@ begin
       ParentStr := 'typeinfo_' + Self.ClassSymName(RT.Parent.Name)
     else
       ParentStr := '0';
-    if RT.ImplementsCount() > 0 then
+    { Point at the impllist when this class OR any ancestor implements an
+      interface — a descendant inherits its parent's interfaces and gets its
+      own impllist (issue #130 bug3). }
+    if Self.ClassOrAncestorImplements(RT) then
       ImplStr := 'impllist_' + CSym
     else
       ImplStr := '0';
@@ -2513,6 +2522,53 @@ begin
     Result := ARec.VTableEntryAt(Slot).IsAbstract;
 end;
 
+{ True when AClassRT or any of its ancestors implements at least one interface.
+  A descendant inherits its parent's interface implementations (issue #130
+  bug3), so the whole class parent chain must be scanned. }
+function TX86_64Backend.ClassOrAncestorImplements(AClassRT: TRecordTypeDesc): Boolean;
+var
+  Walk: TRecordTypeDesc;
+begin
+  Walk := AClassRT;
+  while Walk <> nil do
+  begin
+    if Walk.ImplementsCount() > 0 then Exit(True);
+    Walk := Walk.Parent;
+  end;
+  Result := False;
+end;
+
+{ Native label for AClassRT's implementation of interface method AMethName.
+  Prefers the vtable slot's resolved ImplName (so an inherited method points at
+  the ancestor's body and an override at the descendant's — issue #130 bug3);
+  the ImplName may carry a leading '$' (QBE convention) which is stripped, then
+  NativeMangle is applied.  Falls back to the declaring-class method name. }
+function TX86_64Backend.ItabMethodRefNative(AClassRT: TRecordTypeDesc;
+  ATD: TTypeDecl; const AMethName: string): string;
+var
+  Slot: Integer;
+  E:    TVTableEntry;
+begin
+  if AClassRT <> nil then
+  begin
+    Slot := AClassRT.FindVTableSlot(AMethName);
+    if Slot >= 0 then
+    begin
+      E := AClassRT.VTableEntryAt(Slot);
+      if (E <> nil) and (E.ImplName <> '') then
+      begin
+        if StrAt(E.ImplName, 0) = 36 then   { 36 = '$' }
+          Exit(NativeMangle(StrCopyTail(E.ImplName, 1)))
+        else
+          Exit(NativeMangle(E.ImplName));
+      end;
+    end;
+  end;
+  Result := MethodEmitNameNative(
+              FindMethodInClassDef(TClassTypeDef(ATD.Def), AMethName),
+              ATD.Name, AMethName);
+end;
+
 { Emit typeinfo / itab / impllist blocks for interfaces and implementing
   classes.  Mirrors the QBE backend's EmitInterfaceDefs:
 
@@ -2541,6 +2597,7 @@ var
   MDecl:      TMethodDecl;
   EmitIntfs:  TObjectList;
   IntfWalk:   TInterfaceTypeDesc;
+  ClassWalk:  TRecordTypeDesc;
 begin
   { Typeinfo blocks for every plain interface. }
   for I := 0 to ATypeDecls.Count - 1 do
@@ -2572,23 +2629,32 @@ begin
     TDesc := ASymTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     ClassRT := TRecordTypeDesc(TDesc);
-    if ClassRT.ImplementsCount() = 0 then Continue;
+    { Skip only when neither this class NOR any ancestor implements an interface
+      — a descendant inherits its parent's interfaces (issue #130 bug3). }
+    if not Self.ClassOrAncestorImplements(ClassRT) then Continue;
     CSym := Self.ClassSymName(TD.Name);
 
     { Collect each implemented interface PLUS every ancestor on its parent
       chain so a class instance can narrow directly to a base interface (an
       ancestor's methods are a prefix of the descendant's itab — same impl
-      pointers).  Dedup keeps one itab per (class, interface). }
+      pointers).  Also walk the CLASS parent chain to pick up interfaces an
+      ancestor implements (issue #130 bug3).  Dedup keeps one itab per
+      (class, interface). }
     EmitIntfs := TObjectList.Create(False);
     try
-      for J := 0 to ClassRT.ImplementsCount() - 1 do
+      ClassWalk := ClassRT;
+      while ClassWalk <> nil do
       begin
-        IntfWalk := ClassRT.ImplementsIntfAt(J);
-        while IntfWalk <> nil do
+        for J := 0 to ClassWalk.ImplementsCount() - 1 do
         begin
-          if EmitIntfs.IndexOf(IntfWalk) < 0 then EmitIntfs.Add(IntfWalk);
-          IntfWalk := IntfWalk.Parent;
+          IntfWalk := ClassWalk.ImplementsIntfAt(J);
+          while IntfWalk <> nil do
+          begin
+            if EmitIntfs.IndexOf(IntfWalk) < 0 then EmitIntfs.Add(IntfWalk);
+            IntfWalk := IntfWalk.Parent;
+          end;
         end;
+        ClassWalk := ClassWalk.Parent;
       end;
 
       { One itab per interface — a flat array of method-code ptrs in interface
@@ -2605,9 +2671,10 @@ begin
           if Self.IsAbstractClassMethod(ClassRT, MethName) then
             MethRef := '_AbstractMethodError'
           else
-            MethRef := MethodEmitNameNative(
-                         FindMethodInClassDef(TClassTypeDef(TD.Def), MethName),
-                         TD.Name, MethName);
+            { Resolve via the vtable so an inherited (non-overridden) method
+              points at the ancestor's body and an override at the descendant's
+              (issue #130 bug3). }
+            MethRef := Self.ItabMethodRefNative(ClassRT, TD, MethName);
           Self.Emit(#9'.quad ' + MethRef);
         end;
       end;

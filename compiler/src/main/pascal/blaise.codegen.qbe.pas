@@ -186,6 +186,10 @@ type
     procedure EmitVTableDefs(AProg: TProgram);
     procedure EmitMethodDefs(AProg: TProgram);
     procedure EmitInterfaceDefs(AProg: TProgram);
+    { QBE label for AClassRT's implementation of interface method AMethName,
+      resolved via the vtable so inherited/overridden methods both work. }
+    function  ItabMethodRef(AClassRT: TRecordTypeDesc;
+      const AClassName, AMethName: string): string;
     function  IsAbstractClassMethod(ARec: TRecordTypeDesc;
                                     const AMethName: string): Boolean;
     procedure EmitFieldCleanupDefs(AProg: TProgram);
@@ -7621,6 +7625,31 @@ begin
   EmitLine('');
 end;
 
+function TCodeGenQBE.ItabMethodRef(AClassRT: TRecordTypeDesc;
+  const AClassName, AMethName: string): string;
+var
+  Slot: Integer;
+  E:    TVTableEntry;
+begin
+  { The QBE label for AClassRT's implementation of interface method AMethName.
+    The vtable already records the resolved impl per slot (an override points at
+    the descendant's body, an inherited method at the ancestor's), so prefer it.
+    Fall back to $<class>_<method> for the rare case of a class with no vtable
+    entry for the method (defensive — should not happen for a satisfied
+    interface). }
+  if AClassRT <> nil then
+  begin
+    Slot := AClassRT.FindVTableSlot(AMethName);
+    if Slot >= 0 then
+    begin
+      E := AClassRT.VTableEntryAt(Slot);
+      if (E <> nil) and (E.ImplName <> '') then
+        Exit(E.ImplName);
+    end;
+  end;
+  Result := '$' + ClassSymName(AClassName) + '_' + AMethName;
+end;
+
 procedure TCodeGenQBE.EmitInterfaceDefs(AProg: TProgram);
 { Emit typeinfo blocks for interfaces and itab/impllist blocks for class-interface pairs.
   Interface typeinfo: data $typeinfo_IFoo = ( l 0 )  -- address IS the identity token
@@ -7644,6 +7673,7 @@ var
   MName:       string;
   EmitIntfs:   TObjectList;
   IntfWalk:    TInterfaceTypeDesc;
+  ClassWalk:   TRecordTypeDesc;
 begin
   { Typeinfo blocks for every plain interface }
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
@@ -7668,23 +7698,39 @@ begin
     TDesc := AProg.SymbolTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     ClassRT := TRecordTypeDesc(TDesc);
-    if ClassRT.ImplementsCount() = 0 then Continue;
+    { Skip only when neither this class NOR any ancestor implements an
+      interface — a descendant inherits its parent's interfaces and still needs
+      its own itab (issue #130 bug3). }
+    ClassWalk := ClassRT;
+    while (ClassWalk <> nil) and (ClassWalk.ImplementsCount() = 0) do
+      ClassWalk := ClassWalk.Parent;
+    if ClassWalk = nil then Continue;
 
     { Collect each implemented interface PLUS every ancestor on its parent
       chain (IDog = interface(IAnimal) -> also emit an IAnimal itab), so a
       class instance can be narrowed directly to a base interface.  An
       ancestor's methods are a prefix of the descendant's itab, so the same
-      impl pointers apply; the dedup keeps one itab per (class, interface). }
+      impl pointers apply; the dedup keeps one itab per (class, interface).
+
+      Also walk the CLASS parent chain: a descendant inherits the interfaces
+      its ancestors implement (TLoud < TPerson(IGreeter) -> TLoud also
+      implements IGreeter), so it needs its own itab whose method refs resolve
+      to TLoud's (possibly overridden) implementations (issue #130 bug3). }
     EmitIntfs := TObjectList.Create(False);
     try
-      for J := 0 to ClassRT.ImplementsCount() - 1 do
+      ClassWalk := ClassRT;
+      while ClassWalk <> nil do
       begin
-        IntfWalk := ClassRT.ImplementsIntfAt(J);
-        while IntfWalk <> nil do
+        for J := 0 to ClassWalk.ImplementsCount() - 1 do
         begin
-          if EmitIntfs.IndexOf(IntfWalk) < 0 then EmitIntfs.Add(IntfWalk);
-          IntfWalk := IntfWalk.Parent;
+          IntfWalk := ClassWalk.ImplementsIntfAt(J);
+          while IntfWalk <> nil do
+          begin
+            if EmitIntfs.IndexOf(IntfWalk) < 0 then EmitIntfs.Add(IntfWalk);
+            IntfWalk := IntfWalk.Parent;
+          end;
         end;
+        ClassWalk := ClassWalk.Parent;
       end;
 
       { One itab per interface — when a class's vtable slot for a given
@@ -7703,7 +7749,13 @@ begin
           if IsAbstractClassMethod(ClassRT, MethName) then
             MethRef := '$_AbstractMethodError'
           else
-            MethRef := '$' + ClassSymName(TD.Name) + '_' + MethName;
+            { Resolve to the class's actual implementation of this method.  The
+              vtable slot's ImplName already accounts for inheritance and
+              overrides ($TLoud_Greet for an override, $TPerson_Greet for a
+              method inherited unchanged), so use it rather than blindly naming
+              $<thisclass>_<method> which would not exist for inherited methods
+              (issue #130 bug3). }
+            MethRef := ItabMethodRef(ClassRT, TD.Name, MethName);
           if K = 0 then
             ItabLine := ItabLine + ' l ' + MethRef
           else
