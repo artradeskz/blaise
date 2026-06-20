@@ -12033,8 +12033,16 @@ begin
       Exit;
     end;
     if (SSA.ResolvedArrayType <> nil) and
-       (SSA.ResolvedArrayType.Kind = tyDynArray) then
+       (SSA.ResolvedArrayType.Kind in [tyDynArray, tyOpenArray]) then
     begin
+      { Open arrays share the dynamic-array element-write path: both address the
+        element as data_ptr + I*elemsize.  The one difference is the var-param
+        deref below — an open-array param slot already holds the data pointer
+        directly, so it must NOT be dereferenced a second time (issue #130
+        bug5). }
+      if SSA.ResolvedArrayType.Kind = tyOpenArray then
+        DAElemType := TOpenArrayTypeDesc(SSA.ResolvedArrayType).ElementType
+      else
       DAElemType := TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType;
       { Chained / multi-dimensional write A[I][J] := V where the inner array
         is itself a dynamic array: BaseExpr (A[I]) evaluates to the inner
@@ -12116,7 +12124,10 @@ begin
       else if Self.IsLocal(SSA.ArrayName) then
       begin
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]));
-        if SSA.IsVarParam then
+        { An open-array param slot already holds the data pointer, so it is NOT
+          dereferenced again (a var dynamic-array slot holds the caller-var
+          address and does need the extra load). }
+        if SSA.IsVarParam and (SSA.ResolvedArrayType.Kind <> tyOpenArray) then
           { var/out param: slot -> caller var -> data pointer. }
           Self.Emit(#9'movq (%rcx), %rcx');
       end

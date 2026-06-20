@@ -12011,6 +12011,18 @@ begin
         EmitLine(Format('  %s =w loadw %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
       end;
     end
+    else if (AExpr.ResolvedType <> nil) and
+            (AExpr.ResolvedType.Kind = tyOpenArray) then
+    begin
+      { Open-array parameter: the %_var_X slot holds the DATA POINTER directly
+        (the caller passes base ptr + high as two params), for BOTH const and
+        var open arrays.  A single load yields that data pointer.  Without this
+        guard a `var` open array fell into the var-param scalar branch below and
+        dereferenced the data pointer a second time, reading garbage and
+        crashing (issue #130 bug5). }
+      EmitLine(Format('  %s =l loadl %%_var_%s', [T, TIdentExpr(AExpr).Name]));
+      Exit(T);
+    end
     else if TIdentExpr(AExpr).ParamMode = pmJumboSetValue then
     begin
       { Jumbo set value param: the QBE backend spills it into a local inline

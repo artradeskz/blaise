@@ -11665,6 +11665,28 @@ begin
       Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
     Exit;
   end;
+  { Open-array parameter subscript write: a[I] := V.  An open-array param is a
+    (data ptr, high) pair; an element write needs a var/out param so the pointer
+    refers to the caller's storage.  A `const` open array is read-only and
+    rejected.  (issue #130 bug5) }
+  if Sym.TypeDesc.Kind = tyOpenArray then
+  begin
+    if Sym.Kind <> skVarParameter then
+      SemanticError(Format(
+        'cannot assign to an element of ''%s'': a const open-array parameter ' +
+        'is read-only (declare it ''var'')', [AStmt.ArrayName]),
+        AStmt.Line, AStmt.Col);
+    AStmt.IsGlobal          := False;
+    AStmt.IsVarParam        := True;
+    AStmt.ResolvedArrayType := Sym.TypeDesc;
+    IdxType := AnalyseExpr(AStmt.IndexExpr);
+    if not IdxType.IsNumeric() then
+      SemanticError('Open array index must be numeric', AStmt.Line, AStmt.Col);
+    ValType := AnalyseExpr(AStmt.ValueExpr);
+    CheckTypesMatch(TOpenArrayTypeDesc(Sym.TypeDesc).ElementType, ValType,
+      Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
+    Exit;
+  end;
   if Sym.TypeDesc.Kind <> tyStaticArray then
     SemanticError(
       Format('''%s'' is not a static array or dynamic array', [AStmt.ArrayName]),

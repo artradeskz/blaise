@@ -83,6 +83,10 @@ type
     { Full program analysis }
     procedure TestProgram_HelloWorld_OK;
     procedure TestProgram_ArithmeticAndPrint_OK;
+
+    { var/const open-array element write (issue #130 bug5) }
+    procedure TestVarOpenArray_ElementWrite_OK;
+    procedure TestConstOpenArray_ElementWrite_RaisesError;
   end;
 
 implementation
@@ -547,6 +551,24 @@ begin
         end.
         '''
   ).Free();
+end;
+
+procedure TSemanticTests.TestVarOpenArray_ElementWrite_OK;
+begin
+  { Writing an element of a VAR open-array parameter is allowed. }
+  Analyse(
+    'program P; ' +
+    'procedure Z(var a: array of Integer); begin a[0] := 9 end; ' +
+    'var x: array[0..1] of Integer; begin x[0]:=1; x[1]:=2; Z(x) end.').Free();
+end;
+
+procedure TSemanticTests.TestConstOpenArray_ElementWrite_RaisesError;
+begin
+  { Writing an element of a CONST open-array parameter is rejected. }
+  AnalyseExpectError(
+    'program P; ' +
+    'procedure B(const a: array of Integer); begin a[0] := 9 end; ' +
+    'var x: array[0..1] of Integer; begin x[0]:=1; x[1]:=2; B(x) end.');
 end;
 
 initialization

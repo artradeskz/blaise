@@ -56,6 +56,13 @@ type
     { Empty bracket literal [] as an open-array argument }
     procedure TestRun_EmptyLiteral_ToOpenArray;
     procedure TestRun_EmptyLiteral_OverloadDisambiguation;
+
+    { var open-array parameter (issue #130 bug5): element READ used to segfault
+      on QBE (extra deref of the data pointer) and element WRITE was a semantic
+      error / native codegen error.  A const open array stays read-only. }
+    procedure TestRun_VarOpenArray_ElementRead;
+    procedure TestRun_VarOpenArray_ElementWrite;
+    procedure TestRun_VarOpenArray_ReadModifyWrite;
   end;
 
 implementation
@@ -534,6 +541,68 @@ const Src = '''
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, 'oa 0' + #10 + 'oa 1' + #10 + 'int' + #10, 0);
+end;
+
+procedure TE2EOpenArrayTests.TestRun_VarOpenArray_ElementRead;
+const
+  { Read-only body on a var open array — the exact issue #130 repro. }
+  Src = '''
+    program P;
+    procedure SumVar(var a: array of Integer);
+    var i, s: Integer;
+    begin s := 0; for i := 0 to High(a) do s := s + a[i]; WriteLn(s) end;
+    var x: array[0..2] of Integer;
+    begin x[0] := 1; x[1] := 2; x[2] := 3; SumVar(x) end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '6' + #10, 0);
+end;
+
+procedure TE2EOpenArrayTests.TestRun_VarOpenArray_ElementWrite;
+const
+  { Element write through a var open array mutates the caller's storage. }
+  Src = '''
+    program P;
+    procedure Zero(var a: array of Integer);
+    var i: Integer;
+    begin for i := 0 to High(a) do a[i] := 0 end;
+    var x: array[0..2] of Integer; i: Integer;
+    begin
+      x[0] := 1; x[1] := 2; x[2] := 3;
+      Zero(x);
+      for i := 0 to 2 do WriteLn(x[i])
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '0' + #10 + '0' + #10 + '0' + #10, 0);
+end;
+
+procedure TE2EOpenArrayTests.TestRun_VarOpenArray_ReadModifyWrite;
+const
+  { Read and write the same element (a[i] := a[i] * by) through a var open
+    array, then read it back via a const open array. }
+  Src = '''
+    program P;
+    procedure Scale(var a: array of Integer; by: Integer);
+    var i: Integer;
+    begin for i := 0 to High(a) do a[i] := a[i] * by end;
+    function SumC(const a: array of Integer): Integer;
+    var i: Integer;
+    begin Result := 0; for i := 0 to High(a) do Result := Result + a[i] end;
+    var x: array[0..3] of Integer; i: Integer;
+    begin
+      for i := 0 to 3 do x[i] := i + 1;
+      Scale(x, 10);
+      for i := 0 to 3 do WriteLn(x[i]);
+      WriteLn('sum=', SumC(x))
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src,
+    '10' + #10 + '20' + #10 + '30' + #10 + '40' + #10 + 'sum=100' + #10, 0);
 end;
 
 initialization
