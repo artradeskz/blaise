@@ -135,6 +135,8 @@ uses
   cp.test.e2e.math,
   cp.test.numerics.decimal,
   cp.test.e2e.numerics.decimal,
+  cp.test.numerics.money,
+  cp.test.e2e.numerics.money,
   cp.test.streams,
   cp.test.e2e.streams,
   cp.test.e2e.dateutils,

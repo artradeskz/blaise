@@ -180,20 +180,12 @@ local record variables at scope exit.
 
 == StdLib Packages — Numeric Types
 
-The exact-decimal type itself (`TDecimal` in `Numerics.Decimal`) is implemented;
-the design decision — one `TDecimal`, no separate `Currency`/`BigDecimal` — is
-recorded in `docs/language-rationale.adoc` ("Decimal Arithmetic — One `TDecimal`,
-No `Currency` Primitive").  The following numeric items remain genuinely future
-work.
-
-=== `Numerics.Money` — currency-aware wrapper
-
-A thin type layering currency onto `TDecimal`: a `TMoney` carrying an amount plus
-an ISO-4217 currency tag, with mismatched-currency arithmetic raising and a
-per-currency default scale (JPY 0, USD 2, KWD 3).  This is the universal pattern —
-Moneta (Java), the `money` gem (Ruby) and `rusty-money` (Rust) all wrap a decimal
-rather than baking currency into the numeric core.  Deferred so currency/locale
-policy stays out of `TDecimal`.
+The exact-decimal type (`TDecimal` in `Numerics.Decimal`) and the currency-aware
+wrapper (`TMoney` in `Numerics.Money`) are both implemented; the design
+decisions are recorded in `docs/language-rationale.adoc` ("Decimal Arithmetic —
+One `TDecimal`, No `Currency` Primitive" and "Currency Amounts — `TMoney` Wraps
+`TDecimal`, Currency Is a String Tag").  The following numeric items remain
+genuinely future work.
 
 === Operator overloading for `TDecimal`
 

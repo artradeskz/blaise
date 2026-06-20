@@ -5024,7 +5024,79 @@ rounding) need no change to the library.
   where exact decimal representation is impossible and pointless.  `Double` +
   `Math` already serve this; `TDecimal` ships no such functions.
 
-* *Baking currency (ISO-4217) into the numeric core.*  Deferred to a future
-  `Numerics.Money` wrapper.  Currency is a policy layer (which currencies, how to
-  format, per-jurisdiction rounding) that should not be frozen into the numeric
-  type — matching Moneta / money-gem / rusty-money, which all wrap a decimal.
+* *Baking currency (ISO-4217) into the numeric core.*  Deferred to the
+  `Numerics.Money` wrapper (see the next section).  Currency is a policy layer
+  (which currencies, how to format, per-jurisdiction rounding) that should not be
+  frozen into the numeric type — matching Moneta / money-gem / rusty-money, which
+  all wrap a decimal.
+
+== Currency Amounts — `TMoney` Wraps `TDecimal`, Currency Is a String Tag
+
+=== Decision
+
+Currency-aware monetary amounts are provided by `TMoney` (`Numerics.Money`), a
+thin value-type wrapper that pairs an exact `TDecimal` amount with an ISO-4217
+currency tag.  The numeric core (`TDecimal`) stays currency- and locale-agnostic;
+currency policy lives entirely in this wrapper.  Three rules define `TMoney`:
+
+* The currency tag is an ISO-4217 alphabetic *string* code ('USD', 'JPY',
+  'KWD'), upper-cased on construction.  The set of currencies is open: a code the
+  built-in registry does not list is still accepted and uses the fallback minor-
+  unit scale of two.
+
+* Each currency has a default minor-unit scale (JPY 0, USD 2, KWD 3, fallback 2).
+  Every `TMoney` is normalised to its currency's scale on construction and after
+  every arithmetic operation, using banker's rounding (`rmHalfEven`).
+
+* Arithmetic across different currencies (`Add`, `Subtract`, `Compare`) raises
+  `EMoneyMismatch`.  There is no implicit conversion — exchange rates are a
+  higher policy layer, not a property of the type.  (`Equals` is the one
+  exception: it returns `False` for different currencies rather than raising, so
+  it is total and safe in containers.)
+
+`TMoney` has immutable value semantics: every operation returns a fresh value and
+never mutates `Self`, exactly as `TDecimal` does.
+
+=== Rationale
+
+This is the universal industry pattern.  Moneta (Java), the money gem (Ruby) and
+rusty-money (Rust) each wrap a decimal with a currency tag rather than baking
+currency into the numeric type.  Keeping currency out of `TDecimal` preserves the
+"one exact-decimal type" decision (see the previous section) and keeps locale and
+jurisdiction policy — formatting, which currencies exist, per-currency rounding —
+in a layer that can evolve without touching the numeric core.
+
+A *string* currency code (rather than a closed `enum`) keeps the type open: new
+or non-standard codes (crypto, historical, regional) work without a library
+edit, matching money gem and rusty-money.  The small loss of compile-time
+checking is the right trade for an inventory that changes outside the compiler's
+release cycle; an unknown code degrades gracefully to the fallback scale instead
+of failing to compile.
+
+Per-currency scale normalisation with banker's rounding on every operation makes
+`TMoney` behave like real money: a JPY amount never carries a fraction, a USD
+amount is always two places, and ties round without the upward bias of
+round-half-up.  Doing it on *every* operation (not just on display) keeps stored
+values canonical, so equality and hashing are well-defined.
+
+=== Alternatives considered
+
+* *A `TCurrency` enum instead of a string code.*  Rejected.  It is type-safe but
+  closes the currency set: every new or non-standard code would require editing
+  and re-releasing the library.  The open string code matches the dominant money
+  libraries and lets unknown codes degrade to the fallback scale.
+
+* *Preserving full `TDecimal` scale and rounding only on display.*  Rejected as
+  the default.  Lazy rounding lets non-canonical values (e.g. an un-rounded
+  division result) leak into stored amounts and breaks value equality between
+  amounts that should be equal.  Normalising eagerly keeps every `TMoney` at its
+  currency scale.
+
+* *Baking exchange-rate conversion into `TMoney`.*  Rejected.  Rates are
+  time-varying external data, not a property of an amount; mixing them in would
+  make arithmetic depend on hidden state.  Cross-currency arithmetic raises
+  instead, leaving conversion to an explicit higher layer.
+
+* *A fixed-point money type (Int64 scaled).*  Already rejected for `TDecimal`
+  (see the previous section); `TMoney` inherits `TDecimal`'s compact `Int64`
+  fast path for the common case, so it needs no separate fixed-point design.
