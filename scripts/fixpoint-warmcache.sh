@@ -1,0 +1,171 @@
+#!/bin/bash
+# Incremental warm-cache rebuild guard for the Blaise self-hosting toolchain.
+#
+# WHAT IT GUARDS:
+#   The incremental --unit-cache path: when the compiler rebuilds a program
+#   whose dependency units are loaded from a POPULATED cache (their cached
+#   .bif interface + .o object) instead of from source.  This script compiles
+#   the WHOLE COMPILER twice into the SAME --unit-cache: the first build fills
+#   the cache from source, the second build recompiles the top program against
+#   the cached interfaces.  It asserts the warm-cache rebuild produces a binary
+#   that is present, plausibly sized, AND behaviourally CORRECT (compiles +
+#   runs a hello-world program), not merely a non-empty file.
+#
+# WHY IT EXISTS, separately from the other fixpoint scripts:
+#   A whole class of bugs only manifests when a unit is loaded from its cached
+#   .bif/.o rather than recompiled from source — a dropped field, a wrong
+#   vtable slot, a duplicate global, a missing initialiser in the cached
+#   interface round-trip.  None of the existing fixpoints exercise that path:
+#   fixpoint.sh uses --emit-ir (no cache at all), fixpoint-native.sh diffs the
+#   emitted .s (no cache), and fixpoint-native-internal.sh compiles a tiny
+#   probe program (no large warm cache).  So a regression in the cached-
+#   interface import / round-trip passes every current fixpoint and only blows
+#   up later when an end user does an incremental rebuild.  This script is the
+#   only fixpoint-level guard that drives a real warm --unit-cache rebuild of
+#   a large codebase end to end.
+#
+# WHY THE BEHAVIOURAL CHECK MATTERS:
+#   A broken warm-cache rebuild was observed to produce a truncated binary
+#   (~1.9 MB vs the ~2.8 MB clean build) that SIGABRTs or prints nothing.  So
+#   beyond "exit 0 + plausible size" we compile + run a hello-world program
+#   with BOTH the clean-cache and warm-cache stage-2 binaries and require each
+#   to print "Hello" and exit 0.  Present-but-wrong is the failure mode this
+#   guard is built to catch.
+#
+# Requires: a current native-built compiler at compiler/target/blaise (run
+# `pasbuild compile -m blaise-compiler` first) and compiler/target/blaise_rtl.a
+# beside it.
+
+set -e
+
+if [ ! -f "compiler/src/main/pascal/Blaise.pas" ]; then
+  echo "Run this script from the project root: ./scripts/fixpoint-warmcache.sh" >&2
+  exit 1
+fi
+
+STAGE1="compiler/target/blaise"
+if [ ! -x "$STAGE1" ]; then
+  echo "Compiler not found: $STAGE1" >&2
+  echo "Build it first: pasbuild compile -m blaise-compiler --compiler ..." >&2
+  exit 10
+fi
+
+if [ ! -f compiler/target/blaise_rtl.a ]; then
+  echo "blaise_rtl.a not found beside the compiler — build the runtime first" >&2
+  echo "  (cd runtime && make install) then pasbuild compile -m blaise-compiler" >&2
+  exit 11
+fi
+# FindRTL looks for blaise_rtl.a beside the compiler binary; it already is for
+# compiler/target/blaise, but copy defensively in case the tree is partial.
+cp compiler/target/blaise_rtl.a "$(dirname "$STAGE1")/blaise_rtl.a" 2>/dev/null || true
+
+UNIT_PATHS="--unit-path compiler/src/main/pascal --unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
+
+# All temp state in one mktemp dir so cleanup is a single rm.
+WORK="$(mktemp -d)"
+UC="$WORK/cache"
+mkdir -p "$UC"
+STAGE2A="$WORK/wc_stage2a"
+STAGE2B="$WORK/wc_stage2b"
+trap 'rm -rf "$WORK"' EXIT
+
+echo "compiler (stage-1): $STAGE1"
+echo "unit-cache:         $UC"
+
+echo "[1/4] BUILD 1 — compile whole compiler into a FRESH (empty) unit-cache"
+set +e
+"$STAGE1" --source compiler/src/main/pascal/Blaise.pas \
+  --output "$STAGE2A" --unit-cache "$UC" $UNIT_PATHS \
+  > "$WORK/build1.log" 2>&1
+B1_RC=$?
+set -e
+if [ "$B1_RC" -ne 0 ]; then
+  echo "BUILD1_FAIL (clean-cache build, exit=$B1_RC)"
+  tail -15 "$WORK/build1.log"
+  exit 1
+fi
+if [ ! -s "$STAGE2A" ]; then
+  echo "BUILD1_FAIL (clean-cache build produced no binary)"
+  exit 1
+fi
+SIZE1=$(stat -c %s "$STAGE2A")
+echo "      build1 ok — stage-2a size = $SIZE1 bytes"
+
+echo "[2/4] BUILD 2 — recompile into the SAME (now populated) unit-cache"
+# This is the path under test: dependency units load from cached .bif/.o and
+# the top program is recompiled against those cached interfaces.
+set +e
+"$STAGE1" --source compiler/src/main/pascal/Blaise.pas \
+  --output "$STAGE2B" --unit-cache "$UC" $UNIT_PATHS \
+  > "$WORK/build2.log" 2>&1
+B2_RC=$?
+set -e
+if [ "$B2_RC" -ne 0 ]; then
+  echo "BUILD2_FAIL (warm-cache rebuild, exit=$B2_RC)"
+  echo "  (a unit loaded from the cache likely produced a broken round-trip)"
+  tail -15 "$WORK/build2.log"
+  exit 1
+fi
+if [ ! -s "$STAGE2B" ]; then
+  echo "BUILD2_FAIL (warm-cache rebuild produced no binary)"
+  exit 1
+fi
+SIZE2=$(stat -c %s "$STAGE2B")
+echo "      build2 ok — stage-2b size = $SIZE2 bytes"
+
+echo "[3/4] size sanity — warm-cache binary must not be drastically smaller"
+# A truncated/broken warm-cache rebuild was ~1.9 MB vs a ~2.8 MB clean build.
+# Require stage-2b to be at least 90% of stage-2a's size.
+MIN_SIZE=$(( SIZE1 * 90 / 100 ))
+if [ "$SIZE2" -lt "$MIN_SIZE" ]; then
+  echo "SIZE_REGRESSION — stage-2b ($SIZE2) < 90% of stage-2a ($SIZE1)"
+  echo "  (warm-cache rebuild looks truncated — likely a dropped section/global)"
+  exit 1
+fi
+echo "      ok — stage-2b is within 10% of stage-2a"
+
+echo "[4/4] behavioural check — both stage-2 binaries compile + run hello-world"
+HELLO="$WORK/hello.pas"
+printf 'program hello;\nbegin\n  WriteLn(%s);\nend.\n' "'Hello'" > "$HELLO"
+
+# FindRTL looks for blaise_rtl.a beside whichever binary is invoked.
+cp compiler/target/blaise_rtl.a "$WORK/blaise_rtl.a"
+
+RT_UNIT_PATHS="--unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
+
+check_binary() {
+  local label="$1"
+  local bin="$2"
+  local out="$WORK/${label}_hello"
+  set +e
+  "$bin" --source "$HELLO" --output "$out" $RT_UNIT_PATHS \
+    > "$WORK/${label}_compile.log" 2>&1
+  local crc=$?
+  set -e
+  if [ "$crc" -ne 0 ] || [ ! -x "$out" ]; then
+    echo "HELLO_COMPILE_FAIL ($label, exit=$crc)"
+    tail -10 "$WORK/${label}_compile.log"
+    exit 1
+  fi
+  set +e
+  local stdout; stdout="$("$out" 2>"$WORK/${label}_run.err")"
+  local rrc=$?
+  set -e
+  if [ "$rrc" -ne 0 ]; then
+    echo "HELLO_RUN_FAIL ($label, exit=$rrc)"
+    echo "  stdout: [$stdout]"
+    cat "$WORK/${label}_run.err"
+    exit 1
+  fi
+  if [ "$stdout" != "Hello" ]; then
+    echo "HELLO_OUTPUT_MISMATCH ($label) — expected 'Hello', got '$stdout'"
+    exit 1
+  fi
+  echo "      $label: compiled, ran, printed 'Hello' (exit 0)"
+}
+
+check_binary "stage2a" "$STAGE2A"
+check_binary "stage2b" "$STAGE2B"
+
+echo "WARMCACHE_FIXPOINT_OK"
+exit 0
