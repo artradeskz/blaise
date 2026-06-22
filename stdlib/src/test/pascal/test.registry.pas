@@ -26,7 +26,8 @@ uses
   Crypto.Tests,
   Sockets.Tests,
   WebSockets.Tests,
-  HttpServer.Tests;
+  HttpServer.Tests,
+  Guid.Tests;
 
 implementation
 
