@@ -9,4 +9,9 @@
     </unitPaths>
   </build>
 
+  <test>
+    <framework>blaise</framework>
+    <testSource>testrunner.pas</testSource>
+  </test>
+
 </project>
