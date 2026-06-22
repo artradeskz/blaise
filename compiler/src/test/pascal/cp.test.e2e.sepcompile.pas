@@ -85,6 +85,7 @@ type
       object's fields stayed nil.  This crashed the stdlib JSON test suite
       when its TTestCase base came from target/units. }
     procedure TestIncrementalRebuild_VirtualCtorVtableSlot;
+    procedure TestDebugOpdf_PerUnitSection_InDependencyObject;
   end;
 
 implementation
@@ -947,6 +948,104 @@ begin
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('build2 run exit code', 0, Rc);
   AssertEquals('build2 stdout (cached ctor slot)', '7' + #10, Captured)
+end;
+
+procedure TSepCompileTests.TestDebugOpdf_PerUnitSection_InDependencyObject;
+const
+  DepSrc =
+    '''
+    unit OpdfDep;
+    interface
+    procedure Greet(const AName: string);
+    implementation
+    procedure Greet(const AName: string);
+    var
+      Total: Integer;
+      Msg: string;
+    begin
+      Total := 0;
+      Msg := 'Hello, ';
+      Msg := Msg + AName;
+      Total := Total + 1;
+      WriteLn(Msg);
+      Total := Total + 1;
+      WriteLn('Count is ', Total)
+    end;
+    end.
+    ''';
+  ProgSrc =
+    '''
+    program UseOpdfDep;
+    uses OpdfDep;
+    begin
+      Greet('World')
+    end.
+    ''';
+var
+  DepPas, ProgPas, ProgBin, CacheDir, DepObj: string;
+  Captured, ObjOut: string;
+  Rc: Integer;
+  Proc: TProcess;
+  Chunk: string;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  DepPas   := FScratch + '/OpdfDep.pas';
+  ProgPas  := FScratch + '/use_opdfdep.pas';
+  ProgBin  := FScratch + '/use_opdfdep';
+  CacheDir := FScratch + '/units-opdf';
+  DepObj   := CacheDir + '/opdfdep.o';
+
+  WriteFile(DepPas, DepSrc);
+  WriteFile(ProgPas, ProgSrc);
+  ForceDirectories(CacheDir);
+
+  { Default (incremental) native build with --debug-opdf: the dependency
+    unit is compiled to its own .o in the cache dir.  With per-unit OPDF the
+    worker embeds a self-contained .opdf section into that .o so pdr can break
+    inside OpdfDep.Greet.  Before this feature only the program object carried
+    OPDF, so the dependency .o had no .opdf section. }
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'native', '--debug-opdf',
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('blaise(--debug-opdf) exit code (out: ' + Captured + ')', 0, Rc);
+  AssertTrue('use_opdfdep exists', FileExists(ProgBin));
+  AssertTrue('dependency object exists at ' + DepObj, FileExists(DepObj));
+
+  { The unit .o must carry an .opdf section (objdump -h shows it). }
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := 'objdump';
+    Proc.Parameters.Add('-h');
+    Proc.Parameters.Add(DepObj);
+    Proc.Execute();
+    ObjOut := '';
+    repeat
+      Chunk := Proc.ReadOutput();
+      ObjOut := ObjOut + Chunk
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit()
+  finally
+    Proc.Free()
+  end;
+  AssertTrue('dependency .o has an .opdf section (objdump -h)',
+    Pos('.opdf', ObjOut) >= 0);
+
+  { The program still runs correctly. }
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('use_opdfdep exit code', 0, Rc);
+  AssertEquals('use_opdfdep stdout', 'Hello, World' + #10 + 'Count is 2' + #10,
+    Captured)
 end;
 
 initialization

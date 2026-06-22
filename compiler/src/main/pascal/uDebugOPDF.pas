@@ -26,6 +26,8 @@ type
   TOPDFEmitter = class
   private
     FProgram:    TProgram;
+    FUnit:       TUnit;        { non-nil in unit mode; FProgram is nil then }
+    [Unretained] FUnitSymTable: TSymbolTable;  { unit-mode symbol table (not owned) }
     FSourceFile: string;
     [Unretained] FFacts: TDbgFacts;  { non-owned — provided by the driver }
     FOutput:     TStringList;
@@ -67,6 +69,9 @@ type
     procedure EmitInterface(AType: TInterfaceTypeDesc);
     procedure EmitProperties(AClass: TRecordTypeDesc);
     procedure EmitConstants;
+    procedure EmitConstantsFromList(AList: TObjectList);
+    procedure EmitTypesFromBlock(ABlock: TBlock);
+    procedure EmitGlobalVarsFromList(AList: TObjectList);
     procedure EmitAllTypes;
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
@@ -86,8 +91,15 @@ type
     function  CanonicalName(AType: TTypeDesc): string;
     function  FieldsPayloadSize(ARec: TRecordTypeDesc): Integer;
     procedure EmitFields(ARec: TRecordTypeDesc);
+    function  ActiveSymTable: TSymbolTable;
   public
     constructor Create(AProgram: TProgram; const ASourceFile: string);
+    { Unit-mode emitter: produces a complete, self-contained .opdf section for
+      a single unit's object file (no program directory, no 'main' scope).
+      The same section is concatenated by the linker with every other unit's
+      and the program's .opdf section. }
+    constructor CreateForUnit(AUnit: TUnit; ASymTable: TSymbolTable;
+                              const ASourceFile: string);
     { Optional codegen facts: when set, scopes/locals/lines are emitted
       from exact backend data instead of the approximate AST walk. }
     procedure SetFacts(AFacts: TDbgFacts);
@@ -138,6 +150,8 @@ constructor TOPDFEmitter.Create(AProgram: TProgram; const ASourceFile: string);
 begin
   inherited Create();
   FProgram    := AProgram;
+  FUnit       := nil;
+  FUnitSymTable := nil;
   FSourceFile := ASourceFile;
   FOutput     := TStringList.Create();
   FTypeNames  := TStringList.Create();
@@ -150,6 +164,37 @@ begin
   FTotRecIdx          := -1;
   FUnitDirRecCountIdx := -1;
   FDone               := False;
+end;
+
+constructor TOPDFEmitter.CreateForUnit(AUnit: TUnit; ASymTable: TSymbolTable;
+  const ASourceFile: string);
+begin
+  inherited Create();
+  FProgram      := nil;
+  FUnit         := AUnit;
+  FUnitSymTable := ASymTable;
+  FSourceFile   := ASourceFile;
+  FOutput       := TStringList.Create();
+  FTypeNames    := TStringList.Create();
+  FTypeNames.Sorted        := True;
+  FTypeNames.CaseSensitive := True;
+  FEmitted      := TStringList.Create();
+  FEmitted.Sorted        := True;
+  FEmitted.CaseSensitive := True;
+  FRecordCount        := 0;
+  FTotRecIdx          := -1;
+  FUnitDirRecCountIdx := -1;
+  FDone               := False;
+end;
+
+function TOPDFEmitter.ActiveSymTable: TSymbolTable;
+begin
+  if FUnit <> nil then
+    Result := FUnitSymTable
+  else if FProgram <> nil then
+    Result := FProgram.SymbolTable
+  else
+    Result := nil;
 end;
 
 destructor TOPDFEmitter.Destroy;
@@ -464,15 +509,20 @@ var
   Ch:    string;
   Pfx:   string;
 begin
+  { Mirror the native backend's ClassSymName exactly so the .quad vtable_<sym>
+    label here matches the symbol the backend actually defined.  In WHOLE-
+    PROGRAM mode the backend has a program name and drops the prefix for
+    program-owned classes; in UNIT mode there is no program name, so even the
+    unit's own classes carry their unit prefix (vtable_<Unit>_<Class>). }
   Pfx := '';
-  if (FProgram <> nil) and (FProgram.SymbolTable <> nil) then
+  if Self.ActiveSymTable() <> nil then
   begin
-    Sym := FProgram.SymbolTable.Lookup(AClassName);
+    Sym := Self.ActiveSymTable().Lookup(AClassName);
     if Sym <> nil then
     begin
       Owner := Sym.OwningUnit;
       if (Owner <> '') and
-         not SameText(Owner, FProgram.Name) and
+         not ((FProgram <> nil) and SameText(Owner, FProgram.Name)) and
          not SameText(Owner, 'System') and
          not ((Length(Owner) >= 4) and SameText(Copy(Owner, 0, 4), 'rtl.')) and
          not ((Length(Owner) >= 7) and SameText(Copy(Owner, 0, 7), 'blaise_')) then
@@ -706,7 +756,11 @@ begin
   L('    .byte 2                        # TargetArch: archX86_64');
   L('    .byte 8                        # PointerSize: 8');
   FTotRecIdx := FOutput.Count;
-  L('    .int  0                        # TotalRecords (patched at end)');
+  { TotalRecords = 0 selects stream-terminated mode: the reader does not trust
+    a count, it reads records until section EOF and skips any further 32-byte
+    'OPDF' magic headers (the next unit's block).  This is what makes per-unit
+    .opdf sections concatenate cleanly at link time.  pdr ignores this field. }
+  L('    .int  0                        # TotalRecords (0 = stream-terminated)');
   L('    .int  3                        # Flags: HAS_DIRECTORY or DYNARRAY_LEN32');
 end;
 
@@ -991,16 +1045,16 @@ begin
   end;
 end;
 
-procedure TOPDFEmitter.EmitConstants;
+procedure TOPDFEmitter.EmitConstantsFromList(AList: TObjectList);
 var
   I: Integer;
   C: TConstDecl;
   TypeID: Cardinal;
   RecSize: Integer;
 begin
-  for I := 0 to FProgram.Block.ConstDecls.Count - 1 do
+  for I := 0 to AList.Count - 1 do
   begin
-    C := TConstDecl(FProgram.Block.ConstDecls.Items[I]);
+    C := TConstDecl(AList.Items[I]);
     if C.IsFloat then
     begin
       { Floating-point constant: emit the 8-byte IEEE-754 Double via GAS
@@ -1056,34 +1110,65 @@ begin
   end;
 end;
 
-procedure TOPDFEmitter.EmitAllTypes;
+procedure TOPDFEmitter.EmitConstants;
+begin
+  if FUnit <> nil then
+  begin
+    EmitConstantsFromList(FUnit.IntfBlock.ConstDecls);
+    EmitConstantsFromList(FUnit.ImplBlock.ConstDecls);
+  end
+  else if FProgram <> nil then
+    EmitConstantsFromList(FProgram.Block.ConstDecls);
+end;
+
+procedure TOPDFEmitter.EmitTypesFromBlock(ABlock: TBlock);
 var
   I: Integer;
   TD: TTypeDecl;
   TDesc: TTypeDesc;
+  ST: TSymbolTable;
+begin
+  ST := Self.ActiveSymTable();
+  if ST = nil then Exit;
+  for I := 0 to ABlock.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
+    TDesc := ST.FindType(TD.Name);
+    if TDesc <> nil then
+      EmitTypeDesc(TDesc);
+  end;
+end;
+
+procedure TOPDFEmitter.EmitAllTypes;
+var
+  I: Integer;
   GI: TGenericInstance;
+  ST: TSymbolTable;
+  GIList: TObjectList;
 begin
   EmitUtf8Str();
-  if FProgram.SymbolTable <> nil then
+  ST := Self.ActiveSymTable();
+  if ST <> nil then
   begin
-    EmitPrimitive(FProgram.SymbolTable.TypeInteger);
-    EmitPrimitive(FProgram.SymbolTable.TypeInt64);
-    EmitPrimitive(FProgram.SymbolTable.TypeByte);
-    EmitPrimitive(FProgram.SymbolTable.TypeBoolean);
+    EmitPrimitive(ST.TypeInteger);
+    EmitPrimitive(ST.TypeInt64);
+    EmitPrimitive(ST.TypeByte);
+    EmitPrimitive(ST.TypeBoolean);
   end;
-  for I := 0 to FProgram.Block.TypeDecls.Count - 1 do
+  if FUnit <> nil then
   begin
-    TD := TTypeDecl(FProgram.Block.TypeDecls.Items[I]);
-    if FProgram.SymbolTable <> nil then
-    begin
-      TDesc := FProgram.SymbolTable.FindType(TD.Name);
-      if TDesc <> nil then
-        EmitTypeDesc(TDesc);
-    end;
+    EmitTypesFromBlock(FUnit.IntfBlock);
+    EmitTypesFromBlock(FUnit.ImplBlock);
+    GIList := FUnit.GenericInstances;
+  end
+  else
+  begin
+    EmitTypesFromBlock(FProgram.Block);
+    GIList := FProgram.GenericInstances;
   end;
-  for I := 0 to FProgram.GenericInstances.Count - 1 do
+  for I := 0 to GIList.Count - 1 do
   begin
-    GI := TGenericInstance(FProgram.GenericInstances.Items[I]);
+    GI := TGenericInstance(GIList.Items[I]);
     if (GI.TypeDesc <> nil) and (GI.TypeDesc.Kind = tyClass) then
       EmitTypeDesc(GI.TypeDesc);
   end;
@@ -1113,18 +1198,29 @@ begin
   end;
 end;
 
-procedure TOPDFEmitter.EmitGlobalVars;
+procedure TOPDFEmitter.EmitGlobalVarsFromList(AList: TObjectList);
 var
   I, J: Integer;
   V: TVarDecl;
 begin
-  for I := 0 to FProgram.Block.Decls.Count - 1 do
+  for I := 0 to AList.Count - 1 do
   begin
-    V := TVarDecl(FProgram.Block.Decls.Items[I]);
+    V := TVarDecl(AList.Items[I]);
     if not V.IsGlobal then Continue;
     for J := 0 to V.Names.Count - 1 do
       EmitGlobalVar(V.Names.Strings[J], V.ResolvedType);
   end;
+end;
+
+procedure TOPDFEmitter.EmitGlobalVars;
+begin
+  if FUnit <> nil then
+  begin
+    EmitGlobalVarsFromList(FUnit.IntfBlock.Decls);
+    EmitGlobalVarsFromList(FUnit.ImplBlock.Decls);
+  end
+  else if FProgram <> nil then
+    EmitGlobalVarsFromList(FProgram.Block.Decls);
 end;
 
 procedure TOPDFEmitter.SetFacts(AFacts: TDbgFacts);
@@ -1289,6 +1385,12 @@ begin
     EmitFunctionScopesFromFacts();
     Exit;
   end;
+  { Non-facts (approximate AST-walk) path is whole-program only.  Per-unit
+    incremental compilation only embeds OPDF when the backend produced exact
+    debug facts (native); the QBE backend produces none, so a unit-mode
+    emitter without facts emits no function scopes (acceptable: native is the
+    debug backend, see CLAUDE.md). }
+  if FProgram = nil then Exit;
   Decls  := TObjectList.Create(False);
   Labels := TStringList.Create();
   try
@@ -1447,9 +1549,11 @@ end;
 
 procedure TOPDFEmitter.PatchTotalRecords;
 begin
-  if FTotRecIdx >= 0 then
-    FOutput.Strings[FTotRecIdx] := '    .int  ' + IntToStr(FRecordCount) +
-                                  '                        # TotalRecords';
+  { Stream-terminated mode: TotalRecords stays 0.  Readers (pdr) ignore the
+    field and read records until section EOF, skipping any subsequent 32-byte
+    'OPDF' headers from concatenated per-unit blocks.  Patching a real count
+    here would be wrong once the linker concatenates sections, so this is a
+    deliberate no-op. }
 end;
 
 procedure TOPDFEmitter.PatchUnitDirRecordCount;
@@ -1466,7 +1570,10 @@ begin
   FDone := True;
   EmitSection();
   EmitHeader();
-  EmitUnitDirectory();
+  { recUnitDirectory is emitted ONLY by the program object (pdr ignores it).
+    Units omit it; their records are read in stream-terminated mode. }
+  if FProgram <> nil then
+    EmitUnitDirectory();
   EmitAllTypes();
   EmitGlobalVars();
   EmitConstants();

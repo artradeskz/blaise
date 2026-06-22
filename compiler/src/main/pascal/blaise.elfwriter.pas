@@ -33,7 +33,8 @@ type
     eskData,     { .data — read-write initialised data }
     eskRodata,   { .rodata — read-only data }
     eskBss,      { .bss — zero-initialised read-write data }
-    eskTbss      { .tbss — thread-local zero-initialised data }
+    eskTbss,     { .tbss — thread-local zero-initialised data }
+    eskOpdf      { .opdf OPDF debug info (alloc+write, progbits) }
   );
 
   TElfSymBind = (
@@ -490,8 +491,8 @@ var
   I: Integer;
 begin
   inherited Create();
-  SetLength(FSections, 5);
-  for I := 0 to 4 do
+  SetLength(FSections, 6);
+  for I := 0 to 5 do
     FSections[I] := nil;
   FSymbols  := TList<TElfWriterSym>.Create();
   FSymMap   := TDictionary<string, Integer>.Create();
@@ -525,6 +526,7 @@ begin
     eskRodata: Result := '.rodata';
     eskBss:    Result := '.bss';
     eskTbss:   Result := '.tbss';
+    eskOpdf:   Result := '.opdf';
   else
     Result := '.text';
   end;
@@ -865,11 +867,11 @@ var
     then .rela.text, .rela.data, .rela.rodata,
     then .symtab, .strtab, .shstrtab.
     We track which sections exist and their SHT indices. }
-  SecOrder: array[0..4] of TElfSectionKind;
-  SecPresent: array[0..4] of Boolean;
-  SecShtIdx: array[0..4] of Integer;
+  SecOrder: array[0..5] of TElfSectionKind;
+  SecPresent: array[0..5] of Boolean;
+  SecShtIdx: array[0..5] of Integer;
   NumDataSecs: Integer;
-  RelaShtIdx: array[0..4] of Integer;
+  RelaShtIdx: array[0..5] of Integer;
   NumRelaSecs: Integer;
   SymtabIdx, StrtabIdx, ShstrtabIdx, NoteIdx: Integer;
   TotalShNum: Integer;
@@ -884,8 +886,8 @@ var
   ShdrOff: Int64;
   CurOff: Int64;
 
-  SecFileOff: array[0..4] of Int64;
-  RelaFileOff: array[0..4] of Int64;
+  SecFileOff: array[0..5] of Int64;
+  RelaFileOff: array[0..5] of Int64;
   SymtabFileOff, StrtabFileOff, ShstrtabFileOff, NoteFileOff: Int64;
 
   SymtabBuf: TByteBuf;
@@ -893,8 +895,8 @@ var
   SymSecIdx: Integer;
   StInfo: Integer;
 
-  RelaBuf: array[0..4] of TByteBuf;
-  RelaCount: array[0..4] of Integer;
+  RelaBuf: array[0..5] of TByteBuf;
+  RelaCount: array[0..5] of Integer;
   SymRemapIdx: array of Integer;
   LocalSymCount, GlobalSymCount: Integer;
   LocalSyms, GlobalSyms: TList<Integer>;
@@ -902,8 +904,8 @@ var
 
   ShFlags: Int64;
   ShType: Integer;
-  SecNameIdx: array[0..4] of Integer;
-  RelaNameIdx: array[0..4] of Integer;
+  SecNameIdx: array[0..5] of Integer;
+  RelaNameIdx: array[0..5] of Integer;
   SymtabNameIdx, StrtabNameIdx, ShstrtabNameIdx, NoteNameIdx: Integer;
 
 begin
@@ -912,9 +914,10 @@ begin
   SecOrder[2] := eskRodata;
   SecOrder[3] := eskBss;
   SecOrder[4] := eskTbss;
+  SecOrder[5] := eskOpdf;
 
   NumDataSecs := 0;
-  for I := 0 to 4 do
+  for I := 0 to 5 do
   begin
     SecPresent[I] := FSections[Ord(SecOrder[I])] <> nil;
     if SecPresent[I] then
@@ -927,7 +930,7 @@ begin
   end;
 
   NumRelaSecs := 0;
-  for I := 0 to 4 do
+  for I := 0 to 5 do
   begin
     if SecPresent[I] and (GetSection(SecOrder[I]).RelocCount > 0) then
     begin
@@ -952,7 +955,7 @@ begin
   Strtab := TByteBuf.Create();
   Shstrtab := TByteBuf.Create();
   SymtabBuf := TByteBuf.Create();
-  for I := 0 to 4 do
+  for I := 0 to 5 do
     RelaBuf[I] := nil;
   LocalSyms := TList<Integer>.Create();
   GlobalSyms := TList<Integer>.Create();
@@ -963,7 +966,7 @@ begin
 
     { Build .shstrtab — section name string table }
     Shstrtab.PushByte(0);
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       SecNameIdx[I] := 0;
       RelaNameIdx[I] := 0;
@@ -1007,7 +1010,7 @@ begin
       else
       begin
         SymSecIdx := 0;
-        for J := 0 to 4 do
+        for J := 0 to 5 do
           if SecPresent[J] and (SecOrder[J] = Sym.Section) then
           begin
             SymSecIdx := SecShtIdx[J];
@@ -1027,7 +1030,7 @@ begin
       else
       begin
         SymSecIdx := 0;
-        for J := 0 to 4 do
+        for J := 0 to 5 do
           if SecPresent[J] and (SecOrder[J] = Sym.Section) then
           begin
             SymSecIdx := SecShtIdx[J];
@@ -1040,7 +1043,7 @@ begin
     end;
 
     { Build .rela.* sections }
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       RelaBuf[I] := TByteBuf.Create();
       RelaCount[I] := 0;
@@ -1060,7 +1063,7 @@ begin
       then the section header table at the end. }
     CurOff := Int64(ELF64_EHDR_SIZE);
 
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       SecFileOff[I] := Int64(0);
       if not SecPresent[I] then Continue;
@@ -1072,7 +1075,7 @@ begin
         CurOff := CurOff + Int64(Sec.Count);
     end;
 
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       RelaFileOff[I] := Int64(0);
       if RelaShtIdx[I] = 0 then Continue;
@@ -1132,7 +1135,7 @@ begin
     OutBuf.AppendBytes(Buf);
 
     { Emit section data bodies }
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       if not SecPresent[I] then Continue;
       Sec := GetSection(SecOrder[I]);
@@ -1142,7 +1145,7 @@ begin
     end;
 
     { Emit .rela.* bodies }
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       if RelaShtIdx[I] = 0 then Continue;
       OutBuf.PadTo(Integer(RelaFileOff[I]));
@@ -1170,7 +1173,7 @@ begin
     ElfEmitShdr(Buf, 0, SHT_NULL, 0, 0, 0, 0, 0, 0, 0, 0);
 
     { Data sections }
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       if not SecPresent[I] then Continue;
       Sec := GetSection(SecOrder[I]);
@@ -1200,6 +1203,14 @@ begin
           ShFlags := SHF_ALLOC or SHF_WRITE or SHF_TLS;
           ShType  := SHT_NOBITS;
         end;
+        eskOpdf:
+        begin
+          { OPDF debug section: alloc+write progbits, matching GNU as output
+            for `.section .opdf, "aw", @progbits`.  SHF_ALLOC makes it ride
+            into the loadable image so the debugger finds it by name. }
+          ShFlags := SHF_ALLOC or SHF_WRITE;
+          ShType  := SHT_PROGBITS;
+        end;
       end;
       ElfEmitShdr(Buf, SecNameIdx[I], ShType, ShFlags, 0,
                SecFileOff[I], Int64(Sec.Size), 0, 0,
@@ -1207,7 +1218,7 @@ begin
     end;
 
     { .rela.* sections }
-    for I := 0 to 4 do
+    for I := 0 to 5 do
     begin
       if RelaShtIdx[I] = 0 then Continue;
       ElfEmitShdr(Buf, RelaNameIdx[I], SHT_RELA,
@@ -1247,7 +1258,7 @@ begin
     Strtab.Free();
     Shstrtab.Free();
     SymtabBuf.Free();
-    for I := 0 to 4 do
+    for I := 0 to 5 do
       RelaBuf[I].Free();
     LocalSyms.Free();
     GlobalSyms.Free();

@@ -23,7 +23,7 @@ type
     procedure TestOPDF_SectionDeclaration;
     procedure TestOPDF_HeaderMagic;
     procedure TestOPDF_HeaderVersion;
-    procedure TestOPDF_TotalRecordsPatched;
+    procedure TestOPDF_TotalRecordsStreamTerminated;
     procedure TestOPDF_Primitive_Integer;
     procedure TestOPDF_Primitive_Boolean;
     procedure TestOPDF_Primitive_Int64;
@@ -132,13 +132,16 @@ begin
   AssertTrue('version word present', Contains(IR, '.word 1'));
 end;
 
-procedure TOPDFTests.TestOPDF_TotalRecordsPatched;
+procedure TOPDFTests.TestOPDF_TotalRecordsStreamTerminated;
 var
   IR: string;
 begin
+  { Stream-terminated mode: TotalRecords stays 0 so per-unit .opdf sections
+    concatenate at link time (the reader reads to section EOF, skipping any
+    further 'OPDF' magic headers).  pdr ignores the count entirely. }
   IR := GenOPDF('program P; var X: Integer; begin end.');
-  AssertFalse('TotalRecords not still zero placeholder',
-    Contains(IR, '.int  0                        # TotalRecords'));
+  AssertTrue('TotalRecords is the stream-terminated zero',
+    Contains(IR, '.int  0                        # TotalRecords (0 = stream-terminated)'));
 end;
 
 procedure TOPDFTests.TestOPDF_Primitive_Integer;

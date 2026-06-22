@@ -29,7 +29,7 @@ uses
   blaise.codegen.driver,
   blaise.codegen.qbe.driver,
   blaise.codegen.native.driver,
-  uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
+  uUnitLoader, uDebugOPDF, uDebugFacts, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
   blaise.frontend.opts, uConfig;
 
@@ -363,6 +363,8 @@ var
   WIRFile: string;
   WBifFile: string;
   WSource: TStringList;
+  WFacts: TDbgFacts;
+  WOPDF: TOPDFEmitter;
 begin
   Self.Error := '';
   try
@@ -378,6 +380,34 @@ begin
     WCG.SetSymbolTable(Self.SymTable);
     WCG.AppendUnit(Self.WorkUnit);
     WIR := WCG.GetOutput();
+
+    { Per-unit OPDF debug info: when --debug-opdf is on AND this worker's
+      codegen produced exact debug facts (native backend), build a unit-mode
+      OPDF emitter for THIS unit and append its self-contained .opdf section
+      to the unit's IR.  At link time the linker concatenates every unit's
+      and the program's .opdf section into one, so pdr can break inside any
+      unit.  Mirrors the whole-program path in the main driver.
+
+      QBE backend: GetDebugFacts returns nil (QBE assigns frames/addresses
+      itself), so per-unit OPDF is skipped here.  A per-unit .opdf.s sidecar
+      is impractical in the incremental pipeline; native is the debug backend
+      per CLAUDE.md, so QBE incremental units carry no per-unit OPDF. }
+    if Self.Opts.OPDFEnabled then
+    begin
+      WFacts := WCG.GetDebugFacts();
+      if WFacts <> nil then
+      begin
+        WOPDF := TOPDFEmitter.CreateForUnit(Self.WorkUnit, Self.SymTable,
+                                            Self.WorkUnit.SourceFile);
+        try
+          WOPDF.SetFacts(WFacts);
+          WIR := WIR + LineEnding + WOPDF.GetOutput();
+        finally
+          WOPDF.Free();
+        end;
+      end;
+    end;
+
     WCG := nil;  { release the ARC handle so codegen memory is freed before lowering }
 
     WIRFile := Self.OPath + Self.Driver.IRFileExt() + '.tmp';

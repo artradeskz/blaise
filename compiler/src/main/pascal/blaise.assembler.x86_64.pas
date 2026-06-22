@@ -2335,6 +2335,11 @@ begin
       Exit
     else if StartsWithStr(Args, '.bss') then
       ASection := eskBss
+    else if StartsWithStr(Args, '.opdf') then
+      { OPDF debug section: alloc+write progbits data.  Holds .byte/.word/.int/
+        .quad/.ascii records emitted by uDebugOPDF; .quad <label> lines become
+        R_X86_64_64 relocations via the same data-section machinery below. }
+      ASection := eskOpdf
     else
       raise EAssembler.Create('unsupported section: ' + Args);
     Exit;
@@ -2390,23 +2395,44 @@ begin
     Exit;
   end;
 
+  { .byte and .word accept a comma-separated list of values, e.g.
+    `.byte 79, 80, 68, 70` (the OPDF magic) or `.byte 0,0,0,...` (BuildID).
+    Emit each value in order. }
   if Dir = '.byte' then
   begin
     P := 0;
-    Val := ParseInt(Args, P);
-    AWriter.AppendByte(ASection, Integer(Val));
+    Len := Length(Args);
+    while P < Len do
+    begin
+      while (P < Len) and ((Args[P] = Ord(' ')) or (Args[P] = Ord(#9)) or
+                           (Args[P] = Ord(','))) do
+        P := P + 1;
+      if P >= Len then break;
+      Val := ParseInt(Args, P);
+      AWriter.AppendByte(ASection, Integer(Val));
+    end;
     Exit;
   end;
 
   if Dir = '.word' then
   begin
     P := 0;
-    Val := ParseInt(Args, P);
-    AWriter.AppendWord(ASection, Integer(Val));
+    Len := Length(Args);
+    while P < Len do
+    begin
+      while (P < Len) and ((Args[P] = Ord(' ')) or (Args[P] = Ord(#9)) or
+                           (Args[P] = Ord(','))) do
+        P := P + 1;
+      if P >= Len then break;
+      Val := ParseInt(Args, P);
+      AWriter.AppendWord(ASection, Integer(Val));
+    end;
     Exit;
   end;
 
-  if Dir = '.long' then
+  { .int is an alias for .long: GNU as treats both as a 32-bit value on
+    x86-64.  The OPDF debug emitter uses .int, so accept it here. }
+  if (Dir = '.long') or (Dir = '.int') then
   begin
     DataOp := ParseOperand(Args, 0, OpEnd);
     if DataOp.Kind = opLabel then
