@@ -1925,6 +1925,7 @@ var
   ParentStr: string;
   ImplStr:   string;
   MethStr:   string;
+  AttrsStr:  string;
   PubCount:  Integer;
   Line:      string;
   EmitSys:   Boolean;
@@ -2060,6 +2061,24 @@ begin
     else
       MethStr := '0';
 
+    { Class attribute RTTI table at typeinfo slot 7: a count word followed by
+      one typeinfo pointer per attribute.  Referenced by _HasClassAttribute.
+      Emitted before the typeinfo so the symbol is defined when slot 7
+      references it; nil when the class carries no attributes.  Mirrors the
+      QBE backend's attrs_<Class>. }
+    if RT.ClassAttributeCount() > 0 then
+    begin
+      Self.Emit('.balign 8');
+      Self.Emit('attrs_' + CSym + ':');
+      Self.Emit(Format(#9'.quad %d', [RT.ClassAttributeCount()]));
+      for J := 0 to RT.ClassAttributeCount() - 1 do
+        Self.Emit(#9'.quad typeinfo_' +
+          Self.ClassSymName(RT.ClassAttributeAt(J)));
+      AttrsStr := 'attrs_' + CSym;
+    end
+    else
+      AttrsStr := '0';
+
     Self.Emit('.balign 8');
     Self.Emit('.globl typeinfo_' + CSym);
     Self.Emit('typeinfo_' + CSym + ':');
@@ -2070,7 +2089,7 @@ begin
     Self.Emit(Format(#9'.quad %d', [RT.TotalSize()]));
     Self.Emit(#9'.quad _FieldCleanup_' + CSym);
     Self.Emit(#9'.quad vtable_' + CSym);
-    Self.Emit(#9'.quad 0');   { attrs }
+    Self.Emit(#9'.quad ' + AttrsStr);   { attrs }
   end;
 
   { Typeinfo blocks for generic class instances. }
@@ -5330,6 +5349,24 @@ begin
       Self.Emit(#9'popq %rdi');
       Self.Emit(#9'callq _MethodAddress');
       { Result = method code pointer in %rax. }
+      Exit;
+    end;
+    { HasClassAttribute(AClass, AAttrClass): Boolean — query attribute RTTI.
+      Both args are metaclass expressions that lower to typeinfo pointers.
+      Pass them in %rdi/%rsi and call the runtime helper (result in %al).
+      Without this the native backend never emitted the call — the result
+      was the low byte of the first metaclass's typeinfo address, a layout-
+      dependent false positive. }
+    if FC.IsBuiltinHasClassAttr and (FC.Args.Count = 2) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));   { ti_class -> %rax }
+      Self.Emit(#9'pushq %rax');
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));   { ti_attr  -> %rax }
+      Self.Emit(#9'movq %rax, %rsi');
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'callq _HasClassAttribute');
+      { Result Boolean in %al; normalise to a clean 0/1 in %rax. }
+      Self.Emit(#9'movzbq %al, %rax');
       Exit;
     end;
     { SizeOf(expr) → integer literal = byte size of the resolved type. }

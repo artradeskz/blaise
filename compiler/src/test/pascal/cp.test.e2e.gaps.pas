@@ -58,6 +58,12 @@ type
     { Published RTTI + MethodAddress }
     procedure TestRun_PublishedRTTI_MethodAddress;
 
+    { HasClassAttribute attribute RTTI query: a plain class reports False, a
+      [Threaded]-marked class reports True.  Regression: the native backend
+      emitted no call (result = low byte of the metaclass address, a false
+      positive) and emitted no attribute table in typeinfo. }
+    procedure TestRun_HasClassAttribute_PlainAndMarked;
+
     { Named-type alias array const (GitHub #113) }
     procedure TestRun_NamedArrayAlias_IntConst;
 
@@ -644,6 +650,26 @@ const Src = '''
     ''';
 begin
   AssertRunsOnAll(Src, 'found' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_HasClassAttribute_PlainAndMarked;
+const Src = '''
+    program T;
+    uses blaise.testing;
+    type
+      TPlain = class(TTestCase) published procedure M; end;
+      [Threaded]
+      TMarked = class(TTestCase) published procedure M; end;
+    procedure TPlain.M; begin end;
+    procedure TMarked.M; begin end;
+    begin
+      WriteLn(HasClassAttribute(TPlain, ThreadedAttribute));
+      WriteLn(HasClassAttribute(TMarked, ThreadedAttribute))
+    end.
+    ''';
+begin
+  { Uses blaise.testing (stdlib), so the RTL+stdlib search-path helper. }
+  AssertRTLRunsOnAll(Src, 'False' + Chr(10) + 'True' + Chr(10), 0);
 end;
 
 { ---- Multi-arg WriteLn ---- }
