@@ -10,6 +10,18 @@
   uUnitInterfaceIO.pas, AND that every public field on each such class
   is referenced from both sides.
 
+  It ALSO covers the .bif interface-container types in
+  uUnitInterface.pas (TUnitInterface, TRoutineSig, TConstEntry,
+  TVarEntry) plus TMethodParam (uAST.pas).  Their fields are
+  hand-serialised across WriteMeta / EncodeMethodSig / WriteRoutines /
+  … rather than via the per-node AST dispatch, so they are checked
+  against the encoder-side and decoder-side text of uUnitInterfaceIO.pas
+  as two haystacks: a field counts as covered when its `.Field`
+  identifier appears in both.  Catches the class of bug where a field on
+  one of those types is dropped from one side of the META / routine
+  serialiser (e.g. ResolvedQbeName, VTableSlot, ImplUsedUnits,
+  HasInitialization, a TMethodParam default-value flag).
+
   Catches the two failure modes from docs/extending-ast.adoc:
     1. New node class added but never wired into Encode/Read dispatch.
     2. New public field added but forgotten from one side of the
@@ -17,7 +29,8 @@
        fixpoint failure with a length-prefix corruption message.
 
   Field exemption: trailing "no-bif" marker on the field's source line
-  suppresses the warning. Use for fields populated by semantic only.
+  suppresses the warning. Use for fields populated by semantic only, or
+  container fields rebuilt via Add* mutators on decode.
 
   Exit codes: 0 = clean, 1 = coverage gap(s), 2 = I/O error.
 *)
@@ -25,23 +38,41 @@
 program BifCoverage;
 
 uses
-  SysUtils, Classes, Contnrs, uStrCompat;
+  SysUtils, Classes, Contnrs, strutils, uStrCompat;
 
 const
   AST_REL          = 'compiler/src/main/pascal/uAST.pas';
   IO_REL           = 'compiler/src/main/pascal/uUnitInterfaceIO.pas';
+  IFACE_REL        = 'compiler/src/main/pascal/uUnitInterface.pas';
   COMPILER_ID_REL  = 'compiler/src/main/pascal/uCompilerId.pas';
   ROOT_REL         = 'project.xml';
   STATUS_REL       = 'tools/bif-coverage/bif-coverage.status';
   COMPILER_ID_PREFIX = 'blaise-';
 
+  { The .bif interface-container types in uUnitInterface.pas whose
+    serialised fields are cross-checked against the hand-written
+    encoder/decoder in uUnitInterfaceIO.pas.  These carry the META,
+    routine and type-entry data that the AST-dispatch mechanism does
+    NOT see.  TInlineBody / TGenericBody / TUnitInterface's private
+    index fields are intentionally excluded: index lists are rebuilt
+    from the serialised data on read, and the inline/generic bodies
+    round-trip as AST blocks already covered by the AST mechanism.
+
+    TMethodParam lives in uAST.pas (it is a TASTNode) but is NOT a
+    TASTStmt/TASTExpr, so the AST mechanism skips it; its fields are
+    hand-serialised via EncodeMethodSig / EncodeParamFlags /
+    WriteRoutines, so it is checked here against the IO haystacks. }
+  IFACE_TYPE_COUNT = 4;
+
 var
   GRoot:            string;
   GAstFile:         string;
   GIoFile:          string;
+  GIfaceFile:       string;
   GCompilerIdFile:  string;
   GRootProject:     string;
   GStatusFile:      string;
+  GIfaceTypes:      array[0 .. IFACE_TYPE_COUNT - 1] of string;
 
 (* Walk up from CWD looking for a directory that contains both
    `compiler/src/main/pascal/uAST.pas` and `project.xml`. Lets the
@@ -72,6 +103,8 @@ type
     Parent: string;
     Fields: TStringList;
     LineNo: Integer;
+    SrcName: string;   { basename of the source file the class came from,
+                         for [new]/header location reporting }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -91,6 +124,14 @@ var
   GDecodeNames: TStringList;
   GDecodeObjs:  TObjectList;
   GErrors:      Integer;
+
+  { Interface-container types from uUnitInterface.pas (parallel lists),
+    plus the encoder-side and decoder-side text of uUnitInterfaceIO.pas
+    used as two haystacks for the loose `.Field` substring check. }
+  GIfaceNames:    TStringList;
+  GIfaceObjs:     TObjectList;   { TASTClass instances (reused for fields) }
+  GIoEncodeText:  string;
+  GIoDecodeText:  string;
 
 constructor TASTClass.Create;
 begin
@@ -367,20 +408,37 @@ begin
     Exit(True);
 end;
 
-procedure ScanAST();
+(* True when AAllow is nil (accept every class) or AName appears in
+   the allow-list. Lets the same scan run over uAST.pas (all classes)
+   and uUnitInterface.pas (only the target .bif container types). *)
+function ClassAccepted(AAllow: TStringList; const AName: string): Boolean;
+begin
+  Result := (AAllow = nil) or (AAllow.IndexOf(AName) >= 0);
+end;
+
+(* Generic `T = class ... public ... end;` scanner. Records every
+   accepted class header and its public field names (with source line
+   numbers) into ANames / AObjs. The `no-bif` trailing-marker
+   exemption and the StripLine/ParseClassHeader/ParseFieldNames helpers
+   are shared with the AST scan. When AAllow is non-nil only classes
+   named in it are recorded. *)
+procedure ScanClassFile(const APath: string;
+  ANames: TStringList; AObjs: TObjectList; AAllow: TStringList);
 var
   Lines: TStringList;
-  InBlockComment, InPublic, InClassBody, HasBody, IsEnd: Boolean;
+  InBlockComment, InPublic, InClassBody, HasBody, IsEnd, Recording: Boolean;
   I, J: Integer;
-  Raw, Stripped, Trimmed, Name, Parent: string;
+  Raw, Stripped, Trimmed, Name, Parent, SrcName: string;
   Cls: TASTClass;
   FieldNames: TStringList;
 begin
-  Lines := LoadLines(GAstFile);
+  SrcName := ExtractFileName(APath);
+  Lines := LoadLines(APath);
   try
     InBlockComment := False;
     InClassBody := False;
     InPublic := True;
+    Recording := False;
     Cls := nil;
     for I := 0 to Lines.Count - 1 do
     begin
@@ -393,12 +451,19 @@ begin
       begin
         if ParseClassHeader(Trimmed, Name, Parent, HasBody) then
         begin
-          Cls := TASTClass.Create;
-          Cls.Name := Name;
-          Cls.Parent := Parent;
-          Cls.LineNo := I + 1;
-          GASTNames.Add(Name);
-          GASTObjs.Add(Cls);
+          Recording := ClassAccepted(AAllow, Name);
+          if Recording then
+          begin
+            Cls := TASTClass.Create;
+            Cls.Name := Name;
+            Cls.Parent := Parent;
+            Cls.LineNo := I + 1;
+            Cls.SrcName := SrcName;
+            ANames.Add(Name);
+            AObjs.Add(Cls);
+          end
+          else
+            Cls := nil;
           if HasBody then
           begin
             InClassBody := True;
@@ -417,8 +482,14 @@ begin
         end;
         Continue;
       end;
+      if not Recording then Continue;
       if not InPublic then Continue;
       if Pos('no-bif', Raw) >= 0 then Continue;
+      { A `Name: Type` candidate that carries a parenthesis is a
+        continuation line of a multi-line method/constructor signature
+        (e.g. a wrapped 'ACaseSensitive: Boolean = False);' param), not
+        a real field — skip it. Plain public fields never contain (). }
+      if (Pos('(', Trimmed) >= 0) or (Pos(')', Trimmed) >= 0) then Continue;
       FieldNames := ParseFieldNames(Trimmed);
       try
         for J := 0 to FieldNames.Count - 1 do
@@ -431,6 +502,49 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+procedure ScanAST();
+begin
+  ScanClassFile(GAstFile, GASTNames, GASTObjs, nil);
+end;
+
+(* Scan the .bif container types whose fields are hand-serialised in
+   uUnitInterfaceIO.pas: the GIfaceTypes from uUnitInterface.pas, plus
+   TMethodParam from uAST.pas (an AST node the TASTStmt/TASTExpr
+   dispatch deliberately skips).  All land in GIfaceNames / GIfaceObjs
+   and are checked against the file-level IO haystacks. *)
+procedure ScanInterfaceTypes();
+var
+  Allow: TStringList;
+  I: Integer;
+begin
+  Allow := TStringList.Create;
+  try
+    for I := 0 to IFACE_TYPE_COUNT - 1 do
+      Allow.Add(GIfaceTypes[I]);
+    ScanClassFile(GIfaceFile, GIfaceNames, GIfaceObjs, Allow);
+
+    Allow.Clear;
+    Allow.Add('TMethodParam');
+    ScanClassFile(GAstFile, GIfaceNames, GIfaceObjs, Allow);
+  finally
+    Allow.Free;
+  end;
+end;
+
+function IfaceAt(I: Integer): TASTClass;
+begin
+  Result := TASTClass(GIfaceObjs.Get(I));
+end;
+
+function FindIfaceClass(const AName: string): TASTClass;
+var
+  Idx: Integer;
+begin
+  Idx := GIfaceNames.IndexOf(AName);
+  if Idx < 0 then Result := nil
+  else Result := IfaceAt(Idx);
 end;
 
 (* Find the body of `function FName(...)` in a list of stripped source
@@ -612,21 +726,59 @@ begin
   end;
 end;
 
+(* True when ALine begins (after leading whitespace) a decoder-side
+   function/procedure - i.e. the boundary between the encoder half and
+   the decoder half of uUnitInterfaceIO.pas's implementation. The
+   decoder helpers all sort after every Encode*/Write* routine in
+   source order, so the first such line splits the file cleanly. *)
+function IsDecoderBoundary(const ALine: string): Boolean;
+var
+  P: Integer;
+  Kw, Nm: string;
+begin
+  Result := False;
+  P := 0;
+  Kw := ReadIdent(ALine, P);
+  if (not SameText(Kw, 'function')) and (not SameText(Kw, 'procedure')) then
+    Exit;
+  Nm := ReadIdent(ALine, P);
+  if (Pos('Read', Nm) = 0) or (Pos('Decode', Nm) = 0) or
+     (Pos('Split', Nm) = 0) or SameText(Nm, 'LoadEnumMembers') or
+     SameText(Nm, 'SkipWhitespace') or SameText(Nm, 'IsWhitespaceOrd') or
+     SameText(Nm, 'IsUpperOrd') or SameText(Nm, 'IsDigitOrd') then
+    Result := True;
+end;
+
 procedure ScanIO();
 var
   Raw, Cleaned: TStringList;
   I: Integer;
-  InBlockComment: Boolean;
-  Body, Line: string;
+  InBlockComment, InImpl, InDecoder: Boolean;
+  Body, Line, Trimmed: string;
+  EncSB, DecSB: TStringBuilder;
 begin
   Raw := LoadLines(GIoFile);
   Cleaned := TStringList.Create;
+  EncSB := TStringBuilder.Create;
+  DecSB := TStringBuilder.Create;
   try
     InBlockComment := False;
+    InImpl := False;
+    InDecoder := False;
     for I := 0 to Raw.Count - 1 do
     begin
       Line := StripLine(Raw.Strings[I], InBlockComment);
       Cleaned.Add(Line);
+      Trimmed := Trim(Line);
+      if not InImpl then
+      begin
+        if SameText(Trimmed, 'implementation') then InImpl := True;
+        Continue;
+      end;
+      if (not InDecoder) and IsDecoderBoundary(Trimmed) then
+        InDecoder := True;
+      if InDecoder then DecSB.AppendLine(Line)
+                   else EncSB.AppendLine(Line);
     end;
     Body := ExtractFunctionBody(Cleaned, 'EncodeExpr');
     CarveEncodeBlocks(Body, GEncodeNames, GEncodeObjs);
@@ -636,7 +788,11 @@ begin
     CarveDecodeBlocks(Body, GDecodeNames, GDecodeObjs);
     Body := ExtractFunctionBody(Cleaned, 'ReadStmt');
     CarveDecodeBlocks(Body, GDecodeNames, GDecodeObjs);
+    GIoEncodeText := EncSB.ToString();
+    GIoDecodeText := DecSB.ToString();
   finally
+    DecSB.Free;
+    EncSB.Free;
     Cleaned.Free;
     Raw.Free;
   end;
@@ -880,6 +1036,32 @@ begin
       end;
       Outp.Add('');
     end;
+
+    { ----- .bif interface-container types -------------------------
+      These fields are hand-serialised across WriteMeta/EncodeMethodSig/
+      WriteRoutines/... rather than via the AST dispatch, so they are
+      checked against the file-level encoder/decoder haystacks. }
+    Outp.Add('# === Interface-container types (uUnitInterface.pas + TMethodParam) ===');
+    Outp.Add('#   serialise  must appear in the encoder AND decoder of uUnitInterfaceIO.pas');
+    Outp.Add('');
+    for I := 0 to GIfaceNames.Count - 1 do
+    begin
+      Cls := IfaceAt(I);
+      Header := '# ' + Cls.Name + ' (' + Cls.SrcName + ':' +
+                IntToStr(Cls.LineNo) + ')';
+      Outp.Add(Header);
+      for J := 0 to Cls.Fields.Count - 1 do
+      begin
+        FieldName := Cls.Fields.Strings[J];
+        if Pos('.' + FieldName, GIoEncodeText) >= 0 then
+          State := 'serialise'
+        else
+          State := 'safe';
+        Outp.Add(Cls.Name + '.' + FieldName + '  ' + State);
+      end;
+      Outp.Add('');
+    end;
+
     Outp.SaveToFile(GStatusFile);
     WriteLn('bif-coverage: wrote ' + GStatusFile);
   finally
@@ -901,7 +1083,7 @@ var
   Cls: TASTClass;
   Blk: TIOBlock;
   KnownFields: TStringList;
-  EncoderHasField, DecoderHasField: Boolean;
+  EncoderHasField, DecoderHasField, IsIface: Boolean;
 begin
   if not FileExists(GStatusFile) then
   begin
@@ -934,7 +1116,14 @@ begin
       end;
       ClsName := Copy(Key, 0, SpacePos);
       FieldName := Copy(Key, SpacePos + 1, Length(Key) - SpacePos - 1);
-      Cls := FindASTClass(ClsName);
+      { Probe the iface-container store first: TMethodParam is also an AST
+        node (so it appears in the AST scan) but has no AST encode/decode
+        dispatch block — it must be checked against the file-level
+        haystacks, not the per-class block. }
+      Cls := FindIfaceClass(ClsName);
+      IsIface := Cls <> nil;
+      if Cls = nil then
+        Cls := FindASTClass(ClsName);
       if Cls = nil then
       begin
         Report('  [stale] status names unknown class ' + Key);
@@ -945,10 +1134,20 @@ begin
         Report('  [stale] ' + Key + ' is not a public field on ' + ClsName);
         Continue;
       end;
-      Blk := FindBlock(GEncodeNames, GEncodeObjs, ClsName);
-      EncoderHasField := (Blk <> nil) and (Pos('.' + FieldName, Blk.Body) >= 0);
-      Blk := FindBlock(GDecodeNames, GDecodeObjs, ClsName);
-      DecoderHasField := (Blk <> nil) and (Pos('.' + FieldName, Blk.Body) >= 0);
+      if IsIface then
+      begin
+        { Interface-container fields are hand-serialised across many
+          functions; check the file-level encoder/decoder haystacks. }
+        EncoderHasField := Pos('.' + FieldName, GIoEncodeText) >= 0;
+        DecoderHasField := Pos('.' + FieldName, GIoDecodeText) >= 0;
+      end
+      else
+      begin
+        Blk := FindBlock(GEncodeNames, GEncodeObjs, ClsName);
+        EncoderHasField := (Blk <> nil) and (Pos('.' + FieldName, Blk.Body) >= 0);
+        Blk := FindBlock(GDecodeNames, GDecodeObjs, ClsName);
+        DecoderHasField := (Blk <> nil) and (Pos('.' + FieldName, Blk.Body) >= 0);
+      end;
       if State = 'serialise' then
       begin
         if not EncoderHasField then
@@ -1010,6 +1209,20 @@ begin
                    Key + Loc);
         end;
     end;
+    { Forward check: every public field of each .bif interface-container
+      type must be classified in the status file. }
+    for I := 0 to GIfaceNames.Count - 1 do
+    begin
+      Cls := IfaceAt(I);
+      for J := 0 to Cls.Fields.Count - 1 do
+      begin
+        Key := Cls.Name + '.' + Cls.Fields.Strings[J];
+        Loc := ' (' + Cls.SrcName + ':' + IntToStr(FieldLineNo(Cls, J)) + ')';
+        if KnownFields.IndexOf(Key) < 0 then
+          Report('  [new] not in status (mark as serialise or safe) ' +
+                 Key + Loc);
+      end;
+    end;
   finally
     Status.Free;
     KnownFields.Free;
@@ -1021,9 +1234,11 @@ begin
   GASTObjs.Free;     { owns: frees TASTClass instances }
   GEncodeObjs.Free;  { owns: frees TIOBlock instances }
   GDecodeObjs.Free;
+  GIfaceObjs.Free;   { owns: frees TASTClass instances }
   GASTNames.Free;
   GEncodeNames.Free;
   GDecodeNames.Free;
+  GIfaceNames.Free;
 end;
 
 begin
@@ -1038,17 +1253,25 @@ begin
   end;
   GAstFile        := GRoot + AST_REL;
   GIoFile         := GRoot + IO_REL;
+  GIfaceFile      := GRoot + IFACE_REL;
   GCompilerIdFile := GRoot + COMPILER_ID_REL;
   GRootProject    := GRoot + ROOT_REL;
   GStatusFile     := GRoot + STATUS_REL;
+  GIfaceTypes[0]  := 'TUnitInterface';
+  GIfaceTypes[1]  := 'TRoutineSig';
+  GIfaceTypes[2]  := 'TConstEntry';
+  GIfaceTypes[3]  := 'TVarEntry';
   GASTNames := TStringList.Create;
   GASTObjs := TObjectList.Create(True);
   GEncodeNames := TStringList.Create;
   GEncodeObjs := TObjectList.Create(True);
   GDecodeNames := TStringList.Create;
   GDecodeObjs := TObjectList.Create(True);
+  GIfaceNames := TStringList.Create;
+  GIfaceObjs := TObjectList.Create(True);
   GEncodeNames.Duplicates := dupAccept;
   GDecodeNames.Duplicates := dupAccept;
+  GIfaceNames.Duplicates := dupAccept;
   if not FileExists(GAstFile) then
   begin
     WriteLn('bif-coverage: cannot open ' + GAstFile);
@@ -1059,7 +1282,13 @@ begin
     WriteLn('bif-coverage: cannot open ' + GIoFile);
     Halt(2);
   end;
+  if not FileExists(GIfaceFile) then
+  begin
+    WriteLn('bif-coverage: cannot open ' + GIfaceFile);
+    Halt(2);
+  end;
   ScanAST();
+  ScanInterfaceTypes();
   ScanIO();
   WriteLn('bif-coverage: scanned ' + IntToStr(GASTNames.Count) +
           ' AST classes, ' + IntToStr(GEncodeNames.Count) +

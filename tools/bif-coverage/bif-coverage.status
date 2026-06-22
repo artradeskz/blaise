@@ -162,7 +162,7 @@ TTryExceptStmt.ExceptBody  serialise
 TRaiseStmt.Expr  serialise
 
 # TExitStmt (uAST.pas:353)
-TExitStmt.Value  safe
+TExitStmt.Value  serialise
 TExitStmt.ResultAssign  safe
 
 # TBreakStmt (uAST.pas:361)
@@ -250,7 +250,7 @@ TMethodCallStmt.IsProcFieldCall  safe
 TInheritedCallStmt.Name  serialise
 TInheritedCallStmt.Args  serialise
 
-# TMethodCallExpr (uAST.pas:829)
+# TMethodCallExpr (uAST.pas:835)
 TMethodCallExpr.ObjectName  serialise
 TMethodCallExpr.Name  serialise
 TMethodCallExpr.Args  serialise
@@ -262,4 +262,51 @@ TMethodCallExpr.IsVarParam  safe
 TMethodCallExpr.IsBuiltinToString  safe
 TMethodCallExpr.IsBuiltinInheritsFrom  safe
 TMethodCallExpr.IsProcFieldCall  safe
+
+# === Interface-container types (uUnitInterface.pas + TMethodParam) ===
+#   serialise  must appear in the encoder AND decoder of uUnitInterfaceIO.pas
+
+# TRoutineSig (uUnitInterface.pas:64)
+TRoutineSig.Name  serialise
+TRoutineSig.IsFunction  serialise
+TRoutineSig.Params  serialise
+TRoutineSig.ReturnType  serialise
+TRoutineSig.IsInline  safe
+TRoutineSig.IsPublished  safe
+TRoutineSig.IsExternal  safe
+TRoutineSig.ExternalName  safe
+TRoutineSig.CallingConv  serialise
+TRoutineSig.VTableSlot  serialise
+TRoutineSig.ResolvedQbeName  serialise
+TRoutineSig.IsVirtual  serialise
+TRoutineSig.IsOverride  serialise
+
+# TConstEntry (uUnitInterface.pas:97)
+TConstEntry.Decl  serialise
+TConstEntry.TypeRef  serialise
+
+# TVarEntry (uUnitInterface.pas:105)
+TVarEntry.Name  serialise
+TVarEntry.TypeRef  serialise
+TVarEntry.IsThreadVar  serialise
+
+# TUnitInterface (uUnitInterface.pas:169)
+TUnitInterface.Name  serialise
+TUnitInterface.SourceFile  serialise
+TUnitInterface.SourceHash  serialise
+TUnitInterface.SourceModTime  serialise
+TUnitInterface.CompilerId  serialise
+TUnitInterface.UsedUnits  serialise
+TUnitInterface.ImplUsedUnits  serialise
+TUnitInterface.HasInitialization  serialise
+
+# TMethodParam (uAST.pas:764)
+TMethodParam.ParamName  serialise
+TMethodParam.TypeName  serialise
+TMethodParam.IsVarParam  serialise
+TMethodParam.IsConstParam  serialise
+TMethodParam.IsOutParam  serialise
+TMethodParam.IsOpenArray  serialise
+TMethodParam.DefaultValue  serialise
+TMethodParam.HasDefault  serialise
 

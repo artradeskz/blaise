@@ -198,13 +198,20 @@ type
                                     emit a call to <Unit>_init at program
                                     startup, or the init section never runs. }
 
-    Types:           TObjectList; { owned TTypeEntry }
-    Consts:          TObjectList; { owned TConstEntry }
-    Vars:            TObjectList; { owned TVarEntry }
-    Routines:        TObjectList; { owned TRoutineSig — free routines }
+    { The owning-collection containers below are populated on decode via
+      the Add* mutators, not by name; their element data round-trips
+      through the per-entry encoders/decoders (TTypeEntry, TConstEntry,
+      TVarEntry, TRoutineSig). The bif-coverage tool checks fields by name
+      against the encoder/decoder text, so these are marked no-bif: the
+      named field is not directly serialised, only its contents (which the
+      entry-type checks already cover). }
+    Types:           TObjectList; { owned TTypeEntry, no-bif }
+    Consts:          TObjectList; { owned TConstEntry, no-bif }
+    Vars:            TObjectList; { owned TVarEntry, no-bif }
+    Routines:        TObjectList; { owned TRoutineSig free routines, no-bif }
 
-    InlineBodies:    TObjectList; { owned TInlineBody }
-    GenericBodies:   TObjectList; { owned TGenericBody }
+    InlineBodies:    TObjectList; { owned TInlineBody, no-bif }
+    GenericBodies:   TObjectList; { owned TGenericBody, no-bif }
 
     { ACaseSensitive controls all Find* lookups.  Default False
       matches Object Pascal semantics; set True for cases that need
