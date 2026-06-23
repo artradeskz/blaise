@@ -53,11 +53,21 @@ uses
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 3;  { v2: META block carries ImplUsedUnits + HasInitialization
-                        v3: EncodeBlock carries local var declarations so generic
-                            template method bodies round-trip with their locals
-                            (e.g. 'var Ptr: ^T'); without this an instantiation
-                            from a cached .bif fails with 'Undeclared variable'. }
+  IFACE_VERSION = 2;  { v1: shipped through release v0.11.x (last public commit
+                            d56bdbf).
+                        v2 (release v0.12.0): a batch of META/record additions
+                          made this cycle, all gated by this single bump since
+                          v1 never reached a reader that lacked them:
+                            - META block carries ImplUsedUnits + HasInitialization
+                            - EncodeBlock carries local var declarations so generic
+                              template method bodies round-trip with their locals
+                              (e.g. 'var Ptr: ^T')
+                            - Exit(value) carries its return value
+                            - parameter default values are serialised
+                            - free-routine ResolvedQbeName, generic-class template
+                              properties, and TRoutineSig vtable facts
+                              (VTableSlot/IsVirtual/IsOverride) round-trip.
+                          Old (v1) .bif are rejected and recompiled from source. }
 
 type
   EIfaceFormatError = class(Exception);

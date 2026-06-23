@@ -2683,7 +2683,7 @@ begin
     Buf := WriteUnitInterface(Iface);
     { Blaise Pos is 0-based; match-at-start returns 0. }
     AssertTrue('starts with magic',
-      Pos('BLAISE-IFACE 3', Buf) = 0);
+      Pos('BLAISE-IFACE 2', Buf) = 0);
   finally
     Iface.Free();
   end;
