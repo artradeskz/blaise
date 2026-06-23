@@ -26,7 +26,6 @@ unit Net.Http.Server;
 interface
 
 uses
-  Classes,
   Generics.Collections;
 
 type
@@ -37,7 +36,7 @@ type
     Method: string;     { GET, POST, ... }
     Path:   string;     { decoded path, e.g. /fruit/apple.html }
     Query:  TOrderedDictionary<string, string>;
-    RawHeaders: TStringList;
+    RawHeaders: TList<string>;
     WebSocketKey: string;  { Sec-WebSocket-Key, '' if not an upgrade }
     constructor Create;
     destructor Destroy; override;
@@ -107,7 +106,7 @@ uses
 const
   RECV_BUF = 8192;
 
-{ ---- private string helpers (kept here so StrUtils stays Classes-free) ---- }
+{ ---- private string helpers ---- }
 
 function StripTrailingCR(const S: string): string;
 begin
@@ -119,11 +118,11 @@ end;
 
 { Split S on LF, stripping a trailing CR from each line (so CRLF and LF both
   work).  Caller owns the returned list. }
-function HttpSplitLines(const S: string): TStringList;
+function HttpSplitLines(const S: string): TList<string>;
 var
   I, N, Start: Integer;
 begin
-  Result := TStringList.Create();
+  Result := TList<string>.Create();
   N := Length(S);
   Start := 0;
   I := 0;
@@ -140,11 +139,11 @@ begin
 end;
 
 { Split S on a single delimiter byte.  Caller owns the returned list. }
-function HttpSplitChar(const S: string; ADelim: Byte): TStringList;
+function HttpSplitChar(const S: string; ADelim: Byte): TList<string>;
 var
   I, N, Start: Integer;
 begin
-  Result := TStringList.Create();
+  Result := TList<string>.Create();
   N := Length(S);
   Start := 0;
   I := 0;
@@ -167,7 +166,7 @@ begin
   Method := '';
   Path := '';
   Query := TOrderedDictionary<string, string>.Create();
-  RawHeaders := TStringList.Create();
+  RawHeaders := TList<string>.Create();
   WebSocketKey := '';
 end;
 
@@ -249,7 +248,7 @@ end;
 
 procedure ParseQuery(const AQueryStr: string; ADest: TOrderedDictionary<string, string>);
 var
-  Pairs: TStringList;
+  Pairs: TList<string>;
   I, Eq: Integer;
   Pair, Key, Val: string;
 begin
@@ -278,9 +277,9 @@ end;
 
 function ParseRequest(const ARaw: string): THttpRequest;
 var
-  Lines: TStringList;
+  Lines: TList<string>;
   ReqLine, Target, PathPart, QueryPart, Hdr, HdrLower: string;
-  Parts: TStringList;
+  Parts: TList<string>;
   I, Q, Colon: Integer;
 begin
   Result := THttpRequest.Create();
