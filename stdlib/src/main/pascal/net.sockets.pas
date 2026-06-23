@@ -21,7 +21,41 @@
       MakeNonBlocking, and IgnoreSigPipe.
 
   IPv4 only, no TLS — suitable for a localhost service or a plain TCP server.
-  Strings are treated as raw bytes for I/O. }
+  Strings are treated as raw bytes for I/O.
+
+  --- Why this binds libc (and why that is the normal choice) ---
+
+  Opening a socket is not a computation; it is a request to the OS kernel.  A
+  userspace process cannot touch the network card, allocate a port, or run TCP
+  state itself — only the kernel can.  The single doorway from a process into
+  the kernel is the CPU's `syscall` instruction, and libc (glibc on Linux) is
+  the canonical wrapper around those syscalls: it knows the syscall numbers and
+  the register ABI per architecture, handles errno and EINTR restarts, and
+  gives each call a stable C name (socket/bind/recv/...).  `external name
+  'socket'` simply links to that libc symbol.  This is why nearly everything on
+  Linux — the FPC RTL, Python, Node, even the JVM — goes through libc.
+
+  Every networking stack is the same three layers; only the middle "shim"
+  differs by who wrote it:
+
+    protocol logic (HTTP/WS/crypto)  - pure Pascal here, pure Java in the JDK,
+                                       pure Pascal in Indy/Synapse
+    socket abstraction               - this unit; Indy's TIdStack; the JDK's
+                                       sun.nio.ch native methods
+    OS doorway                       - libc bindings (us, Indy, FPC, Synapse)
+                                       OR hand-written C in a VM (Java JNI ->
+                                       still libc/Winsock underneath)
+    kernel                           - syscalls (fixed; nobody reimplements it)
+
+  Java is NOT libc-free: java.net.Socket calls `native` methods implemented in
+  C inside the JVM, which call socket()/bind()/recv() in libc exactly as we do.
+  Its portability comes from writing that C glue once per OS, not from avoiding
+  libc.  A truly "pure Pascal" version would replace libc's job with our own
+  per-arch `syscall` assembly stubs (the route Go takes) — that removes the
+  libc dependency but not the kernel boundary, and trades a stable cross-OS C
+  ABI for per-arch/per-OS assembly we would then maintain.  For a single Linux
+  target it is a day or two of work; as a portability strategy it is MORE work
+  than the per-platform binding layer noted at the PORTING BOUNDARY below. }
 
 unit Net.Sockets;
 
