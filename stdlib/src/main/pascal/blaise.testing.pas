@@ -205,7 +205,7 @@ implementation
   ----------------------------------------------------------------------- }
 
 var
-  GRegistry: TStringList;  { Objects[i] holds the TTestCaseClass typeinfo ptr }
+  GRegistry: TList<TTestCaseClass>;  { registered test-case classes }
 
 { -----------------------------------------------------------------------
   TTest
@@ -656,10 +656,8 @@ end;
 procedure RegisterTest(ATestClass: TTestCaseClass);
 begin
   if GRegistry = nil then
-    GRegistry := TStringList.Create();
-  { Store the metaclass typeinfo pointer in Objects[]; the name slot
-    is reserved for a descriptive label the runner can print. }
-  GRegistry.AddObject('', Pointer(ATestClass));
+    GRegistry := TList<TTestCaseClass>.Create();
+  GRegistry.Add(ATestClass);
 end;
 
 function GetRegisteredTestCount: Integer;
@@ -672,7 +670,7 @@ end;
 
 function GetRegisteredTest(AIndex: Integer): TTestCaseClass;
 begin
-  Result := TTestCaseClass(GRegistry.Objects[AIndex]);
+  Result := GRegistry.Get(AIndex);
 end;
 
 end.
