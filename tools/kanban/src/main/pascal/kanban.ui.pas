@@ -276,27 +276,23 @@ begin
   else
   begin
     Lines := TStringList.Create();
-    try
-      Lines.Text := Content;
-      StartLine := FDetailScroll;
-      if StartLine > Lines.Count - 1 then
-        StartLine := Lines.Count - 1;
-      if StartLine < 0 then StartLine := 0;
+    Lines.Text := Content;
+    StartLine := FDetailScroll;
+    if StartLine > Lines.Count - 1 then
+      StartLine := Lines.Count - 1;
+    if StartLine < 0 then StartLine := 0;
 
-      I := StartLine;
-      Y := 4;
-      while (I < Lines.Count) and (Y <= FTerm.Rows - 2) do
-      begin
-        FTerm.MoveTo(Y, 2);
-        Line := Lines.Get(I);
-        if Length(Line) > FTerm.Cols - 3 then
-          Line := Copy(Line, 0, FTerm.Cols - 3);
-        FTerm.BufWrite(Line);
-        I := I + 1;
-        Y := Y + 1
-      end
-    finally
-      Lines.Free()
+    I := StartLine;
+    Y := 4;
+    while (I < Lines.Count) and (Y <= FTerm.Rows - 2) do
+    begin
+      FTerm.MoveTo(Y, 2);
+      Line := Lines.Get(I);
+      if Length(Line) > FTerm.Cols - 3 then
+        Line := Copy(Line, 0, FTerm.Cols - 3);
+      FTerm.BufWrite(Line);
+      I := I + 1;
+      Y := Y + 1
     end
   end;
 

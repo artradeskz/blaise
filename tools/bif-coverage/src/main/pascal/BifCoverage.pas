@@ -38,7 +38,7 @@
 program BifCoverage;
 
 uses
-  SysUtils, Classes, Contnrs, strutils, uStrCompat;
+  SysUtils, Classes, Contnrs, Generics.Collections, strutils, uStrCompat;
 
 const
   AST_REL          = 'compiler/src/main/pascal/uAST.pas';
@@ -106,7 +106,6 @@ type
     SrcName: string;   { basename of the source file the class came from,
                          for [new]/header location reporting }
     constructor Create;
-    destructor Destroy; override;
   end;
 
   TIOBlock = class
@@ -137,12 +136,6 @@ constructor TASTClass.Create;
 begin
   inherited Create;
   Fields := TStringList.Create;
-end;
-
-destructor TASTClass.Destroy;
-begin
-  Fields.Free;
-  inherited Destroy;
 end;
 
 constructor TIOBlock.Create;
@@ -348,12 +341,12 @@ end;
    supported). The caller is responsible for only invoking this inside
    the public section. Returns the comma-separated list of field names,
    or empty if the line is not a field declaration. *)
-function ParseFieldNames(const ALine: string): TStringList;
+function ParseFieldNames(const ALine: string): TList<String>;
 var
   Stripped, Tok: string;
   P, Len: Integer;
 begin
-  Result := TStringList.Create;
+  Result := TList<String>.Create;
   Stripped := StripAttrs(ALine);
   P := 0;
   Len := Length(Stripped);
@@ -411,7 +404,7 @@ end;
 (* True when AAllow is nil (accept every class) or AName appears in
    the allow-list. Lets the same scan run over uAST.pas (all classes)
    and uUnitInterface.pas (only the target .bif container types). *)
-function ClassAccepted(AAllow: TStringList; const AName: string): Boolean;
+function ClassAccepted(AAllow: TList<String>; const AName: string): Boolean;
 begin
   Result := (AAllow = nil) or (AAllow.IndexOf(AName) >= 0);
 end;
@@ -423,18 +416,18 @@ end;
    are shared with the AST scan. When AAllow is non-nil only classes
    named in it are recorded. *)
 procedure ScanClassFile(const APath: string;
-  ANames: TStringList; AObjs: TObjectList; AAllow: TStringList);
+  ANames: TStringList; AObjs: TObjectList; AAllow: TList<String>);
 var
   Lines: TStringList;
   InBlockComment, InPublic, InClassBody, HasBody, IsEnd, Recording: Boolean;
   I, J: Integer;
   Raw, Stripped, Trimmed, Name, Parent, SrcName: string;
   Cls: TASTClass;
-  FieldNames: TStringList;
+  FieldNames: TList<String>;
 begin
   SrcName := ExtractFileName(APath);
   Lines := LoadLines(APath);
-  try
+  begin
     InBlockComment := False;
     InClassBody := False;
     InPublic := True;
@@ -491,16 +484,10 @@ begin
         a real field — skip it. Plain public fields never contain (). }
       if (Pos('(', Trimmed) >= 0) or (Pos(')', Trimmed) >= 0) then Continue;
       FieldNames := ParseFieldNames(Trimmed);
-      try
-        for J := 0 to FieldNames.Count - 1 do
-          Cls.Fields.AddObject(FieldNames.Strings[J],
-            Pointer(PtrUInt(I + 1)));
-      finally
-        FieldNames.Free;
-      end;
+      for J := 0 to FieldNames.Count - 1 do
+        Cls.Fields.AddObject(FieldNames[J],
+          Pointer(PtrUInt(I + 1)));
     end;
-  finally
-    Lines.Free;
   end;
 end;
 
@@ -516,21 +503,17 @@ end;
    and are checked against the file-level IO haystacks. *)
 procedure ScanInterfaceTypes();
 var
-  Allow: TStringList;
+  Allow: TList<String>;
   I: Integer;
 begin
-  Allow := TStringList.Create;
-  try
-    for I := 0 to IFACE_TYPE_COUNT - 1 do
-      Allow.Add(GIfaceTypes[I]);
-    ScanClassFile(GIfaceFile, GIfaceNames, GIfaceObjs, Allow);
+  Allow := TList<String>.Create;
+  for I := 0 to IFACE_TYPE_COUNT - 1 do
+    Allow.Add(GIfaceTypes[I]);
+  ScanClassFile(GIfaceFile, GIfaceNames, GIfaceObjs, Allow);
 
-    Allow.Clear;
-    Allow.Add('TMethodParam');
-    ScanClassFile(GAstFile, GIfaceNames, GIfaceObjs, Allow);
-  finally
-    Allow.Free;
-  end;
+  Allow.Clear;
+  Allow.Add('TMethodParam');
+  ScanClassFile(GAstFile, GIfaceNames, GIfaceObjs, Allow);
 end;
 
 function IfaceAt(I: Integer): TASTClass;
@@ -551,7 +534,7 @@ end;
    lines and return it as one concatenated string. The body spans from
    the first `begin` after the signature to the matching `end;` (depth
    counting on begin/case/record/try). *)
-function ExtractFunctionBody(ALines: TStringList; const AFName: string): string;
+function ExtractFunctionBody(ALines: TList<String>; const AFName: string): string;
 var
   I, J, P, Depth: Integer;
   Line, Tok: string;
@@ -565,7 +548,7 @@ begin
   Depth := 0;
   for I := 0 to ALines.Count - 1 do
   begin
-    Line := ALines.Strings[I];
+    Line := ALines[I];
     if not InFn then
     begin
       if (Pos(Header, Line) >= 0) and (Pos('forward', Line) < 0) then
@@ -617,16 +600,16 @@ end;
 procedure CarveEncodeBlocks(const ABody: string;
   ANames: TStringList; AObjs: TObjectList);
 var
-  MarkPositions: TStringList;
-  MarkNames: TStringList;
+  MarkPositions: TList<String>;
+  MarkNames: TList<String>;
   P, Len, Save: Integer;
   Tok: string;
   Blk: TIOBlock;
   I, EndPos, StartPos: Integer;
 begin
-  MarkPositions := TStringList.Create;
-  MarkNames := TStringList.Create;
-  try
+  MarkPositions := TList<String>.Create;
+  MarkNames := TList<String>.Create;
+  begin
     Len := Length(ABody);
     P := 0;
     while P < Len do
@@ -650,20 +633,17 @@ begin
     end;
     for I := 0 to MarkNames.Count - 1 do
     begin
-      StartPos := StrToInt(MarkPositions.Strings[I]);
+      StartPos := StrToInt(MarkPositions[I]);
       if I < MarkNames.Count - 1 then
-        EndPos := StrToInt(MarkPositions.Strings[I + 1])
+        EndPos := StrToInt(MarkPositions[I + 1])
       else
         EndPos := Len;
       Blk := TIOBlock.Create;
-      Blk.ClsName := MarkNames.Strings[I];
+      Blk.ClsName := MarkNames[I];
       Blk.Body := Copy(ABody, StartPos, EndPos - StartPos);
-      ANames.Add(MarkNames.Strings[I]);
+      ANames.Add(MarkNames[I]);
       AObjs.Add(Blk);
     end;
-  finally
-    MarkPositions.Free;
-    MarkNames.Free;
   end;
 end;
 
@@ -673,13 +653,13 @@ end;
 procedure CarveDecodeBlocks(const ABody: string;
   ANames: TStringList; AObjs: TObjectList);
 var
-  Starts: TStringList;
+  Starts: TList<String>;
   P, Len, I, EndPos, J, Q, StartPos: Integer;
   Block, Tok: string;
   Blk: TIOBlock;
 begin
-  Starts := TStringList.Create;
-  try
+  Starts := TList<String>.Create;
+  begin
   Len := Length(ABody);
   P := 0;
   while P + 7 < Len do
@@ -694,8 +674,8 @@ begin
   end;
   for I := 0 to Starts.Count - 1 do
   begin
-    StartPos := StrToInt(Starts.Strings[I]);
-    if I < Starts.Count - 1 then EndPos := StrToInt(Starts.Strings[I + 1])
+    StartPos := StrToInt(Starts[I]);
+    if I < Starts.Count - 1 then EndPos := StrToInt(Starts[I + 1])
     else EndPos := Len;
     Block := Copy(ABody, StartPos, EndPos - StartPos);
     J := 0;
@@ -721,8 +701,6 @@ begin
         Inc(J);
     end;
   end;
-  finally
-    Starts.Free;
   end;
 end;
 
@@ -751,17 +729,18 @@ end;
 
 procedure ScanIO();
 var
-  Raw, Cleaned: TStringList;
+  Raw: TStringList;
+  Cleaned: TList<String>;
   I: Integer;
   InBlockComment, InImpl, InDecoder: Boolean;
   Body, Line, Trimmed: string;
   EncSB, DecSB: TStringBuilder;
 begin
   Raw := LoadLines(GIoFile);
-  Cleaned := TStringList.Create;
+  Cleaned := TList<String>.Create;
   EncSB := TStringBuilder.Create;
   DecSB := TStringBuilder.Create;
-  try
+  begin
     InBlockComment := False;
     InImpl := False;
     InDecoder := False;
@@ -790,11 +769,6 @@ begin
     CarveDecodeBlocks(Body, GDecodeNames, GDecodeObjs);
     GIoEncodeText := EncSB.ToString();
     GIoDecodeText := DecSB.ToString();
-  finally
-    DecSB.Free;
-    EncSB.Free;
-    Cleaned.Free;
-    Raw.Free;
   end;
 end;
 
@@ -823,7 +797,7 @@ begin
   Result := '';
   if not FileExists(GRootProject) then Exit;
   Lines := TStringList.Create;
-  try
+  begin
     Lines.LoadFromFile(GRootProject);
     for I := 0 to Lines.Count - 1 do
     begin
@@ -837,8 +811,6 @@ begin
       Result := Trim(Result);
       Exit;
     end;
-  finally
-    Lines.Free;
   end;
 end;
 
@@ -853,7 +825,7 @@ begin
   Result := '';
   if not FileExists(GCompilerIdFile) then Exit;
   Lines := TStringList.Create;
-  try
+  begin
     Lines.LoadFromFile(GCompilerIdFile);
     for I := 0 to Lines.Count - 1 do
     begin
@@ -867,8 +839,6 @@ begin
       Result := Copy(Line, Q1 + 1, Q2);
       Exit;
     end;
-  finally
-    Lines.Free;
   end;
 end;
 
@@ -899,7 +869,7 @@ begin
   if not FileExists(GIoFile) then Exit;
   Needle := '.' + AFieldName;
   Lines := TStringList.Create;
-  try
+  begin
     Lines.LoadFromFile(GIoFile);
     for I := AStartLine to Lines.Count - 1 do
     begin
@@ -909,8 +879,6 @@ begin
       Result := I + 1;
       Exit;
     end;
-  finally
-    Lines.Free;
   end;
 end;
 
@@ -934,7 +902,7 @@ begin
   Result := 0;
   if not FileExists(GIoFile) then Exit;
   Lines := TStringList.Create;
-  try
+  begin
     Lines.LoadFromFile(GIoFile);
     for I := 0 to Lines.Count - 1 do
     begin
@@ -947,8 +915,6 @@ begin
         Exit;
       end;
     end;
-  finally
-    Lines.Free;
   end;
 end;
 
@@ -1011,7 +977,7 @@ var
   FieldName, State, Header: string;
 begin
   Outp := TStringList.Create;
-  try
+  begin
     Outp.Add('# bif-coverage status - one line per public AST field.');
     Outp.Add('# Format: <TClass>.<Field>  <serialise|safe>');
     Outp.Add('#   serialise  must appear in EncodeStmt/EncodeExpr AND ReadStmt/ReadExpr');
@@ -1064,8 +1030,6 @@ begin
 
     Outp.SaveToFile(GStatusFile);
     WriteLn('bif-coverage: wrote ' + GStatusFile);
-  finally
-    Outp.Free;
   end;
 end;
 
@@ -1082,7 +1046,7 @@ var
   Line, Key, State, ClsName, FieldName, Loc: string;
   Cls: TASTClass;
   Blk: TIOBlock;
-  KnownFields: TStringList;
+  KnownFields: TList<String>;
   EncoderHasField, DecoderHasField, IsIface: Boolean;
 begin
   if not FileExists(GStatusFile) then
@@ -1091,8 +1055,8 @@ begin
     Exit;
   end;
   Status := TStringList.Create;
-  KnownFields := TStringList.Create;
-  try
+  KnownFields := TList<String>.Create;
+  begin
     Status.LoadFromFile(GStatusFile);
     for I := 0 to Status.Count - 1 do
     begin
@@ -1223,22 +1187,7 @@ begin
                  Key + Loc);
       end;
     end;
-  finally
-    Status.Free;
-    KnownFields.Free;
   end;
-end;
-
-procedure FreeAll();
-begin
-  GASTObjs.Free;     { owns: frees TASTClass instances }
-  GEncodeObjs.Free;  { owns: frees TIOBlock instances }
-  GDecodeObjs.Free;
-  GIfaceObjs.Free;   { owns: frees TASTClass instances }
-  GASTNames.Free;
-  GEncodeNames.Free;
-  GDecodeNames.Free;
-  GIfaceNames.Free;
 end;
 
 begin
@@ -1305,6 +1254,5 @@ begin
     WriteLn('bif-coverage: OK')
   else
     WriteLn('bif-coverage: ' + IntToStr(GErrors) + ' gap(s) found');
-  FreeAll();
   if GErrors > 0 then Halt(1);
 end.

@@ -34,7 +34,7 @@ unit blaise.testing;
 interface
 
 uses
-  Classes, SysUtils;
+  Classes, Generics.Collections, SysUtils;
 
 type
   { TRunMethod — type of a parameter-less method on any TObject descendant.
@@ -51,14 +51,13 @@ type
     FNumberOfFailures: Integer;
     FNumberOfErrors:   Integer;
     FNumberOfIgnored:  Integer;
-    FFailureList:      TStringList;
-    FErrorList:        TStringList;
+    FFailureList:      TList<String>;
+    FErrorList:        TList<String>;
     FVerbose:          Boolean;
     FCurrentClassName: string;
     FCurrentTestName:  string;
   public
     constructor Create;
-    destructor  Destroy; override;
 
     procedure StartTest (AClassName, ATestName: string);
     procedure EndTest   (AOutcome: string);
@@ -73,8 +72,8 @@ type
     property  NumberOfFailures: Integer read FNumberOfFailures;
     property  NumberOfErrors:   Integer read FNumberOfErrors;
     property  NumberOfIgnored:  Integer read FNumberOfIgnored;
-    property  Failures:         TStringList read FFailureList;
-    property  Errors:           TStringList read FErrorList;
+    property  Failures:         TList<String> read FFailureList;
+    property  Errors:           TList<String> read FErrorList;
     property  Verbose:          Boolean read FVerbose write FVerbose;
   end;
 
@@ -562,18 +561,11 @@ begin
   Self.FNumberOfFailures := 0;
   Self.FNumberOfErrors   := 0;
   Self.FNumberOfIgnored  := 0;
-  Self.FFailureList      := TStringList.Create();
-  Self.FErrorList        := TStringList.Create();
+  Self.FFailureList      := TList<String>.Create();
+  Self.FErrorList        := TList<String>.Create();
   Self.FVerbose          := False;
   Self.FCurrentClassName := '';
   Self.FCurrentTestName  := '';
-end;
-
-destructor TTestResult.Destroy;
-begin
-  Self.FFailureList.Free();
-  Self.FErrorList.Free();
-  inherited Destroy();
 end;
 
 procedure TTestResult.StartTest(AClassName, ATestName: string);
@@ -616,9 +608,9 @@ begin
   Self.FNumberOfErrors   := Self.FNumberOfErrors   + ASource.FNumberOfErrors;
   Self.FNumberOfIgnored  := Self.FNumberOfIgnored  + ASource.FNumberOfIgnored;
   for I := 0 to ASource.FFailureList.Count - 1 do
-    Self.FFailureList.Add(ASource.FFailureList.Strings[I]);
+    Self.FFailureList.Add(ASource.FFailureList.Get(I));
   for I := 0 to ASource.FErrorList.Count - 1 do
-    Self.FErrorList.Add(ASource.FErrorList.Strings[I]);
+    Self.FErrorList.Add(ASource.FErrorList.Get(I));
 end;
 
 function TTestResult.Summary: string;

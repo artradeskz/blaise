@@ -44,7 +44,6 @@ type
     function IsDeleted(AId: Integer): Boolean;
   public
     constructor Create(const AFilePath: string);
-    destructor Destroy; override;
     procedure Load;
     procedure Save;
     function AddTask(const ATitle: string; AStatus: TTaskStatus): TTask;
@@ -75,13 +74,6 @@ begin
   FDeletedIds := TObjectList.Create(True);
   FNextId := 1;
   FLastMtime := -1
-end;
-
-destructor TBoard.Destroy;
-begin
-  FDeletedIds.Free();
-  FTasks.Free();
-  inherited Destroy
 end;
 
 function TBoard.GetCount: Integer;
@@ -197,30 +189,26 @@ begin
   if not FileExists(FFilePath) then Exit;
 
   Lines := TStringList.Create();
-  try
-    Lines.LoadFromFile(FFilePath);
-    CurrentStatus := tsTodo;
-    I := 0;
-    while I < Lines.Count do
+  Lines.LoadFromFile(FFilePath);
+  CurrentStatus := tsTodo;
+  I := 0;
+  while I < Lines.Count do
+  begin
+    Line := Lines.Get(I);
+    if StartsStr('## Todo', Line) then
+      CurrentStatus := tsTodo
+    else if StartsStr('## In Progress', Line) then
+      CurrentStatus := tsInProgress
+    else if StartsStr('## Done', Line) then
+      CurrentStatus := tsDone
+    else if StartsStr('#next-id:', Line) then
     begin
-      Line := Lines.Get(I);
-      if StartsStr('## Todo', Line) then
-        CurrentStatus := tsTodo
-      else if StartsStr('## In Progress', Line) then
-        CurrentStatus := tsInProgress
-      else if StartsStr('## Done', Line) then
-        CurrentStatus := tsDone
-      else if StartsStr('#next-id:', Line) then
-      begin
-        IdLine := Trim(Copy(Line, 9, Length(Line) - 9));
-        FNextId := StrToInt(IdLine)
-      end
-      else if StartsStr('- ', Line) then
-        Self.ParseLine(Line, CurrentStatus);
-      I := I + 1
+      IdLine := Trim(Copy(Line, 9, Length(Line) - 9));
+      FNextId := StrToInt(IdLine)
     end
-  finally
-    Lines.Free()
+    else if StartsStr('- ', Line) then
+      Self.ParseLine(Line, CurrentStatus);
+    I := I + 1
   end;
   FLastMtime := FileAge(FFilePath)
 end;
@@ -234,45 +222,41 @@ begin
   if Self.HasExternalChanges() then
     Self.MergeFromDisk();
   Lines := TStringList.Create();
-  try
-    Lines.Add('#next-id: ' + IntToStr(FNextId));
-    Lines.Add('');
-    Lines.Add('## Todo');
-    I := 0;
-    while I < FTasks.Count do
-    begin
-      Task := TTask(FTasks.Get(I));
-      if Task.FStatus = tsTodo then
-        Lines.Add(Self.FormatTask(Task));
-      I := I + 1
-    end;
-
-    Lines.Add('');
-    Lines.Add('## In Progress');
-    I := 0;
-    while I < FTasks.Count do
-    begin
-      Task := TTask(FTasks.Get(I));
-      if Task.FStatus = tsInProgress then
-        Lines.Add(Self.FormatTask(Task));
-      I := I + 1
-    end;
-
-    Lines.Add('');
-    Lines.Add('## Done');
-    I := 0;
-    while I < FTasks.Count do
-    begin
-      Task := TTask(FTasks.Get(I));
-      if Task.FStatus = tsDone then
-        Lines.Add(Self.FormatTask(Task));
-      I := I + 1
-    end;
-
-    Lines.SaveToFile(FFilePath)
-  finally
-    Lines.Free()
+  Lines.Add('#next-id: ' + IntToStr(FNextId));
+  Lines.Add('');
+  Lines.Add('## Todo');
+  I := 0;
+  while I < FTasks.Count do
+  begin
+    Task := TTask(FTasks.Get(I));
+    if Task.FStatus = tsTodo then
+      Lines.Add(Self.FormatTask(Task));
+    I := I + 1
   end;
+
+  Lines.Add('');
+  Lines.Add('## In Progress');
+  I := 0;
+  while I < FTasks.Count do
+  begin
+    Task := TTask(FTasks.Get(I));
+    if Task.FStatus = tsInProgress then
+      Lines.Add(Self.FormatTask(Task));
+    I := I + 1
+  end;
+
+  Lines.Add('');
+  Lines.Add('## Done');
+  I := 0;
+  while I < FTasks.Count do
+  begin
+    Task := TTask(FTasks.Get(I));
+    if Task.FStatus = tsDone then
+      Lines.Add(Self.FormatTask(Task));
+    I := I + 1
+  end;
+
+  Lines.SaveToFile(FFilePath);
   FLastMtime := FileAge(FFilePath)
 end;
 
@@ -445,53 +429,49 @@ var
 begin
   Merged := 0;
   DiskBoard := TBoard.Create(FFilePath);
-  try
-    DiskBoard.Load();
+  DiskBoard.Load();
 
-    MaxId := FNextId;
-    if DiskBoard.FNextId > MaxId then
-      MaxId := DiskBoard.FNextId;
+  MaxId := FNextId;
+  if DiskBoard.FNextId > MaxId then
+    MaxId := DiskBoard.FNextId;
 
-    I := 0;
-    while I < DiskBoard.FTasks.Count do
+  I := 0;
+  while I < DiskBoard.FTasks.Count do
+  begin
+    DiskTask := TTask(DiskBoard.FTasks.Get(I));
+    if Self.IsDeleted(DiskTask.FId) then
     begin
-      DiskTask := TTask(DiskBoard.FTasks.Get(I));
-      if Self.IsDeleted(DiskTask.FId) then
-      begin
-        I := I + 1;
-        Continue
-      end;
-      MemTask := Self.FindById(DiskTask.FId);
-      if MemTask = nil then
-      begin
-        NewTask := TTask.Create();
-        NewTask.FId := DiskTask.FId;
-        NewTask.FTitle := DiskTask.FTitle;
-        NewTask.FStatus := DiskTask.FStatus;
-        NewTask.FCreated := DiskTask.FCreated;
-        NewTask.FPriority := DiskTask.FPriority;
-        FTasks.Add(NewTask);
-        Merged := Merged + 1
-      end
-      else if MemTask.FTitle <> DiskTask.FTitle then
-      begin
-        MemTask.FId := MaxId;
-        MaxId := MaxId + 1;
-        NewTask := TTask.Create();
-        NewTask.FId := DiskTask.FId;
-        NewTask.FTitle := DiskTask.FTitle;
-        NewTask.FStatus := DiskTask.FStatus;
-        NewTask.FCreated := DiskTask.FCreated;
-        NewTask.FPriority := DiskTask.FPriority;
-        FTasks.Add(NewTask);
-        Merged := Merged + 1
-      end;
-      I := I + 1
+      I := I + 1;
+      Continue
     end;
-    FNextId := MaxId
-  finally
-    DiskBoard.Free()
+    MemTask := Self.FindById(DiskTask.FId);
+    if MemTask = nil then
+    begin
+      NewTask := TTask.Create();
+      NewTask.FId := DiskTask.FId;
+      NewTask.FTitle := DiskTask.FTitle;
+      NewTask.FStatus := DiskTask.FStatus;
+      NewTask.FCreated := DiskTask.FCreated;
+      NewTask.FPriority := DiskTask.FPriority;
+      FTasks.Add(NewTask);
+      Merged := Merged + 1
+    end
+    else if MemTask.FTitle <> DiskTask.FTitle then
+    begin
+      MemTask.FId := MaxId;
+      MaxId := MaxId + 1;
+      NewTask := TTask.Create();
+      NewTask.FId := DiskTask.FId;
+      NewTask.FTitle := DiskTask.FTitle;
+      NewTask.FStatus := DiskTask.FStatus;
+      NewTask.FCreated := DiskTask.FCreated;
+      NewTask.FPriority := DiskTask.FPriority;
+      FTasks.Add(NewTask);
+      Merged := Merged + 1
+    end;
+    I := I + 1
   end;
+  FNextId := MaxId;
   FLastMtime := FileAge(FFilePath);
   Result := Merged
 end;

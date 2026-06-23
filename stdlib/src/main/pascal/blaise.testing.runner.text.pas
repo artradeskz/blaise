@@ -37,7 +37,7 @@ unit blaise.testing.runner.text;
 interface
 
 uses
-  blaise.testing, Classes, SysUtils, Process;
+  blaise.testing, Classes, Generics.Collections, SysUtils, Process;
 
 { Run every test method of every TTestCase class registered via
   RegisterTest.  Returns the result so the caller can compute an
@@ -54,7 +54,7 @@ procedure PrintSummary(AResult: TTestResult);
 function RunAll: Integer;
 
 { Filter helpers — exposed for unit testing.  A filter list is a
-  TStringList where every entry is either a class-only filter ("TFooTests")
+  TList<String> where every entry is either a class-only filter ("TFooTests")
   or a class.method filter ("TFooTests.TestBar"). }
 
 { Split a single user-supplied filter spec into class and method parts.
@@ -64,11 +64,11 @@ procedure SplitSuiteSpec(const ASpec: string;
 
 { Append ASpec to AFilters.  If ASpec contains commas, each
   comma-delimited entry is appended individually after trimming. }
-procedure AppendSuiteFilter(AFilters: TStringList; const ASpec: string);
+procedure AppendSuiteFilter(AFilters: TList<String>; const ASpec: string);
 
 { True if the (ASuite, AMethod) pair matches at least one filter in
   AFilters.  An empty filter list always matches. }
-function MatchesFilters(AFilters: TStringList;
+function MatchesFilters(AFilters: TList<String>;
   const ASuite, AMethod: string): Boolean;
 
 
@@ -206,7 +206,7 @@ begin
     Result := Copy(S, Lo, Hi - Lo + 1);
 end;
 
-procedure AppendSuiteFilter(AFilters: TStringList; const ASpec: string);
+procedure AppendSuiteFilter(AFilters: TList<String>; const ASpec: string);
 var
   Start, I: Integer;
   Part:     string;
@@ -228,7 +228,7 @@ begin
     AFilters.Add(Part);
 end;
 
-function MatchesFilters(AFilters: TStringList;
+function MatchesFilters(AFilters: TList<String>;
   const ASuite, AMethod: string): Boolean;
 var
   I:        Integer;
@@ -241,7 +241,7 @@ begin
   end;
   for I := 0 to AFilters.Count - 1 do
   begin
-    SplitSuiteSpec(AFilters.Strings[I], FSuite, FMethod);
+    SplitSuiteSpec(AFilters.Get(I), FSuite, FMethod);
     if FSuite <> ASuite then
       Continue;
     if (FMethod = '') or (FMethod = AMethod) then
@@ -255,7 +255,7 @@ end;
 { True if any filter in AFilters names ASuite (regardless of whether
   the filter pins a specific method).  Used to decide whether a class
   should be considered for execution at all. }
-function FiltersTouchSuite(AFilters: TStringList;
+function FiltersTouchSuite(AFilters: TList<String>;
   const ASuite: string): Boolean;
 var
   I:        Integer;
@@ -268,7 +268,7 @@ begin
   end;
   for I := 0 to AFilters.Count - 1 do
   begin
-    SplitSuiteSpec(AFilters.Strings[I], FSuite, FMethod);
+    SplitSuiteSpec(AFilters.Get(I), FSuite, FMethod);
     if FSuite = ASuite then
     begin
       Exit(True);
@@ -282,7 +282,7 @@ end;
   times and each --suite value may be comma-delimited.  Empty list
   means "run everything".  AVerbose is True when --verbose is present.
   AFilters must be created by the caller and is owned by the caller. }
-procedure ParseArgs(AFilters: TStringList; out AVerbose: Boolean);
+procedure ParseArgs(AFilters: TList<String>; out AVerbose: Boolean);
 var
   I:   Integer;
   Arg: string;
@@ -326,48 +326,44 @@ var
   MsgBody: string;
 begin
   Lines := TStringList.Create();
-  try
-    Lines.Text := AOutput;
-    InFail := False;
-    InErr  := False;
-    for I := 0 to Lines.Count - 1 do
+  Lines.Text := AOutput;
+  InFail := False;
+  InErr  := False;
+  for I := 0 to Lines.Count - 1 do
+  begin
+    Line := Lines.Strings[I];
+    if Line = 'Failures:' then begin InFail := True; InErr := False; Continue end;
+    if Line = 'Errors:'   then begin InErr  := True; InFail := False; Continue end;
+    if InFail or InErr then
     begin
-      Line := Lines.Strings[I];
-      if Line = 'Failures:' then begin InFail := True; InErr := False; Continue end;
-      if Line = 'Errors:'   then begin InErr  := True; InFail := False; Continue end;
-      if InFail or InErr then
+      { Indented detail lines: "  MethodName: message" }
+      if (Length(Line) > 2) and (Copy(Line, 0, 2) = '  ') then
       begin
-        { Indented detail lines: "  MethodName: message" }
-        if (Length(Line) > 2) and (Copy(Line, 0, 2) = '  ') then
+        P := Pos(': ', Line);
+        if P >= 0 then
         begin
-          P := Pos(': ', Line);
-          if P >= 0 then
-          begin
-            MsgName := Copy(Line, 2, P - 2);
-            MsgBody := Copy(Line, P + 2, Length(Line));
-            if InFail then
-              AResult.AddFailure(MsgName, MsgBody)
-            else
-              AResult.AddError(MsgName, MsgBody);
-          end;
-          Continue;
+          MsgName := Copy(Line, 2, P - 2);
+          MsgBody := Copy(Line, P + 2, Length(Line));
+          if InFail then
+            AResult.AddFailure(MsgName, MsgBody)
+          else
+            AResult.AddError(MsgName, MsgBody);
         end;
-        InFail := False; InErr := False;
+        Continue;
       end;
-      { Verbose outcome line: "CName.MName ... OUTCOME" }
-      if Pos(' ... ', Line) >= 0 then
-      begin
-        AResult.StartTest('', '');
-        if (Pos(' ... FAIL', Line) >= 0) or (Pos(' ... ERROR', Line) >= 0) then
-          AResult.EndTest('FAIL')
-        else if Pos(' ... IGNORED', Line) >= 0 then
-          AResult.EndTest('IGNORED')
-        else
-          AResult.EndTest('OK');
-      end;
+      InFail := False; InErr := False;
     end;
-  finally
-    Lines.Free();
+    { Verbose outcome line: "CName.MName ... OUTCOME" }
+    if Pos(' ... ', Line) >= 0 then
+    begin
+      AResult.StartTest('', '');
+      if (Pos(' ... FAIL', Line) >= 0) or (Pos(' ... ERROR', Line) >= 0) then
+        AResult.EndTest('FAIL')
+      else if Pos(' ... IGNORED', Line) >= 0 then
+        AResult.EndTest('IGNORED')
+      else
+        AResult.EndTest('OK');
+    end;
   end;
 end;
 
@@ -382,7 +378,7 @@ end;
   parallel while non-threaded suites run in-process.  After in-process
   tests finish, remaining subprocess output is collected.
   When --suite is given, the named suite runs directly (no subprocess). }
-function RunFilteredTests(AFilters: TStringList; AVerbose: Boolean): TTestResult;
+function RunFilteredTests(AFilters: TList<String>; AVerbose: Boolean): TTestResult;
 var
   ClsIdx:    Integer;
   Cls:       TTestCaseClass;
@@ -489,8 +485,8 @@ end;
 procedure PrintSummary(AResult: TTestResult);
 var
   I:     Integer;
-  Fails: TStringList;
-  Errs:  TStringList;
+  Fails: TList<String>;
+  Errs:  TList<String>;
   Line:  string;
 begin
   WriteLn(AResult.Summary());
@@ -502,7 +498,7 @@ begin
     I     := 0;
     while I < AResult.NumberOfFailures do
     begin
-      Line := Fails.Strings[I];
+      Line := Fails.Get(I);
       WriteLn('  ' + Line);
       I := I + 1
     end;
@@ -515,7 +511,7 @@ begin
     I    := 0;
     while I < AResult.NumberOfErrors do
     begin
-      Line := Errs.Strings[I];
+      Line := Errs.Get(I);
       WriteLn('  ' + Line);
       I := I + 1
     end;
@@ -525,10 +521,10 @@ end;
 function RunAll: Integer;
 var
   R:       TTestResult;
-  Filters: TStringList;
+  Filters: TList<String>;
   Verbose: Boolean;
 begin
-  Filters := TStringList.Create();
+  Filters := TList<String>.Create();
   ParseArgs(Filters, Verbose);
   R := RunFilteredTests(Filters, Verbose);
   PrintSummary(R);
