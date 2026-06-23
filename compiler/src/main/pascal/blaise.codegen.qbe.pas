@@ -13123,7 +13123,7 @@ begin
   begin
     C := StrAt(AName, I);
     if (C = 60) or (C = 62) or (C = 44) or (C = 36) or (C = 64) or
-       (C = 94) then
+       (C = 94) or (C = 32) then
     begin
       Clean := False;
       break;
@@ -13139,6 +13139,7 @@ begin
       60:  Result := Result + '_';    { '<' }
       62:  ;                          { '>' — skip }
       44:  Result := Result + '_';    { ',' }
+      32:  Result := Result + '_';    { ' ' — e.g. 'class of T' }
       36:  Result := Result + '_D_';  { '$' — overload delimiter }
       64:  Result := Result + '_V_';  { '@' — var-param prefix }
       94:  Result := Result + '_P_';  { '^' — pointer prefix }

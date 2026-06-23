@@ -1593,6 +1593,7 @@ begin
       60: Result := Result + '_';    { '<' }
       62: ;                          { '>' — skip }
       44: Result := Result + '_';    { ',' }
+      32: Result := Result + '_';    { ' ' — e.g. 'class of T' }
       36: Result := Result + '_D_';  { '$' }
       64: Result := Result + '_V_';  { '@' }
       94: Result := Result + '_P_';  { '^' }
