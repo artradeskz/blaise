@@ -144,16 +144,10 @@ trap cleanup EXIT
 git worktree add --detach "$WT" "$START_SHA" >/dev/null 2>&1 || {
   echo "Failed to create worktree." >&2; exit 1; }
 
-# The worktree checks out vendored QBE *source* but not a built binary. The
-# runtime Makefile invokes $(QBE) (default ../vendor/qbe/qbe) and we call QBE
-# directly for the compiler link. Use the main repo's already-built QBE for
-# both. The QBE binary is stable across the replayed range; if a step bumps the
-# vendored QBE version, rebuild vendor/qbe in the main repo before replaying.
-QBE_BIN="$ROOT/vendor/qbe/qbe"
-if [ ! -x "$QBE_BIN" ]; then
-  echo "QBE binary not built: $QBE_BIN  (run 'make' in vendor/qbe)" >&2
-  exit 1
-fi
+# From v0.12.0 onward the native backend is the default and the compiler links
+# via its internal assembler + internal linker, so no QBE binary and no gcc are
+# needed to replay the bootstrap chain.  Only the distro's CRT objects (read by
+# the internal linker) are required, which the runtime depends on anyway.
 
 # CUR_BIN / CUR_RTL hold the most recently built (or starting) artifacts.
 CUR_BIN="$START_BIN"
@@ -172,9 +166,10 @@ build_step() {
 
   # 1. Build + install the RTL using the previous-step compiler.
   #    runtime/Makefile honours BLAISE=<compiler> and COMPILER_BIN for install.
+  #    The native default backend builds the RTL units with no external tools.
   if ! ( cd "$wt/runtime" && make clean >/dev/null 2>&1 && \
-         make BLAISE="$cc" QBE="$QBE_BIN" >"$out/rtl.log" 2>&1 && \
-         make BLAISE="$cc" QBE="$QBE_BIN" install >>"$out/rtl.log" 2>&1 ); then
+         make BLAISE="$cc" >"$out/rtl.log" 2>&1 && \
+         make BLAISE="$cc" install >>"$out/rtl.log" 2>&1 ); then
     echo "    RTL build failed:"; tail -8 "$out/rtl.log" | sed 's/^/      /'
     return 1
   fi
@@ -185,29 +180,21 @@ build_step() {
     echo "    RTL archive missing after build"; return 1
   fi
 
-  # 2. Compile the compiler to IR with the previous-step binary, then
-  #    assemble + link. Mirrors fixpoint.sh's direct-invocation approach so we
-  #    do not depend on pasbuild internals varying across history.
+  # 2. Compile the compiler with the previous-step binary straight to an
+  #    executable.  Native default backend + internal assembler + internal
+  #    linker: source in, binary out, no --emit-ir, no QBE, no gcc.  Valid for
+  #    the whole v0.12.0..HEAD range (every commit is native-default).
   if ! "$cc" --source "$wt/compiler/src/main/pascal/Blaise.pas" \
         --unit-path "$wt/compiler/src/main/pascal" \
         --unit-path "$wt/runtime/src/main/pascal" \
         --unit-path "$wt/stdlib/src/main/pascal" \
-        --emit-ir > "$out/blaise.ssa" 2>"$out/compile.err"; then
-    echo "    compiler IR generation failed:"; head -5 "$out/compile.err" | sed 's/^/      /'
+        --output "$out/blaise" 2>"$out/compile.err"; then
+    echo "    compiler build failed:"; head -5 "$out/compile.err" | sed 's/^/      /'
     return 1
   fi
-  if [ ! -s "$out/blaise.ssa" ] || \
-     head -1 "$out/blaise.ssa" | grep -qiE 'error|exception'; then
-    echo "    compiler IR invalid:"; head -3 "$out/blaise.ssa" | sed 's/^/      /'
-    head -3 "$out/compile.err" | sed 's/^/      /'
+  if [ ! -s "$out/blaise" ]; then
+    echo "    compiler binary missing after build:"; head -3 "$out/compile.err" | sed 's/^/      /'
     return 1
-  fi
-
-  if ! "$QBE_BIN" -o "$out/blaise.s" "$out/blaise.ssa" 2>"$out/qbe.err"; then
-    echo "    QBE failed:"; head -5 "$out/qbe.err" | sed 's/^/      /'; return 1
-  fi
-  if ! gcc -o "$out/blaise" "$out/blaise.s" "$rtl" 2>"$out/gcc.err"; then
-    echo "    link failed:"; head -5 "$out/gcc.err" | sed 's/^/      /'; return 1
   fi
 
   cp "$rtl" "$out/blaise_rtl.a"
@@ -217,9 +204,10 @@ build_step() {
 # ---------------------------------------------------------------------------
 # smoke_test <compiler-binary> <rtl-archive>
 #   Compiles + runs a trivial program to prove the freshly-built binary is
-#   functional (compiles → valid QBE → links → runs → correct stdout). Kept
-#   deliberately feature-agnostic: it must pass at EVERY commit in history, so
-#   it probes only arithmetic + WriteLn, not any specific later feature.
+#   functional (source -> native backend -> internal assembler + linker ->
+#   runs -> correct stdout). Kept deliberately feature-agnostic: it must pass
+#   at EVERY commit in the replay range, so it probes only arithmetic + WriteLn,
+#   not any specific later feature.
 # ---------------------------------------------------------------------------
 smoke_test() {
   local cc="$1" rtl="$2"
@@ -232,10 +220,11 @@ begin
   WriteLn(X)
 end.
 PAS
+  # FindRTL looks beside the compiler binary; ensure the matching archive is
+  # there so the internal linker finds it.
+  cp "$rtl" "$(dirname "$cc")/blaise_rtl.a" 2>/dev/null || true
   local ok=1
-  if "$cc" --source "$d/s.pas" --emit-ir > "$d/s.ssa" 2>"$d/s.err" \
-     && "$QBE_BIN" -o "$d/s.s" "$d/s.ssa" 2>>"$d/s.err" \
-     && gcc -o "$d/s" "$d/s.s" "$rtl" 2>>"$d/s.err"; then
+  if "$cc" --source "$d/s.pas" --output "$d/s" 2>"$d/s.err"; then
     [ "$("$d/s" 2>/dev/null)" = "42" ] && ok=0
   fi
   rm -rf "$d"

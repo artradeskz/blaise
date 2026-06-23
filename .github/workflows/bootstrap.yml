@@ -38,7 +38,10 @@ permissions:
 env:
   # Cold-start anchor: the newest *real* release whose binary is published as a
   # GitHub Release asset. Used only when no cached -pre binary is available.
-  STAGE1_TAG: v0.10.0
+  # v0.12.0 is the clean rolling-bootstrap anchor: the broken v0.11.0->v0.12.0
+  # commit range is BEFORE it, so the replay range (v0.12.0..HEAD) is all
+  # native-default + internal-toolchain and needs neither QBE nor gcc.
+  STAGE1_TAG: v0.12.0
 
 jobs:
   bootstrap:
@@ -56,34 +59,15 @@ jobs:
           fetch-depth: 0
 
       # --------------------------------------------------------------------
-      # 2. Toolchain. The runner needs gcc + make to build QBE and link the
-      #    bootstrapped compiler. ubuntu-latest already ships both, but install
-      #    explicitly so the workflow is self-documenting and resilient.
+      # 2. Toolchain. From the v0.12.0 anchor onward the bootstrap chain is
+      #    native-default with the internal assembler + linker, so neither QBE
+      #    nor gcc is needed to replay it — only make (runtime Makefile) and the
+      #    distro CRT objects (build-essential) the internal linker reads.
       # --------------------------------------------------------------------
       - name: Install build tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y build-essential unzip
-
-      # --------------------------------------------------------------------
-      # 3. Build vendored QBE (source is committed under vendor/qbe/).
-      #    rolling-bootstrap.sh and the runtime Makefile both need this binary.
-      # --------------------------------------------------------------------
-      - name: Build QBE
-        run: make -C vendor/qbe
-
-      # --------------------------------------------------------------------
-      # 3b. Make the freshly-built QBE discoverable by the *compiler itself*.
-      #     The compiler shells out to `qbe` and resolves it via the BLAISE_QBE
-      #     env var first, then PATH (see uToolchain.ResolveQBE). The QBE= make
-      #     variable only covers rolling-bootstrap.sh's direct qbe calls, NOT
-      #     the compiler's internal invocation when building the RTL — so
-      #     without this the RTL build fails with "qbe error (exit 127)".
-      # --------------------------------------------------------------------
-      - name: Expose QBE to the compiler
-        run: |
-          echo "BLAISE_QBE=$PWD/vendor/qbe/qbe" >> "$GITHUB_ENV"
-          echo "$PWD/vendor/qbe" >> "$GITHUB_PATH"
 
       # --------------------------------------------------------------------
       # 4. Restore the carry-forward cache: the previous successful master run
@@ -202,8 +186,8 @@ jobs:
         run: |
           set -euo pipefail
           BLAISE="${{ steps.pre.outputs.bin }}"
-          ( cd runtime && make BLAISE="$BLAISE" QBE="$PWD/../vendor/qbe/qbe" \
-              && make BLAISE="$BLAISE" QBE="$PWD/../vendor/qbe/qbe" install )
+          # Native default backend builds the RTL with no external tools.
+          ( cd runtime && make BLAISE="$BLAISE" && make BLAISE="$BLAISE" install )
 
       - name: Install PasBuild
         run: |
