@@ -32,13 +32,13 @@ unit Process;
 
 interface
 
-uses Classes;
+uses Generics.Collections;
 
 type
   TProcess = class
     FHandle: Pointer;
     FExe: string;
-    FParameters: TStringList;
+    FParameters: TList<string>;
     function GetRunning: Boolean;
     function GetExitCode: Integer;
     constructor Create(AOwner: TObject);
@@ -47,7 +47,7 @@ type
     function ReadOutput: string;
     procedure WaitOnExit;
     property Executable: string read FExe write FExe;
-    property Parameters: TStringList read FParameters;
+    property Parameters: TList<string> read FParameters;
     property Running: Boolean read GetRunning;
     property ExitCode: Integer read GetExitCode;
   end;
@@ -57,7 +57,7 @@ implementation
 constructor TProcess.Create(AOwner: TObject);
 begin
   Self.FHandle := ProcessCreate();
-  Self.FParameters := TStringList.Create()
+  Self.FParameters := TList<string>.Create()
 end;
 
 procedure TProcess.Destroy;
