@@ -101,7 +101,8 @@ type
   public
     Name:   string;
     Parent: string;
-    Fields: TStringList;
+    Fields:     TList<String>;    { field names }
+    FieldLines: TList<Integer>;   { parallel: source line per field, 0 if unknown }
     LineNo: Integer;
     SrcName: string;   { basename of the source file the class came from,
                          for [new]/header location reporting }
@@ -135,7 +136,8 @@ var
 constructor TASTClass.Create;
 begin
   inherited Create;
-  Fields := TStringList.Create;
+  Fields     := TList<String>.Create;
+  FieldLines := TList<Integer>.Create;
 end;
 
 constructor TIOBlock.Create;
@@ -253,7 +255,7 @@ end;
    header line when zero. *)
 function FieldLineNo(ACls: TASTClass; AFieldIndex: Integer): Integer;
 begin
-  Result := Integer(PtrUInt(ACls.Fields.Objects[AFieldIndex]));
+  Result := ACls.FieldLines.Get(AFieldIndex);
   if Result = 0 then Result := ACls.LineNo;
 end;
 
@@ -485,8 +487,10 @@ begin
       if (Pos('(', Trimmed) >= 0) or (Pos(')', Trimmed) >= 0) then Continue;
       FieldNames := ParseFieldNames(Trimmed);
       for J := 0 to FieldNames.Count - 1 do
-        Cls.Fields.AddObject(FieldNames[J],
-          Pointer(PtrUInt(I + 1)));
+      begin
+        Cls.Fields.Add(FieldNames[J]);
+        Cls.FieldLines.Add(I + 1);
+      end;
     end;
   end;
 end;
@@ -993,7 +997,7 @@ begin
       Blk := FindBlock(GEncodeNames, GEncodeObjs, Cls.Name);
       for J := 0 to Cls.Fields.Count - 1 do
       begin
-        FieldName := Cls.Fields.Strings[J];
+        FieldName := Cls.Fields.Get(J);
         if (Blk <> nil) and (Pos('.' + FieldName, Blk.Body) >= 0) then
           State := 'serialise'
         else
@@ -1018,7 +1022,7 @@ begin
       Outp.Add(Header);
       for J := 0 to Cls.Fields.Count - 1 do
       begin
-        FieldName := Cls.Fields.Strings[J];
+        FieldName := Cls.Fields.Get(J);
         if Pos('.' + FieldName, GIoEncodeText) >= 0 then
           State := 'serialise'
         else
@@ -1160,7 +1164,7 @@ begin
       else
         for J := 0 to Cls.Fields.Count - 1 do
         begin
-          Key := Cls.Name + '.' + Cls.Fields.Strings[J];
+          Key := Cls.Name + '.' + Cls.Fields.Get(J);
           Loc := ' (uAST.pas:' + IntToStr(FieldLineNo(Cls, J)) + ')';
           if not EncoderHasField then
             Report('  [encoder] >>> missing ' +
@@ -1180,7 +1184,7 @@ begin
       Cls := IfaceAt(I);
       for J := 0 to Cls.Fields.Count - 1 do
       begin
-        Key := Cls.Name + '.' + Cls.Fields.Strings[J];
+        Key := Cls.Name + '.' + Cls.Fields.Get(J);
         Loc := ' (' + Cls.SrcName + ':' + IntToStr(FieldLineNo(Cls, J)) + ')';
         if KnownFields.IndexOf(Key) < 0 then
           Report('  [new] not in status (mark as serialise or safe) ' +
