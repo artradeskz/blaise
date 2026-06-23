@@ -4993,7 +4993,7 @@ begin
           end;
           if MDecl.ReturnTypeName <> '' then
           begin
-            ParType := FTable.FindType(MDecl.ReturnTypeName);
+            ParType := FindTypeOrInstantiate(MDecl.ReturnTypeName);
             if ParType = nil then
               SemanticError(
                 Format('Unknown return type ''%s'' for method ''%s''',
@@ -5125,7 +5125,7 @@ begin
           end;
           if MDecl.ReturnTypeName <> '' then
           begin
-            ParType := FTable.FindType(MDecl.ReturnTypeName);
+            ParType := FindTypeOrInstantiate(MDecl.ReturnTypeName);
             if ParType = nil then
               SemanticError(
                 Format('Unknown return type ''%s'' for method ''%s''',
@@ -5881,7 +5881,7 @@ begin
     { Resolve return type for functions }
     if ADecl.ReturnTypeName <> '' then
     begin
-      RetType := FTable.FindType(ADecl.ReturnTypeName);
+      RetType := FindTypeOrInstantiate(ADecl.ReturnTypeName);
       if RetType = nil then
         SemanticError(
           Format('Unknown return type ''%s'' for function ''%s''',
