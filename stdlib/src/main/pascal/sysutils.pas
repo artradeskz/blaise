@@ -64,6 +64,18 @@ function BoolToStr(B: Boolean; AUseBoolStrs: Boolean = False): string;
   on paths that do not traverse symlinks. }
 function ExpandFileName(const APath: string): string;
 
+{ SameFileName — compare two file names for equality.
+
+  PARTIAL STUB: an exact, case-sensitive string comparison.  This is correct
+  only on case-sensitive file systems (Unix); case-insensitive platforms
+  (Windows) would need the names folded before comparing.  Blaise has no
+  platform-variance facility yet — system.pas hardcodes DirectorySeparator,
+  PathSeparator and LineEnding to their Unix values — so there is nothing to
+  key the case-folding on.  When a FileNameCaseSensitive constant lands
+  alongside the other platform constants, add the case-insensitive branch
+  here under that guard. }
+function SameFileName(const S1, S2: string): Boolean;
+
 implementation
 
 constructor Exception.Create(AMessage: string);
@@ -143,6 +155,14 @@ begin
 
   if Result = '' then
     Result := '/';
+end;
+
+{ PARTIAL STUB — exact compare only; see the interface note.  Correct on
+  case-sensitive (Unix) file systems; needs a case-insensitive branch for
+  Windows. }
+function SameFileName(const S1, S2: string): Boolean;
+begin
+  Result := S1 = S2;
 end;
 
 end.
