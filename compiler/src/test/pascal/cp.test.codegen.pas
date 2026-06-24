@@ -81,6 +81,13 @@ type
     procedure TestInt64AssignDouble_EmitsSltof;
     procedure TestIntAssignSingle_EmitsSwtof;
 
+    { Integer→float conversion on a CLASS-FIELD store target (not just a
+      simple variable).  Regression: the field-store path emitted a bare
+      integer store into the float slot. }
+    procedure TestInt64AssignDoubleField_EmitsSltof;
+    procedure TestIntAssignSingleField_EmitsSwtof;
+    procedure TestInt64AssignDoubleFieldBare_EmitsSltof;
+
     { Mixed Single×Double arithmetic }
     procedure TestSingleMulDouble_PromotesSingleToDouble;
     procedure TestSingleAddSingle_EmitsSTypedOp;
@@ -665,6 +672,65 @@ begin
     ''');
   AssertTrue('should emit swtof for Integer literal→Single',
     IRContains(IR, 'swtof'));
+end;
+
+procedure TCodeGenTests.TestInt64AssignDoubleField_EmitsSltof;
+var IR: string;
+begin
+  IR := GenerateIR('''
+    program P;
+    type TFoo = class
+      FD: Double;
+      procedure SetIt(AValue: Int64);
+      begin Self.FD := AValue end;
+    end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create()
+    end.
+    ''');
+  AssertTrue('Int64→Double field store should emit sltof',
+    IRContains(IR, 'sltof'));
+  AssertFalse('Int64→Double field store must not bare-store the integer',
+    IRContains(IR, 'storel %_t2, %_t1'));
+end;
+
+procedure TCodeGenTests.TestIntAssignSingleField_EmitsSwtof;
+var IR: string;
+begin
+  IR := GenerateIR('''
+    program P;
+    type TFoo = class
+      FS: Single;
+      procedure SetIt(AValue: Integer);
+      begin Self.FS := AValue end;
+    end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create()
+    end.
+    ''');
+  AssertTrue('Integer→Single field store should emit swtof',
+    IRContains(IR, 'swtof'));
+end;
+
+procedure TCodeGenTests.TestInt64AssignDoubleFieldBare_EmitsSltof;
+var IR: string;
+begin
+  IR := GenerateIR('''
+    program P;
+    type TFoo = class
+      FD: Double;
+      procedure SetIt(AValue: Int64);
+      begin FD := AValue end;
+    end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create()
+    end.
+    ''');
+  AssertTrue('Int64→Double bare implicit-Self field store should emit sltof',
+    IRContains(IR, 'sltof'));
 end;
 
 procedure TCodeGenTests.TestSingleMulDouble_PromotesSingleToDouble;

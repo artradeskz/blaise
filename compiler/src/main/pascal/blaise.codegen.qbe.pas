@@ -4051,6 +4051,42 @@ begin
     QType := QbeTypeOf(ISFld.TypeDesc);
     if QType = 'w' then
       EmitLine(Format('  %s %s, %s', [StoreInstrFor(ISFld.TypeDesc), ValTemp, ObjTemp]))
+    else if (QType = 'd') or (QType = 's') then
+    begin
+      { Float-typed field via implicit Self.Field: convert an integer RHS
+        (swtof/sltof) or adjust float width (exts/truncd) before storing, and
+        use the float store instruction — never the bare storel below, which
+        would deposit the raw integer/wrong-width bits into the float slot. }
+      if (AAssign.Expr.ResolvedType <> nil) and
+         (QbeTypeOf(AAssign.Expr.ResolvedType) = 'w') and
+         not AAssign.Expr.ResolvedType.IsFloat() then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =%s swtof %s', [ExtTemp, QType, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (AAssign.Expr.ResolvedType <> nil) and
+              (QbeTypeOf(AAssign.Expr.ResolvedType) = 'l') and
+              not AAssign.Expr.ResolvedType.IsFloat() then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =%s sltof %s', [ExtTemp, QType, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (QType = 's') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 'd') then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (QType = 'd') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 's') then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+      EmitLine(Format('  %s %s, %s', [StoreInstrFor(ISFld.TypeDesc), ValTemp, ObjTemp]));
+    end
     else
     begin
       if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
@@ -6336,31 +6372,51 @@ begin
   begin
     QType      := QbeTypeOf(AAssign.FieldInfo.TypeDesc);
     StoreInstr := StoreInstrFor(AAssign.FieldInfo.TypeDesc);
-    if QType <> 'w' then
+    if (QType = 'd') or (QType = 's') then
     begin
-      { Sign-extend if the value is word-typed but the field needs l }
+      { Float-typed field: an integer RHS must be converted (swtof/sltof),
+        not merely sign-extended — otherwise 'rec.d := i' emits
+        'stored <l>, ...', an integer value into a float slot the assembler
+        rejects.  A float RHS of the wrong width is adjusted (exts/truncd).
+        Mirrors the scalar-variable assignment path. }
+      if (AAssign.Expr.ResolvedType <> nil) and
+         (QbeTypeOf(AAssign.Expr.ResolvedType) = 'w') and
+         not AAssign.Expr.ResolvedType.IsFloat() then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =%s swtof %s', [ExtTemp, QType, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (AAssign.Expr.ResolvedType <> nil) and
+              (QbeTypeOf(AAssign.Expr.ResolvedType) = 'l') and
+              not AAssign.Expr.ResolvedType.IsFloat() then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =%s sltof %s', [ExtTemp, QType, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (QType = 's') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 'd') then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (QType = 'd') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 's') then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+    end
+    else if QType <> 'w' then
+    begin
+      { Integer/pointer field wider than word: sign-extend a word RHS to l. }
       if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
       begin
         ExtTemp := AllocTemp();
         EmitLine(Format('  %s =l extsw %s', [ExtTemp, ValTemp]));
         ValTemp := ExtTemp;
       end;
-    end;
-    { Float-width coercion: real-typed literals and double sub-exprs land
-      in the SSA as 'd' even when the destination field is a 32-bit
-      'Single' ('s').  Without this, 'rec.s := 1.5' emits
-      'stores d_1.5, ...' — a type mismatch the assembler rejects. }
-    if (QType = 's') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 'd') then
-    begin
-      ExtTemp := AllocTemp();
-      EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
-      ValTemp := ExtTemp;
-    end
-    else if (QType = 'd') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 's') then
-    begin
-      ExtTemp := AllocTemp();
-      EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
-      ValTemp := ExtTemp;
     end;
     EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, Ptr]));
   end;

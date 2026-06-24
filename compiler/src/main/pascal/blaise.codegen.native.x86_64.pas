@@ -10781,6 +10781,10 @@ begin
         if IsFloatFamily(Asgn.ResolvedLhsType) then
         begin
           Self.EmitExprToXmm0(Asgn.Expr);
+          { Narrow a Double/integer RHS to Single before the movss store
+            (see the TFieldAssignment float path). }
+          Self.EmitXmm0WidthAdjust(Asgn.Expr.ResolvedType,
+            Asgn.ResolvedLhsType.Kind = tySingle);
           Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
           if ISFld.Offset > 0 then
             Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
@@ -12260,6 +12264,12 @@ begin
     if IsFloatFamily(FA.FieldInfo.TypeDesc) then
     begin
       Self.EmitExprToXmm0(FA.Expr);
+      { An integer RHS (and any Double sub-expression) lands in %xmm0 as a
+        DOUBLE; a Single field needs it narrowed (cvtsd2ss) before the movss
+        store, else only the low 32 bits of the double are written — garbage.
+        Mirrors the QBE swtof/truncd field-store conversion. }
+      Self.EmitXmm0WidthAdjust(FA.Expr.ResolvedType,
+        FA.FieldInfo.TypeDesc.Kind = tySingle);
       if FA.ObjExpr <> nil then
       begin
         Self.Emit(#9'subq $8, %rsp');
