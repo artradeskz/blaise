@@ -34,6 +34,14 @@ type
     procedure TestQualifiedTypeName;
     procedure TestQualifiedTypeName_DottedUnit;
 
+    { Unit-qualified symbols 'UnitName.Symbol' collapse to the bare symbol
+      (resolved later through the uses chain), at any unit-name depth. }
+    procedure TestUnitQualifiedProcCall_Collapses;
+    procedure TestUnitQualifiedRef_Collapses;
+    procedure TestDottedUnitQualifiedProcCall_Collapses;
+    procedure TestNonUnitQualifier_StaysMethodCall;
+    procedure TestUnitQualifierNoTrailingSymbol_StaysFieldWrite;
+
     { Statements }
     procedure TestEmptyBeginEnd;
     procedure TestAssignment_IntLit;
@@ -200,6 +208,96 @@ begin
     AssertEquals('dotted-unit qualified type captured whole',
       'System.SysUtils.TFoo',
       TVarDecl(Prog.Block.Decls.Items[0]).TypeName);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TParserTests.TestUnitQualifiedProcCall_Collapses;
+var
+  Prog: TProgram;
+  Call: TProcCall;
+begin
+  { 'MyUnit.DoIt()' with MyUnit in the uses clause collapses to a bare free
+    call 'DoIt()' — the qualifier is dropped by the parser. }
+  Prog := ParseSource('program P; uses MyUnit; begin MyUnit.DoIt() end.');
+  try
+    AssertTrue('collapsed to TProcCall',
+      Prog.Block.Stmts.Items[0] is TProcCall);
+    Call := TProcCall(Prog.Block.Stmts.Items[0]);
+    AssertEquals('bare symbol name', 'DoIt', Call.Name);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TParserTests.TestUnitQualifiedRef_Collapses;
+var
+  Prog:   TProgram;
+  Assign: TAssignment;
+begin
+  { 'MyUnit.Val' in expression position collapses to a bare identifier. }
+  Prog := ParseSource(
+    'program P; uses MyUnit; var x: Integer; begin x := MyUnit.Val end.');
+  try
+    Assign := TAssignment(Prog.Block.Stmts.Items[0]);
+    AssertTrue('RHS collapsed to TIdentExpr', Assign.Expr is TIdentExpr);
+    AssertEquals('bare symbol name', 'Val', TIdentExpr(Assign.Expr).Name);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TParserTests.TestDottedUnitQualifiedProcCall_Collapses;
+var
+  Prog: TProgram;
+  Call: TProcCall;
+begin
+  { The unit qualifier may be dotted to any depth (here three components). }
+  Prog := ParseSource('program P; uses A.B.C; begin A.B.C.DoIt() end.');
+  try
+    AssertTrue('collapsed to TProcCall',
+      Prog.Block.Stmts.Items[0] is TProcCall);
+    Call := TProcCall(Prog.Block.Stmts.Items[0]);
+    AssertEquals('bare symbol name', 'DoIt', Call.Name);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TParserTests.TestNonUnitQualifier_StaysMethodCall;
+var
+  Prog: TProgram;
+begin
+  { 'r.DoIt()' where 'r' is NOT a used unit stays an object method call —
+    the parser must not collapse a plain receiver. }
+  Prog := ParseSource('program P; begin r.DoIt() end.');
+  try
+    AssertTrue('stays a method call on the receiver',
+      Prog.Block.Stmts.Items[0] is TMethodCallStmt);
+    AssertEquals('receiver kept', 'r',
+      TMethodCallStmt(Prog.Block.Stmts.Items[0]).ObjectName);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TParserTests.TestUnitQualifierNoTrailingSymbol_StaysFieldWrite;
+var
+  Prog: TProgram;
+  Fld:  TFieldAssignment;
+begin
+  { 'My.Pkg := 4' where 'My.Pkg' is a used unit but no '.Symbol' follows is a
+    record field write, NOT a unit qualifier — the trailing symbol is what
+    distinguishes the two, so this must stay a TFieldAssignment. }
+  Prog := ParseSource(
+    'program P; uses My.Pkg; var My: Integer; begin My.Pkg := 4 end.');
+  try
+    AssertTrue('stays a field assignment',
+      Prog.Block.Stmts.Items[0] is TFieldAssignment);
+    Fld := TFieldAssignment(Prog.Block.Stmts.Items[0]);
+    AssertEquals('record name kept', 'My', Fld.RecordName);
+    AssertEquals('field name kept', 'Pkg', Fld.FieldName);
   finally
     Prog.Free();
   end;

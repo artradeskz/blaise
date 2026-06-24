@@ -50,7 +50,25 @@ type
     FCurrent:    TToken;
     FLookahead:  TToken;  { one-token lookahead }
     FLookahead2: TToken;  { two-token lookahead for generic disambiguation }
+    FAhead:      array of TToken;  { tokens beyond FLookahead2 (FIFO), filled on
+                                     demand by PeekTok for unbounded lookahead }
+    FUsedUnits:  TStringList; { unit names from every 'uses' clause, plus implicit
+                                'System'.  Consulted purely as a syntactic name list
+                                to recognise 'UnitName.Symbol' — no symbol lookup. }
 
+    function  IsUsedUnit(const AName: string): Boolean;
+    function  IsUnitPrefix(const AName: string): Boolean;
+    { Unbounded lookahead, exposed as scalar accessors (0 = FCurrent).  A
+      TToken-returning peek is deliberately avoided — TToken carries a managed
+      string, and returning it by value would create transient managed records
+      in the hot matcher path. }
+    procedure EnsureAhead(N: Integer);
+    function  PeekKindAt(N: Integer): TTokenKind;
+    function  PeekValueAt(N: Integer): string;
+    function  PeekLineAt(N: Integer): Integer;
+    function  PeekColAt(N: Integer): Integer;
+    function  TryCollapseUnitQualifier(var AName: string;
+                                       var ALine, ACol: Integer): Boolean;
     procedure Advance;
     function  PeekKind(): TTokenKind;
     function  PeekKind2(): TTokenKind;  { two tokens ahead }
@@ -122,6 +140,7 @@ type
     procedure ParseMethodCallArgList(ACall: TMethodCallStmt);
   public
     constructor Create(ALexer: TLexer);
+    destructor Destroy; override;
     function Parse: TProgram;
     function ParseUnit: TUnit;
     { True iff the primed first token is `unit` — caller forks to
@@ -135,16 +154,37 @@ constructor TParser.Create(ALexer: TLexer);
 begin
   inherited Create();
   FLexer      := ALexer;
+  FUsedUnits  := TStringList.Create();
+  { 'System' is implicitly used by every compilation unit. }
+  FUsedUnits.Add('System');
   FCurrent    := FLexer.Next();
   FLookahead  := FLexer.Next();
   FLookahead2 := FLexer.Next();
 end;
 
+destructor TParser.Destroy;
+begin
+  FUsedUnits.Free();
+  inherited Destroy();
+end;
+
 procedure TParser.Advance;
+var
+  I: Integer;
 begin
   FCurrent    := FLookahead;
   FLookahead  := FLookahead2;
-  FLookahead2 := FLexer.Next();
+  { Drain the on-demand lookahead buffer first (tokens PeekTok pre-read), so
+    consumption order is preserved; fall back to the lexer when it is empty. }
+  if Length(FAhead) > 0 then
+  begin
+    FLookahead2 := FAhead[0];
+    for I := 1 to High(FAhead) do
+      FAhead[I - 1] := FAhead[I];
+    SetLength(FAhead, Length(FAhead) - 1);
+  end
+  else
+    FLookahead2 := FLexer.Next();
 end;
 
 function TParser.PeekKind(): TTokenKind;
@@ -155,6 +195,153 @@ end;
 function TParser.PeekKind2(): TTokenKind;
 begin
   Result := FLookahead2.Kind;
+end;
+
+{ Ensure the on-demand lookahead buffer holds enough tokens that conceptual
+  index N (>= 3) maps to FAhead[N - 3].  Tokens are pulled from the lexer and
+  held (FIFO) until consumed by Advance.  Lets the unit-qualifier matcher
+  inspect a whole dotted chain of any depth before consuming any of it. }
+procedure TParser.EnsureAhead(N: Integer);
+var
+  T: TToken;
+begin
+  while Length(FAhead) < (N - 2) do
+  begin
+    T := FLexer.Next();
+    SetLength(FAhead, Length(FAhead) + 1);
+    FAhead[High(FAhead)] := T;
+  end;
+end;
+
+{ Kind of the token N positions ahead of FCurrent (0=FCurrent, 1=FLookahead,
+  2=FLookahead2, 3+ from FAhead). }
+function TParser.PeekKindAt(N: Integer): TTokenKind;
+begin
+  case N of
+    0: Exit(FCurrent.Kind);
+    1: Exit(FLookahead.Kind);
+    2: Exit(FLookahead2.Kind);
+  end;
+  EnsureAhead(N);
+  Result := FAhead[N - 3].Kind;
+end;
+
+{ Value text of the token N positions ahead. }
+function TParser.PeekValueAt(N: Integer): string;
+begin
+  case N of
+    0: Exit(FCurrent.Value);
+    1: Exit(FLookahead.Value);
+    2: Exit(FLookahead2.Value);
+  end;
+  EnsureAhead(N);
+  Result := FAhead[N - 3].Value;
+end;
+
+function TParser.PeekLineAt(N: Integer): Integer;
+begin
+  case N of
+    0: Exit(FCurrent.Line);
+    1: Exit(FLookahead.Line);
+    2: Exit(FLookahead2.Line);
+  end;
+  EnsureAhead(N);
+  Result := FAhead[N - 3].Line;
+end;
+
+function TParser.PeekColAt(N: Integer): Integer;
+begin
+  case N of
+    0: Exit(FCurrent.Col);
+    1: Exit(FLookahead.Col);
+    2: Exit(FLookahead2.Col);
+  end;
+  EnsureAhead(N);
+  Result := FAhead[N - 3].Col;
+end;
+
+{ Case-insensitive membership test against the parsed 'uses' names. }
+function TParser.IsUsedUnit(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FUsedUnits.Count - 1 do
+    if SameText(FUsedUnits.Strings[I], AName) then
+      Exit(True);
+  Result := False;
+end;
+
+{ True iff AName is a used unit OR a dotted prefix of one (some used unit equals
+  AName or begins with 'AName.').  Lets the matcher stop extending a candidate
+  the moment it can no longer complete any unit name. }
+function TParser.IsUnitPrefix(const AName: string): Boolean;
+var
+  I: Integer;
+  U: string;
+begin
+  for I := 0 to FUsedUnits.Count - 1 do
+  begin
+    U := FUsedUnits.Strings[I];
+    if SameText(U, AName) then Exit(True);
+    { U begins with 'AName.' — StrHead is 0-based (Blaise strings are 0-indexed). }
+    if (Length(U) > Length(AName) + 1) and
+       SameText(StrHead(U, Length(AName) + 1), AName + '.') then Exit(True);
+  end;
+  Result := False;
+end;
+
+{ Recognise a unit-qualified reference 'Unit.Symbol' where Unit is the LONGEST
+  dotted prefix (starting at AName) that exactly names a used unit and is
+  followed by a trailing '.Symbol'.  The 'uses' name list bounds how far to
+  scan, so any unit-name depth works (System.SysUtils.Foo, A.B.C.D.Sym, ...).
+
+  Cursor on entry: AName has just been consumed, so FCurrent is the '.' before
+  the first extra component.  Component idents after AName therefore sit at peek
+  indices 1, 3, 5, ... with the separating dots at 0, 2, 4, ...
+
+  On a match the unit name and its trailing dot are consumed, AName/ALine/ACol
+  become the bare Symbol (cursor left just past it), and the caller proceeds as
+  if it had read an unqualified reference.  On no match NOTHING is consumed, so
+  a same-prefixed record/field chain (My.Pkg := x) is left intact — the required
+  trailing '.Symbol' is what distinguishes the two. }
+function TParser.TryCollapseUnitQualifier(var AName: string;
+  var ALine, ACol: Integer): Boolean;
+var
+  Cand: string;
+  Comps, BestComps, J, DotIdx, IdentIdx: Integer;
+begin
+  Result := False;
+  Cand := AName;
+  Comps := 0;
+  if IsUsedUnit(Cand) then BestComps := 0 else BestComps := -1;
+  { Greedily absorb '.ident' components while the candidate stays a viable unit
+    prefix; remember the longest position that is an exact used-unit match. }
+  J := 1;
+  while True do
+  begin
+    DotIdx   := 2 * (J - 1);
+    IdentIdx := 2 * J - 1;
+    if (PeekKindAt(DotIdx) <> tkDot) or (PeekKindAt(IdentIdx) <> tkIdent) then
+      Break;
+    if not IsUnitPrefix(Cand + '.' + PeekValueAt(IdentIdx)) then
+      Break;
+    Cand := Cand + '.' + PeekValueAt(IdentIdx);
+    Comps := J;
+    if IsUsedUnit(Cand) then BestComps := Comps;
+    Inc(J);
+  end;
+  if BestComps < 0 then Exit;  { AName does not lead to a used unit }
+  { A trailing '.Symbol' must follow the matched unit, else this is a bare unit
+    reference or a same-prefixed value chain — leave it for the normal parser. }
+  DotIdx   := 2 * BestComps;
+  IdentIdx := 2 * BestComps + 1;
+  if (PeekKindAt(DotIdx) <> tkDot) or (PeekKindAt(IdentIdx) <> tkIdent) then
+    Exit;
+  AName := PeekValueAt(IdentIdx);
+  ALine := PeekLineAt(IdentIdx);
+  ACol  := PeekColAt(IdentIdx);
+  for J := 1 to IdentIdx + 1 do Advance();  { consume unit name, dot, symbol }
+  Result := True;
 end;
 
 function TParser.ReadConstBoundText: string;
@@ -618,6 +805,7 @@ begin
     Advance();
   end;
   AList.Add(UName);
+  FUsedUnits.Add(UName);
   while Check(tkComma) do
   begin
     Advance();
@@ -636,6 +824,7 @@ begin
       Advance();
     end;
     AList.Add(UName);
+    FUsedUnits.Add(UName);
   end;
   Expect(tkSemicolon);
 end;
@@ -2671,6 +2860,13 @@ begin
   Col  := FCurrent.Col;
   Advance();
 
+  { Unit-qualified statement target 'Unit.Symbol' (Unit may be dotted to any
+    depth).  Collapse to the bare symbol so the rest of the statement parser
+    treats it as an unqualified procedure call or assignment target resolved
+    through the uses chain.  No-op (consumes nothing) for a same-prefixed
+    record/field chain — see TryCollapseUnitQualifier. }
+  TryCollapseUnitQualifier(Name, Line, Col);
+
   if Check(tkLBracket) then
   begin
     { Subscript on the statement LHS.  Three shapes:
@@ -4444,6 +4640,13 @@ begin
         Line := FCurrent.Line;
         Col  := FCurrent.Col;
         Advance();
+        { Unit-qualified reference 'Unit.Symbol' (Unit may be dotted to any
+          depth).  Collapse to the bare Symbol and reposition the origin to it,
+          so everything below resolves Symbol through the uses chain as an
+          unqualified reference — a free call when '(' follows, otherwise a
+          plain identifier / indexed / chained / generic access.  No-op for a
+          same-prefixed record/field chain. }
+        TryCollapseUnitQualifier(Name, Line, Col);
         { Generic constructor: TypeName<Args>.Method  or diamond TypeName<>.Method
           Heuristic: '<' followed by IDENT followed by '>' or ',' is treated as
           generic type args.  '<>' (empty) is the diamond operator — type args
