@@ -364,14 +364,21 @@ no dynamic-link / sysroot work on this path.
 * *Verify:* a FreeBSD hello-world + file-I/O smoke test produce correct output
   under emulation.
 
-=== Step 5 — Per-target RTL archive
+=== Step 5 — Per-target RTL
 
-* The runtime build (`runtime/`) produces a FreeBSD `blaise_rtl-freebsd-
-  x86_64.a` (compiled with `--target freebsd-x86_64`) containing *only* the
-  FreeBSD adapter family.  `FindRTLArchive` selects the archive matching the
-  *target*, not the host.
-* *Verify:* `ResolveToolchain(freebsd-target).RTLPath` resolves to the FreeBSD
-  archive on a Linux host; the produced binary contains no Linux adapter code.
+* The compiler must link a FreeBSD-built RTL (the FreeBSD `TPlatformLayout` and
+  kernel-stub) into a `--target freebsd-x86_64` program, not the host RTL.
+* *Transitional* (matches today's archive model): build a FreeBSD
+  `blaise_rtl-freebsd-x86_64.a` (RTL compiled with `--target freebsd-x86_64`,
+  composing the FreeBSD adapter set) and have `FindRTLArchive` select the
+  archive matching the *target*, not the host.
+* *End-state* (per the RTL-unification track in
+  `docs/native-target-architecture.adoc`): no per-target `.a` — the compiler
+  compiles the embedded RTL source for `freebsd-x86_64` in-process and links it.
+  Implement whichever is current when this step is reached; the FreeBSD adapter
+  set is the same either way.
+* *Verify:* a `--target freebsd-x86_64` program links the FreeBSD layout +
+  syscall-stub and contains no Linux/libc RTL code.
 
 === Step 6 — Drive target selection through the linker
 

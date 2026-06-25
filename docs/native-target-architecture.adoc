@@ -342,6 +342,46 @@ hard-wiring with a lookup that the CLI *and* the test runner share.
   edit.
 |===
 
+== Runtime end-state: one binary, embedded RTL source, no external archives
+
+Today the runtime is a separate PasBuild module whose Makefile compiles the RTL
+units and `ar`-archives them into `blaise_rtl.a`, which `make install` copies
+beside the compiler; the internal linker then pulls members from that archive
+(`AddArchive`).  The archive is a *cache/convenience*, not a necessity — the
+compiler already compiles `.pas` units to objects in-process (`AssembleToObject`),
+links them in-process (`TLinker.AddOwnedObject`), and resolves units from source
+via `TUnitLoader`.
+
+The chosen end-state (gated on finishing the `.s`→inline-asm migration, after
+which the RTL is pure Pascal): *`blaise` embeds the RTL Pascal source once and
+compiles it per target on demand*.
+
+* The single `blaise` binary carries the RTL source as embedded data.  The RTL
+  is overwhelmingly target-*invariant* (ARC, strings, the memory-manager logic,
+  exceptions); only the leaves vary (`TPlatformLayout` values, the kernel-stub
+  `_start`/syscall unit, the `TLinkTarget`).
+* For `--target X`, the compiler compiles that embedded RTL source *for X* —
+  codegen already takes a `TTargetDesc`; the toolkit/registry already selects
+  the per-target `TPlatformLayout` adapter, kernel-stub unit, and link target —
+  and links the resulting objects in-process.
+* Result: a single `blaise` binary, with *nothing* beside it, cross-compiles to
+  any registered target.  There is no `blaise_rtl.a` on disk, no `ar`, no
+  `make install`, and no per-target `.a` files: the per-target RTL is *produced
+  on demand* from one embedded source plus a small per-target adapter set.  This
+  is "multiple target runtimes in one binary" realised as *one embedded source +
+  N adapter sets*, not N copies of a runtime.
+
+This also collapses the bootstrap to a single `pasbuild compile -m
+blaise-compiler` (the `runtime` module folds into the compiler; `stdlib` stays
+separate as it is opt-in, not always-linked).
+
+*Performance note.* Compiling the RTL source on every program build is the cost
+to evaluate first.  If it proves noticeably slower than the archive model, an
+in-memory / `--unit-cache`-backed object cache (compile the RTL once per process
+or persist the objects) recovers the speed without reintroducing an on-disk
+archive.  We adopt the simple compile-per-target model first and measure before
+adding the cache.
+
 == Two selection moments (a subtlety, not a contradiction)
 
 The same ports-and-adapters pattern applies in two binaries with *different*
@@ -360,19 +400,19 @@ target's runtime into every produced binary.
 
 | A *produced* binary (e.g. a FreeBSD app)
 | Must contain *only its own* target's RTL: the `TRtlPlatform`/`TPlatformLayout`
-  runtime objects and the kernel-leaf symbol implementation for that target.
-  This falls out of per-target RTL archives — a FreeBSD binary links
-  `blaise_rtl-freebsd-x86_64.a`, which contains the FreeBSD layout object and
-  the FreeBSD syscall-stub object; the Linux archive contains the libc-backed
-  equivalents.  The kernel leaf in particular is fixed purely by *which archive
-  is linked*, so no run-time selection is needed for it.
+  objects and the kernel-leaf (`_start`/syscalls) for that target.  In the
+  end-state (above) the compiler produces those objects on demand by compiling
+  the embedded RTL source for the target with that target's adapter set, then
+  links them in-process — so the produced binary contains exactly one target's
+  RTL with no run-time multi-target dispatch and no bloat.  (Transitional
+  mechanism today: a pre-built `blaise_rtl.a` linked via `AddArchive`; the
+  end-state replaces it with in-process per-target compilation.)
 |===
 
 So: the compiler chooses a target *to emit for*; the produced binary chooses a
-platform *to run on*.  Both use the registry/factory, but the produced
-binary's choice is fixed at link time by which RTL archive it pulls — there is
-no run-time multi-target dispatch inside an application binary, and therefore
-no bloat.
+platform *to run on*.  Both use the registry/factory; the produced binary's RTL
+is fixed by which target it was compiled for — there is no run-time
+multi-target dispatch inside an application binary, and therefore no bloat.
 
 == Testing — the payoff of run-time selection
 
@@ -420,14 +460,35 @@ numbers, struct layouts, `_start` shape) lives in
   `TNativeBackend` as template methods with abstract per-CPU leaves.  This is
   *arm64 groundwork* — FreeBSD reuses the x86_64 backend unchanged, so it does
   not block the FreeBSD target and is deferred until a second CPU lands.
-. Add the `TFreeBSDX86_64Toolkit` adapters + FreeBSD RTL archive (per the
+. Add the `TFreeBSDX86_64Toolkit` adapters + FreeBSD kernel-stub/layout (per the
   FreeBSD design doc).  Adding the target touches *no* existing target's code —
   new files plus one registry line.
 
 The completed steps are behaviour-preserving refactors verified against the
-existing Linux suite and all four fixpoints; the last step is the actual
+existing Linux suite and all four fixpoints; the FreeBSD step is the actual
 FreeBSD work.  Sequencing the refactors first means the FreeBSD adapter slots
 into clean seams rather than forcing them open mid-implementation.
+
+=== RTL unification (separate track, gated on the `.s` migration)
+
+Independent of the per-target work above, the runtime is being unified into the
+compiler so bootstrap is a single command and there are no external archives
+(see "Runtime end-state" above).  Ordered sub-steps:
+
+. *(IN PROGRESS)* Migrate the hand-written `runtime/src/main/asm/*_x86_64.s`
+  bodies to inline-assembler Pascal units (`asm … end`, `nostackframe`), one
+  file per commit, expanding the internal assembler as needed.  Done:
+  `blaise_atomic`, `blaise_setjmp`.  Remaining: `blaise_start`, `blaise_utf8`
+  (the latter needs the SSE2/AVX2 instruction set).  When complete the RTL is
+  pure Pascal and the Makefile's `$(CC) -c` asm rule and `$(ASM_DIR)` are gone.
+. Compile the RTL units in-process into in-memory objects and link them via the
+  in-process `TLinker`, dropping `ar`, `blaise_rtl.a`, and `make install`.
+. Embed the RTL Pascal source in the `blaise` binary and compile it per
+  `--target` on demand (selecting that target's adapter set), so one binary
+  cross-compiles to any registered target with nothing beside it.  Fold the
+  `runtime` PasBuild module into the compiler; bootstrap becomes a single
+  `pasbuild compile -m blaise-compiler`.  Measure build time; add an in-memory /
+  `--unit-cache` RTL object cache only if the recompile cost proves noticeable.
 
 == Summary
 
