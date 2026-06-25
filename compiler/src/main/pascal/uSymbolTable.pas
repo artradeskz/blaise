@@ -2012,11 +2012,18 @@ end;
 
 function IsUnmangledUnit(const AUnitName: string): Boolean;
 begin
+  { RTL units export their runtime symbols (_SetArgs, _BlaiseGetMem, _start, …)
+    UNMANGLED — the compiler emits bare calls to them — so their unit prefix is
+    empty.  The RTL units are: System, the rtl.* platform units, and the
+    runtime.* units (dotted-flat names after the RTL-unification move; the
+    legacy blaise_* names are still accepted for any not-yet-renamed source). }
   Result := True;
   if AUnitName = '' then Exit;
   if SameText(AUnitName, 'System') then Exit;
   if (Length(AUnitName) >= 4)
      and SameText(Copy(AUnitName, 0, 4), 'rtl.') then Exit;
+  if (Length(AUnitName) >= 8)
+     and SameText(Copy(AUnitName, 0, 8), 'runtime.') then Exit;
   if (Length(AUnitName) >= 7)
      and SameText(Copy(AUnitName, 0, 7), 'blaise_') then Exit;
   Result := False;
