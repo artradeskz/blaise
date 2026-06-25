@@ -251,33 +251,34 @@ subclassing.  This backend completes that idiom.
 The full structural design lives in
 `docs/native-target-architecture.adoc`.  In brief, each target is a *family of
 adapter classes* produced by an Abstract Factory (`TTargetToolkit`) resolved by
-name from a `TTargetRegistry`, with two new runtime ports introduced for
-Strategy B:
+name from a `TTargetRegistry`.  The two per-target seams Strategy B needs:
 
-* `TKernelABI` — the raw syscall + `_start` entry leaf (adapters
-  `TKernelLinuxX86_64`, `TKernelFreeBSDX86_64`).
-* `TPlatformLayout` — `struct stat`/`struct tm` layouts and the OS constants
-  (`O_*`, signals, `CLOCK_*`, `WNOHANG`, `SEEK_*`), so the Linux values
-  currently hard-coded inside `TRtlPlatformPosix` move behind a per-target
-  port instead of leaking into a "shared" adapter.
+* *The kernel leaf* — the raw syscalls + `_start` entry stub.  This is a
+  *link-time symbol swap*, NOT a runtime port: the FreeBSD RTL archive links a
+  syscall-stub object that resolves the same `external name` symbols (`open`,
+  `read`, …) that libc resolves on Linux.  (A runtime `TKernelABI` virtual port
+  was tried and reverted — it destabilised self-hosting for zero present
+  benefit; see the kernel-leaf note in the architecture doc.)
+* `TPlatformLayout` — `struct stat` layout and the OS constants (`O_*`,
+  `CLOCK_*`, `WNOHANG`, `SEEK_*`), moved behind a per-target runtime port
+  (Step 0b, done) instead of leaking into a "shared" adapter.
 
-Target divergence therefore lives in *which adapter object is instantiated*,
-decided once at startup — and the test runner can select the FreeBSD adapter
-at run time to test it natively on a FreeBSD host, or structurally from Linux.
-The implementation steps below assume the structural refactor in the
-architecture doc (introduce toolkit/registry, extract `TPlatformLayout`,
-introduce `TKernelABI`) lands first as behaviour-preserving refactors against
-the existing Linux suite.
+Target divergence therefore lives in *which adapter object is instantiated and
+which RTL archive is linked* — and the test runner can select the FreeBSD
+adapter to test it natively on a FreeBSD host, or structurally from Linux.
+The implementation steps below assume the structural refactors in the
+architecture doc (toolkit/registry — Step 0a done; `TPlatformLayout` — Step 0b
+done) are already in place.
 
 == Implementation plan
 
 Each step states a verification check, per the project's goal-driven
-convention.  Steps 0a–0c are the behaviour-preserving structural refactor from
+convention.  Steps 0a–0b are the behaviour-preserving structural refactor from
 `docs/native-target-architecture.adoc` (no FreeBSD code, no behaviour change —
-verified against the existing Linux suite/fixpoints).  Steps 1–9 add the
-FreeBSD target as a new adapter family on those clean seams.  Strategy B
-(direct syscalls, static `ET_EXEC`) is assumed throughout; there is no
-dynamic-link / sysroot work on this path.
+verified against the existing Linux suite/fixpoints; *both are done*).  Steps
+1–9 add the FreeBSD target as a new adapter family on those clean seams.
+Strategy B (direct syscalls, static `ET_EXEC`) is assumed throughout; there is
+no dynamic-link / sysroot work on this path.
 
 === Step 0a — Toolkit + registry (refactor, no behaviour change)
 
@@ -296,15 +297,21 @@ dynamic-link / sysroot work on this path.
   No `{$IFDEF}`; the layout object is selected at startup.
 * *Verify:* full suite unchanged (the Linux layout reproduces current values).
 
-=== Step 0c — Introduce `TKernelABI` (refactor, no behaviour change)
+=== Step 0c — Kernel leaf: link-time swap, not a runtime port (revised)
 
-* Add the `TKernelABI` port (syscall + entry-stub leaf).  The first Linux
-  adapter may still *delegate to the existing libc bindings* so the seam lands
-  with zero behaviour change before any syscall rewrite.
-* Lift the ARC field-kind walkers and record-return classifier into
-  `TNativeBackend` as template methods with abstract per-CPU leaves, as the
-  backend base class already plans.
-* *Verify:* full suite + native fixpoint unchanged.
+* *No refactor in this step.*  A runtime `TKernelABI` virtual port was attempted
+  and reverted: routing the RTL's kernel calls through a 30-method virtual class
+  + a new global destabilised self-hosting (segfaulting binaries, non-converging
+  across bootstrap stages) for zero present benefit — the Linux adapter was pure
+  libc delegation.  See the kernel-leaf note in
+  `docs/native-target-architecture.adoc`.
+* The RTL keeps its `external name 'open'`/`'read'`/… bindings unchanged.  The
+  FreeBSD kernel leaf is introduced as a *link-time symbol-stub object* when the
+  FreeBSD RTL archive is built (Step 4), resolving those same symbols with raw
+  syscalls.  Nothing in the Linux RTL changes.
+* The ARC-walker lift into `TNativeBackend` template methods is *deferred* —
+  it is arm64 groundwork (FreeBSD reuses the x86_64 backend unchanged) and does
+  not block this target.
 
 === Step 1 — FreeBSD link target + toolkit skeleton
 
@@ -330,11 +337,11 @@ dynamic-link / sysroot work on this path.
 
 === Step 3 — Freestanding `_start` entry stub
 
-* The FreeBSD `TKernelABI` adapter's entry contract emits `_start` (not
-  `__libc_start_main`): read `argc` at `[%rsp]`, `argv` at `[%rsp+8]`, align
-  the stack, call `_SetArgs`, run the body, then `exit` via syscall.  The
-  linker's static `ET_EXEC` / `_start` path (Phase B) already supports this —
-  no GOT/PLT, no interp, no CRT.
+* The FreeBSD kernel-stub object provides `_start` (not `__libc_start_main`):
+  read `argc` at `[%rsp]`, `argv` at `[%rsp+8]`, align the stack, call
+  `_SetArgs`, run the body, then `exit` via syscall.  The linker's static
+  `ET_EXEC` / `_start` path (Phase B) already supports this — no GOT/PLT, no
+  interp, no CRT.
 * *Verify:* `freebsd-x86_64` link produces an `ET_EXEC` with entry `_start`
   and no `PT_INTERP`; linker unit test asserts the ELF shape.
 
@@ -348,11 +355,12 @@ dynamic-link / sysroot work on this path.
 * Add a FreeBSD syscall-number table (e.g. open=5, read=3, write=4, close=6,
   exit=1, plus `fstat`/`lseek`/`mmap`/`munmap`/… — FreeBSD numbers, *not*
   Linux's).
-* Implement the `TKernelABI` leaves against the trampoline, then the harder
-  leaves per the work breakdown above (`memcpy/memset/memcmp` freestanding;
-  pure-Pascal `localtime_r/gmtime_r/timegm`; `mmap`-based allocator with a
-  no-`mremap` grow fallback; `thr_new`/`_umtx_op` threads last; verify the
-  FreeBSD `jmp_buf` for setjmp/longjmp; an `atexit` registry).
+* Implement the syscall-stub leaves (exporting `open`/`read`/`write`/… as raw
+  syscalls) against the trampoline, then the harder leaves per the work
+  breakdown above (`memcpy/memset/memcmp` freestanding; pure-Pascal
+  `localtime_r/gmtime_r/timegm`; `mmap`-based allocator with a no-`mremap` grow
+  fallback; `thr_new`/`_umtx_op` threads last; verify the FreeBSD `jmp_buf` for
+  setjmp/longjmp; an `atexit` registry).
 * *Verify:* a FreeBSD hello-world + file-I/O smoke test produce correct output
   under emulation.
 
@@ -418,8 +426,8 @@ here so the FreeBSD work is shaped to extend rather than be re-done:
   exists, but Windows is materially more backend work than FreeBSD.
 * *Syscall/startup abstraction.* Each OS gets its own entry stub and either
   a syscall leaf (Strategy B) or an import-library leaf (Win32: `kernel32`).
-  Building the FreeBSD direct-syscall leaf as a clean, target-keyed
-  `TKernelABI` adapter (Step 4) is the template every later OS follows.
+  Building the FreeBSD direct-syscall leaf as a clean, link-time-swapped
+  syscall-stub object (Step 4) is the template every later OS follows.
 * *Host independence.* Strategy B's "no host CRT, no host libc" property is
   what makes Linux-hosted cross-compilation tool-free.  Every target that
   can be driven by direct syscalls (Linux, FreeBSD) should support it;
@@ -468,18 +476,19 @@ A `freebsd-x86_64` native backend is feasible and the codebase is already
 staged for it: the instruction selector, register allocator, System V ABI
 lowering, ELF relocation core, and OPDF debug sections are all reused
 unchanged.  The entire FreeBSD-specific surface is (1) a FreeBSD `TLinkTarget`
-(OSABI, base, page size), (2) a FreeBSD `TPlatformLayout` (`struct stat`/
-`struct tm` layouts and OS constants), and (3) a FreeBSD `TKernelABI` (direct
-syscalls + `_start` entry stub).
+(OSABI, base, page size), (2) a FreeBSD `TPlatformLayout` (`struct stat` layout
+and OS constants), and (3) a FreeBSD kernel-stub object (raw syscalls + `_start`
+entry stub) that the FreeBSD RTL archive links in place of libc.
 
 The chosen kernel-access strategy is *direct syscalls into a static `ET_EXEC`*
 (Strategy B): the linker's static path already supports it, and it is the only
 route that delivers the stated goal — cross-compiling a runnable FreeBSD binary
 from a Linux host with no external tools and nothing staged.  Its cost is the
 libc-replacement leaves (threads, allocator, libc string ops, date math),
-which become methods on the FreeBSD `TKernelABI` adapter, done hardest-last.
-A conventional libc-linked path (Strategy A) is documented only as a fallback
-shape and is not on this implementation path.
+which are implemented in that per-target syscall-stub object (a link-time swap,
+not a runtime port), done hardest-last.  A conventional libc-linked path
+(Strategy A) is documented only as a fallback shape and is not on this
+implementation path.
 
 Structurally, FreeBSD is *one new adapter family* — composed by an Abstract
 Factory toolkit, resolved from a registry, with zero `{$IFDEF}` and no target

@@ -90,29 +90,74 @@ startup.  Callers depend on the port, never on a concrete target.
 | `TRtlPlatform` (exists)
 | High-level OS operations (file/dir/process/time/console).  Unchanged.
 
-| `TKernelABI` (new)
-| The *syscall + startup leaf*: raw `Open/Read/Write/Close/Mmap/Munmap/Exit/
-  …` for the target kernel, and the entry-stub contract (how `_start` reads
-  `argc/argv`, how `exit` is issued).  Adapters: `TKernelLinuxX86_64`,
-  `TKernelFreeBSDX86_64`.  In Strategy B, `TRtlPlatformPosix` calls
-  `GKernel.Open(...)` instead of `external name 'open'`.
+| Kernel leaf (NOT a runtime port — see below)
+| The *syscall + startup leaf*: `open/read/write/close/mmap/exit/…` and the
+  `_start` entry stub.  This is a *link-time symbol swap*, not a runtime
+  virtual port: each target's RTL archive resolves the same `external name`
+  symbols differently.  See <<kernel-leaf>> for the rationale and the design
+  that was tried and rejected.
 
 | `TPlatformLayout` (new)
 | The target's *struct layouts and OS constants*: `struct stat` field
   offsets, `struct tm` layout, `O_*` flag bits, signal numbers, `SEEK_*`,
   `CLOCK_*`.  This is where the Linux constants leaking into
-  `TRtlPlatformPosix` go to live properly, per target.
+  `TRtlPlatformPosix` go to live properly, per target.  Implemented in Step 0b.
 |===
 
+[#kernel-leaf]
 [NOTE]
+.The kernel leaf is a link-time swap, not a runtime port
 ====
-`TKernelABI` and `TPlatformLayout` are kept *separate* deliberately.  The
-syscall ABI and the struct/constant layout vary on *different axes*: a future
-`freebsd-arm64` may reuse FreeBSD's syscall numbers (`TKernelABI`) while
-needing different struct packing (`TPlatformLayout`), and vice-versa.  Two
-ports let those vary independently instead of forcing a four-way adapter
-matrix.  The Abstract Factory (below) composes the correct pair so callers
-never assemble an inconsistent combination by hand.
+An earlier revision of this design specified a runtime `TKernelABI` virtual
+class (≈30 abstract methods) with a `GKernel` global, through which every
+`TRtlPlatformPosix` kernel call was routed; the Linux adapter forwarded each
+method to the existing libc binding, and a FreeBSD adapter would later issue
+raw syscalls.
+
+*That approach was implemented and reverted (2026-06-25).*  Introducing the
+class and the third managed RTL global into `rtl.platform`/`rtl.platform.posix`
+— the most layout-sensitive units in the self-hosting RTL — destabilised the
+bootstrap.  Binaries built against the modified RTL segfaulted at startup with
+a corrupted/overflowed stack that no debugger (gdb or pdr) could unwind.  The
+failure was bootstrap-stage-dependent and non-converging: the release binary
+built a *working* hello-world from the modified RTL source, but the
+release-built stage-1 emitted a *crashing* one, and stage-2 was worse.  The
+precise cause was not isolated (candidates: a `TimeNow` method-name collision
+with `TRtlPlatform.TimeNow` in the vtable, the compiler baking layout for a new
+managed global, or the large abstract vtable), but the verdict is independent
+of the cause: *the abstraction carried real self-hosting risk for zero present
+benefit* — the Linux adapter was pure libc delegation, so nothing functional
+changed until a FreeBSD syscall adapter existed.
+
+The replacement design is a *link-time symbol swap*, the pattern Blaise already
+uses for `blaise_setjmp_x86_64.s` and `blaise_atomic_x86_64.s`:
+
+* The RTL keeps its `external name 'open'` / `'read'` / `'write'` / … bindings
+  exactly as today.
+* On Linux (and any libc-linked build), those symbols resolve to libc.
+* For FreeBSD Strategy B, the FreeBSD RTL archive instead links a small
+  syscall-stub object that *exports the same symbol names* (`open`, `read`,
+  …) implemented as raw `syscall` instructions with the FreeBSD numbers and
+  carry-flag error translation, plus a `_start`.
+* The kernel leaf therefore varies by *which object the per-target archive
+  composes* — selected at link time by the toolkit/RTL-archive choice — with
+  *no new runtime virtual dispatch, no new global, and no change to the
+  layout-sensitive RTL units*.
+
+Why this is better here: the kernel mechanism is genuinely a build-time
+property of a target (a binary is libc-linked *or* freestanding; it never
+switches at run time), so a link-time swap models it exactly, while a runtime
+port adds vtable/global surface to the RTL for a choice that is never made at
+run time.  `TPlatformLayout` stays a runtime object because its values
+(struct offsets, flag bits) are read by shared method bodies and genuinely
+differ per target instance; the kernel leaf does not need that — it needs a
+different *symbol implementation*, which the linker already selects.
+
+`TPlatformLayout` and the kernel leaf still vary on *different axes* (a future
+`freebsd-arm64` may reuse FreeBSD syscall numbers but need different struct
+packing), so they remain separate concerns; they are simply realised by
+*different mechanisms* — a runtime object for layout, a link-time symbol set
+for the kernel leaf.
 ====
 
 Compiler-side ports (already present, kept as ports):
@@ -142,16 +187,19 @@ call vary by target"*:
   getenv/exit/nanosleep/pipe/dup2/fork/execvp/waitpid`
 | *Yes* — different syscall numbers; FreeBSD reports errors via the carry
   flag, not a negative return.
-| Route through `TKernelABI`.
+| Link-time symbol swap: the FreeBSD archive links a syscall-stub object
+  exporting these names; the RTL's `external name` bindings are unchanged
+  (see <<kernel-leaf>>).
 
 | `mmap/munmap/mremap` (`blaise_mem.pas`)
 | *Yes* — and FreeBSD has no `mremap`.
-| Route through `TKernelABI` (memory leaf, with a grow-path fallback).
+| Link-time symbol swap (memory leaf, with a grow-path fallback for the
+  missing `mremap`).
 
 | `pthread_create/join/mutex_*` (`blaise_thread.pas`, and the mutexes used by
   `blaise_exc.pas`/`blaise_weak.pas`)
 | *Yes* — no pthreads without libc; FreeBSD uses `thr_new`/`_umtx_op`.
-| Route through `TKernelABI` (threads leaf — the hardest, done last).
+| Link-time symbol swap (threads leaf — the hardest, done last).
 
 | `localtime_r/gmtime_r/timegm` (`rtl.platform.posix.pas`)
 | *Yes* — libc-dependent, no syscall equivalent.
@@ -176,27 +224,31 @@ call vary by target"*:
 | Leave as-is.
 |===
 
-So the refactor is *narrow and funnelled*, not unit-by-unit:
+So the refactor is *narrow and link-time*, not unit-by-unit:
 
-. *One unit changes shape* — `rtl.platform.posix.pas`: its `external name
-  'open'` bindings become `GKernel.Open(...)` calls.  This is the bulk of the
-  kernel-facing surface and the natural caller of the port.
-. *A few units lose only their kernel-touching leaves* — `blaise_mem`,
-  `blaise_thread`, `blaise_exc`, `blaise_weak` keep all their logic; only the
-  handful of `mmap`/`pthread_*` lines move behind `TKernelABI`.  The units are
-  *not* re-architected.
+. *No RTL unit changes shape for the kernel leaf* — `rtl.platform.posix.pas`
+  keeps its `external name 'open'` bindings verbatim.  The FreeBSD difference is
+  *which object resolves those symbols* (libc vs a raw-syscall stub), chosen
+  when the per-target RTL archive is composed — not a code change in the unit.
+. *Units keep all their logic* — `blaise_mem`, `blaise_thread`, `blaise_exc`,
+  `blaise_weak` are untouched; their `mmap`/`pthread_*` `external name`
+  bindings are satisfied by the target's chosen kernel-stub object.  The units
+  are *not* re-architected.
 . *Most units are left alone* — pure-computation and CPU-keyed-asm units
-  (`blaise_str`, `blaise_float`, the atomic/setjmp stubs) do not touch a port.
+  (`blaise_str`, `blaise_float`, the atomic/setjmp stubs) need nothing.
   `localtime_r`/etc. become one target-independent Pascal unit.
 
-The principle: *every kernel-varying leaf funnels into the single `TKernelABI`
-port; everything that does not vary by target stays where it is.*  One port is
-the one place "what does FreeBSD do differently" lives — adding a port per unit
-would defeat that.  Forcing target-invariant code (memcpy, string formatting,
-atomics) through a port would be abstraction for its own sake — the
-over-engineering this design explicitly rejects.
+The principle: *the kernel-varying leaves are satisfied by one per-target
+symbol set chosen at link time; everything that does not vary by target stays
+where it is.*  That single stub object is the one place "what does FreeBSD do
+differently at the syscall level" lives.  Routing these through a runtime
+virtual port instead was tried and reverted (<<kernel-leaf>>): it added
+vtable/global surface to the layout-sensitive RTL for a choice that is never
+made at run time.  Forcing target-invariant code (memcpy, string formatting,
+atomics) through any indirection would likewise be abstraction for its own sake
+— the over-engineering this design rejects.
 
-The migration sequence below exploits this: Step 0c introduces `TKernelABI`
+The migration sequence below exploits this: Step 0c introduces the kernel leaf
 with a Linux adapter that *still delegates to the existing libc bindings*, so
 every caller is repointed at the port with *zero behaviour change* (verified
 against the current Linux suite) before a single syscall is rewritten.  No unit
@@ -212,18 +264,25 @@ and produces the *consistent family* of adapters for that target:
 type
   TTargetToolkit = class
   public
+    function Name: string; virtual; abstract;               { "linux-x86_64" }
     function MakeBackend: TNativeBackend; virtual; abstract;
     function MakeLinkTarget: TLinkTarget; virtual; abstract;
-    function MakeKernelABI: TKernelABI; virtual; abstract;     { runtime side }
-    function MakeLayout: TPlatformLayout; virtual; abstract;   { runtime side }
-    function TargetName: string; virtual; abstract;
   end;
 ----
 
+The compiler-side toolkit (Step 0a, as built) makes the backend and the link
+target.  It does *not* have a `MakeKernelABI` — the kernel leaf is a link-time
+symbol set in the per-target RTL archive, not a runtime object the compiler
+constructs (<<kernel-leaf>>).  `TPlatformLayout` is also not made here: it is a
+runtime RTL object selected at the produced binary's startup, in that binary's
+own RTL archive, not in the compiler.  (The method is named `Name`, not
+`TargetName`, to avoid colliding with the unit-level `TargetName` free
+function.)
+
 Why Abstract Factory and not free functions: the produced objects must be
-*coherent as a set*.  A FreeBSD backend paired with a Linux link target, or a
-FreeBSD syscall ABI paired with Linux struct offsets, is a silent bug.  A
-factory guarantees the family is internally consistent — this is the textbook
+*coherent as a set*.  A FreeBSD backend paired with a Linux link target is a
+silent bug.  A factory guarantees the family is internally consistent — this is
+the textbook
 Abstract Factory motivation (families of related products that must be used
 together).
 
@@ -255,9 +314,10 @@ hard-wiring with a lookup that the CLI *and* the test runner share.
 | GoF pattern | Applied to | Why it earns its place
 
 | Strategy
-| `TNativeBackend`, `TKernelABI`, `TRtlPlatform`, `TPlatformLayout`
+| `TNativeBackend`, `TRtlPlatform`, `TPlatformLayout`
 | Interchangeable target behaviour chosen at run time.  Already in use
-  (`TProfilerStrategy`, `TNativeBackend`).
+  (`TProfilerStrategy`, `TNativeBackend`).  Note the kernel leaf is *not* a
+  Strategy object — it is a link-time symbol swap (<<kernel-leaf>>).
 
 | Abstract Factory
 | `TTargetToolkit`
@@ -299,11 +359,13 @@ target's runtime into every produced binary.
   resolves one toolkit from the registry.
 
 | A *produced* binary (e.g. a FreeBSD app)
-| Must contain *only its own* runtime adapter (`TKernelABI` /
-  `TPlatformLayout` / `TRtlPlatform`), selected at that binary's own startup.
-  The unused targets' runtime code must NOT be linked in.  This falls out of
-  per-target RTL archives: a FreeBSD binary links
-  `blaise_rtl-freebsd-x86_64.a`, which contains only the FreeBSD adapters.
+| Must contain *only its own* target's RTL: the `TRtlPlatform`/`TPlatformLayout`
+  runtime objects and the kernel-leaf symbol implementation for that target.
+  This falls out of per-target RTL archives — a FreeBSD binary links
+  `blaise_rtl-freebsd-x86_64.a`, which contains the FreeBSD layout object and
+  the FreeBSD syscall-stub object; the Linux archive contains the libc-backed
+  equivalents.  The kernel leaf in particular is fixed purely by *which archive
+  is linked*, so no run-time selection is needed for it.
 |===
 
 So: the compiler chooses a target *to emit for*; the produced binary chooses a
@@ -319,7 +381,7 @@ Because a toolkit is resolved from a `TTargetDesc` rather than frozen by
 
 . *Native self-target.*  On a FreeBSD host, `HostTarget()` resolves the
   FreeBSD toolkit, so running the compiler's own test suite there exercises
-  the FreeBSD `TKernelABI`/`TPlatformLayout`/`TNativeBackend` adapters
+  the FreeBSD kernel-stub object, `TPlatformLayout`, and `TNativeBackend`
   natively — no rebuild, no special flag.
 
 . *Cross-target static coverage.*  On any host, the e2e harness can loop over
@@ -341,37 +403,52 @@ This is the *structural* refactor; the FreeBSD-specific content (syscall
 numbers, struct layouts, `_start` shape) lives in
 `freebsd-x86_64-backend-design.adoc`.
 
-. Introduce `TTargetToolkit` + `TTargetRegistry`; register the existing Linux
-  target through them.  Re-express `--target` resolution via the registry.
-  *No behaviour change* — verify the full suite still passes (pure refactor).
-. Extract `TPlatformLayout` from `TRtlPlatformPosix`: move `TStatBuf`/`TTm`
-  layouts and the `O_*`/`S_*`/`CLOCK_*`/`WNOHANG`/`SEEK_*` constants behind the
-  port; the Linux adapter supplies today's values.  Verify suite unchanged.
-. Introduce `TKernelABI`; for Linux, the first adapter may still delegate to
-  the libc bindings (no behaviour change) so the seam lands before the
-  syscall rewrite.  Verify suite unchanged.
-. Lift the ARC field-kind walkers and record classifier into `TNativeBackend`
-  as template methods with abstract per-CPU leaves (as the base class already
-  plans), so a second CPU/OS adapter inherits them.
-. Only then add the `TFreeBSDX86_64Toolkit` adapters (per the FreeBSD design
-  doc).  Adding the target touches *no* existing target's code — it is new
-  files plus one registry line.
+. *(DONE — Step 0a)* Introduce `TTargetToolkit` + `TTargetRegistry`; register
+  the existing Linux target through them.  Re-express `--target` resolution via
+  the registry.  *No behaviour change* — full suite + all fixpoints verified.
+. *(DONE — Step 0b)* Extract `TPlatformLayout` from `TRtlPlatformPosix`: move the
+  `struct stat` layout (now an opaque buffer + offset accessors) and the
+  `O_*`/`S_*`/`CLOCK_*`/`WNOHANG`/`SEEK_*` constants behind the port; the Linux
+  adapter (`rtl.platform.layout.linux`) supplies today's values.  Verified.
+. *(REVISED — kernel leaf)* The kernel leaf is a *link-time symbol swap*, NOT a
+  runtime port.  A runtime `TKernelABI` virtual port was attempted here and
+  reverted because it destabilised self-hosting for zero present benefit
+  (<<kernel-leaf>>).  No refactor is needed in this step: the RTL keeps its
+  `external name` bindings, and the FreeBSD syscall-stub object is introduced
+  when the FreeBSD RTL archive is built (FreeBSD design doc, Step 4).
+. *(DEFERRED)* Lift the ARC field-kind walkers and record classifier into
+  `TNativeBackend` as template methods with abstract per-CPU leaves.  This is
+  *arm64 groundwork* — FreeBSD reuses the x86_64 backend unchanged, so it does
+  not block the FreeBSD target and is deferred until a second CPU lands.
+. Add the `TFreeBSDX86_64Toolkit` adapters + FreeBSD RTL archive (per the
+  FreeBSD design doc).  Adding the target touches *no* existing target's code —
+  new files plus one registry line.
 
-Steps 1–4 are behaviour-preserving refactors verifiable against the existing
-Linux suite and fixpoints; step 5 is the actual FreeBSD work.  Sequencing the
-refactor first means the FreeBSD adapter slots into clean seams rather than
-forcing them open mid-implementation.
+The completed steps are behaviour-preserving refactors verified against the
+existing Linux suite and all four fixpoints; the last step is the actual
+FreeBSD work.  Sequencing the refactors first means the FreeBSD adapter slots
+into clean seams rather than forcing them open mid-implementation.
 
 == Summary
 
 Hexagonal architecture is not just viable in Blaise — it is already the chosen
 idiom for the runtime platform layer and the codegen backend, explicitly
-`{$IFDEF}`-free.  The path to many targets is to *complete* that idiom:
-promote the kernel leaf and the struct/constant layout to first-class ports
-(`TKernelABI`, `TPlatformLayout`), compose each target's adapter family with an
-Abstract Factory (`TTargetToolkit`), resolve toolkits by name through a
-Registry, keep the linker's container writer behind a Bridge, and reuse the
-Template-Method backend base.  Target divergence then lives entirely in *which
-object is instantiated*, decided once at startup — the compiler picks a target
-to emit for, a produced binary picks a platform to run on — and the test runner
-can select adapters at run time to test any target, natively or structurally.
+`{$IFDEF}`-free.  The path to many targets is to *complete* that idiom, using
+the right mechanism for each axis of divergence:
+
+* the struct/constant layout becomes a runtime port (`TPlatformLayout`) —
+  its per-target values are read by shared method bodies;
+* the kernel leaf becomes a *link-time symbol swap* — a per-target syscall/
+  startup object resolving the RTL's `external name` bindings (a runtime
+  `TKernelABI` port was tried and reverted, <<kernel-leaf>>);
+* each target's compiler-side adapter family (backend + link target) is
+  composed by an Abstract Factory (`TTargetToolkit`) and resolved by name
+  through a Registry;
+* the linker's container writer stays behind a Bridge and the backend reuses
+  the Template-Method base.
+
+Target divergence then lives in *which object is instantiated or which archive
+is linked*, decided once — the compiler picks a target to emit for, a produced
+binary picks a platform to run on — with no `{$IFDEF}` and no scattered
+per-target code.  The test runner can select adapters at run time to test any
+target, natively or structurally.
