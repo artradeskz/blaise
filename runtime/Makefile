@@ -5,19 +5,14 @@
 # Licensed under the Apache License v2.0 with Runtime Library Exception.
 # See LICENSE file in the project root for full license terms.
 #
-# Each Pascal unit is compiled directly via Blaise's unit-as-top-level
-# mode (project_unit_as_toplevel, 2026-05-24): a single
-# `blaise --source X.pas --output X.o` invocation runs qbe + cc -c
-# + objcopy-embed in one step.  No build-driver shims, no IR-strip
-# sed pipelines, no intermediate .ssa/.s files needed.
+# Each RTL unit is compiled directly via Blaise's unit-as-top-level mode: a
+# single `blaise --source X.pas --output X.o` invocation produces the object.
+# The RTL is now entirely pure Pascal (the four hand-written *_x86_64.s files
+# were migrated to inline-asm `.pas` units), so the whole archive builds through
+# Blaise's own internal assembler — no external assembler, no gcc, no .s files.
 SHELL   = /bin/bash
 
-CC      = gcc
-CFLAGS  = -O2 -Wall -Wextra -std=c11
-
-SRC_DIR     = src/main/c
 PAS_SRC_DIR = src/main/pascal
-ASM_DIR     = src/main/asm
 OBJ_DIR     = target
 LIB         = $(OBJ_DIR)/blaise_rtl.a
 
@@ -36,18 +31,16 @@ BLAISE       = $(COMPILER_BIN)/blaise
 #
 # --assembler internal: assemble each unit to its .o with Blaise's own in-process
 # assembler instead of `cc -c`, so building the RTL needs no external assembler.
-# (The hand-written .s files in $(ASM_DIR) still go through $(CC) until Blaise can
-# assemble a standalone .s; the Pascal units no longer touch gcc.)
 BLAISE_FLAGS = --no-incremental --assembler internal
 
-# Assembly sources — platform-specific, no C compiler needed.
-# (blaise_atomic, blaise_setjmp, blaise_start migrated to inline-asm units.)
-ASM_OBJS = $(OBJ_DIR)/blaise_utf8_x86_64.o
-
-# Pascal RTL units compiled via the Blaise compiler.
+# Every RTL unit is now pure Pascal (the four hand-written *_x86_64.s files —
+# start, setjmp, atomic, utf8 — were migrated to inline-asm `.pas` units).  The
+# RTL therefore builds entirely through Blaise's own pipeline: no $(CC), no
+# external assembler, no .s files.
 PAS_OBJS = $(OBJ_DIR)/blaise_start.o \
            $(OBJ_DIR)/blaise_atomic.o \
            $(OBJ_DIR)/blaise_setjmp.o \
+           $(OBJ_DIR)/blaise_utf8.o \
            $(OBJ_DIR)/blaise_mem.o \
            $(OBJ_DIR)/blaise_str.o \
            $(OBJ_DIR)/blaise_set.o \
@@ -59,7 +52,7 @@ PAS_OBJS = $(OBJ_DIR)/blaise_start.o \
            $(OBJ_DIR)/rtl_platform_layout_linux.o \
            $(OBJ_DIR)/rtl_platform_posix.o
 
-OBJS = $(ASM_OBJS) $(PAS_OBJS)
+OBJS = $(PAS_OBJS)
 
 .PHONY: all install clean
 
@@ -68,12 +61,11 @@ all: $(LIB)
 $(LIB): $(OBJS)
 	ar rcs $@ $^
 
-# --- Assembly rules ---
-$(OBJ_DIR)/%.o: $(ASM_DIR)/%.s
-	@mkdir -p $(OBJ_DIR)
-	$(CC) -c -o $@ $<
-
 # --- Pascal unit rules (unit-as-top-level) ---
+$(OBJ_DIR)/blaise_utf8.o: $(PAS_SRC_DIR)/blaise_utf8.pas
+	@mkdir -p $(OBJ_DIR)
+	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
+
 $(OBJ_DIR)/blaise_start.o: $(PAS_SRC_DIR)/blaise_start.pas
 	@mkdir -p $(OBJ_DIR)
 	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
