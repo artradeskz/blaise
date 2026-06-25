@@ -50,7 +50,6 @@ type
     QBE:        TTool;   { QBE backend only }
     Assembler:  TTool;   { native backend: assemble .s -> .o (reserved) }
     Linker:     TTool;   { both backends: link final binary }
-    RTLPath:    string;  { '' if not found }
   end;
 
   { One external tool a backend declares it needs (TBackendDriver.DescribeTools).
@@ -87,7 +86,6 @@ function ResolveToolchain(const ATarget: TTargetDesc): TToolchain;
 function ResolveQBE: TTool;
 function ResolveAssembler: TTool;
 function ResolveLinker(const ATarget: TTargetDesc): TTool;
-function FindRTLArchive(const ATarget: TTargetDesc): string;
 
 { Directory containing the running compiler binary (ParamStr(0)). }
 function CompilerBinDir: string;
@@ -363,18 +361,6 @@ begin
     + '../src/main/pascal');
 end;
 
-function FindRTLArchive(const ATarget: TTargetDesc): string;
-var
-  BinDir: string;
-begin
-  Result := GetEnvironmentVariable('BLAISE_RTL');
-  if (Result <> '') and FileExists(Result) then Exit;
-  BinDir := CompilerBinDir();
-  Result := IncludeTrailingPathDelimiter(BinDir) + 'blaise_rtl.a';
-  if FileExists(Result) then Exit;
-  Result := '';
-end;
-
 { ------------------------------------------------------------------ }
 { Top-level resolver                                                   }
 { ------------------------------------------------------------------ }
@@ -384,7 +370,6 @@ begin
   Result.QBE       := ResolveQBE();
   Result.Assembler := ResolveAssembler();
   Result.Linker    := ResolveLinker(ATarget);
-  Result.RTLPath   := FindRTLArchive(ATarget);
 end;
 
 end.

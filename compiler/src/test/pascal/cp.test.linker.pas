@@ -1299,13 +1299,15 @@ end;
 
 function TInternalLinkerE2ETests.CompilerAvailable: Boolean;
 begin
+  { The compiler source-builds the RTL itself (no blaise_rtl.a); only the binary
+    and the RTL source need to be present. }
   Result := FileExists(FCompiler) and
-            FileExists(ProjectRoot() + 'compiler/target/blaise_rtl.a');
+            FileExists(FRTLPath + '/runtime.arc.pas');
   if (not Result) and (not GIntLinkSkipNoted) then
   begin
     GIntLinkSkipNoted := True;
     WriteLn(StdErr, 'note: TInternalLinkerE2ETests skipped — compiler binary "',
-            FCompiler, '" not found');
+            FCompiler, '" or RTL source not found');
   end;
 end;
 
