@@ -34,7 +34,6 @@ type
   TE2ETestCase = class(TTestCase)
   private
     FQBE:         string;
-    FRTL:         string;
     FRTLUnitPath: string;
     FStdlibUnitPath: string;
     FScratch:     string;
@@ -43,6 +42,13 @@ type
     function  RunProc(const AExe: string; const AArgs: array of string;
                       out AStdout: string): Integer;
     function  RunProcNoArgs(const AExe: string; out AStdout: string): Integer;
+    { Link an assembled program (AAsmFile) into ABinFile against the RTL.  The
+      RTL is built from source by scripts/build-rtl-objects.sh (no blaise_rtl.a
+      archive); --exclude-defined-by drops the RTL objects the whole-program
+      assembly already inlines, so the loose objects do not double-define.
+      Returns the cc exit code; AStdout carries any tool output. }
+    function  LinkWithRTL(const AAsmFile, ABinFile: string;
+                          out AStdout: string): Integer;
   protected
     function  ToolchainAvailable(): Boolean;
     function  ValgrindAvailable(): Boolean;
@@ -169,7 +175,11 @@ end;
 
 function TE2ETestCase.ToolchainAvailable(): Boolean;
 begin
-  Result := FileExists(FQBE) and FileExists(FRTL)
+  { Need the QBE assembler, the compiler binary (build-rtl-objects.sh drives it
+    to source-build the RTL), and the RTL source.  No blaise_rtl.a archive. }
+  Result := FileExists(FQBE)
+        and FileExists(ProjectRoot() + 'compiler/target/blaise')
+        and FileExists(ProjectRoot() + 'compiler/src/main/pascal/runtime.arc.pas')
 end;
 
 function TE2ETestCase.ValgrindAvailable(): Boolean;
@@ -186,9 +196,6 @@ begin
   FQBE := GetEnvironmentVariable('BLAISE_QBE');
   if FQBE = '' then
     FQBE := ProjectRoot() + 'vendor/qbe/qbe';
-  FRTL := GetEnvironmentVariable('BLAISE_RTL');
-  if FRTL = '' then
-    FRTL := ProjectRoot() + 'runtime/target/blaise_rtl.a';
   { RTL units (runtime.*, rtl.platform.*) now live in the compiler's own source
     tree after the RTL-unification move; the old runtime/src/main/pascal is empty. }
   FRTLUnitPath := ProjectRoot() + 'compiler/src/main/pascal';
@@ -226,6 +233,62 @@ begin
   finally
     Proc.Free()
   end
+end;
+
+function TE2ETestCase.LinkWithRTL(const AAsmFile, ABinFile: string;
+                                 out AStdout: string): Integer;
+var
+  ProgObj, ObjDir, Compiler, ScriptOut: string;
+  Objs: TStringList;
+  Proc: TProcess;
+  I: Integer;
+begin
+  { 1. Assemble the program to an object so build-rtl-objects.sh can see which
+       RTL symbols it already defines (it inlines the RTL units it uses). }
+  ProgObj := AAsmFile + '.o';
+  Result := RunProc('cc', ['-c', '-o', ProgObj, AAsmFile], AStdout);
+  if Result <> 0 then Exit;
+
+  { 2. Build the RTL objects from source, excluding the units the program
+       already inlined.  Compiler binary is the freshly-built compiler/target. }
+  Compiler := ProjectRoot() + 'compiler/target/blaise';
+  ObjDir   := IncludeTrailingPathDelimiter(FScratch) + 'rtlobj';
+  Result := RunProc(ProjectRoot() + 'scripts/build-rtl-objects.sh',
+                    [Compiler, ObjDir, '--exclude-defined-by', ProgObj],
+                    ScriptOut);
+  if Result <> 0 then
+  begin
+    AStdout := 'build-rtl-objects failed: ' + ScriptOut;
+    Exit;
+  end;
+
+  { 3. Link: cc -o Bin ProgObj <rtl objects> -lm -lpthread.  Build the TProcess
+       directly so the object list (variable length) can be appended. }
+  Objs := TStringList.Create();
+  Proc := TProcess.Create(nil);
+  try
+    Objs.Text := ScriptOut;
+    Proc.Executable := 'cc';
+    Proc.Parameters.Add('-o');
+    Proc.Parameters.Add(ABinFile);
+    Proc.Parameters.Add(ProgObj);
+    for I := 0 to Objs.Count - 1 do
+      if Trim(Objs.Strings[I]) <> '' then
+        Proc.Parameters.Add(Trim(Objs.Strings[I]));
+    Proc.Parameters.Add('-lm');
+    Proc.Parameters.Add('-lpthread');
+    Proc.Execute();
+    AStdout := '';
+    repeat
+      ScriptOut := Proc.ReadOutput();
+      AStdout := AStdout + ScriptOut
+    until (ScriptOut = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free();
+    Objs.Free();
+  end;
 end;
 
 function TE2ETestCase.RunProcNoArgs(const AExe: string;
@@ -316,7 +379,7 @@ begin
     Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
     if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
   end;
-  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
+  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True
@@ -428,7 +491,7 @@ begin
   WriteFile(IRFile, IR);
   Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
   if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
+  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProc(BinFile, AExtraArgs, AStdout);
   Result := True
@@ -472,7 +535,7 @@ begin
   WriteFile(IRFile, IR);
   Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
   if Rc <> 0 then Exit;
-  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
+  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
   if Rc <> 0 then Exit;
 
   Rc := RunProc('valgrind',
@@ -664,7 +727,7 @@ begin
     Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
     if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
   end;
-  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
+  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True
@@ -764,7 +827,7 @@ begin
     Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
     if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
   end;
-  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
+  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True

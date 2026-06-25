@@ -53,7 +53,15 @@ if [ ! -x "$BLAISE" ]; then
   exit 2
 fi
 
-SRC=compiler/src/main/pascal
+# Resolve the RTL source relative to THIS script (scripts/ is a sibling of
+# compiler/), so the script works regardless of the caller's CWD — the fixpoint
+# scripts run from the project root, the test runner from compiler/.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SRC="$SCRIPT_DIR/../compiler/src/main/pascal"
+if [ ! -f "$SRC/runtime.arc.pas" ]; then
+  # Fall back to a CWD-relative path (e.g. an unusual invocation layout).
+  SRC=compiler/src/main/pascal
+fi
 if [ ! -f "$SRC/runtime.arc.pas" ]; then
   echo "build-rtl-objects: RTL source not found under $SRC" >&2
   exit 2
@@ -81,23 +89,30 @@ fi
 OBJS=()
 for u in "${RTL_UNITS[@]}"; do
   obj="$OUTDIR/$u.o"
-  "$BLAISE" --backend native --assembler internal \
-    --source "$SRC/$u.pas" \
-    --unit-path "$SRC" --unit-cache "$OUTDIR" \
-    --output "$obj" >/dev/null 2>"$OUTDIR/$u.build.err" || {
-      echo "build-rtl-objects: failed to build $u" >&2
-      tail -5 "$OUTDIR/$u.build.err" >&2
-      exit 1
-    }
+  src="$SRC/$u.pas"
+  # Rebuild only when the cached object is missing or older than its source, so
+  # a persistent $OUTDIR (e.g. reused across a test suite) builds the RTL once.
+  if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]; then
+    "$BLAISE" --backend native --assembler internal \
+      --source "$src" \
+      --unit-path "$SRC" --unit-cache "$OUTDIR" \
+      --output "$obj" >/dev/null 2>"$OUTDIR/$u.build.err" || {
+        echo "build-rtl-objects: failed to build $u" >&2
+        tail -5 "$OUTDIR/$u.build.err" >&2
+        exit 1
+      }
+    # Cache this object's defined symbols so repeated --exclude-defined-by calls
+    # (e.g. one per test in a suite) don't re-run nm on the stable RTL objects.
+    nm "$obj" 2>/dev/null | grep -E ' [TDBR] ' | awk '{print $3}' | sort -u \
+      > "$obj.syms"
+  fi
   if [ "$u" = "runtime.start" ] && [ "$WITH_STARTUP" -eq 0 ]; then
     continue
   fi
   # Drop this object if it re-defines any symbol the main program already owns
   # (it was inlined into the program) — otherwise the loose .o collides.
-  if [ -n "$EXCL_DEFS" ]; then
-    this_defs=$(nm "$obj" 2>/dev/null | grep -E ' [TDBR] ' | awk '{print $3}' | sort -u)
-    if [ -n "$this_defs" ] && \
-       [ -n "$(comm -12 <(printf '%s\n' "$this_defs") <(printf '%s\n' "$EXCL_DEFS"))" ]; then
+  if [ -n "$EXCL_DEFS" ] && [ -f "$obj.syms" ] && [ -s "$obj.syms" ]; then
+    if [ -n "$(comm -12 "$obj.syms" <(printf '%s\n' "$EXCL_DEFS"))" ]; then
       continue
     fi
   fi

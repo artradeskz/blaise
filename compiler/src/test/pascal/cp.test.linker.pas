@@ -18,7 +18,7 @@ unit cp.test.linker;
 interface
 
 uses
-  SysUtils, process, blaise.testing, Generics.Collections,
+  classes, SysUtils, process, blaise.testing, Generics.Collections,
   blaise.elfreader, blaise.linker.elf, blaise.assembler.x86_64;
 
 type
@@ -330,22 +330,82 @@ end;
 
 procedure TElfReaderTests.TestArchive_ParsesRTL;
 var
-  RTLPath: string;
+  Root, ObjDir, ArPath, ScriptOut: string;
+  Compiler: string;
   Members: TList<TArchiveMember>;
+  ObjList: TStringList;
+  Proc: TProcess;
+  Chunk: string;
   I: Integer;
   M: TArchiveMember;
   Obj: TElfObjectFile;
   SawLongName: Boolean;
 begin
-  RTLPath := ProjectRoot() + 'compiler/target/blaise_rtl.a';
-  if not FileExists(RTLPath) then
+  { The shipped blaise_rtl.a is gone (RTL-unification Stage 3).  To still
+    exercise the archive parser — including the GNU long-name (//) table on the
+    >15-char member rtl.platform.layout.linux.o — build the RTL objects from
+    source and bundle them into a THROWAWAY .a with `ar` just for this test.
+    `ar` is a test-time dependency only; the product/bootstrap no longer use it. }
+  Root     := ProjectRoot();
+  Compiler := Root + 'compiler/target/blaise';
+  if (not FileExists(Compiler))
+     or (not FileExists(Root + 'compiler/src/main/pascal/runtime.arc.pas')) then
   begin
     Ignore('<toolchain-missing>');
     Exit;
   end;
+  ObjDir := Root + 'compiler/target/test-archive-rtl';
+  ScriptOut := '';
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := Root + 'scripts/build-rtl-objects.sh';
+    Proc.Parameters.Add(Compiler);
+    Proc.Parameters.Add(ObjDir);
+    Proc.Parameters.Add('--with-startup');
+    Proc.Execute();
+    repeat
+      Chunk := Proc.ReadOutput();
+      ScriptOut := ScriptOut + Chunk
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    if Proc.ExitCode <> 0 then
+    begin
+      Ignore('<toolchain-missing>');
+      Exit;
+    end;
+  finally
+    Proc.Free();
+  end;
+
+  { Bundle the built objects into a temp archive with ar.  Split the script's
+    stdout (one object path per line) via TStringList. }
+  ArPath := IncludeTrailingPathDelimiter(ObjDir) + 'rtl_test.a';
+  DeleteFile(ArPath);
+  ObjList := TStringList.Create();
+  Proc := TProcess.Create(nil);
+  try
+    ObjList.Text := ScriptOut;
+    Proc.Executable := 'ar';
+    Proc.Parameters.Add('rcs');
+    Proc.Parameters.Add(ArPath);
+    for I := 0 to ObjList.Count - 1 do
+      if Trim(ObjList.Strings[I]) <> '' then
+        Proc.Parameters.Add(Trim(ObjList.Strings[I]));
+    Proc.Execute();
+    Proc.WaitOnExit();
+    if (Proc.ExitCode <> 0) or (not FileExists(ArPath)) then
+    begin
+      Ignore('<toolchain-missing>');
+      Exit;
+    end;
+  finally
+    Proc.Free();
+    ObjList.Free();
+  end;
+
   Members := TList<TArchiveMember>.Create();
   try
-    ReadArchiveFile(RTLPath, Members);
+    ReadArchiveFile(ArPath, Members);
     AssertTrue('expected several RTL members, got '
       + IntToStr(Members.Count), Members.Count >= 5);
     { A member whose name exceeds 15 chars exercises the GNU long-name (//)

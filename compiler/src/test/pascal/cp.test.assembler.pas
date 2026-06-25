@@ -83,7 +83,6 @@ type
     FCompiler: string;
     FRTLPath: string;
     FStdlibPath: string;
-    FRTL: string;
     FScratch: string;
     FCounter: Integer;
     function ProjectRoot: string;
@@ -752,7 +751,6 @@ begin
     FCompiler := '/tmp/fp_blaise3';
   FRTLPath := ProjectRoot() + 'compiler/src/main/pascal';
   FStdlibPath := ProjectRoot() + 'stdlib/src/main/pascal';
-  FRTL := ProjectRoot() + 'compiler/target/blaise_rtl.a';
   FScratch := ProjectRoot() + 'compiler/target/asm_scratch/';
   ForceDirectories(FScratch);
   FCounter := 0;
@@ -763,12 +761,15 @@ var
   SrcFile, OutFile, CompOut, RunOut: string;
   Rc: Integer;
 begin
-  Result := FileExists(FCompiler) and FileExists(FRTL);
+  { The compiler binary source-builds the RTL itself (no blaise_rtl.a); only
+    the binary and the RTL source need to be present. }
+  Result := FileExists(FCompiler)
+        and FileExists(FRTLPath + '/runtime.arc.pas');
   if (not Result) and (not GInternalAsmSkipNoted) then
   begin
     GInternalAsmSkipNoted := True;
     WriteLn(StdErr, 'note: TInternalAsmE2ETests skipped — compiler binary "',
-            FCompiler, '" or RTL "', FRTL, '" not found ',
+            FCompiler, '" or RTL source not found ',
             '(set BLAISE_QBE_COMPILER to a QBE-backend blaise binary to run them)');
     Exit;
   end;

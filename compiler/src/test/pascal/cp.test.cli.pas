@@ -35,7 +35,6 @@ type
     FCompiler: string;
     FRTLPath: string;
     FStdlibPath: string;
-    FRTL: string;
     FScratch: string;
     FCounter: Integer;
     function ProjectRoot: string;
@@ -144,7 +143,6 @@ begin
     FCompiler := '/tmp/fp_blaise2';
   FRTLPath := ProjectRoot() + 'compiler/src/main/pascal';
   FStdlibPath := ProjectRoot() + 'stdlib/src/main/pascal';
-  FRTL := ProjectRoot() + 'compiler/target/blaise_rtl.a';
   FScratch := ProjectRoot() + 'compiler/target/cli_scratch/';
   ForceDirectories(FScratch);
   FCounter := 0;
@@ -155,12 +153,15 @@ var
   Out_: string;
   EC: Integer;
 begin
-  Result := FileExists(FCompiler) and FileExists(FRTL);
+  { The compiler binary source-builds the RTL itself (no blaise_rtl.a); only
+    the binary and the RTL source need to be present. }
+  Result := FileExists(FCompiler)
+        and FileExists(FRTLPath + '/runtime.arc.pas');
   if (not Result) and (not GCLISkipNoted) then
   begin
     GCLISkipNoted := True;
     WriteLn(StdErr, 'note: TCLIContractTests skipped — compiler binary "',
-            FCompiler, '" or RTL "', FRTL, '" not found ',
+            FCompiler, '" or RTL source not found ',
             '(set BLAISE_QBE_COMPILER to a QBE-backend blaise binary to run them)');
     Exit;
   end;

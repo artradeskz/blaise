@@ -20,7 +20,8 @@ interface
 
 uses
   Classes, SysUtils, Process, blaise.testing,
-  uLexer, uParser, uAST, uSymbolTable, uSemantic, blaise.codegen.qbe;
+  uLexer, uParser, uAST, uSymbolTable, uSemantic, blaise.codegen.qbe,
+  cp.test.rtllink;
 
 function ProjectRootOFO: string;
 function RunCmdOFO(const AExe: string; const AArgs: array of string): Integer;
@@ -157,7 +158,7 @@ function TProcTypesOfObjectTests.CompileAndRun(const ASrc: string): string;
 var
   IR:                       string;
   Root:                     string;
-  QBE, RTL, Scratch:        string;
+  QBE, Scratch:             string;
   IRFile, AsmFile, BinFile: string;
   Lst:                      TStringList;
   Proc:                     TProcess;
@@ -166,8 +167,7 @@ begin
   Result := '';
   Root   := ProjectRootOFO();
   QBE    := Root + 'vendor/qbe/qbe';
-  RTL    := Root + 'compiler/target/blaise_rtl.a';
-  if not (FileExists(QBE) and FileExists(RTL)) then
+  if not RTLLinkToolchainAvailable(Root) then
   begin
     Result := '<toolchain-missing>';
     Exit;
@@ -193,7 +193,7 @@ begin
     Exit;
   end;
 
-  if RunCmdOFO('cc', ['-o', BinFile, AsmFile, RTL]) <> 0 then
+  if LinkProgramWithRTL(Root, AsmFile, BinFile) <> 0 then
   begin
     Result := '<link-failed>';
     Exit;
