@@ -6784,22 +6784,30 @@ begin
       ArgTemp  := AllocTemp();
       EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
-      EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
-      FlushPendingReleases(PMark);
-      EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
-      ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
-      ArgTemps.Free();
-      { Receiver was a +1-owned temporary (function/property return) used
-        transiently — release it so the temporary does not leak. }
-      if ExprOwnsRef(ACall.ObjExpr) then
-        EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
-      Exit;
-    end;
-    if MDecl.OwnerTypeName <> '' then
-      FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name)
+      FuncName := FPtrTemp;
+    end
     else
-      FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
-    EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+    begin
+      if MDecl.OwnerTypeName <> '' then
+        FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name)
+      else
+        FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
+    end;
+    if (ACall.ResolvedReturnTypeDesc <> nil) and
+       (ACall.ResolvedReturnTypeDesc.Kind = tyRecord) then
+    begin
+      SretTemp := AllocTemp();
+      EmitLine(Format('  %s =l alloc8 %d',
+        [SretTemp, TRecordTypeDesc(ACall.ResolvedReturnTypeDesc).TotalSize()]));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+        [SretTemp, TRecordTypeDesc(ACall.ResolvedReturnTypeDesc).TotalSize()]));
+      Self.EmitRecordReturnCallSite(FuncName, ArgLine,
+        TRecordTypeDesc(ACall.ResolvedReturnTypeDesc), SretTemp);
+      if not Self.IsRecordManagedClean(TRecordTypeDesc(ACall.ResolvedReturnTypeDesc)) then
+        Self.EmitRecordReleaseFields(TRecordTypeDesc(ACall.ResolvedReturnTypeDesc), SretTemp);
+    end
+    else
+      EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     FlushPendingReleases(PMark);
     EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
     ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
@@ -6995,7 +7003,7 @@ begin
       ArgTemp  := AllocTemp();
       EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
-      EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+      FuncName := FPtrTemp;
     end
     else
     begin
@@ -7004,8 +7012,23 @@ begin
         FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name)
       else
         FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
-      EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     end;
+
+    if (ACall.ResolvedReturnTypeDesc <> nil) and
+       (ACall.ResolvedReturnTypeDesc.Kind = tyRecord) then
+    begin
+      SretTemp := AllocTemp();
+      EmitLine(Format('  %s =l alloc8 %d',
+        [SretTemp, TRecordTypeDesc(ACall.ResolvedReturnTypeDesc).TotalSize()]));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+        [SretTemp, TRecordTypeDesc(ACall.ResolvedReturnTypeDesc).TotalSize()]));
+      Self.EmitRecordReturnCallSite(FuncName, ArgLine,
+        TRecordTypeDesc(ACall.ResolvedReturnTypeDesc), SretTemp);
+      if not Self.IsRecordManagedClean(TRecordTypeDesc(ACall.ResolvedReturnTypeDesc)) then
+        Self.EmitRecordReleaseFields(TRecordTypeDesc(ACall.ResolvedReturnTypeDesc), SretTemp);
+    end
+    else
+      EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     FlushPendingReleases(PMark);
     EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
     ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);

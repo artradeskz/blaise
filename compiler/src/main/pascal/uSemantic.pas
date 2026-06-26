@@ -7536,6 +7536,9 @@ begin
     AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
     ACall.ResolvedClassType := RT;
     ACall.ResolvedMethod    := MDecl;
+    if (MDecl.ResolvedReturnType <> nil) and
+       (MDecl.ResolvedReturnType.Kind = tyRecord) then
+      ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
     Exit;
   end;
 
@@ -7588,6 +7591,9 @@ begin
       AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
       ACall.ResolvedClassType := RT;
       ACall.ResolvedMethod    := MDecl;
+      if (MDecl.ResolvedReturnType <> nil) and
+         (MDecl.ResolvedReturnType.Kind = tyRecord) then
+        ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
       Exit;
     end;
   end;
@@ -7700,6 +7706,9 @@ begin
   ACall.ResolvedMethod    := MDecl;
   ACall.IsGlobal          := ObjSym.IsGlobal;
   ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
+  if (MDecl.ResolvedReturnType <> nil) and
+     (MDecl.ResolvedReturnType.Kind = tyRecord) then
+    ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
 end;
 
 { If AExpr is a diamond constructor call (RecordName ends with '<>'), replace

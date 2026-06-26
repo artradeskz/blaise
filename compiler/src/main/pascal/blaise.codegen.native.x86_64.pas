@@ -9023,6 +9023,9 @@ var
   HK:       TList<Integer>;
   HTotal:   Integer;
   RT:       TRecordTypeDesc;
+  IsSretDiscard: Boolean;
+  SretBufSize:   Integer;
+  SretRT:        TRecordTypeDesc;
 begin
   { Metaclass-var constructor dispatch in statement position: C.Create(args)
     where C is a 'class of' variable and the result is discarded.  Only the
@@ -9224,12 +9227,36 @@ begin
       'native backend: TMethodCallStmt has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
+  IsSretDiscard := (ACall.ResolvedReturnTypeDesc <> nil) and
+    (ACall.ResolvedReturnTypeDesc.Kind = tyRecord) and
+    (ClassifyRecordReturn(TRecordTypeDesc(ACall.ResolvedReturnTypeDesc)) = rcSret);
+  SretBufSize := 0;
+  SretRT      := nil;
+  if IsSretDiscard then
+  begin
+    SretRT      := TRecordTypeDesc(ACall.ResolvedReturnTypeDesc);
+    SretBufSize := (SretRT.TotalSize() + 15) and (-16);
+  end;
+
   UserSlots  := Self.CountArgSlots(MD.Params);
   TotalSlots := UserSlots + 1;
 
   if TotalSlots <= 6 then
   begin
-    { ≤6 total slots: push/pop strategy (Self in %rdi, args in %rsi..%r9). }
+    { ≤6 total slots: push/pop strategy (Self in %rdi, args in %rsi..%r9).
+      When IsSretDiscard is set, %rdi holds the throwaway buffer and Self
+      shifts to %rsi, so user args start at %rdx (IntBase = 2). }
+    if IsSretDiscard then
+    begin
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(Format(#9'subq $%d, %%rsp', [SretBufSize]));
+      Self.Emit(#9'movq %rsp, %rbx');
+      Self.Emit(#9'movq %rbx, %rdi');
+      Self.Emit(#9'xorl %esi, %esi');
+      Self.Emit(Format(#9'movq $%d, %%rdx', [SretRT.TotalSize()]));
+      Self.Emit(#9'callq memset');
+    end;
+
     Self.BeginCallArgs(MD.Params, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
     begin
@@ -9276,8 +9303,17 @@ begin
     else
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
 
-    Self.EmitPopMethodArgsToRegs(MD.Params, ACall.Args, 1);
-    Self.Emit(#9'movq %r10, %rdi');
+    if IsSretDiscard then
+    begin
+      Self.EmitPopMethodArgsToRegs(MD.Params, ACall.Args, 2);
+      Self.Emit(#9'movq %r10, %rsi');
+      Self.Emit(#9'movq %rbx, %rdi');
+    end
+    else
+    begin
+      Self.EmitPopMethodArgsToRegs(MD.Params, ACall.Args, 1);
+      Self.Emit(#9'movq %r10, %rdi');
+    end;
   end
   else
   begin
@@ -9359,7 +9395,10 @@ begin
 
   if MD.VTableSlot >= 0 then
   begin
-    Self.Emit(#9'movq (%rdi), %rax');
+    if IsSretDiscard then
+      Self.Emit(#9'movq (%rsi), %rax')
+    else
+      Self.Emit(#9'movq (%rdi), %rax');
     Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
     Self.Emit(#9'callq *%rax');
   end
@@ -9374,6 +9413,14 @@ begin
   end
   else
     Self.EndCallArgs();
+
+  if IsSretDiscard then
+  begin
+    if not Self.IsRecordManagedClean(SretRT) then
+      Self.EmitRecordFieldReleases(SretRT, '%rbx');
+    Self.Emit(Format(#9'addq $%d, %%rsp', [SretBufSize]));
+    Self.Emit(#9'popq %rbx');
+  end;
 end;
 
 { Shared static-dispatch call sequence for both inherited forms.  Marshals

@@ -142,6 +142,18 @@ type
       lives in the inline-asm commit; this test, from Andrew's parallel fix,
       locks it in.) }
     procedure TestRun_SretResult_ReadModifyOffsetZeroField;
+    { Regression: calling a record-returning METHOD as a statement (result
+      discarded) with no assignment target.  The SysV sret ABI puts the sret
+      pointer in %rdi and Self in %rsi, but without a buffer the callee wrote
+      the record through Self, corrupting the object.  Both backends. }
+    procedure TestRun_DiscardedRecordReturn_ManagedField;
+    { Same for a small record with only scalar fields (register-returned,
+      not sret) — the return value goes to %rax and is harmlessly discarded,
+      but we must verify codegen doesn't crash. }
+    procedure TestRun_DiscardedRecordReturn_ScalarOnly;
+    { Discarded record-returning call via an expression receiver
+      (Obj.RecordMethod();).  Tests the ObjExpr path. }
+    procedure TestRun_DiscardedRecordReturn_ObjExprReceiver;
   end;
 
 implementation
@@ -1102,6 +1114,109 @@ begin
   { The string field forces a genuine sret return (24 bytes); reading
     Result.A (offset 0) mid-body must deref the Result pointer. }
   AssertRunsOnAll(Src, '11 hi 20' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_DiscardedRecordReturn_ManagedField;
+const
+  Src = '''
+    program P;
+    type
+      TToken = record
+        Kind: Integer;
+        Value: string;
+      end;
+      TLexer = class
+        FName: string;
+        function Next(): TToken;
+        function GetName(): string;
+      end;
+    function TLexer.Next(): TToken;
+    begin
+      Result.Kind := 42;
+      Result.Value := 'hello'
+    end;
+    function TLexer.GetName(): string;
+    begin
+      Result := FName
+    end;
+    var L: TLexer;
+    begin
+      L := TLexer.Create();
+      L.FName := 'mylex';
+      L.Next();
+      WriteLn(L.GetName());
+      L.Free()
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'mylex' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_DiscardedRecordReturn_ScalarOnly;
+const
+  Src = '''
+    program P;
+    type
+      TPoint = record X, Y: Integer; end;
+      TObj = class
+        function Pos(): TPoint;
+      end;
+    function TObj.Pos(): TPoint;
+    begin
+      Result.X := 10;
+      Result.Y := 20
+    end;
+    var O: TObj;
+    begin
+      O := TObj.Create();
+      O.Pos();
+      WriteLn('ok');
+      O.Free()
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'ok' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_DiscardedRecordReturn_ObjExprReceiver;
+const
+  Src = '''
+    program P;
+    type
+      TRec = record N: Integer; S: string; end;
+      TFactory = class
+        FTag: string;
+        function Make(): TRec;
+        function GetTag(): string;
+      end;
+      THolder = class
+        F: TFactory;
+      end;
+    function TFactory.Make(): TRec;
+    begin
+      Result.N := 7;
+      Result.S := 'test'
+    end;
+    function TFactory.GetTag(): string;
+    begin
+      Result := FTag
+    end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.F := TFactory.Create();
+      H.F.FTag := 'mytag';
+      H.F.Make();
+      WriteLn(H.F.GetTag());
+      H.F.Free();
+      H.Free()
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'mytag' + LE, 0);
 end;
 
 initialization
