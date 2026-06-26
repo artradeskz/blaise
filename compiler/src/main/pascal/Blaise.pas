@@ -31,7 +31,7 @@ uses
   blaise.codegen.native.driver,
   uUnitLoader, uDebugOPDF, uDebugFacts, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
-  blaise.frontend.opts, uConfig;
+  blaise.frontend.opts, uConfig, uToolchain;
 
 type
   { Alias so existing signatures (ParseArgs out param, locals) read
@@ -480,6 +480,7 @@ var
   Front:     TFrontEndOpts;   { front-end-only flag bag, populated by ParseArgs }
   ToolErr:   string;          { CheckToolchain result ('' on success) }
   ValidErr:  string;          { Driver.ValidateOptions result ('' on success) }
+  RTLSrc:    string;          { RTL source dir added to the loader search path }
   PendingFlags: TStringList;  { deferred unknown flags (driver-private) }
   PendingArgs:  TStringList;  { lookahead token per pending flag ('' if none) }
   PendIdx:   Integer;         { drain cursor over the pending lists }
@@ -561,6 +562,24 @@ begin
 
   if (UnitCacheDir <> '') and (SearchPaths.IndexOf(UnitCacheDir) < 0) then
     SearchPaths.Add(UnitCacheDir);
+
+  { Always make the RTL source directory discoverable to the unit loader.  The
+    RTL units (runtime.*, rtl.platform.*, system) live in the compiler's own
+    source tree after the RTL-unification move; stdlib units such as `classes`
+    explicitly `uses runtime.arc`, so a program that uses them needs the RTL
+    source on the search path — without this the loader fails with
+    "Unit 'runtime.arc' not found".  The driver already source-builds the RTL
+    from this same directory at link time; here we add it for the front-end
+    loader too.  Resolution mirrors EnsureRTLObjects: --rtl-src, then
+    $BLAISE_RTL_SRC, then the binary/CWD-relative default. }
+  RTLSrc := Opts.RTLSrcDir;
+  if RTLSrc = '' then
+    RTLSrc := GetEnvironmentVariable('BLAISE_RTL_SRC');
+  if RTLSrc = '' then
+    RTLSrc := RTLSourceDir();
+  if (RTLSrc <> '') and DirectoryExists(RTLSrc)
+     and (SearchPaths.IndexOf(RTLSrc) < 0) then
+    SearchPaths.Add(RTLSrc);
 
   { Emit-mode / backend compatibility.  --emit-ir prints QBE IR and
     --emit-asm prints native assembly; PickTopDriver routes each to the
