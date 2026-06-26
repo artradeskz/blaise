@@ -88,7 +88,7 @@ entire FreeBSD work surface.
 
 === The runtime reaches the kernel through glibc
 
-`runtime/src/main/pascal/rtl.platform.posix.pas` is *pure Pascal* but is not
+`compiler/src/main/pascal/rtl.platform.posix.pas` is *pure Pascal* but is not
 syscall-direct: every primitive is an `external name` binding to a libc
 symbol — `open`, `read`, `write`, `lseek`, `close`, `fstat`, `stat`,
 `mkdir`, `clock_gettime`, `fork`, `execvp`, `waitpid`, `nanosleep`,
@@ -113,32 +113,43 @@ Consequences for FreeBSD:
 === The entry/startup model assumes glibc
 
 `blaise.codegen.native.x86_64.pas` (`EmitProgram`) emits an exported
-`main(argc, argv)` and relies on the CRT's `_start` →
-`__libc_start_main(main, ...)` to drive it.  The internal linker
-(`LinkViaInternalLinker` in `blaise.codegen.native.driver.pas`) links:
+`main(argc, argv)`.  The runtime now ships its *own* `_start` (the
+`runtime.start` RTL unit, since master commit 626ee4c9) which reads
+`argc`/`argv` off the stack and calls `__libc_start_main(main, ...)`; the
+internal linker (`LinkViaInternalLinker` in `blaise.codegen.native.driver.pas`)
+no longer scans for the host CRT objects (`Scrt1.o`, `crti.o`, `crtn.o`).  It
+links:
 
-* the host CRT objects discovered by `FindCrtObjects` in `uToolchain.pas`
-  (`Scrt1.o`, `crti.o`, `crtbeginS.o`, `crtendS.o`, `crtn.o`), searched
-  under `/usr/lib/x86_64-linux-gnu`, `/usr/lib/gcc/...`;
-* the program object and `blaise_rtl.a`;
-* in dynamic mode, against `libc.so.6` via the interpreter
+* the program object and the source-built RTL objects (including
+  `runtime.start`, which provides `_start`);
+* in the default dynamic mode, against `libc.so.6` via the interpreter
   `/lib64/ld-linux-x86-64.so.2` (both strings hard-coded in
-  `TLinker.BuildDynamic`).
+  `TLinker.BuildDynamic`) — so `__libc_start_main` is still resolved from
+  glibc on the Linux target.
 
-`__libc_start_main`, `Scrt1.o`, `libc.so.6`, and the glibc loader path are
-glibc-specific.  None exist on FreeBSD, whose libc startup convention,
-CRT objects (`crt1.o`), and run-time linker (`/libexec/ld-elf.so.1`)
-differ.
+`__libc_start_main`, `libc.so.6`, and the glibc loader path are glibc-specific.
+None exist on FreeBSD, whose run-time linker (`/libexec/ld-elf.so.1`) and libc
+differ.  Because the runtime already owns `_start` and the linker already has a
+static `ET_EXEC` / `_start` path (Strategy B), FreeBSD needs only a FreeBSD
+`_start` variant that calls `main` directly and exits via syscall — the
+link-time-swap seam is present (Step 3).
 
 === Toolchain discovery is Linux-pathed
 
-`uToolchain.pas`:
+`uToolchain.pas` and the driver:
 
 * `FindCrtObjects` searches Linux library directories only.
-* `FindRTLArchive`/`ResolveToolchain` locate one `blaise_rtl.a` — built for
-  the host.  A FreeBSD binary needs a FreeBSD-built `blaise_rtl.a`.
-* `TLinker` is always constructed via `LinuxX86_64Target()`; the driver
-  never selects a FreeBSD `TLinkTarget`.
+* The RTL is no longer a pre-built per-host archive.  `EnsureRTLObjects`
+  (`blaise.codegen.driver.pas`) compiles the embedded RTL source
+  (`compiler/src/main/pascal/runtime.*`, `rtl.platform.*`) in-process and links
+  the resulting `.o` files; the legacy `FindRTLArchive`/`blaise_rtl.a` path is
+  gone.  The RTL unit list it compiles is Linux-specific (it names
+  `rtl.platform.layout.linux`); a FreeBSD program must compile the FreeBSD
+  adapter set instead (Step 5).
+* The internal linker now honours `--target` (Step 1): it builds the resolved
+  toolkit's `TLinkTarget` rather than always `LinuxX86_64Target()`.  What
+  remains Linux-specific is the driver's unconditional `FindCrtObjects` /
+  dynamic-libc link line (Step 6 selects the static, CRT-free path for FreeBSD).
 
 [#syscall-strategy]
 == The central decision: how does the FreeBSD binary reach the kernel?
@@ -180,11 +191,11 @@ with a FreeBSD syscall stub layer.  Produce a *static* `ET_EXEC`
 !===
 ! libc symbol(s) ! Why a raw-syscall replacement is non-trivial
 
-! `pthread_create/join/mutex_*` (`blaise_thread.pas`)
+! `pthread_create/join/mutex_*` (`runtime.thread.pas`)
 ! Threading.  Reimplementing on raw `thr_new`/`_umtx_op` FreeBSD syscalls is
   real work, not a thin stub.
 
-! `mmap/munmap/mremap` (`blaise_mem.pas`)
+! `mmap/munmap/mremap` (`runtime.mem.pas`)
 ! The memory manager.  `mmap`/`munmap` map to syscalls cleanly, but FreeBSD
   has no `mremap`; the allocator's in-place-grow path needs a fallback.
 
@@ -196,9 +207,10 @@ with a FreeBSD syscall stub layer.  Produce a *static* `ET_EXEC`
 ! Timezone-aware date math.  No syscall equivalent; needs a pure-Pascal
   tz/calendar implementation or shipping the rules.
 
-! `setjmp`/`longjmp` (`_blaise_longjmp`, `blaise_setjmp_x86_64.s`)
-! Exception unwinding.  Already hand-written assembly — portable, but must be
-  verified for the FreeBSD stack/`jmp_buf` layout.
+! `setjmp`/`longjmp` (`_blaise_longjmp`, `runtime.setjmp.pas`)
+! Exception unwinding.  Hand-written inline assembly (the former
+  `blaise_setjmp_x86_64.s`, since migrated into `runtime.setjmp.pas`) — portable,
+  but must be verified for the FreeBSD stack/`jmp_buf` layout.
 
 ! `atexit`
 ! Finalisation.  Replaceable with our own registry plus an `exit`-time flush.
@@ -315,6 +327,10 @@ no dynamic-link / sysroot work on this path.
 
 === Step 1 — FreeBSD link target + toolkit skeleton
 
+NOTE: Done.  The FreeBSD toolkit is registered and the internal linker honours
+`--target freebsd-x86_64` (stamps `EI_OSABI = 9`); test
+`TLinkerE2ETests.TestLink_FreeBSDTarget_StampsOSABI`.
+
 * Add `TFreeBSDX86_64Toolkit` and register it.  Its `MakeLinkTarget` returns a
   FreeBSD `TLinkTarget` with `OSABI := ELFOSABI_FREEBSD`,
   `EMachine := EM_X86_64`, and the FreeBSD load base / page size
@@ -327,12 +343,27 @@ no dynamic-link / sysroot work on this path.
 
 === Step 2 — FreeBSD `TPlatformLayout` adapter
 
-* Add `TLayoutFreeBSDX86_64`: the FreeBSD `struct stat` field offsets (note
-  FreeBSD 12+ widened `ino_t`/`dev_t`; pin to a target major version),
-  `struct tm` layout, and the FreeBSD `O_*` / `S_IFDIR` / `CLOCK_REALTIME` /
-  `WNOHANG` / `SEEK_*` constant values.
+NOTE: Done.  `TPlatformLayoutFreeBSDX86_64` in
+`compiler/src/main/pascal/rtl.platform.layout.freebsd.pas`, pinned to FreeBSD
+14.x amd64 (also valid for 13.x — the `ino_t`/`dev_t` widening landed in
+FreeBSD 12 and has been stable since).  `struct stat` offsets `st_mode` = 24,
+`st_mtim.tv_sec` = 64, `st_size` = 112, `sizeof` = 224 (all differing from
+Linux); `O_CREAT`/`O_TRUNC`/`O_APPEND` = `$200`/`$400`/`$008` (differing); the
+remaining `S_*`/`SEEK_*`/`CLOCK_REALTIME`/`WNOHANG` share Linux's values.  The
+unit is a standalone sibling of `rtl.platform.layout.linux` — nothing in the
+default Linux build graph `uses` it, so it is composed only when the FreeBSD
+RTL is built (Step 5).  Test `cp.test.platformlayout.freebsd` asserts every
+constant and validates the `struct stat` accessors by planting sentinels at the
+FreeBSD offsets (catching an offset typo on the Linux host, ahead of the
+emulation lane).
+
+* Add `TPlatformLayoutFreeBSDX86_64`: the FreeBSD `struct stat` field offsets
+  (note FreeBSD 12+ widened `ino_t`/`dev_t`; pin to a target major version),
+  and the FreeBSD `O_*` / `S_IFDIR` / `CLOCK_REALTIME` /
+  `WNOHANG` / `SEEK_*` constant values.  (`struct tm` is not abstracted — its
+  used fields share an identical layout on Linux/FreeBSD amd64.)
 * *Verify:* a FreeBSD `fstat`-based `FileExists`/`FileAge`/`DirectoryExists`
-  returns correct results under emulation (Step 9) — static checks cannot
+  returns correct results under emulation (Step 8) — static checks cannot
   catch a wrong struct offset.
 
 === Step 3 — Freestanding `_start` entry stub
@@ -347,8 +378,10 @@ no dynamic-link / sysroot work on this path.
 
 === Step 4 — FreeBSD syscall leaf (the libc-replacement work)
 
-* Provide a FreeBSD syscall trampoline (a small `.s` stub like
-  `blaise_setjmp_x86_64.s`, or compiler-emitted): number in `%rax`, args in
+* Provide a FreeBSD syscall trampoline as inline-assembly Pascal stubs (the RTL
+  is now pure Pascal with `asm … end` bodies — there are no `.s` files; this
+  mirrors the Linux direct-syscall leaf `runtime.syscall.linux.pas` already
+  shipped under `--static`): number in `%rax`, args in
   `rdi/rsi/rdx/r10/r8/r9`, `syscall`, then branch on the *carry flag* to
   translate FreeBSD's CF-error convention into the errno-style negative return
   the existing Pascal call sites (`if Fd < 0 ...`) expect.
@@ -368,24 +401,24 @@ no dynamic-link / sysroot work on this path.
 
 * The compiler must link a FreeBSD-built RTL (the FreeBSD `TPlatformLayout` and
   kernel-stub) into a `--target freebsd-x86_64` program, not the host RTL.
-* *Transitional* (matches today's archive model): build a FreeBSD
-  `blaise_rtl-freebsd-x86_64.a` (RTL compiled with `--target freebsd-x86_64`,
-  composing the FreeBSD adapter set) and have `FindRTLArchive` select the
-  archive matching the *target*, not the host.
-* *End-state* (per the RTL-unification track in
-  `docs/native-target-architecture.adoc`): no per-target `.a` — the compiler
-  compiles the embedded RTL source for `freebsd-x86_64` in-process and links it.
-  Implement whichever is current when this step is reached; the FreeBSD adapter
-  set is the same either way.
+* The RTL-unification track (`docs/native-target-architecture.adoc`) has already
+  landed its end-state: there is no per-target `.a`.  `EnsureRTLObjects`
+  compiles the embedded RTL source in-process and links the `.o` files.  So this
+  step is a *unit-list* change, not an archive change: `EnsureRTLObjects` must
+  select the FreeBSD adapter set (`rtl.platform.layout.freebsd` in place of
+  `…layout.linux`, plus the FreeBSD kernel-stub / `runtime.start.static.freebsd`
+  in place of their Linux counterparts) when the target is `freebsd-x86_64`,
+  driven off `AOpts.Target` rather than the hard-coded `RTL_UNITS` list.
 * *Verify:* a `--target freebsd-x86_64` program links the FreeBSD layout +
   syscall-stub and contains no Linux/libc RTL code.
 
 === Step 6 — Drive target selection through the linker
 
-* `LinkViaInternalLinker` currently always builds `LinuxX86_64Target` and
-  calls `FindCrtObjects` unconditionally.  Drive it from the resolved toolkit:
-  select the FreeBSD `TLinkTarget`, and for the Strategy-B static path skip
-  CRT discovery and dynamic mode entirely (static `_start`, no interp).
+* `LinkViaInternalLinker` already builds the resolved toolkit's `TLinkTarget`
+  (Step 1), but the driver still drives the Linux dynamic-libc link line.  For
+  the Strategy-B static path, when the target is `freebsd-x86_64` skip dynamic
+  mode entirely (static `ET_EXEC`, freestanding `_start`, no interp, no libc
+  `NEEDED`).
 * *Verify:* `--target freebsd-x86_64` end-to-end emits a FreeBSD `ET_EXEC` on
   a Linux host with no external tools invoked.
 
