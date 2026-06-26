@@ -92,12 +92,9 @@ function sys_time(T: Pointer): Int64;
   runtime.libc.linux adapts that.) }
 function sys_getcwd(Buf: PChar; Size: Int64): Int64;
 
-{ Process exit — exit_group(2), terminates all threads.  Neither runs atexit
-  handlers (that lives in the atexit-registry leaf, a later step); for now the
-  bare `exit` (called by main's epilogue) and `_exit` both terminate directly.
-  `exit` is a reserved word in Pascal, so the Pascal proc is _sys_exit and the
-  asm body emits a bare `exit` label (like `write` -> _sys_write). }
-function _sys_exit(Code: Integer): Integer;
+{ _exit(2) — exit_group, terminates all threads, runs NO atexit handlers.
+  The bare `exit` (which DOES run atexit handlers, called by main's epilogue) is
+  defined by runtime.libc2.linux alongside the registry, not here. }
 procedure _exit(Code: Integer);
 
 implementation
@@ -382,20 +379,8 @@ asm
     ret
 end;
 
-{ exit_group(2) terminates the whole process (all threads) and does not return.
-  The bare `exit` (called by main's epilogue) and `_exit` are the same raw
-  terminator until the atexit-registry leaf lands.  Code arrives in %edi;
-  exit_group reads its status from %rdi, so no marshalling is needed. }
-function _sys_exit(Code: Integer): Integer;
-  assembler; nostackframe;
-asm
-.globl exit
-exit:
-    movq $231, %rax      { SYS_exit_group }
-    syscall
-    ret
-end;
-
+{ _exit(2): terminate immediately via exit_group, running no atexit handlers.
+  Code arrives in %edi; exit_group reads its status from %rdi. }
 procedure _exit(Code: Integer);
   assembler; nostackframe;
 asm
