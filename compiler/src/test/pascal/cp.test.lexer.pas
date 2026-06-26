@@ -82,6 +82,11 @@ type
     procedure TestStringLit_Simple;
     procedure TestStringLit_Empty;
     procedure TestStringLit_EmbeddedQuote;
+    { #nnnn / #$hhhh Unicode codepoint -> UTF-8 string literals }
+    procedure TestCodepoint_DecimalAscii;
+    procedure TestCodepoint_HexBmp_ThreeBytes;
+    procedure TestCodepoint_HexAstral_FourBytes;
+    procedure TestCodepoint_MergesWithStringAndEachOther;
 
     { Operators and punctuation }
     procedure TestOp_Plus;
@@ -447,6 +452,47 @@ begin
   tok := FLexer.Next();
   AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
   AssertEquals('Value', 'it''s', tok.Value);
+end;
+
+{ #nnnn / #$hhhh Unicode codepoint -> UTF-8 string literals }
+
+procedure TLexerTests.TestCodepoint_DecimalAscii;
+var tok: TToken;
+begin
+  SetLexer('#65');
+  tok := FLexer.Next();
+  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
+  AssertEquals('Value', 'A', tok.Value);   { codepoint 65 -> 1 byte $41 }
+end;
+
+procedure TLexerTests.TestCodepoint_HexBmp_ThreeBytes;
+var tok: TToken;
+begin
+  SetLexer('#$20AC');   { EURO SIGN -> UTF-8 E2 82 AC }
+  tok := FLexer.Next();
+  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
+  AssertEquals('len', 3, Length(tok.Value));
+  AssertEquals('Value', Chr($E2) + Chr($82) + Chr($AC), tok.Value);
+end;
+
+procedure TLexerTests.TestCodepoint_HexAstral_FourBytes;
+var tok: TToken;
+begin
+  SetLexer('#$1F600');  { GRINNING FACE -> UTF-8 F0 9F 98 80 }
+  tok := FLexer.Next();
+  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
+  AssertEquals('len', 4, Length(tok.Value));
+  AssertEquals('Value', Chr($F0) + Chr($9F) + Chr($98) + Chr($80), tok.Value);
+end;
+
+procedure TLexerTests.TestCodepoint_MergesWithStringAndEachOther;
+var tok: TToken;
+begin
+  { Adjacent # and '...' literals merge into one compile-time string. }
+  SetLexer('#72#73''!''');   { 'H' 'I' '!' }
+  tok := FLexer.Next();
+  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
+  AssertEquals('Value', 'HI!', tok.Value);
 end;
 
 { Operators and punctuation }

@@ -132,6 +132,7 @@ type
     FFilename: string;
     FDefines:  TStringList;   { conditional-compilation symbols, case-insensitive }
     function MapKeyword(const AUpper: string): TTokenKind;
+    function CodepointToUtf8(ACodepoint: Integer): string;
     function UnescapeString(const ARaw: string): string;
     function ProcessTextBlock(const ARaw: string): string;
     function DirectiveName(const AText: string): string;
@@ -287,11 +288,41 @@ begin
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;
 
+function TLexer.CodepointToUtf8(ACodepoint: Integer): string;
+{ Encode a Unicode scalar value as its UTF-8 byte sequence.  A `#nnnn` / `#$hhhh`
+  literal denotes a codepoint (NOT a raw byte), so the string it contributes is
+  that codepoint's UTF-8 encoding: #65 -> 'A' (1 byte), #$20AC -> 3 bytes,
+  #$1F600 -> 4 bytes.  Rejects values outside 0..U+10FFFF and the surrogate
+  range U+D800..U+DFFF, which are not valid scalar values. }
+var
+  N: Integer;
+begin
+  N := ACodepoint;
+  if (N < 0) or (N > $10FFFF) or ((N >= $D800) and (N <= $DFFF)) then
+    raise Exception.Create(Format(
+      'Invalid Unicode codepoint in character literal: %d (must be 0..$10FFFF, '
+      + 'excluding surrogates $D800..$DFFF)', [N]));
+  if N <= $7F then
+    Result := Chr(N)
+  else if N <= $7FF then
+    Result := Chr($C0 or (N shr 6))
+           + Chr($80 or (N and $3F))
+  else if N <= $FFFF then
+    Result := Chr($E0 or (N shr 12))
+           + Chr($80 or ((N shr 6) and $3F))
+           + Chr($80 or (N and $3F))
+  else
+    Result := Chr($F0 or (N shr 18))
+           + Chr($80 or ((N shr 12) and $3F))
+           + Chr($80 or ((N shr 6) and $3F))
+           + Chr($80 or (N and $3F));
+end;
+
 function TLexer.UnescapeString(const ARaw: string): string;
 { ARaw is the full source span. Handles: 'text' with '' → ' escaping,
-  #nn numeric char literals (decimal), and concatenated runs like
-  'abc'#13#10'def'. Uses OrdAt (0-based) so the body parses under both
-  FPC and the self-hosted Blaise compiler. }
+  #nnnn / #$hhhh Unicode-codepoint literals (decimal or hex, UTF-8 encoded),
+  and concatenated runs like 'abc'#13#10'def'. Uses OrdAt (0-based) so the body
+  parses under both FPC and the self-hosted Blaise compiler. }
 var
   I, Len, N, C: Integer;
 begin
@@ -327,18 +358,34 @@ begin
         end;
       end;
     end
-    else if C = 35 then  { '#' }
+    else if C = 35 then  { '#' — a Unicode codepoint, decimal #nnnn or hex #$hhhh }
     begin
       I := I + 1;
       N := 0;
-      while I < Len do
+      if (I < Len) and (OrdAt(ARaw, I) = 36) then  { '$' -> hexadecimal }
       begin
-        C := OrdAt(ARaw, I);
-        if (C < 48) or (C > 57) then Break;
-        N := N * 10 + (C - 48);
         I := I + 1;
+        while I < Len do
+        begin
+          C := OrdAt(ARaw, I);
+          if (C >= 48) and (C <= 57) then        N := N * 16 + (C - 48)
+          else if (C >= 65) and (C <= 70) then   N := N * 16 + (C - 55)  { A-F }
+          else if (C >= 97) and (C <= 102) then  N := N * 16 + (C - 87)  { a-f }
+          else Break;
+          I := I + 1;
+        end;
+      end
+      else
+      begin
+        while I < Len do
+        begin
+          C := OrdAt(ARaw, I);
+          if (C < 48) or (C > 57) then Break;
+          N := N * 10 + (C - 48);
+          I := I + 1;
+        end;
       end;
-      Result := Result + Chr(N);
+      Result := Result + CodepointToUtf8(N);
     end
     else
       I := I + 1;
