@@ -131,6 +131,7 @@ uses
   cp.test.e2e.strutils,
   cp.test.toolchain,
   cp.test.targettoolkit,
+  cp.test.platformlayout.freebsd,
   cp.test.dynarray,
   cp.test.math,
   cp.test.e2e.math,
