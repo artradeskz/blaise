@@ -68,6 +68,10 @@ type
     { Inline asm: a nostackframe asm-body function emits the verbatim block and
       NO compiler prologue (no pushq %rbp / frame subq). }
     procedure TestInlineAsm_VerbatimBody_NoPrologue;
+    { Regression: an implicit-Self call whose Self+args exceed the six integer
+      argument registers spills the overflow to the stack (it used to abort
+      codegen).  Asserts the slot-block overflow shape and the dispatch. }
+    procedure TestImplicitSelfCall_RegisterOverflow_Spills;
   end;
 
 implementation
@@ -680,6 +684,42 @@ begin
   AssertTrue('verbatim ret', Pos('ret', Region) >= 0);
   { nostackframe: no compiler-emitted prologue inside the function. }
   AssertTrue('no pushq %rbp prologue', Pos('pushq %rbp', Region) < 0);
+end;
+
+procedure TNativeConstArgTests.TestImplicitSelfCall_RegisterOverflow_Spills;
+const
+  Src = '''
+      program P;
+      type
+        TW = class
+          function C(a, b, c, d, e, f, g: Integer): Integer;
+          function D(): Integer;
+        end;
+      function TW.C(a, b, c, d, e, f, g: Integer): Integer;
+      begin
+        Result := a;
+      end;
+      function TW.D(): Integer;
+      begin
+        Result := C(1, 2, 3, 4, 5, 6, 7);
+      end;
+      begin
+      end.
+      ''';
+var
+  Region: string;
+begin
+  { Implicit-Self call C(...): Self (%rdi) + 7 args = 8 integer slots.  Six load
+    into registers; the last two spill to the stack.  The slot-block overflow
+    path stores Self into 0(%rsp) and fills all six integer arg registers —
+    unlike the <=6 push/pop fast path.  Before the fix this aborted codegen with
+    'arg register index 6 out of range'. }
+  Region := FuncRegion(GenAsm(Src), 'TW_D');
+  AssertTrue('overflow call dispatched', Pos('callq TW_C', Region) >= 0);
+  AssertTrue('Self stored into slot 0 (overflow slot-block path)',
+    Pos('movq %rax, 0(%rsp)', Region) >= 0);
+  AssertTrue('arg registers filled through %r9',
+    (Pos('%r8', Region) >= 0) and (Pos('%r9', Region) >= 0));
 end;
 
 initialization

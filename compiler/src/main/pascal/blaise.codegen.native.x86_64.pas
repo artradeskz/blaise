@@ -566,6 +566,13 @@ type
     { Emit a TMethodCallExpr (class method call, with explicit receiver).
       Loads Self into %rdi and evaluates scalar args; result in %rax/%xmm0. }
     procedure EmitMethodCallExpr(ACall: TMethodCallExpr);
+    { Implicit-Self regular (non-sret) method call whose register slots
+      (Self + args) exceed 6: evaluate args into a stack slot block (slot 0 =
+      Self), load the first six into registers and spill the rest, then dispatch
+      (vtable-aware) with Self in %rdi.  Mirrors EmitMethodCallExpr's >6-slot
+      branch; the implicit-Self expression path (EmitExprToEax) lacked it. }
+    procedure EmitImplicitSelfCallOverflow(MD: TMethodDecl;
+      AArgs: TObjectList; const ASym: string);
     { Emit a TMethodCallStmt (class method call in statement position). }
     procedure EmitMethodCallStmt(ACall: TMethodCallStmt);
     { Emit a TInheritedCallStmt (`inherited Method[(args)]`).  Direct static
@@ -6466,19 +6473,27 @@ begin
     if FC.IsImplicitSelfMethod then
     begin
       MD := TMethodDecl(FC.ResolvedDecl);
-      Self.BeginCallArgs(MD.Params, FC.Args);
-      for I := 0 to FC.Args.Count - 1 do
-        Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
-          TASTExpr(FC.Args.Items[I]), I);
-      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-      Self.EmitPopMethodArgsToRegs(MD.Params, FC.Args, 1);
-      Self.Emit(#9'movq %r10, %rdi');
-      { Implicit-Self call to a virtual method must dispatch through the vtable
-        (Self may be a more-derived instance), exactly as Self.Method() does;
-        a static callq would bind to the declaring class and break
-        polymorphism (and link-fail for an abstract base). }
-      Self.EmitSelfDispatch(MD, FuncSymbolOf(FC));
-      Self.EndCallArgs();
+      { Register slots = Self (%rdi) + the arg slots.  When they fit in the six
+        integer registers, use the push/pop-into-registers fast path; otherwise
+        spill the overflow to the stack per the SysV ABI. }
+      if Self.CountArgSlots(MD.Params) + 1 <= 6 then
+      begin
+        Self.BeginCallArgs(MD.Params, FC.Args);
+        for I := 0 to FC.Args.Count - 1 do
+          Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
+            TASTExpr(FC.Args.Items[I]), I);
+        Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+        Self.EmitPopMethodArgsToRegs(MD.Params, FC.Args, 1);
+        Self.Emit(#9'movq %r10, %rdi');
+        { Implicit-Self call to a virtual method must dispatch through the vtable
+          (Self may be a more-derived instance), exactly as Self.Method() does;
+          a static callq would bind to the declaring class and break
+          polymorphism (and link-fail for an abstract base). }
+        Self.EmitSelfDispatch(MD, FuncSymbolOf(FC));
+        Self.EndCallArgs();
+      end
+      else
+        Self.EmitImplicitSelfCallOverflow(MD, FC.Args, FuncSymbolOf(FC));
       if FC.ResolvedType <> nil then
         Self.EmitNarrowToType(FC.ResolvedType);
       Exit;
@@ -8343,6 +8358,61 @@ begin
       Self.Emit(#9'popq %rbx');
     end;
   end;
+end;
+
+procedure TX86_64Backend.EmitImplicitSelfCallOverflow(MD: TMethodDecl;
+  AArgs: TObjectList; const ASym: string);
+var
+  I, AllocSz, CleanUp, Dest: Integer;
+  Arg: TASTExpr;
+  HD, HK: TList<Integer>;
+  HTotal: Integer;
+begin
+  { Slot block: slot 0 = Self, slots 1.. = one per logical arg (matching
+    EmitMethodOverflowLoad's reader).  16-aligned. }
+  AllocSz := (((Self.CountArgSlots(MD.Params) + 1) * 8 + 15) and (-16));
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', AArgs, HD, HK);
+  Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    Dest := (I + 1) * 8;
+    if HK.Get(I) >= akRecCall then
+    begin
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [AllocSz + HTotal - HD.Get(I)]));
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end
+    else if TMethodParam(MD.Params.Items[I]).IsVarParam then
+    begin
+      Self.EmitVarArgAddrToRax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end
+    else if Self.OverflowArgIsFloat(MD.Params, I) then
+    begin
+      Self.EmitExprToXmm0(Arg);
+      Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
+        TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
+      Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
+    end
+    else
+    begin
+      Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end;
+  end;
+  { Self into slot 0. }
+  Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+  Self.Emit(#9'movq %rax, 0(%rsp)');
+  { Load slot 0 -> %rdi (Self) and the arg slots into %rsi.. / %xmm0.., spilling
+    the >6th integer slot to the stack; returns bytes to reclaim after the call. }
+  CleanUp := Self.EmitMethodOverflowLoad(MD.Params, AArgs, AllocSz);
+  { Self is now in %rdi — dispatch (vtable-aware) exactly like Self.Method(). }
+  Self.EmitSelfDispatch(MD, ASym);
+  Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, CleanUp, True);
+  HD.Free();
+  HK.Free();
 end;
 
 { Leave the ADDRESS of a var/out argument in %rax.  Shared by every

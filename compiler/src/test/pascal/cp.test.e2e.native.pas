@@ -386,6 +386,10 @@ type
     { Record value assigned into a record-typed field of the sret Result
       must be a full ARC-aware copy, not an 8-byte pointer store. }
     procedure TestRun_Native_SretResult_NestedRecordFieldAssign;
+    { Regression: implicit-Self method calls whose Self+args exceed six integer
+      registers must spill the overflow to the stack (the expression path used
+      to abort codegen with 'arg register index 6 out of range'). }
+    procedure TestRun_Native_ImplicitSelfCall_RegisterOverflow;
     { Subscripting a string-typed FIELD (Rec.S[I] / Obj.Data[I]) must be
       0-based like every other Blaise subscript (regression: QBE
       subtracted 1, native read garbage through the unhandled path). }
@@ -1417,6 +1421,43 @@ const
     end.
     ''';
 
+  { Implicit-Self method calls whose register slots (Self + args) exceed the
+    six System V integer registers must spill the overflow to the stack — the
+    implicit-Self expression path previously aborted codegen.  Covers a
+    non-virtual call (Self + 8 args = 9 slots, 3 spilled) and a virtual/vtable
+    call (Self + 7 args = 8 slots, 2 spilled); the values verify that every
+    arg, including the spilled ones, arrives intact. }
+  SrcImplicitSelfArgOverflow = '''
+    program Prg;
+    type
+      TWorker = class
+        function Sum8(a, b, c, d, e, f, g, h: Integer): Integer;
+        function VSum7(a, b, c, d, e, f, g: Integer): Integer; virtual;
+        function Drive(): string;
+      end;
+    function TWorker.Sum8(a, b, c, d, e, f, g, h: Integer): Integer;
+    begin
+      Result := a + b + c + d + e + f + g + h;
+    end;
+    function TWorker.VSum7(a, b, c, d, e, f, g: Integer): Integer;
+    begin
+      Result := a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7;
+    end;
+    function TWorker.Drive(): string;
+    begin
+      WriteLn(Sum8(1, 2, 3, 4, 5, 6, 7, 8));
+      WriteLn(VSum7(1, 1, 1, 1, 1, 1, 1));
+      Result := 'ok';
+    end;
+    var
+      W: TWorker;
+    begin
+      W := TWorker.Create();
+      WriteLn(W.Drive());
+      W.Free();
+    end.
+    ''';
+
 const
   SrcStringFieldCharRead = '''
     program Prg;
@@ -1470,6 +1511,13 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcSretNestedRecFieldAssign,
     '1' + LE + '5' + LE + '7' + LE + '70' + LE + 'x' + LE + '9' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ImplicitSelfCall_RegisterOverflow;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcImplicitSelfArgOverflow,
+    '36' + LE + '28' + LE + 'ok' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_EmptyProgram_ExitsZero;
