@@ -81,6 +81,11 @@ function wait4(Pid: Integer; Status: Pointer; Options: Integer;
                Rusage: Pointer): Integer;
 function sched_getaffinity(Pid: Integer; CpuSetSize: Int64;
                            Mask: Pointer): Integer;
+{ futex(2): the kernel primitive the threads leaf builds mutexes and join on.
+  6-arg syscall; arg4 (Timeout) arrives in %rcx -> moved to %r10.  Returns 0 or
+  a count on success, -errno on error.  Op = FUTEX_WAIT(0) / FUTEX_WAKE(1). }
+function futex(Uaddr: Pointer; Op, Val: Integer; Timeout: Pointer;
+               Uaddr2: Pointer; Val3: Integer): Integer;
 function getrandom(Buf: Pointer; Count: Int64; Flags: Integer): Int64;
 function arch_prctl(Code: Integer; Addr: Pointer): Integer;
 function kill(Pid, Sig: Integer): Integer;
@@ -135,6 +140,7 @@ const
   SYS_kill          = 62;
   SYS_getcwd        = 79;
   SYS_sched_getaffinity = 204;
+  SYS_futex         = 202;
   SYS_arch_prctl    = 158;
   SYS_time          = 201;
   SYS_getrandom     = 318;
@@ -342,6 +348,17 @@ function sched_getaffinity(Pid: Integer; CpuSetSize: Int64;
   assembler; nostackframe;
 asm
     movq $204, %rax      { SYS_sched_getaffinity }
+    syscall
+    ret
+end;
+
+{ futex has 6 args; arg4 (Timeout) arrives in %rcx -> move to %r10. }
+function futex(Uaddr: Pointer; Op, Val: Integer; Timeout: Pointer;
+               Uaddr2: Pointer; Val3: Integer): Integer;
+  assembler; nostackframe;
+asm
+    movq %rcx, %r10
+    movq $202, %rax      { SYS_futex }
     syscall
     ret
 end;

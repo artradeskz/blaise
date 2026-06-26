@@ -650,7 +650,7 @@ end;
 function ParseLine(const ALine: string; ALineNum: Integer): TParsedLine;
 var
   S: string;
-  P, OpEnd: Integer;
+  P, Q, OpEnd: Integer;
   Mnemonic: string;
   TmpOp: TOperand;
 begin
@@ -659,12 +659,35 @@ begin
   Result.NumOps := 0;
   Result.RawLine := ALine;
   Result.LineNum := ALineNum;
+  Result.HasLock := False;
   Result.Op1.Kind := opNone;
   Result.Op2.Kind := opNone;
   Result.Op3.Kind := opNone;
 
   S := TrimStr(ALine);
   if (Length(S) = 0) or (S[0]= Ord('#')) then Exit;
+
+  { Strip a brace comment (open/close = ASCII 123/125) that survived the lexer:
+    a whole-line or trailing comment inside an asm block.  Single line only;
+    remove the span from the open brace to the matching close brace, or to end
+    of line when unterminated. }
+  P := 0;
+  while P < Length(S) do
+  begin
+    if S[P] = 123 then
+    begin
+      Q := P + 1;
+      while (Q < Length(S)) and (S[Q] <> 125) do
+        Q := Q + 1;
+      if Q < Length(S) then
+        S := TrimStr(Copy(S, 0, P) + ' ' + Copy(S, Q + 1, Length(S)))
+      else
+        S := TrimStr(Copy(S, 0, P));
+    end
+    else
+      P := P + 1;
+  end;
+  if Length(S) = 0 then Exit;
 
   { Strip trailing comment, but skip over quoted strings so that '#'
     inside .ascii "..." is not mistaken for a comment start. }
@@ -1013,6 +1036,9 @@ function EncodeALU(var ACB: TCodeBuf; var ACtx: TEncodeContext;
 
 function EncodeIMul(var ACB: TCodeBuf; var ACtx: TEncodeContext;
   const ASrc, ADst: TOperand): string; forward;
+
+function EncodeXchg(var ACB: TCodeBuf; var ACtx: TEncodeContext;
+  const AMnem: string; const ASrc, ADst: TOperand): string; forward;
 
 function EncodeShift(var ACB: TCodeBuf; var ACtx: TEncodeContext;
   const AMnem: string; const ASrc, ADst: TOperand): string; forward;
@@ -1655,6 +1681,17 @@ begin
     Exit;
   end;
 
+  { ---- xchg / cmpxchg (atomic primitives) ----
+    AT&T order is `reg, r/m`.  xchg has an implicit lock when r/m is memory;
+    cmpxchg compares r/m against %eax/%rax and conditionally swaps in reg.
+    Both take the `reg, mem` and `reg, reg` forms the futex mutex needs. }
+  if (Mnem = 'xchgl') or (Mnem = 'xchgq')
+     or (Mnem = 'cmpxchgl') or (Mnem = 'cmpxchgq') then
+  begin
+    Result := EncodeXchg(CB, ACtx, Mnem, Op1, Op2);
+    Exit;
+  end;
+
   { ---- imulq ---- }
   if Mnem = 'imulq' then
   begin
@@ -2082,6 +2119,59 @@ begin
       CBEmit32(ACB, Integer(ASrc.Imm));
     end;
     ACtx.ImmTail := 0;
+    Result := ACB.Data;
+    Exit;
+  end;
+
+  raise EAssembler.Create(AMnem + ': unsupported operand combination');
+end;
+
+{ ---- XCHG / CMPXCHG encoder ------------------------------------------- }
+
+{ Atomic exchange and compare-exchange.  AT&T operand order is `reg, r/m`
+  (ASrc = the register, ADst = the register or memory target):
+    xchg    %reg, r/m   -> 87 /r  (mem form is implicitly atomic)
+    cmpxchg %reg, r/m   -> 0F B1 /r
+  Only the forms the futex mutex needs (reg->reg, reg->mem) are encoded. }
+function EncodeXchg(var ACB: TCodeBuf; var ACtx: TEncodeContext;
+  const AMnem: string; const ASrc, ADst: TOperand): string;
+var
+  W64, IsCmpxchg: Boolean;
+begin
+  W64 := AMnem[Length(AMnem)] = Ord('q');
+  IsCmpxchg := (AMnem = 'cmpxchgl') or (AMnem = 'cmpxchgq');
+
+  if ASrc.Kind <> opReg then
+    raise EAssembler.Create(AMnem + ': source must be a register');
+
+  { reg, reg }
+  if ADst.Kind = opReg then
+  begin
+    EmitRexIfNeeded(ACB, W64, ASrc.Reg, ADst.Reg, False);
+    if IsCmpxchg then
+    begin
+      CBEmit(ACB, $0F);
+      CBEmit(ACB, $B1);
+    end
+    else
+      CBEmit(ACB, $87);
+    CBEmit(ACB, MakeModRM(3, ASrc.Reg, ADst.Reg));
+    Result := ACB.Data;
+    Exit;
+  end;
+
+  { reg, mem/rip }
+  if IsMemLike(ADst) then
+  begin
+    EmitRexForMem(ACB, W64, ASrc.Reg, ADst, False);
+    if IsCmpxchg then
+    begin
+      CBEmit(ACB, $0F);
+      CBEmit(ACB, $B1);
+    end
+    else
+      CBEmit(ACB, $87);
+    EncodeMemOperand(ACB, ACtx, ADst, ASrc.Reg and 7);
     Result := ACB.Data;
     Exit;
   end;

@@ -35,6 +35,20 @@ uses
 
 procedure _start;
 
+{ The static TLS template, captured from PT_TLS at startup so each spawned thread
+  can build its own TLS block (runtime.thread.static.linux uses these via clone +
+  CLONE_SETTLS).  Zero TlsMemSz means the program has no thread-local storage. }
+var
+  GTlsInitAddr: Pointer;   { .tdata init image (= PT_TLS p_vaddr) }
+  GTlsFileSz:   Int64;     { bytes to copy from the init image }
+  GTlsMemSz:    Int64;     { total TLS size (.tdata + .tbss) }
+  GTlsAlign:    Int64;     { PT_TLS alignment }
+
+{ Build a fresh TLS block for a new thread and return its thread pointer (the
+  value to load into %fs).  Layout matches _start's SetupTLS: aligned TLS data
+  followed by the TCB self-pointer.  Returns nil when the program has no TLS. }
+function BuildThreadTLS: Pointer;
+
 implementation
 
 type
@@ -117,6 +131,12 @@ begin
   end;
   if TlsMemSz = 0 then Exit;
 
+  { Stash the template so BuildThreadTLS can reproduce this block per thread. }
+  GTlsInitAddr := Pointer(TlsVaddr);
+  GTlsFileSz   := TlsFileSz;
+  GTlsMemSz    := TlsMemSz;
+  GTlsAlign    := TlsAlign;
+
   { Allocate block = aligned(memsz) + 8 (TCB self-pointer).  mmap zero-fills. }
   BlockSize := AlignUp(TlsMemSz, TlsAlign) + 16;
   Block := mmap(nil, BlockSize, PROT_RW, MAP_PRIVANON, -1, 0);
@@ -138,6 +158,36 @@ begin
   TpSlot := PPointer(Tp);
   TpSlot^ := Tp;
   arch_prctl(ARCH_SET_FS, Tp);
+end;
+
+{ Build a per-thread TLS block from the template captured at startup and return
+  its thread pointer.  Mirrors SetupTLS's block construction (variant II: TLS
+  data, then the TCB self-pointer at the thread pointer).  The caller installs
+  the returned TP into %fs (clone's CLONE_SETTLS does that for a new thread). }
+function BuildThreadTLS: Pointer;
+var
+  Block, Tp: Pointer;
+  BlockSize, J: Int64;
+  Src, Dst: PChar;
+  TpSlot: PPointer;
+begin
+  Result := nil;
+  if GTlsMemSz = 0 then Exit;
+  BlockSize := AlignUp(GTlsMemSz, GTlsAlign) + 16;
+  Block := mmap(nil, BlockSize, PROT_RW, MAP_PRIVANON, -1, 0);
+  if Int64(Block) < 0 then Exit;
+  Src := PChar(GTlsInitAddr);
+  Dst := PChar(Block);
+  J := 0;
+  while J < GTlsFileSz do
+  begin
+    Dst[J] := Src[J];
+    J := J + 1;
+  end;
+  Tp := Pointer(PChar(Block) + AlignUp(GTlsMemSz, GTlsAlign));
+  TpSlot := PPointer(Tp);
+  TpSlot^ := Tp;
+  Result := Tp;
 end;
 
 { Call the program's `main(argc, argv)` (emitted by the backend) and return its
