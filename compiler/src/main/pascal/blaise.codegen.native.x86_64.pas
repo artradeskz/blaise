@@ -11283,8 +11283,17 @@ begin
     begin
       Self.EmitExprToEax(Asgn.Expr);
       Self.Emit(#9'pushq %rax');
-      Self.Emit(#9'movq %rax, %rdi');
-      Self.Emit(#9'callq _ClassAddRef');
+      { Elide the retain when the RHS already owns +1 (a call result): a
+        function/method returning a class leaves Result at +1 (the callee's
+        `Result := x` AddRef'd and the epilogue did not release it), so the
+        assignment consumes that transferred reference.  AddRef'ing again leaks
+        one ref per call.  This matches the tyString/tyDynArray branches above
+        and the QBE backend's ExprOwnsRef elision. }
+      if not NativeExprOwnsRef(Asgn.Expr) then
+      begin
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'callq _ClassAddRef');
+      end;
       if Asgn.IsVarParam then
       begin
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(Asgn.Name)]));

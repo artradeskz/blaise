@@ -38,6 +38,10 @@ type
 
     { obj.Field := MakeClass() consumes the call's +1 — no leak per store. }
     procedure TestDebug_ClassFieldFromCall_NoLeak;
+
+    { local := MakeClass() consumes the call's +1 — no leak per assignment.
+      Pins the native class-assignment AddRef elision against the QBE backend. }
+    procedure TestDebug_FuncReturnAssign_NoLeak;
     { Multiple same-named typed handlers share one slot — no over-release. }
     procedure TestDebug_MultiHandlerVar_NoOverRelease;
     { for-in over a TList: GetEnumerator's +1 result must be transferred
@@ -512,6 +516,35 @@ const
     end.
     ''';
 
+  { A function returning a class leaves Result at +1 (the callee's `Result := x`
+    AddRef'd and the epilogue did not release it).  Assigning that call result to
+    a local consumes the transferred reference — the assignment site must NOT
+    AddRef again, or one object leaks per call.  The native backend used to
+    AddRef class assignments unconditionally; this pins the elision. }
+  SrcFuncReturnAssign = '''
+    program P;
+    type
+      TThing = class N: Integer; end;
+    function MakeThing(): TThing;
+    begin
+      Result := TThing.Create();
+      Result.N := 9;
+    end;
+    var
+      T: TThing;
+      I, Sum: Integer;
+    begin
+      Sum := 0;
+      for I := 1 to 100 do
+      begin
+        T := MakeThing();
+        Sum := Sum + T.N;
+        T := nil;
+      end;
+      WriteLn(Sum);
+    end.
+    ''';
+
   SrcMultiHandlerVar = '''
     program P;
     type
@@ -547,6 +580,24 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcClassFieldFromCall, Output, ExitCode, True));
   AssertEquals('exit 0 (native)', 0, ExitCode);
   AssertEquals('stdout (native)', '7' + LE, Output);
+  AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_FuncReturnAssign_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcFuncReturnAssign, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', '900' + LE, Output);
+  AssertTrue('no leak report (qbe)', Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcFuncReturnAssign, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', '900' + LE, Output);
   AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
 end;
 
