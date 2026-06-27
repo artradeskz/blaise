@@ -389,6 +389,10 @@ type
       compound-body inline idiom used for try/finally/except bodies, loop
       bodies, the program block, and unit init sections.  Nil AList is a no-op. }
     procedure EmitStmtList(AList: TObjectList);
+    { Given a static-array element index already in %rax, scale it to a byte
+      offset: subtract the (non-zero) low bound, then multiply by the element
+      size.  The read-path subscript sites all spell this the same way. }
+    procedure EmitStaticElemScale(ASAT: TStaticArrayTypeDesc);
     { Lower a Write/WriteLn call (ANewline = WriteLn). }
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     { Lower a for loop. }
@@ -3551,9 +3555,7 @@ var
 begin
   SAT := TStaticArrayTypeDesc(ASub.StrExpr.ResolvedType);
   Self.EmitExprToEax(ASub.IndexExpr);          { index -> %rax }
-  if SAT.LowBound <> 0 then
-    Self.Emit(Format(#9'subq $%d, %%rax', [SAT.LowBound]));
-  Self.Emit(Format(#9'imulq $%d, %%rax', [SAT.ElementType.RawSize()]));
+  Self.EmitStaticElemScale(SAT);
   { Base address of the array's inline storage into %rcx. }
   if (ASub.StrExpr is TIdentExpr) and
      TIdentExpr(ASub.StrExpr).IsImplicitSelf and
@@ -5088,14 +5090,8 @@ begin
     Self.EmitExprToEax(TStringSubscriptExpr(AExpr).StrExpr);
     Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(TStringSubscriptExpr(AExpr).IndexExpr);
-    if TStaticArrayTypeDesc(
-         TStringSubscriptExpr(AExpr).StrExpr.ResolvedType).LowBound <> 0 then
-      Self.Emit(Format(#9'subq $%d, %%rax',
-        [TStaticArrayTypeDesc(
-          TStringSubscriptExpr(AExpr).StrExpr.ResolvedType).LowBound]));
-    Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TStaticArrayTypeDesc(TStringSubscriptExpr(AExpr).StrExpr.ResolvedType)
-        .ElementType.RawSize()]));
+    Self.EmitStaticElemScale(
+      TStaticArrayTypeDesc(TStringSubscriptExpr(AExpr).StrExpr.ResolvedType));
     Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
     Self.EmitLoadFloat('(%rax)',
@@ -6957,11 +6953,7 @@ begin
     Self.EmitExprToEax(SAE.StrExpr);
     Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SAE.IndexExpr);
-    if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound <> 0 then
-      Self.Emit(Format(#9'subq $%d, %%rax',
-        [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
-    Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+    Self.EmitStaticElemScale(TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType));
     Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
     { Record and nested static-array elements evaluate to their address —
@@ -7026,9 +7018,7 @@ begin
     begin
       SCAT := TStaticArrayTypeDesc(FAE.ConstArrayType);
       Self.EmitExprToEax(FAE.PropIndexExpr);          { index -> %rax }
-      if SCAT.LowBound <> 0 then
-        Self.Emit(Format(#9'subq $%d, %%rax', [SCAT.LowBound]));
-      Self.Emit(Format(#9'imulq $%d, %%rax', [SCAT.ElementType.RawSize()]));
+      Self.EmitStaticElemScale(SCAT);
       Self.Emit(Format(#9'leaq %s(%%rip), %%rcx',
         [NativeMangle(FAE.ConstArraySymbol)]));
       Self.Emit(#9'addq %rcx, %rax');
@@ -7292,11 +7282,7 @@ begin
     begin
       Self.Emit(#9'pushq %rcx');
       Self.EmitExprToEax(FAE.PropIndexExpr);
-      if TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound <> 0 then
-        Self.Emit(Format(#9'subq $%d, %%rax',
-          [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound]));
-      Self.Emit(Format(#9'imulq $%d, %%rax',
-        [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
+      Self.EmitStaticElemScale(TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc));
       Self.Emit(#9'popq %rcx');
       Self.Emit(#9'addq %rcx, %rax');
       if TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
@@ -7573,11 +7559,7 @@ begin
         Self.EmitExprToEax(SAE.StrExpr);
         Self.Emit(#9'pushq %rax');
         Self.EmitExprToEax(SAE.IndexExpr);
-        if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound <> 0 then
-          Self.Emit(Format(#9'subq $%d, %%rax',
-            [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
-        Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+        Self.EmitStaticElemScale(TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType));
         Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
@@ -7713,11 +7695,7 @@ begin
       begin
         Self.Emit(#9'pushq %rcx');
         Self.EmitExprToEax(FAE.PropIndexExpr);
-        if TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound <> 0 then
-          Self.Emit(Format(#9'subq $%d, %%rax',
-            [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).LowBound]));
-        Self.Emit(Format(#9'imulq $%d, %%rax',
-          [TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc).ElementType.RawSize()]));
+        Self.EmitStaticElemScale(TStaticArrayTypeDesc(FAE.FieldInfo.TypeDesc));
         Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
       end
@@ -10809,6 +10787,13 @@ begin
   if AList = nil then Exit;
   for I := 0 to AList.Count - 1 do
     Self.EmitStmt(TASTStmt(AList.Items[I]));
+end;
+
+procedure TX86_64Backend.EmitStaticElemScale(ASAT: TStaticArrayTypeDesc);
+begin
+  if ASAT.LowBound <> 0 then
+    Self.Emit(Format(#9'subq $%d, %%rax', [ASAT.LowBound]));
+  Self.Emit(Format(#9'imulq $%d, %%rax', [ASAT.ElementType.RawSize()]));
 end;
 
 procedure TX86_64Backend.EmitStmt(AStmt: TASTStmt);
