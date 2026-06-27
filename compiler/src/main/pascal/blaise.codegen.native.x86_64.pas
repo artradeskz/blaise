@@ -726,6 +726,18 @@ type
       pattern (movsd %xmm0). }
     function EmitMethodOverflowLoad(AParams, AArgs: TObjectList;
       AAllocSz: Integer): Integer;
+    { Store every logical argument into its 8-byte slot in the >6-slot call
+      frame already allocated at (%rsp): slot I goes to (I+1)*8(%rsp) (slot 0 is
+      reserved for Self).  Dispatches per arg kind — a hoisted akRecCall buffer
+      is reloaded from its hoist depth, a var/out param stores its address, a
+      by-value float stores the width-adjusted xmm bit pattern, and a plain
+      scalar stores %rax.  AHoistDepths/AHoistKinds are the (depth, kind) vectors
+      EmitArgHoist produced; AAllocSz/AHoistTotal frame the akRecCall reload
+      offset.  Shared verbatim by every >6-slot method/implicit-Self/metaclass
+      call path. }
+    procedure EmitArgsToSlots(AArgs, AParams: TObjectList;
+      AAllocSz, AHoistTotal: Integer;
+      AHoistDepths, AHoistKinds: TList<Integer>);
     { True when the parameter at AIndex is a by-value float-family param (the
       caller must store its slot as an xmm bit pattern, not via %rax). }
     function OverflowArgIsFloat(AParams: TObjectList; AIndex: Integer): Boolean;
@@ -8153,34 +8165,7 @@ begin
         OverflowSlots := TotalSlots - 6;
         AllocSz := ((TotalSlots * 8 + 15) and (-16));
         Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-        for I := 0 to ACall.Args.Count - 1 do
-        begin
-          Arg := TASTExpr(ACall.Args.Items[I]);
-          Dest := (I + 1) * 8;
-          if HK.Get(I) >= akRecCall then
-          begin
-            Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-              [AllocSz + HTotal - HD.Get(I)]));
-            Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-          end
-          else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-          begin
-            Self.EmitVarArgAddrToRax(Arg);
-            Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-          end
-          else if Self.OverflowArgIsFloat(MD.Params, I) then
-          begin
-            Self.EmitExprToXmm0(Arg);
-            Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
-              TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-            Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
-          end
-          else
-          begin
-            Self.EmitExprToEax(Arg);
-            Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-          end;
-        end;
+        Self.EmitArgsToSlots(ACall.Args, MD.Params, AllocSz, HTotal, HD, HK);
         Self.Emit(Format(#9'movq %%rbx, 0(%%rsp)', []));
         CleanUp := Self.EmitMethodOverflowLoad(MD.Params, ACall.Args, AllocSz);
         if ACall.IsMetaclassDispatch and (MD.VTableSlot >= 0) then
@@ -8354,34 +8339,7 @@ begin
     HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
 
-    for I := 0 to ACall.Args.Count - 1 do
-    begin
-      Arg := TASTExpr(ACall.Args.Items[I]);
-      Dest := (I + 1) * 8;
-      if HK.Get(I) >= akRecCall then
-      begin
-        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-          [AllocSz + HTotal - HD.Get(I)]));
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end
-      else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-      begin
-        Self.EmitVarArgAddrToRax(Arg);
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end
-      else if Self.OverflowArgIsFloat(MD.Params, I) then
-      begin
-        Self.EmitExprToXmm0(Arg);
-        Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
-          TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-        Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
-      end
-      else
-      begin
-        Self.EmitExprToEax(Arg);
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end;
-    end;
+    Self.EmitArgsToSlots(ACall.Args, MD.Params, AllocSz, HTotal, HD, HK);
 
     if ACall.ObjectName <> '' then
     begin
@@ -8450,33 +8408,7 @@ begin
   HK := TList<Integer>.Create();
   HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', AArgs, HD, HK);
   Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-  for I := 0 to AArgs.Count - 1 do
-  begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    Dest := (I + 1) * 8;
-    if HK.Get(I) >= akRecCall then
-    begin
-      Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [AllocSz + HTotal - HD.Get(I)]));
-      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-    end
-    else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-    begin
-      Self.EmitVarArgAddrToRax(Arg);
-      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-    end
-    else if Self.OverflowArgIsFloat(MD.Params, I) then
-    begin
-      Self.EmitExprToXmm0(Arg);
-      Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
-        TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-      Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
-    end
-    else
-    begin
-      Self.EmitExprToEax(Arg);
-      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-    end;
-  end;
+  Self.EmitArgsToSlots(AArgs, MD.Params, AllocSz, HTotal, HD, HK);
   { Self into slot 0. }
   Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
   Self.Emit(#9'movq %rax, 0(%rsp)');
@@ -8992,6 +8924,43 @@ begin
             not P.IsOpenArray;
 end;
 
+procedure TX86_64Backend.EmitArgsToSlots(AArgs, AParams: TObjectList;
+  AAllocSz, AHoistTotal: Integer;
+  AHoistDepths, AHoistKinds: TList<Integer>);
+var
+  I, Dest: Integer;
+  Arg: TASTExpr;
+begin
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    Dest := (I + 1) * 8;
+    if AHoistKinds.Get(I) >= akRecCall then
+    begin
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+        [AAllocSz + AHoistTotal - AHoistDepths.Get(I)]));
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end
+    else if TMethodParam(AParams.Items[I]).IsVarParam then
+    begin
+      Self.EmitVarArgAddrToRax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end
+    else if Self.OverflowArgIsFloat(AParams, I) then
+    begin
+      Self.EmitExprToXmm0(Arg);
+      Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
+        TMethodParam(AParams.Items[I]).ResolvedType.Kind = tySingle);
+      Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
+    end
+    else
+    begin
+      Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end;
+  end;
+end;
+
 function TX86_64Backend.EmitMethodOverflowLoad(AParams, AArgs: TObjectList;
   AAllocSz: Integer): Integer;
 var
@@ -9155,34 +9124,7 @@ begin
         OverflowSlots := TotalSlots - 6;
         AllocSz := ((TotalSlots * 8 + 15) and (-16));
         Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-        for I := 0 to ACall.Args.Count - 1 do
-        begin
-          Arg := TASTExpr(ACall.Args.Items[I]);
-          Dest := (I + 1) * 8;
-          if HK.Get(I) >= akRecCall then
-          begin
-            Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-              [AllocSz + HTotal - HD.Get(I)]));
-            Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-          end
-          else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-          begin
-            Self.EmitVarArgAddrToRax(Arg);
-            Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-          end
-          else if Self.OverflowArgIsFloat(MD.Params, I) then
-          begin
-            Self.EmitExprToXmm0(Arg);
-            Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
-              TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-            Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
-          end
-          else
-          begin
-            Self.EmitExprToEax(Arg);
-            Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-          end;
-        end;
+        Self.EmitArgsToSlots(ACall.Args, MD.Params, AllocSz, HTotal, HD, HK);
         Self.Emit(Format(#9'movq %%rbx, 0(%%rsp)', []));
         CleanUp := Self.EmitMethodOverflowLoad(MD.Params, ACall.Args, AllocSz);
         if MD.VTableSlot >= 0 then
@@ -9399,34 +9341,7 @@ begin
     HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
 
-    for I := 0 to ACall.Args.Count - 1 do
-    begin
-      Arg := TASTExpr(ACall.Args.Items[I]);
-      Dest := (I + 1) * 8;
-      if HK.Get(I) >= akRecCall then
-      begin
-        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-          [AllocSz + HTotal - HD.Get(I)]));
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end
-      else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-      begin
-        Self.EmitVarArgAddrToRax(Arg);
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end
-      else if Self.OverflowArgIsFloat(MD.Params, I) then
-      begin
-        Self.EmitExprToXmm0(Arg);
-        Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
-          TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-        Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
-      end
-      else
-      begin
-        Self.EmitExprToEax(Arg);
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end;
-    end;
+    Self.EmitArgsToSlots(ACall.Args, MD.Params, AllocSz, HTotal, HD, HK);
 
     if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
     begin
@@ -9546,34 +9461,7 @@ begin
     HK := TList<Integer>.Create();
     HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', AArgs, HD, HK);
     Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
-    for I := 0 to AArgs.Count - 1 do
-    begin
-      Arg := TASTExpr(AArgs.Items[I]);
-      Dest := (I + 1) * 8;
-      if HK.Get(I) >= akRecCall then
-      begin
-        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-          [AllocSz + HTotal - HD.Get(I)]));
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end
-      else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-      begin
-        Self.EmitVarArgAddrToRax(Arg);
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end
-      else if Self.OverflowArgIsFloat(MD.Params, I) then
-      begin
-        Self.EmitExprToXmm0(Arg);
-        Self.EmitXmm0WidthAdjust(Arg.ResolvedType,
-          TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-        Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [Dest]));
-      end
-      else
-      begin
-        Self.EmitExprToEax(Arg);
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
-      end;
-    end;
+    Self.EmitArgsToSlots(AArgs, MD.Params, AllocSz, HTotal, HD, HK);
     { Self into slot 0 (the implicit first integer arg). }
     Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
     Self.Emit(Format(#9'movq %%rax, 0(%%rsp)', []));
@@ -11894,33 +11782,7 @@ begin
       PCHK := TList<Integer>.Create();
       PCHTotal := Self.EmitArgHoist(MD.Params, nil, True, '', PC.Args, PCHD, PCHK);
       Self.Emit(Format(#9'subq $%d, %%rsp', [PCAllocSz]));
-      for I := 0 to PC.Args.Count - 1 do
-      begin
-        PCDest := (I + 1) * 8;
-        if PCHK.Get(I) >= akRecCall then
-        begin
-          Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-            [PCAllocSz + PCHTotal - PCHD.Get(I)]));
-          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
-        end
-        else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-        begin
-          Self.EmitVarArgAddrToRax(TASTExpr(PC.Args.Items[I]));
-          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
-        end
-        else if Self.OverflowArgIsFloat(MD.Params, I) then
-        begin
-          Self.EmitExprToXmm0(TASTExpr(PC.Args.Items[I]));
-          Self.EmitXmm0WidthAdjust(TASTExpr(PC.Args.Items[I]).ResolvedType,
-            TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
-          Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [PCDest]));
-        end
-        else
-        begin
-          Self.EmitExprToEax(TASTExpr(PC.Args.Items[I]));
-          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
-        end;
-      end;
+      Self.EmitArgsToSlots(PC.Args, MD.Params, PCAllocSz, PCHTotal, PCHD, PCHK);
       { Self into slot 0 -> %rdi. }
       Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
       Self.Emit(#9'movq %rax, 0(%rsp)');
