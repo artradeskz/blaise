@@ -7231,7 +7231,7 @@ begin
     else if Self.IsLocal(FAE.RecordName) then
       Self.EmitLocalRecordBase(FAE.RecordName, '%rcx')
     else
-      Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+      Self.EmitLeaqGlobal(FAE.RecordName, '%rcx');
     if FAE.FieldInfo.Offset > 0 then
       Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.FieldInfo.Offset]));
     Self.Emit(#9'movq (%rcx), %rcx');      { string data pointer }
@@ -7281,7 +7281,7 @@ begin
     else if Self.IsLocal(FAE.RecordName) then
       Self.EmitLocalRecordBase(FAE.RecordName, '%rcx')
     else
-      Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+      Self.EmitLeaqGlobal(FAE.RecordName, '%rcx');
     if FAE.FieldInfo.Offset > 0 then
       Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.FieldInfo.Offset]));
     if FAE.FieldInfo.TypeDesc.Kind = tyDynArray then
@@ -7479,17 +7479,22 @@ begin
       if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
          (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
       begin
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+        Self.EmitLeaqGlobal(FAE.RecordName, '%rcx');
         if FAE.FieldInfo.Offset = 0 then
           Self.Emit(#9'movq %rcx, %rax')
         else
           Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]));
       end
-      else if FAE.FieldInfo.Offset = 0 then
+      else if (FAE.FieldInfo.Offset = 0) and
+              (not Self.IsThreadVarGlobal(FAE.RecordName)) then
+        { Non-threadvar offset-0 fast path: read the field directly off the
+          PC-relative global.  threadvars must not use this — the slot is
+          TLS-resident, so fall through to EmitLeaqGlobal (which emits the
+          %fs:0 + @tpoff sequence) and an indirect load. }
         Self.EmitLoadVar(FAE.RecordName + '(%rip)', FAE.FieldInfo.TypeDesc)
       else
       begin
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+        Self.EmitLeaqGlobal(FAE.RecordName, '%rcx');
         Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
           FAE.FieldInfo.TypeDesc);
       end;
@@ -7695,7 +7700,7 @@ begin
         if Self.IsLocal(FAE.RecordName) then
           Self.EmitLocalRecordBase(FAE.RecordName, '%rcx')
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+          Self.EmitLeaqGlobal(FAE.RecordName, '%rcx');
       end;
       if FAE.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.FieldInfo.Offset]));
@@ -7772,7 +7777,7 @@ begin
         if Self.IsLocal(FAE.RecordName) then
           Self.EmitLocalRecordBase(FAE.RecordName, '%rcx')
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+          Self.EmitLeaqGlobal(FAE.RecordName, '%rcx');
       end;
       if (FAE.FieldInfo <> nil) and (FAE.FieldInfo.Offset > 0) then
         Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.FieldInfo.Offset]));
@@ -8273,7 +8278,7 @@ begin
         if Self.IsLocal(ACall.ObjectName) then
           Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+          Self.EmitLeaqGlobal(ACall.ObjectName, '%r10');
       end
       else if ACall.IsVarParam then
       begin
@@ -8489,7 +8494,7 @@ begin
     else if Self.IsLocal(FAE.RecordName) then
       Self.EmitLocalRecordBase(FAE.RecordName, '%rax')
     else
-      Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [FAE.RecordName]));
+      Self.EmitLeaqGlobal(FAE.RecordName, '%rax');
     if FAE.FieldInfo.Offset > 0 then
       Self.Emit(Format(#9'addq $%d, %%rax', [FAE.FieldInfo.Offset]));
   end
@@ -9298,7 +9303,7 @@ begin
       else if Self.IsLocal(ACall.ObjectName) then
         Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+        Self.EmitLeaqGlobal(ACall.ObjectName, '%r10');
     end
     else if ACall.IsVarParam then
     begin
@@ -9360,7 +9365,7 @@ begin
       else if Self.IsLocal(ACall.ObjectName) then
         Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ACall.ObjectName]));
+        Self.EmitLeaqGlobal(ACall.ObjectName, '%rax');
     end
     else if ACall.IsVarParam then
     begin
@@ -12054,7 +12059,7 @@ begin
       else if Self.IsLocal(FA.RecordName) then
         Self.Emit(Format(#9'leaq %s, %%rdx', [Self.VarOperand(FA.RecordName)]))
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rdx', [FA.RecordName]));
+        Self.EmitLeaqGlobal(FA.RecordName, '%rdx');
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rdx', [FA.FieldInfo.Offset]));
       if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
@@ -12148,7 +12153,7 @@ begin
       else if Self.IsLocal(FA.RecordName) then
         Self.EmitLocalRecordBase(FA.RecordName, '%rcx')
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+        Self.EmitLeaqGlobal(FA.RecordName, '%rcx');
       Self.EmitInterfaceToFieldSlotsAt(FA.Expr, '%rcx', FA.FieldInfo.Offset,
         FA.FieldInfo.TypeDesc);
       Exit;
@@ -12204,7 +12209,7 @@ begin
       else if Self.IsLocal(FA.RecordName) then
         Self.EmitLocalRecordBase(FA.RecordName, '%rcx')
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+        Self.EmitLeaqGlobal(FA.RecordName, '%rcx');
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rcx', [FA.FieldInfo.Offset]));
       { Store the code pointer at offset 0. }
@@ -12276,7 +12281,7 @@ begin
         if Self.IsLocal(FA.RecordName) then
           Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rbx', [FA.RecordName]));
+          Self.EmitLeaqGlobal(FA.RecordName, '%rbx');
       end;
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rbx', [FA.FieldInfo.Offset]));
@@ -12323,7 +12328,7 @@ begin
         if Self.IsLocal(FA.RecordName) then
           Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rbx', [FA.RecordName]));
+          Self.EmitLeaqGlobal(FA.RecordName, '%rbx');
       end;
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rbx', [FA.FieldInfo.Offset]));
@@ -12394,7 +12399,7 @@ begin
         if Self.IsLocal(FA.RecordName) then
           Self.EmitLocalRecordBase(FA.RecordName, '%rcx')
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+          Self.EmitLeaqGlobal(FA.RecordName, '%rcx');
       end;
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rcx', [FA.FieldInfo.Offset]));
@@ -12438,7 +12443,7 @@ begin
       else if Self.IsLocal(FA.RecordName) then
         Self.EmitLocalRecordBase(FA.RecordName, '%rcx')
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+        Self.EmitLeaqGlobal(FA.RecordName, '%rcx');
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rcx', [FA.FieldInfo.Offset]));
       Self.Emit(#9'pushq %rbx');
@@ -12714,7 +12719,7 @@ begin
       if Self.IsLocal(FA.RecordName) then
         Self.EmitLocalRecordBase(FA.RecordName, '%rcx')
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+        Self.EmitLeaqGlobal(FA.RecordName, '%rcx');
       if FA.FieldInfo.TypeDesc.IsString() then
       begin
         if not NativeExprOwnsRef(FA.Expr) then
@@ -14661,7 +14666,7 @@ begin
   else if Self.IsLocal(AFA.RecordName) then
     Self.EmitLocalRecordBase(AFA.RecordName, '%rcx')
   else
-    Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [AFA.RecordName]));
+    Self.EmitLeaqGlobal(AFA.RecordName, '%rcx');
   if AFA.FieldInfo.Offset > 0 then
     Self.Emit(Format(#9'addq $%d, %%rcx', [AFA.FieldInfo.Offset]));
 end;
@@ -15450,7 +15455,7 @@ begin
         if Self.IsLocal(ACall.ObjectName) then
           Self.Emit(Format(#9'leaq %s, %%rsi', [Self.VarOperand(ACall.ObjectName)]))
         else
-          Self.Emit(Format(#9'leaq %s(%%rip), %%rsi', [ACall.ObjectName]));
+          Self.EmitLeaqGlobal(ACall.ObjectName, '%rsi');
       end
       else if ACall.IsVarParam then
       begin

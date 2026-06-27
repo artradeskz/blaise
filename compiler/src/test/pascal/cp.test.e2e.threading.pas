@@ -32,6 +32,8 @@ type
     procedure TestRun_Thread_InheritedDestroy_CleanExit;
     procedure TestRun_ThreadVar_MainThread_ReadWrite;
     procedure TestRun_ThreadVar_MixedWithGlobalVar;
+    procedure TestRun_ThreadVar_RecordField_PerThreadIsolation;
+    procedure TestRun_ThreadVar_RecordMethod_PerThreadIsolation;
     procedure TestRun_PerThreadAllocator_IndependentAllocs;
     procedure TestRun_AtomicARC_SharedObject_NoCorruption;
   end;
@@ -365,6 +367,154 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcThreadVarMixed, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout', '30' + LE, Output)
+end;
+
+const
+  { A RECORD-typed threadvar mutated and read back per-thread.  Each thread
+    stamps its own id into the record-field threadvar, then spins re-reading it
+    and asserting it never changes.  If the record threadvar is addressed
+    statically (leaq Name(%rip)) instead of via TLS (%fs:0 + @tpoff), all
+    threads share one slot and clobber each other -> 'CORRUPT'.  Scalar
+    threadvars already use TLS; the bug was that record/aggregate threadvar
+    field access bypassed it. }
+  SrcThreadVarRecordIsolation =
+    '''
+    program P;
+    uses Classes;
+    type
+      TRec = record
+        Tag: Integer;
+      end;
+      TStampThread = class(TThread)
+        MyId: Integer;
+      protected
+        procedure Execute; override;
+      end;
+    threadvar
+      TVR: TRec;
+    var
+      Corrupt: Integer;
+    procedure TStampThread.Execute;
+    var I: Integer;
+    begin
+      TVR.Tag := Self.MyId;
+      for I := 0 to 200000 do
+        if TVR.Tag <> Self.MyId then
+        begin
+          Corrupt := 1;
+          Exit
+        end
+    end;
+    var
+      A, B, C: TStampThread;
+    begin
+      Corrupt := 0;
+      A := TStampThread.Create(True);
+      B := TStampThread.Create(True);
+      C := TStampThread.Create(True);
+      A.MyId := 11;
+      B.MyId := 22;
+      C.MyId := 33;
+      A.Start();
+      B.Start();
+      C.Start();
+      A.WaitFor();
+      B.WaitFor();
+      C.WaitFor();
+      if Corrupt = 0 then
+        WriteLn('ok')
+      else
+        WriteLn('CORRUPT')
+    end.
+    ''';
+
+procedure TE2EThreadingTests.TestRun_ThreadVar_RecordField_PerThreadIsolation;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcThreadVarRecordIsolation, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('stdout', 'ok' + LE, Output)
+end;
+
+const
+  { Same per-thread isolation guarantee, but the record threadvar is accessed
+    through METHOD CALLS (GR.Put / GR.Get) rather than direct field access.  The
+    method-call receiver ladder loads the record base too, and used the same
+    static `leaq Name(%rip)` for a global receiver — so this exercises the
+    receiver-load path specifically. }
+  SrcThreadVarRecordMethod =
+    '''
+    program P;
+    uses Classes;
+    type
+      TRec = record
+        N: Integer;
+        procedure Put(V: Integer);
+        function Get: Integer;
+      end;
+      TStampThread = class(TThread)
+        MyId: Integer;
+      protected
+        procedure Execute; override;
+      end;
+    procedure TRec.Put(V: Integer);
+    begin
+      N := V
+    end;
+    function TRec.Get: Integer;
+    begin
+      Result := N
+    end;
+    threadvar
+      GR: TRec;
+    var
+      Corrupt: Integer;
+    procedure TStampThread.Execute;
+    var I: Integer;
+    begin
+      GR.Put(Self.MyId);
+      for I := 0 to 200000 do
+        if GR.Get() <> Self.MyId then
+        begin
+          Corrupt := 1;
+          Exit
+        end
+    end;
+    var
+      A, B, C: TStampThread;
+    begin
+      Corrupt := 0;
+      A := TStampThread.Create(True);
+      B := TStampThread.Create(True);
+      C := TStampThread.Create(True);
+      A.MyId := 11;
+      B.MyId := 22;
+      C.MyId := 33;
+      A.Start();
+      B.Start();
+      C.Start();
+      A.WaitFor();
+      B.WaitFor();
+      C.WaitFor();
+      if Corrupt = 0 then
+        WriteLn('ok')
+      else
+        WriteLn('CORRUPT')
+    end.
+    ''';
+
+procedure TE2EThreadingTests.TestRun_ThreadVar_RecordMethod_PerThreadIsolation;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcThreadVarRecordMethod, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('stdout', 'ok' + LE, Output)
 end;
 
 const
