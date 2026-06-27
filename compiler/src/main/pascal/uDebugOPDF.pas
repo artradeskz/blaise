@@ -975,6 +975,7 @@ var
   ReadType, WriteType: Integer;
   RecSize: Integer;
   RF: TFieldInfo;
+  ReadMethSym, WriteMethSym: string;
 begin
   if AClass.Properties.Count = 0 then Exit;
   ClassTypeID := GetOrAllocTypeID(AClass.Name);
@@ -1002,8 +1003,23 @@ begin
     else
       WriteType := PAT_NONE;
 
-    RecSize := 28 + Length(PI.Name);
-    { 4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+8(WriteAddr)+2(NameLen) }
+    { Method-backed accessors carry the getter/setter SYMBOL name so the
+      debugger can resolve it via FindFunctionByName (which matches against the
+      recFunctionScope name = the mangled symbol) and inject the call.  The
+      symbol is the same one written as ReadAddr/WriteAddr below. }
+    if ReadType = PAT_METHOD then
+      ReadMethSym := MangledClassSym(AClass.Name) + '_' + PI.ReadMethod
+    else
+      ReadMethSym := '';
+    if WriteType = PAT_METHOD then
+      WriteMethSym := MangledClassSym(AClass.Name) + '_' + PI.WriteMethod
+    else
+      WriteMethSym := '';
+
+    { Fixed-size payload (30 bytes) + the three variable-length strings.
+      4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+
+      8(WriteAddr)+2(ReadMethodNameLen)+2(WriteMethodNameLen)+2(NameLen). }
+    RecSize := 32 + Length(ReadMethSym) + Length(WriteMethSym) + Length(PI.Name);
 
     L('');
     L('    # recProperty: ' + PI.Name);
@@ -1041,7 +1057,14 @@ begin
     else
       L('    .quad 0  # WriteAddr (none)');
 
-    EmitStrField(PI.Name);
+    { The reader (TDefProperty) expects all three length words FIRST, then the
+      three strings in order: ReadMethodName, WriteMethodName, Name. }
+    L('    .word ' + IntToStr(Length(ReadMethSym)) + '  # ReadMethodNameLen');
+    L('    .word ' + IntToStr(Length(WriteMethSym)) + '  # WriteMethodNameLen');
+    L('    .word ' + IntToStr(Length(PI.Name)) + '  # NameLen');
+    EmitNameData(ReadMethSym);
+    EmitNameData(WriteMethSym);
+    EmitNameData(PI.Name);
   end;
 end;
 
