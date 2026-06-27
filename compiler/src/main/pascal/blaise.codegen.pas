@@ -121,6 +121,18 @@ function RecretEightbyteIsSSE(ARec: TRecordTypeDesc; AStartByte: Integer): Boole
 function RecretClassify(ARec: TRecordTypeDesc;
   const ATarget: TTargetDesc): TRecReturnClass;
 
+{ ----------------------------------------------------------------------
+  Shared ARC ownership-transfer predicate.
+
+  True when AExpr, used as an r-value, leaves an ARC-managed value at
+  refcount +1 that the consuming site must NOT AddRef again (it consumes the
+  transferred reference).  Covers function/method calls and method-backed
+  property reads returning a class, string, or dynamic array.  The decision is
+  a pure walk over the AST node + its resolved type — no backend state — so it
+  is single-sourced here and both backends call it (formerly the byte-identical
+  twins ExprOwnsRef / NativeExprOwnsRef). }
+function ArcExprOwnsRef(AExpr: TASTExpr): Boolean;
+
 implementation
 
 function RecretManagedClean(ARec: TRecordTypeDesc): Boolean;
@@ -280,6 +292,68 @@ begin
         if      (not Eb0SSE) and Eb1SSE then Result := rcIntSSE
         else if Eb0SSE and (not Eb1SSE) then Result := rcSSEInt;
       end;
+  end;
+end;
+
+function ArcExprOwnsRef(AExpr: TASTExpr): Boolean;
+var
+  FA: TFieldAccessExpr;
+  MC: TMethodCallExpr;
+  IE: TIdentExpr;
+begin
+  Result := False;
+  if AExpr = nil then Exit;
+  if AExpr.ResolvedType = nil then Exit;
+  { Ownership transfer applies to every ARC-managed return value, not just
+    classes: a function/method returning a String or dynamic array leaves
+    its Result at refcount +1 (the callee AddRef'd on `Result := x` and did
+    not release Result at scope exit).  The caller's assignment site must
+    therefore NOT AddRef again — it consumes that transferred reference.
+    Without covering tyString/tyDynArray here the assignment branches emit a
+    spurious _StringAddRef/_DynArrayAddRef on the call result, which is never
+    balanced and leaks one buffer per call. }
+  if not (AExpr.ResolvedType.Kind in [tyClass, tyDynArray])
+     and not AExpr.ResolvedType.IsString() then Exit;
+  if AExpr is TIdentExpr then
+  begin
+    IE := TIdentExpr(AExpr);
+    if IE.IsImplicitSelfMethod then
+      Exit(True);
+  end;
+  { Constructor calls via TFieldAccessExpr (TFoo.Create) — do NOT own. }
+  if AExpr is TFieldAccessExpr then
+  begin
+    FA := TFieldAccessExpr(AExpr);
+    if FA.IsConstructorCall then Exit;
+    if FA.IsMethodCall then begin Result := True; Exit end;
+    { Method-backed property read (read GetX): the getter returns +1.
+      Field-backed reads (read FX) emit a plain load and do NOT own. }
+    if (FA.PropRead <> nil) and (FA.PropRead.ReadMethod <> '') then
+      Exit(True);
+  end;
+  { TMethodCallExpr: constructor calls do NOT own; all other method calls DO. }
+  if AExpr is TMethodCallExpr then
+  begin
+    MC := TMethodCallExpr(AExpr);
+    if not MC.IsConstructorCall then Result := True;
+    Exit;
+  end;
+  if AExpr is TFuncCallExpr then
+  begin
+    if (TFuncCallExpr(AExpr).ResolvedDecl <> nil) or
+       TFuncCallExpr(AExpr).IsIndirectCall then
+      Result := True;
+    Exit;
+  end;
+  { Indexed property subscript: L[I] desugars to Subscript(FieldAccess(Items))
+    where Items has a ReadMethod.  The subscript emitter delegates to the
+    getter — the result inherits the +1. }
+  if AExpr is TStringSubscriptExpr then
+  begin
+    if (TStringSubscriptExpr(AExpr).StrExpr is TFieldAccessExpr) and
+       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead <> nil) and
+       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead.ReadMethod <> '') then
+      Result := True;
   end;
 end;
 

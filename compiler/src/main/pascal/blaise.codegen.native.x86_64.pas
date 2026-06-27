@@ -27,7 +27,7 @@ interface
 
 uses
   SysUtils, Classes, contnrs, Generics.Collections, uAST, uSymbolTable, uStrCompat,
-  blaise.codegen.arcshapes, uDebugFacts,
+  blaise.codegen, blaise.codegen.arcshapes, uDebugFacts,
   blaise.codegen.native.backend, blaise.codegen.target;
 
 const
@@ -1778,58 +1778,10 @@ begin
 end;
 
 function NativeExprOwnsRef(AExpr: TASTExpr): Boolean;
-var
-  FA: TFieldAccessExpr;
-  MC: TMethodCallExpr;
-  IE: TIdentExpr;
 begin
-  Result := False;
-  if AExpr = nil then Exit;
-  if AExpr.ResolvedType = nil then Exit;
-  { Ownership transfer applies to every ARC-managed return value, not just
-    classes: a function/method returning a String or dynamic array leaves its
-    Result at refcount +1 (the callee AddRef'd on `Result := x` and did not
-    release Result at scope exit).  The caller's assignment site must therefore
-    NOT AddRef again — it consumes that transferred reference.  Without covering
-    tyString/tyDynArray here the assignment branches below emit a spurious
-    _StringAddRef/_DynArrayAddRef on the call result, which is never balanced
-    and leaks one buffer per call. }
-  if not (AExpr.ResolvedType.Kind in [tyClass, tyDynArray])
-     and not AExpr.ResolvedType.IsString() then Exit;
-  if AExpr is TIdentExpr then
-  begin
-    IE := TIdentExpr(AExpr);
-    if IE.IsImplicitSelfMethod then
-      Exit(True);
-  end;
-  if AExpr is TFieldAccessExpr then
-  begin
-    FA := TFieldAccessExpr(AExpr);
-    if FA.IsConstructorCall then Exit;
-    if FA.IsMethodCall then begin Result := True; Exit end;
-    if (FA.PropRead <> nil) and (FA.PropRead.ReadMethod <> '') then
-      Exit(True);
-  end;
-  if AExpr is TMethodCallExpr then
-  begin
-    MC := TMethodCallExpr(AExpr);
-    if not MC.IsConstructorCall then Result := True;
-    Exit;
-  end;
-  if AExpr is TFuncCallExpr then
-  begin
-    if (TFuncCallExpr(AExpr).ResolvedDecl <> nil) or
-       TFuncCallExpr(AExpr).IsIndirectCall then
-      Result := True;
-    Exit;
-  end;
-  if AExpr is TStringSubscriptExpr then
-  begin
-    if (TStringSubscriptExpr(AExpr).StrExpr is TFieldAccessExpr) and
-       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead <> nil) and
-       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead.ReadMethod <> '') then
-      Result := True;
-  end;
+  { Delegates to the shared backend-neutral predicate in blaise.codegen
+    (formerly a byte-identical twin of the QBE backend's ExprOwnsRef). }
+  Result := ArcExprOwnsRef(AExpr);
 end;
 
 { Emit an immortal class-name string blob and return the label+12 reference
