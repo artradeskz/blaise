@@ -5275,164 +5275,39 @@ begin
   end;
 end;
 
+{ The record-return ABI classifier and its leaf predicates now live as shared
+  free functions in blaise.codegen (byte-identical to the native backend's
+  former twin).  These methods delegate so existing Self.X call sites are
+  unchanged. }
 function TCodeGenQBE.IsRecordManagedClean(ARec: TRecordTypeDesc): Boolean;
-var
-  I: Integer;
-  F: TFieldInfo;
 begin
-  Result := False;
-  if ARec = nil then Exit;
-  for I := 0 to ARec.Fields.Count - 1 do
-  begin
-    F := TFieldInfo(ARec.Fields.Items[I]);
-    case F.TypeDesc.Kind of
-      tyString, tyClass, tyInterface, tyDynArray:
-        Exit;
-      tyRecord:
-        if not Self.IsRecordManagedClean(TRecordTypeDesc(F.TypeDesc)) then Exit;
-    end;
-  end;
-  Result := True;
+  Result := RecretManagedClean(ARec);
 end;
 
 function TCodeGenQBE.IsRecordAllIntegerLeaves(ARec: TRecordTypeDesc): Boolean;
-var
-  I: Integer;
-  F: TFieldInfo;
 begin
-  Result := False;
-  if ARec = nil then Exit;
-  for I := 0 to ARec.Fields.Count - 1 do
-  begin
-    F := TFieldInfo(ARec.Fields.Items[I]);
-    case F.TypeDesc.Kind of
-      tyInteger, tyInt64, tyUInt32, tyUInt64,
-      tySmallInt, tyWord, tyByte, tyBoolean,
-      tyEnum, tyPointer, tyProcedural, tyMetaClass:
-        ;
-      tyRecord:
-        if not Self.IsRecordAllIntegerLeaves(TRecordTypeDesc(F.TypeDesc)) then Exit;
-    else
-      Exit;
-    end;
-  end;
-  Result := True;
+  Result := RecretAllIntegerLeaves(ARec);
 end;
 
 function TCodeGenQBE.IsRecordAllFloatLeaves(ARec: TRecordTypeDesc): Boolean;
-var
-  I: Integer;
-  F: TFieldInfo;
 begin
-  Result := False;
-  if ARec = nil then Exit;
-  for I := 0 to ARec.Fields.Count - 1 do
-  begin
-    F := TFieldInfo(ARec.Fields.Items[I]);
-    case F.TypeDesc.Kind of
-      tyDouble, tySingle: ;
-      tyRecord:
-        if not Self.IsRecordAllFloatLeaves(TRecordTypeDesc(F.TypeDesc)) then Exit;
-    else
-      Exit;
-    end;
-  end;
-  Result := True;
+  Result := RecretAllFloatLeaves(ARec);
 end;
 
 function TCodeGenQBE.IsRecordAllIntOrFloatLeaves(ARec: TRecordTypeDesc): Boolean;
-var
-  I: Integer;
-  F: TFieldInfo;
 begin
-  Result := False;
-  if ARec = nil then Exit;
-  for I := 0 to ARec.Fields.Count - 1 do
-  begin
-    F := TFieldInfo(ARec.Fields.Items[I]);
-    case F.TypeDesc.Kind of
-      tyInteger, tyInt64, tyUInt32, tyUInt64,
-      tySmallInt, tyWord, tyByte, tyBoolean,
-      tyEnum, tyPointer, tyProcedural, tyMetaClass,
-      tyDouble, tySingle: ;
-      tyRecord:
-        if not Self.IsRecordAllIntOrFloatLeaves(TRecordTypeDesc(F.TypeDesc)) then Exit;
-    else
-      Exit;
-    end;
-  end;
-  Result := True;
+  Result := RecretAllIntOrFloatLeaves(ARec);
 end;
 
 function TCodeGenQBE.EightbyteIsSSE(ARec: TRecordTypeDesc;
   AStartByte: Integer): Boolean;
-var
-  I, Off: Integer;
-  F:      TFieldInfo;
 begin
-  Result := False;
-  if ARec = nil then Exit;
-  for I := 0 to ARec.Fields.Count - 1 do
-  begin
-    F   := TFieldInfo(ARec.Fields.Items[I]);
-    Off := F.Offset;
-    if (Off < AStartByte) or (Off >= AStartByte + 8) then Continue;
-    case F.TypeDesc.Kind of
-      tyDouble, tySingle:
-        Exit(True);
-      tyRecord:
-        if Self.EightbyteIsSSE(TRecordTypeDesc(F.TypeDesc),
-                          AStartByte - Off) then Exit(True);
-    end;
-  end;
+  Result := RecretEightbyteIsSSE(ARec, AStartByte);
 end;
 
 function TCodeGenQBE.ClassifyRecordReturn(ARec: TRecordTypeDesc): TRecReturnClass;
-var
-  Sz:               Integer;
-  Eb0SSE, Eb1SSE:   Boolean;
 begin
-  Result := rcSret;
-  if (ARec = nil) or (ARec.Kind <> tyRecord) then Exit;
-  if ARec.Fields.Count = 0 then Exit;
-  if not Self.IsRecordManagedClean(ARec) then Exit;
-  Sz := ARec.TotalSize();
-
-  if GTarget.OS = osWindows then
-  begin
-    if Self.IsRecordAllIntOrFloatLeaves(ARec) then
-      Result := rcWin64Agg;
-    Exit;
-  end;
-
-  if Self.IsRecordAllIntegerLeaves(ARec) then
-  begin
-    case Sz of
-      1, 2, 4, 8:                       Result := rcInt1;
-      9, 10, 11, 12, 13, 14, 15, 16:    Result := rcInt2;
-    end;
-    Exit;
-  end;
-
-  if Self.IsRecordAllFloatLeaves(ARec) then
-  begin
-    case Sz of
-      4, 8:                            Result := rcSSE1;
-      9, 10, 11, 12, 13, 14, 15, 16:   Result := rcSSE2;
-    end;
-    Exit;
-  end;
-
-  if not Self.IsRecordAllIntOrFloatLeaves(ARec) then Exit;
-  case Sz of
-    9, 10, 11, 12, 13, 14, 15, 16:
-      begin
-        Eb0SSE := Self.EightbyteIsSSE(ARec, 0);
-        Eb1SSE := Self.EightbyteIsSSE(ARec, 8);
-        if      (not Eb0SSE) and Eb1SSE then Result := rcIntSSE
-        else if Eb0SSE and (not Eb1SSE) then Result := rcSSEInt;
-      end;
-  end;
+  Result := RecretClassify(ARec, GTarget);
 end;
 
 procedure TCodeGenQBE.EmitRecordReturnSignature(var ASig: string;

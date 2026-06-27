@@ -27,7 +27,7 @@ unit blaise.codegen;
 interface
 
 uses
-  uAST, uSymbolTable, uDebugFacts;
+  uAST, uSymbolTable, uDebugFacts, blaise.codegen.target;
 
 type
   TRecReturnClass = (
@@ -91,6 +91,196 @@ type
     function GetOutput: string;
   end;
 
+{ ----------------------------------------------------------------------
+  Shared System V / Win64 record-return ABI classifier.
+
+  Both the QBE backend and the native x86-64 backend must agree, byte for
+  byte, on how a record-typed return value is passed (sret vs register, and
+  which register class).  The decision is a pure walk over the record's field
+  layout plus the target OS — no backend state — so it lives here as free
+  functions that both backends call, instead of being carried as two
+  drift-prone twins.  Only RecretClassify consults the target (the Win64
+  aggregate rule); the leaf predicates are target-independent type walks. }
+
+{ True when ARec (and every nested record) contains no managed fields
+  (string / class / interface / dynamic array) — a precondition for any
+  register return. }
+function RecretManagedClean(ARec: TRecordTypeDesc): Boolean;
+{ True when every leaf field is an integer-class scalar (or a nested record
+  thereof). }
+function RecretAllIntegerLeaves(ARec: TRecordTypeDesc): Boolean;
+{ True when every leaf field is a float (Double/Single) or a nested record
+  thereof. }
+function RecretAllFloatLeaves(ARec: TRecordTypeDesc): Boolean;
+{ True when every leaf field is an integer- or float-class scalar. }
+function RecretAllIntOrFloatLeaves(ARec: TRecordTypeDesc): Boolean;
+{ True when the eightbyte starting at AStartByte holds any float leaf — i.e.
+  the eightbyte is SSE-classified under the SysV mixed-class rules. }
+function RecretEightbyteIsSSE(ARec: TRecordTypeDesc; AStartByte: Integer): Boolean;
+{ Classify ARec's return-passing for ATarget's OS. }
+function RecretClassify(ARec: TRecordTypeDesc;
+  const ATarget: TTargetDesc): TRecReturnClass;
+
 implementation
+
+function RecretManagedClean(ARec: TRecordTypeDesc): Boolean;
+var
+  I: Integer;
+  F: TFieldInfo;
+begin
+  Result := False;
+  if ARec = nil then Exit;
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields.Items[I]);
+    case F.TypeDesc.Kind of
+      tyString, tyClass, tyInterface, tyDynArray:
+        Exit;
+      tyRecord:
+        if not RecretManagedClean(TRecordTypeDesc(F.TypeDesc)) then Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+function RecretAllIntegerLeaves(ARec: TRecordTypeDesc): Boolean;
+var
+  I: Integer;
+  F: TFieldInfo;
+begin
+  Result := False;
+  if ARec = nil then Exit;
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields.Items[I]);
+    case F.TypeDesc.Kind of
+      tyInteger, tyInt64, tyUInt32, tyUInt64,
+      tySmallInt, tyWord, tyByte, tyBoolean,
+      tyEnum, tyPointer, tyProcedural, tyMetaClass:
+        ;
+      tyRecord:
+        if not RecretAllIntegerLeaves(TRecordTypeDesc(F.TypeDesc)) then Exit;
+    else
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+function RecretAllFloatLeaves(ARec: TRecordTypeDesc): Boolean;
+var
+  I: Integer;
+  F: TFieldInfo;
+begin
+  Result := False;
+  if ARec = nil then Exit;
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields.Items[I]);
+    case F.TypeDesc.Kind of
+      tyDouble, tySingle: ;
+      tyRecord:
+        if not RecretAllFloatLeaves(TRecordTypeDesc(F.TypeDesc)) then Exit;
+    else
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+function RecretAllIntOrFloatLeaves(ARec: TRecordTypeDesc): Boolean;
+var
+  I: Integer;
+  F: TFieldInfo;
+begin
+  Result := False;
+  if ARec = nil then Exit;
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields.Items[I]);
+    case F.TypeDesc.Kind of
+      tyInteger, tyInt64, tyUInt32, tyUInt64,
+      tySmallInt, tyWord, tyByte, tyBoolean,
+      tyEnum, tyPointer, tyProcedural, tyMetaClass,
+      tyDouble, tySingle: ;
+      tyRecord:
+        if not RecretAllIntOrFloatLeaves(TRecordTypeDesc(F.TypeDesc)) then Exit;
+    else
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+function RecretEightbyteIsSSE(ARec: TRecordTypeDesc; AStartByte: Integer): Boolean;
+var
+  I, Off: Integer;
+  F:      TFieldInfo;
+begin
+  Result := False;
+  if ARec = nil then Exit;
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F   := TFieldInfo(ARec.Fields.Items[I]);
+    Off := F.Offset;
+    if (Off < AStartByte) or (Off >= AStartByte + 8) then Continue;
+    case F.TypeDesc.Kind of
+      tyDouble, tySingle:
+        Exit(True);
+      tyRecord:
+        if RecretEightbyteIsSSE(TRecordTypeDesc(F.TypeDesc),
+                          AStartByte - Off) then Exit(True);
+    end;
+  end;
+end;
+
+function RecretClassify(ARec: TRecordTypeDesc;
+  const ATarget: TTargetDesc): TRecReturnClass;
+var
+  Sz:               Integer;
+  Eb0SSE, Eb1SSE:   Boolean;
+begin
+  Result := rcSret;
+  if (ARec = nil) or (ARec.Kind <> tyRecord) then Exit;
+  if ARec.Fields.Count = 0 then Exit;
+  if not RecretManagedClean(ARec) then Exit;
+  Sz := ARec.TotalSize();
+
+  if ATarget.OS = osWindows then
+  begin
+    if RecretAllIntOrFloatLeaves(ARec) then
+      Result := rcWin64Agg;
+    Exit;
+  end;
+
+  if RecretAllIntegerLeaves(ARec) then
+  begin
+    case Sz of
+      1, 2, 4, 8:                       Result := rcInt1;
+      9, 10, 11, 12, 13, 14, 15, 16:    Result := rcInt2;
+    end;
+    Exit;
+  end;
+
+  if RecretAllFloatLeaves(ARec) then
+  begin
+    case Sz of
+      4, 8:                            Result := rcSSE1;
+      9, 10, 11, 12, 13, 14, 15, 16:   Result := rcSSE2;
+    end;
+    Exit;
+  end;
+
+  if not RecretAllIntOrFloatLeaves(ARec) then Exit;
+  case Sz of
+    9, 10, 11, 12, 13, 14, 15, 16:
+      begin
+        Eb0SSE := RecretEightbyteIsSSE(ARec, 0);
+        Eb1SSE := RecretEightbyteIsSSE(ARec, 8);
+        if      (not Eb0SSE) and Eb1SSE then Result := rcIntSSE
+        else if Eb0SSE and (not Eb1SSE) then Result := rcSSEInt;
+      end;
+  end;
+end;
 
 end.
