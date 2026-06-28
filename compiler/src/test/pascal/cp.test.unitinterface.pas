@@ -2559,7 +2559,7 @@ begin
   try
     Parser := TParser.Create(Lex);
     try
-      Result := Parser.ParseProgram();
+      Result := Parser.Parse();  { public entry; ParseProgram is a private internal }
     finally
       Parser.Free();
     end;
@@ -2691,11 +2691,12 @@ begin
   Iface := TUnitInterface.Create('U');
   try
     Buf := WriteUnitInterface(Iface);
-    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 4 since
-      TRoutineSig.IsStatic was added to the method-sig encoded layout (on top
-      of v3's IsClassVar/ClassVarEmitName, property IsStatic, ConstDecls). }
+    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 5 since
+      member Visibility (private/protected/strict) was added to the field,
+      method, and property encoded layouts (on top of v4's TRoutineSig.IsStatic
+      and v3's static-member facts). }
     AssertTrue('starts with magic',
-      Pos('BLAISE-IFACE 4', Buf) = 0);
+      Pos('BLAISE-IFACE 5', Buf) = 0);
   finally
     Iface.Free();
   end;

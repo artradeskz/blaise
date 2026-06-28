@@ -94,6 +94,10 @@ type
     pmJumboSetValue       { by-value jumbo (>64) set param: by-ref aggregate ABI }
   );
 
+  { TMemberVisibility is declared in uSymbolTable (so the symbol-table
+    descriptors can carry it without a circular unit dependency); uAST re-uses
+    that type for the parser-level AST member decls. }
+
   TIdentExpr = class(TASTExpr)
   public
     Name:              string;
@@ -148,6 +152,12 @@ type
     IsClassVarRead:   Boolean; { set by uSemantic — TypeName.StaticVar read; lower as a global load of ClassVarEmitName }
     ClassVarEmitName: string;  { mangled global label for an IsClassVarRead access }
     IsStaticPropGet:  Boolean; { set by uSemantic — TypeName.StaticProp read; ResolvedMethod is the static getter }
+    BackingFieldRedirect: Boolean; { set by uSemantic — FieldName was rewritten from a
+                                     property name to its (possibly private) backing
+                                     field; visibility was already enforced on the
+                                     property, so re-analysis of this node must NOT
+                                     re-check the backing field's visibility.  Transient
+                                     analysis flag — not serialised. }
     destructor Destroy; override;
   end;
 
@@ -749,6 +759,9 @@ type
                                   BOTH backends emit the slot under the exact label
                                   the read/write sites use, without re-deriving the
                                   unit prefix. }
+    Visibility:   TMemberVisibility; { set by uParser from the enclosing visibility
+                                       section; default mvPublic.  Enforced by
+                                       uSemantic's member-access checks. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -874,6 +887,8 @@ type
                             implementation section (no interface forward).  Such routines are
                             PRIVATE to the unit; overload resolution must not treat another
                             unit's same-named impl-only routine as a competing candidate. }
+    Visibility: TMemberVisibility; { set by uParser from the enclosing visibility section
+                                     when this is a class/record method; default mvPublic. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -913,6 +928,8 @@ type
     IsDefault:      Boolean; { declared with the `default` directive (Obj[I] sugar) }
     IsStatic:       Boolean; { set by uParser — declared `static`: sugar over a
                                static getter/setter; no implicit Self. }
+    Visibility:     TMemberVisibility; { set by uParser from the enclosing visibility
+                                         section; default mvPublic. }
   end;
 
   TClassTypeDef = class(TASTTypeDef)
@@ -2278,6 +2295,10 @@ begin
   Result.IsUnretained    := ASrc.IsUnretained;
   Result.IsClassVar      := ASrc.IsClassVar;
   Result.ClassVarEmitName := ASrc.ClassVarEmitName;
+  { Visibility must survive the export clone or a cross-unit consumer would see
+    every imported field as public and enforcement would silently disappear at
+    the unit boundary. }
+  Result.Visibility      := ASrc.Visibility;
 end;
 
 function ClonePropertyDecl(ASrc: TPropertyDecl): TPropertyDecl;
@@ -2293,6 +2314,7 @@ begin
     property whose accessors take no Self.  Both were silently dropped. }
   Result.IsDefault      := ASrc.IsDefault;
   Result.IsStatic       := ASrc.IsStatic;
+  Result.Visibility     := ASrc.Visibility;
 end;
 
 function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl;
@@ -2411,6 +2433,7 @@ begin
     export clone made every cross-unit static method look like a normal
     instance method, so TypeName.StaticMethod() resolution failed. }
   Result.IsStatic       := ASrc.IsStatic;
+  Result.Visibility     := ASrc.Visibility;
   for I := 0 to ASrc.Params.Count - 1 do
     Result.Params.Add(CloneMethodParam(TMethodParam(ASrc.Params.Items[I])));
   if ASrc.TypeParams <> nil then

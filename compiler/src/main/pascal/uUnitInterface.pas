@@ -94,6 +94,7 @@ type
                                    static and final non-virtual instance
                                    methods, so this is a distinct flag rather
                                    than being inferred from the slot. }
+    Visibility:   TMemberVisibility; { member access scope; default mvPublic }
     constructor Create;
     destructor Destroy; override;
   end;

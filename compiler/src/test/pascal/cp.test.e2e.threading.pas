@@ -110,18 +110,20 @@ const
     var I: Integer;
     begin
       { Spin until terminated.  The loop must exit *only* via the terminate
-        flag so FTerminated is guaranteed True when read — an early-break
+        flag so Terminated is guaranteed True when read — an early-break
         escape would let the worker finish before the main thread's Terminate
         landed, making the printed flag race between 0 and 1.  The large cap is
-        only a safety net so a missed Terminate cannot hang the test forever. }
+        only a safety net so a missed Terminate cannot hang the test forever.
+        Read the public Terminated property — the backing FTerminated field is
+        private to TThread and not visible to subclasses. }
       I := 0;
-      while not Self.FTerminated do
+      while not Self.Terminated do
       begin
         I := I + 1;
         if I > 2000000000 then
           break
       end;
-      WriteLn(Self.FTerminated)
+      WriteLn(Self.Terminated)
     end;
     var T: TLoopThread;
     begin
@@ -147,11 +149,13 @@ const
     end;
     var T: TQuickThread;
     begin
+      { Read the public Finished property — the backing FFinished field is
+        private to TThread and not visible outside the class. }
       T := TQuickThread.Create(True);
-      WriteLn(T.FFinished);
+      WriteLn(T.Finished);
       T.Start();
       T.WaitFor();
-      WriteLn(T.FFinished)
+      WriteLn(T.Finished)
     end.
     ''';
 

@@ -529,6 +529,10 @@ begin
     begin
       FldInfo := TFieldInfo(ParentRT.Fields.Items[I]);
       RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
+      { Inherited field keeps the ancestor's visibility + declaring origin. }
+      RT.FindField(FldInfo.Name).Visibility    := FldInfo.Visibility;
+      RT.FindField(FldInfo.Name).DeclaringUnit := FldInfo.DeclaringUnit;
+      RT.FindField(FldInfo.Name).DeclaringType := FldInfo.DeclaringType;
     end;
   end;
 
@@ -551,7 +555,15 @@ begin
         FldDecl.ClassVarEmitName, FldType, ATable)
     else
       for J := 0 to FldDecl.Names.Count - 1 do
+      begin
         RT.AddField(FldDecl.Names.Strings[J], FldType);
+        { An imported field's privacy boundary is its own declaring unit, not
+          the importing unit — carry both so cross-unit private/protected is
+          enforced exactly as in the declaring unit. }
+        RT.FindField(FldDecl.Names.Strings[J]).Visibility    := FldDecl.Visibility;
+        RT.FindField(FldDecl.Names.Strings[J]).DeclaringUnit := AUnitName;
+        RT.FindField(FldDecl.Names.Strings[J]).DeclaringType := AEntry.Name;
+      end;
   end;
 
   { Methods: walk TRoutineSig list; for virtual/override, register
@@ -631,6 +643,9 @@ begin
       implicit Self.  Mirrors the within-unit pass (PropInfo.IsStatic). }
     PropInfo.IsDefault := PropDecl.IsDefault;
     PropInfo.IsStatic  := PropDecl.IsStatic;
+    PropInfo.Visibility    := PropDecl.Visibility;
+    PropInfo.DeclaringUnit := AUnitName;
+    PropInfo.DeclaringType := AEntry.Name;
     RT.AddProperty(PropInfo);
   end;
 
@@ -699,7 +714,12 @@ begin
         FldDecl.ClassVarEmitName, FldType, ATable)
     else
       for J := 0 to FldDecl.Names.Count - 1 do
+      begin
         RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
+        RecDesc.FindField(FldDecl.Names.Strings[J]).Visibility    := FldDecl.Visibility;
+        RecDesc.FindField(FldDecl.Names.Strings[J]).DeclaringUnit := AUnitName;
+        RecDesc.FindField(FldDecl.Names.Strings[J]).DeclaringType := AEntry.Name;
+      end;
   end;
 
   { record-level `static const` declarations — reachable bare and qualified. }
@@ -961,6 +981,8 @@ begin
   { Carry static-ness so the semantic pass's TypeName.StaticMethod() resolution
     (which checks MDecl.IsStatic) succeeds for a method imported from a .bif. }
   Result.IsStatic   := ASig.IsStatic;
+  { Carry visibility so cross-unit private/protected method access is enforced. }
+  Result.Visibility := ASig.Visibility;
   for J := 0 to ASig.Params.Count - 1 do
   begin
     Param := TMethodParam(ASig.Params.Items[J]);

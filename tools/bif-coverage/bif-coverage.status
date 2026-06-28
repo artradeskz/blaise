@@ -71,6 +71,7 @@ TFieldAccessExpr.IsArrayAccess  safe
 TFieldAccessExpr.IsClassVarRead  safe
 TFieldAccessExpr.ClassVarEmitName  safe
 TFieldAccessExpr.IsStaticPropGet  safe
+TFieldAccessExpr.BackingFieldRedirect  safe
 
 # TIsExpr (uAST.pas:154)
 TIsExpr.Obj  serialise
@@ -291,6 +292,7 @@ TRoutineSig.ResolvedQbeName  serialise
 TRoutineSig.IsVirtual  serialise
 TRoutineSig.IsOverride  serialise
 TRoutineSig.IsStatic  serialise
+TRoutineSig.Visibility  serialise
 
 # TConstEntry (uUnitInterface.pas:102)
 TConstEntry.Decl  serialise

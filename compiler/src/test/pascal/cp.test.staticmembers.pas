@@ -574,6 +574,7 @@ type
     procedure TestSem_StaticVar_BareReadResolves;
     procedure TestSem_StaticVar_NotAnInstanceField;
     procedure TestSem_StaticVar_RejectsStringType;
+    procedure TestSem_StaticVar_AcceptsClassType;
     procedure TestSem_StaticMethod_NoSelf_CannotTouchInstanceField;
     procedure TestSem_StaticMethod_CanReadStaticVar;
 
@@ -713,6 +714,38 @@ begin
   { String (and dynamic-array) static vars remain deferred; class and
     interface are supported (see TestSem_StaticVar_AcceptsClassType). }
   AnalyseExpectErrorMsg(Src, 'static var');
+end;
+
+procedure TStaticMembersSemTests.TestSem_StaticVar_AcceptsClassType;
+const
+  Src =
+    '''
+        program P;
+        type
+          TConfig = class
+          private static var
+            FInstance: TConfig;
+          public
+            static function Instance: TConfig;
+          end;
+        static function TConfig.Instance: TConfig;
+        begin
+          if FInstance = nil then FInstance := TConfig.Create();
+          Result := FInstance;
+        end;
+        begin TConfig.Instance(); end.
+        ''';
+var
+  Prog: TProgram;
+begin
+  { A class-typed (self-referential) static var is the canonical singleton
+    shape.  This used to corrupt the heap during AST/symbol-table teardown
+    (a double-free of the shared GlobalEmitName string registered on the two
+    static-var symbols).  Drive the full analyse -> Free cycle and assert it
+    completes without error — the teardown is the part under test. }
+  Prog := AnalyseSrc(Src);
+  Prog.Free();
+  AssertTrue('class-typed static var analyses and tears down cleanly', True);
 end;
 
 procedure TStaticMembersSemTests.TestSem_StaticMethod_NoSelf_CannotTouchInstanceField;

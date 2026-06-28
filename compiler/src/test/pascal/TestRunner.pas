@@ -124,6 +124,7 @@ uses
   cp.test.classof,
   cp.test.staticmembers,
   cp.test.e2e.staticmembers,
+  cp.test.visibility,
   cp.test.publishedrtti,
   cp.test.attributes,
   cp.test.proctypes_ofobject,

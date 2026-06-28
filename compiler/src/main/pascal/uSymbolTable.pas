@@ -14,6 +14,28 @@ uses
   Classes, SysUtils, contnrs;
 
 type
+  { Member visibility — class/record field, method, and property access scope.
+    Default (a member declared before any visibility keyword) is mvPublic, to
+    match Blaise's previous behaviour where visibility was parsed but never
+    enforced (everything was effectively public).
+      mvPublic / mvPublished — visible everywhere the type is.
+      mvPrivate              — visible only within the declaring UNIT
+                               (classic Pascal unit-scoped privacy).
+      mvProtected            — as mvPrivate plus descendant types' methods,
+                               regardless of unit.
+      mvStrictPrivate        — visible only from the declaring TYPE's methods.
+      mvStrictProtected      — declaring type plus its descendants' methods.
+    Declared here (not in uAST) so the symbol-table descriptors can carry it;
+    uAST uses uSymbolTable, so the type flows up to the AST member decls. }
+  TMemberVisibility = (
+    mvPublic,
+    mvPrivate,
+    mvProtected,
+    mvPublished,
+    mvStrictPrivate,
+    mvStrictProtected
+  );
+
   { ------------------------------------------------------------------ }
   {  Type descriptors                                                   }
   { ------------------------------------------------------------------ }
@@ -196,6 +218,13 @@ type
                              with neither addref nor release, and field cleanup
                              does nothing.  Use only when the referent is
                              guaranteed to outlive this field. }
+    Visibility: TMemberVisibility; { access scope; default mvPublic }
+    DeclaringUnit: string; { name of the unit that declares the owning type — the
+                             privacy boundary for mvPrivate/mvProtected }
+    DeclaringType: string; { name of the class/record that DECLARED this field; for
+                             an inherited field this is the ancestor, not the
+                             subclass that copied it — protected/strict checks walk
+                             the descendant chain up to this type }
   end;
 
   { One entry in a class vtable — tracks slot index and implementing method. }
@@ -220,6 +249,9 @@ type
     [Unretained] IndexTypeDesc: TTypeDesc;  { not owned; non-nil when IndexParamName <> '' }
     IsDefault:      Boolean; { declared with the `default` directive (Obj[I] sugar) }
     IsStatic:       Boolean; { declared `static property` — accessors are static (no Self) }
+    Visibility:     TMemberVisibility; { access scope; default mvPublic }
+    DeclaringUnit:  string;  { unit that declares the owning type — privacy boundary }
+    DeclaringType:  string;  { class/record that DECLARED this property (ancestor for inherited) }
   end;
 
   { Type descriptor for zero-GUID interface types (Phase 3). }
@@ -402,6 +434,14 @@ type
                                 not the owner.  Prevents an impl-section class/
                                 type from leaking into an unrelated unit through
                                 the flat global scope. }
+    Visibility: TMemberVisibility; { for a STATIC (class-level) variable: the
+                                declared member visibility (private/protected/
+                                strict/public).  Default mvPublic.  Read by the
+                                qualified-access visibility checks. }
+    OwnerTypeName: string;    { for a STATIC (class-level) variable: the class/
+                                record that declared it.  Empty for non-members.
+                                Lets strict/protected checks resolve the owning
+                                type the same way TFieldInfo.DeclaringType does. }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;

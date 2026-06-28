@@ -1927,12 +1927,14 @@ function TParser.ParseRecordDef: TRecordTypeDef;
 var
   MethDecl:         TMethodDecl;
   CurrStatic:       Boolean;   { current section's static (class-level) association }
+  CurrVisibility:   TMemberVisibility; { current section's visibility }
   LocalStatic:      Boolean;
   FieldCountBefore: Integer;
   FieldIdx:         Integer;
 begin
   Result := TRecordTypeDef.Create();
-  CurrStatic := False;
+  CurrStatic     := False;
+  CurrVisibility := mvPublic;
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
@@ -1947,12 +1949,45 @@ begin
         CurrStatic := True;
         Advance();  { the following var/const section belongs to this static section }
       end
-      { Visibility section keywords are accepted (and currently cosmetic), with
-        an optional trailing `static`.  A new visibility section resets static. }
+      { Optional `strict` soft keyword before private/protected (record fields). }
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
+              (PeekKind() = tkIdent) and
+              (SameText(PeekValueAt(1), 'private') or
+               SameText(PeekValueAt(1), 'protected')) then
+      begin
+        Advance();  { consume `strict` }
+        if SameText(FCurrent.Value, 'private') then
+          CurrVisibility := mvStrictPrivate
+        else
+          CurrVisibility := mvStrictProtected;
+        CurrStatic := False;
+        Advance();  { consume private/protected }
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+           (PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure]) then
+        begin
+          CurrStatic := True;
+          Advance();
+        end;
+      end
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
+              (PeekKind() = tkIdent) and
+              (SameText(PeekValueAt(1), 'public') or
+               SameText(PeekValueAt(1), 'published')) then
+        raise EParseError.Create(Format(
+          'Only ''private'' or ''protected'' may be ''strict'' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]))
+      { Visibility section keywords, with an optional trailing `static`.
+        A new visibility section resets static. }
       else if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
                                   SameText(FCurrent.Value, 'public') or
                                   SameText(FCurrent.Value, 'protected')) then
       begin
+        if SameText(FCurrent.Value, 'private') then
+          CurrVisibility := mvPrivate
+        else if SameText(FCurrent.Value, 'protected') then
+          CurrVisibility := mvProtected
+        else
+          CurrVisibility := mvPublic;
         CurrStatic := False;
         Advance();
         if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
@@ -1983,15 +2018,19 @@ begin
         else
           MethDecl := ParseMethodDecl(False);
         MethDecl.IsStatic := LocalStatic;
+        MethDecl.Visibility := CurrVisibility;
         Result.Methods.Add(MethDecl);
       end
       else if Check(tkIdent) or Check(tkLBracket) then
       begin
         FieldCountBefore := Result.Fields.Count;
         ParseFieldDecl(Result.Fields);
-        if CurrStatic then
-          for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
+        for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
+        begin
+          if CurrStatic then
             TFieldDecl(Result.Fields.Items[FieldIdx]).IsClassVar := True;
+          TFieldDecl(Result.Fields.Items[FieldIdx]).Visibility := CurrVisibility;
+        end;
       end
       else
         Break;
@@ -2037,6 +2076,7 @@ end;
 function TParser.ParseClassDef: TClassTypeDef;
 var
   CurrPublished:    Boolean;
+  CurrVisibility:   TMemberVisibility; { current section's visibility }
   CurrStatic:       Boolean;   { current section's static (class-level) association }
   LocalStatic:      Boolean;   { effective static for the member being parsed }
   MethDecl:         TMethodDecl;
@@ -2077,18 +2117,63 @@ begin
       (private/public/protected/published) update CurrPublished, which
       is then attached to each method decl so codegen can emit a
       published-method table entry. }
-    CurrPublished := False;
-    CurrStatic    := False;
+    CurrPublished  := False;
+    CurrVisibility := mvPublic;
+    CurrStatic     := False;
     repeat
+      { Optional `strict` soft keyword preceding `private`/`protected`.  `strict`
+        is not a real token — recognise it only at section start, immediately
+        before `private` or `protected`, so an ordinary identifier named `strict`
+        elsewhere is unaffected.  `strict public`, `strict published` and bare
+        `strict` are errors. }
+      if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
+         (PeekKind() = tkIdent) and
+         (SameText(PeekValueAt(1), 'private') or
+          SameText(PeekValueAt(1), 'protected')) then
+      begin
+        Advance();  { consume `strict`; the following private/protected sets visibility }
+        if SameText(FCurrent.Value, 'private') then
+          CurrVisibility := mvStrictPrivate
+        else
+          CurrVisibility := mvStrictProtected;
+        CurrPublished := False;
+        CurrStatic    := False;
+        Advance();  { consume the private/protected keyword }
+        { Optional trailing `static` section qualifier — `strict private static var`. }
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+           ((PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure,
+                            tkConstructor, tkDestructor]) or
+            ((PeekKind() = tkIdent) and SameText(PeekValueAt(1), 'property'))) then
+        begin
+          CurrStatic := True;
+          Advance();
+        end;
+      end
+      { `strict` not followed by private/protected is an error inside a class body. }
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
+              (PeekKind() = tkIdent) and
+              (SameText(PeekValueAt(1), 'public') or
+               SameText(PeekValueAt(1), 'published')) then
+        raise EParseError.Create(Format(
+          'Only ''private'' or ''protected'' may be ''strict'' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]))
       { Visibility section keyword (private/public/protected/published),
         optionally followed by a `static` qualifier.  A visibility keyword
         resets the static section (you must re-state `static` after it). }
-      if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
+      else if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
                               SameText(FCurrent.Value, 'public') or
                               SameText(FCurrent.Value, 'protected') or
                               SameText(FCurrent.Value, 'published')) then
       begin
         CurrPublished := SameText(FCurrent.Value, 'published');
+        if SameText(FCurrent.Value, 'private') then
+          CurrVisibility := mvPrivate
+        else if SameText(FCurrent.Value, 'protected') then
+          CurrVisibility := mvProtected
+        else if SameText(FCurrent.Value, 'published') then
+          CurrVisibility := mvPublished
+        else
+          CurrVisibility := mvPublic;
         CurrStatic    := False;  { a new visibility section is non-static unless
                                    `static` follows }
         Advance();  { consume the visibility modifier }
@@ -2135,6 +2220,7 @@ begin
         end;
         PropDecl := ParsePropertyDecl();
         PropDecl.IsStatic := LocalStatic;
+        PropDecl.Visibility := CurrVisibility;
         Result.Properties.Add(PropDecl);
       end
       { Method declarations — checked BEFORE the generic field branch so that a
@@ -2166,16 +2252,20 @@ begin
           MethDecl := ParseMethodDecl(False);
         MethDecl.IsPublished := CurrPublished;
         MethDecl.IsStatic    := LocalStatic;
+        MethDecl.Visibility  := CurrVisibility;
         Result.Methods.Add(MethDecl);
       end
       else if Check(tkIdent) or Check(tkLBracket) then
       begin
         FieldCountBefore := Result.Fields.Count;
         ParseFieldDecl(Result.Fields);
-        { Stamp class-var flag on every field this decl produced. }
-        if CurrStatic then
-          for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
+        { Stamp class-var flag and visibility on every field this decl produced. }
+        for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
+        begin
+          if CurrStatic then
             TFieldDecl(Result.Fields.Items[FieldIdx]).IsClassVar := True;
+          TFieldDecl(Result.Fields.Items[FieldIdx]).Visibility := CurrVisibility;
+        end;
       end
       else
         Break;

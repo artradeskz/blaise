@@ -303,7 +303,8 @@ ClassDef
  * member that follows until the next such keyword. *)
 
 VisibilitySection
-    = ( PRIVATE | PROTECTED | PUBLIC | PUBLISHED ) [ STATIC ]
+    = [ STRICT ] ( PRIVATE | PROTECTED ) [ STATIC ]
+    | ( PUBLIC | PUBLISHED ) [ STATIC ]
     | STATIC                                   (* STATIC alone keeps current visibility *)
     ;
 
@@ -317,9 +318,16 @@ VisibilitySection
  * static constants.  There is no `class var` / `class function` /
  * `class property` — the word `class` is never a member qualifier in Blaise.
  *
- * Visibility keywords (PRIVATE/PROTECTED/PUBLIC/PUBLISHED) and STATIC are
- * contextual: outside a class/record body they remain usable as identifiers,
- * except those already reserved elsewhere. *)
+ * Visibility keywords (PRIVATE/PROTECTED/PUBLIC/PUBLISHED), STRICT and STATIC
+ * are contextual: outside a class/record body they remain usable as
+ * identifiers, except those already reserved elsewhere.  STRICT is only a
+ * keyword immediately before PRIVATE or PROTECTED at the start of a member
+ * section; `strict public`, `strict published` and a bare `strict` are
+ * errors.  Visibility is ENFORCED: PRIVATE is visible only within the
+ * declaring unit; PROTECTED additionally within descendant types; STRICT
+ * PRIVATE only within the declaring type's own methods; STRICT PROTECTED
+ * within the declaring type and its descendants; PUBLIC/PUBLISHED everywhere.
+ * Visibility composes orthogonally with STATIC. *)
 
 GenericName
     = IDENT [ LESS TypeArgList GREATER ]   (* plain name or generic specialisation *)

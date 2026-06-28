@@ -53,7 +53,12 @@ uses
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 4;  { v4 (this cycle): TRoutineSig.IsStatic added to
+  IFACE_VERSION = 5;  { v5 (this cycle): member Visibility (private/protected/
+                          strict) now serialised — field, method, and property
+                          payloads each carry one extra byte for the visibility
+                          ordinal, so v4 readers must reject these .bif and
+                          recompile.
+                        v4: TRoutineSig.IsStatic added to
                           EncodeMethodSig/ReadMethodSig so a cross-unit
                           TypeName.StaticMethod() call resolves through the
                           cached .bif (VTableSlot alone cannot distinguish a
@@ -288,7 +293,9 @@ begin
                   differs — so the label is carried verbatim.  Both default to
                   False/'' for ordinary instance fields. }
                 EncodeBool(F.IsClassVar) +
-                EncodeLpstr(F.ClassVarEmitName);
+                EncodeLpstr(F.ClassVarEmitName) +
+                { member visibility ordinal (private/protected/strict) }
+                EncodeLpstr(IntToStr(Ord(F.Visibility)));
   end;
 end;
 
@@ -335,6 +342,8 @@ begin
     { static-method flag — distinct from VTableSlot (both static and final
       non-virtual instance methods carry slot -1). }
     EncodeBool (AR.IsStatic) +
+    { member visibility ordinal }
+    EncodeLpstr(IntToStr(Ord(AR.Visibility))) +
     EncodeCount(AR.Params.Count);
   for J := 0 to AR.Params.Count - 1 do
   begin
@@ -386,7 +395,9 @@ begin
               EncodeBool(P.IsDefault) +
               { `static property` — accessors take no implicit Self.  An importer
                 needs this to dispatch reads/writes without a receiver. }
-              EncodeBool(P.IsStatic);
+              EncodeBool(P.IsStatic) +
+              { member visibility ordinal }
+              EncodeLpstr(IntToStr(Ord(P.Visibility)));
   end;
 end;
 
@@ -1831,6 +1842,7 @@ var
   IsWeak:      Boolean;
   IsClassVar:  Boolean;
   ClassVarEmit: string;
+  Vis:         Integer;
   F:           TFieldDecl;
 begin
   C := DecodeCount(AText, APos);
@@ -1839,15 +1851,18 @@ begin
     FldName := ReadLpstrAt(AText, APos);
     FldType := ReadLpstrAt(AText, APos);
     IsWeak  := DecodeBool(AText, APos);
-    { Order must mirror EncodeFieldList: IsClassVar then ClassVarEmitName. }
+    { Order must mirror EncodeFieldList: IsClassVar then ClassVarEmitName
+      then the visibility ordinal. }
     IsClassVar   := DecodeBool(AText, APos);
     ClassVarEmit := ReadLpstrAt(AText, APos);
+    Vis          := StrToInt(ReadLpstrAt(AText, APos));
     F := TFieldDecl.Create();
     F.Names.Add(FldName);
     F.TypeName := FldType;
     F.IsWeak   := IsWeak;
     F.IsClassVar      := IsClassVar;
     F.ClassVarEmitName := ClassVarEmit;
+    F.Visibility := TMemberVisibility(Vis);
     ATarget.Add(F);
   end;
 end;
@@ -1898,8 +1913,10 @@ begin
   Result.IsOverride  := DecodeBool(AText, APos);
   Result.ResolvedQbeName := ReadLpstrAt(AText, APos);
   Result.VTableSlot  := StrToInt(ReadLpstrAt(AText, APos));
-  { Order must mirror EncodeMethodSig: IsStatic follows VTableSlot. }
+  { Order must mirror EncodeMethodSig: IsStatic follows VTableSlot, then the
+    visibility ordinal. }
   Result.IsStatic    := DecodeBool(AText, APos);
+  Result.Visibility  := TMemberVisibility(StrToInt(ReadLpstrAt(AText, APos)));
   Pc := DecodeCount(AText, APos);
   for J := 1 to Pc do
   begin
@@ -2011,8 +2028,10 @@ begin
     P.IndexParamName := ReadLpstrAt(AText, APos);
     P.IndexTypeName  := ReadLpstrAt(AText, APos);
     P.IsDefault      := DecodeBool(AText, APos);
-    { Order must mirror EncodePropertyList: IsStatic follows IsDefault. }
+    { Order must mirror EncodePropertyList: IsStatic follows IsDefault, then
+      the visibility ordinal. }
     P.IsStatic       := DecodeBool(AText, APos);
+    P.Visibility     := TMemberVisibility(StrToInt(ReadLpstrAt(AText, APos)));
     ATarget.Add(P);
   end;
 end;

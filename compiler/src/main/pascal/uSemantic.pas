@@ -519,6 +519,29 @@ type
                                   const AMemberName: string;
                                   ALine, ACol: Integer);
 
+    { Core visibility predicate.  Single source of truth applied by both
+      the unqualified uses-chain probe and the qualified member-access
+      asserts.  ADeclaringUnit / ADeclaringType identify where the member
+      was declared; AFromClass is the class whose method body we are in
+      (or nil at unit/free-routine level). }
+    function MemberVisibleTo(AVisibility: TMemberVisibility;
+                             const ADeclaringUnit, ADeclaringType: string;
+                             const AFromUnit: string;
+                             AFromClass: TRecordTypeDesc): Boolean;
+
+    { Richer qualified-access assert that carries the member's visibility
+      and declaring type.  On invisible, hard error. }
+    procedure AssertMemberVisibleV(AVisibility: TMemberVisibility;
+                                   const ADeclaringUnit, ADeclaringType: string;
+                                   const AMemberName: string;
+                                   ALine, ACol: Integer);
+
+    { Qualified instance/class method-call visibility enforcement.  AMDecl is
+      the resolved TMethodDecl (via ResolveMethodOverload or FindMethodDecl);
+      reads its Visibility / OwningUnit / OwnerTypeName.  No-op when AMDecl is
+      nil.  Constructors are exempt (always reachable for instantiation). }
+    procedure EnforceMethodVisible(AMDecl: TObject; ALine, ACol: Integer);
+
     { Uses-chain lookup for *unqualified* identifiers.  Walks
       FCurrentUsesChain right-to-left ("last in uses wins"); for
       each chain entry whose TUnitInterface advertises AName via
@@ -2018,13 +2041,10 @@ function TSemanticAnalyser.IsVisibleFromUnit(ASym: TSymbol;
                                              const AFromUnit: string;
                                              AFromClass: TRecordTypeDesc): Boolean;
 begin
-  { Stub — see declaration in interface section.  When private/
-    protected modifiers arrive on class members:
-      - private:   Result := (AFromUnit = ASym.OwningUnit);
-      - protected: Result := (AFromUnit = ASym.OwningUnit)
-                          or (AFromClass <> nil)
-                             and AFromClassDescendsFromDeclarer(...);
-    Free symbols default to public so AFromClass is ignored for them. }
+  { Free (non-member) symbols default to public — the symbol carries no
+    per-member visibility, so the uses-chain probe never rejects on this
+    path.  Class/record member visibility is enforced at the qualified- and
+    unqualified-member access sites via MemberVisibleTo / AssertMemberVisibleV. }
   Result := True;
 end;
 
@@ -2032,9 +2052,68 @@ function TSemanticAnalyser.IsVisibleFromUnit(const AMemberOwningUnit: string;
                                              const AFromUnit: string;
                                              AFromClass: TRecordTypeDesc): Boolean;
 begin
-  { String-flavor stub.  Same future logic as the TSymbol form,
-    keyed on the AMemberOwningUnit string directly. }
+  { String-flavor — same rationale as the TSymbol form. }
   Result := True;
+end;
+
+function TSemanticAnalyser.MemberVisibleTo(AVisibility: TMemberVisibility;
+                                           const ADeclaringUnit, ADeclaringType: string;
+                                           const AFromUnit: string;
+                                           AFromClass: TRecordTypeDesc): Boolean;
+var
+  C: TRecordTypeDesc;
+begin
+  case AVisibility of
+    mvPublic, mvPublished:
+      Result := True;
+
+    mvPrivate:
+      { Unit-scoped: visible to any code in the declaring unit.  A member
+        whose declaring unit is unknown (empty) is treated as same-unit —
+        program-scope types and pre-visibility imports must not be locked out. }
+      Result := (ADeclaringUnit = '') or SameText(ADeclaringUnit, AFromUnit);
+
+    mvProtected:
+      begin
+        { Same unit OR AFromClass is the declaring type or a descendant of it. }
+        Result := (ADeclaringUnit = '') or SameText(ADeclaringUnit, AFromUnit);
+        if not Result then
+        begin
+          C := AFromClass;
+          while C <> nil do
+          begin
+            if SameText(C.Name, ADeclaringType) then
+            begin
+              Result := True;
+              Break;
+            end;
+            C := C.Parent;
+          end;
+        end;
+      end;
+
+    mvStrictPrivate:
+      { Visible only from the declaring TYPE's own methods. }
+      Result := (AFromClass <> nil) and SameText(AFromClass.Name, ADeclaringType);
+
+    mvStrictProtected:
+      begin
+        { Declaring type or any descendant's methods, regardless of unit. }
+        Result := False;
+        C := AFromClass;
+        while C <> nil do
+        begin
+          if SameText(C.Name, ADeclaringType) then
+          begin
+            Result := True;
+            Break;
+          end;
+          C := C.Parent;
+        end;
+      end;
+  else
+    Result := True;
+  end;
 end;
 
 procedure TSemanticAnalyser.AssertMemberVisible(const AMemberOwningUnit: string;
@@ -2042,10 +2121,39 @@ procedure TSemanticAnalyser.AssertMemberVisible(const AMemberOwningUnit: string;
                                                 const AMemberName: string;
                                                 ALine, ACol: Integer);
 begin
+  { Legacy unit-only assert — no per-member visibility available here, so it
+    never rejects.  Retained for call sites that lack the descriptor; the
+    visibility-bearing AssertMemberVisibleV does the real enforcement. }
   if not IsVisibleFromUnit(AMemberOwningUnit, FCurrentUnitName, AClassContext) then
     SemanticError(
       Format('Identifier ''%s'' is not accessible from this context',
         [AMemberName]),
+      ALine, ACol);
+end;
+
+procedure TSemanticAnalyser.EnforceMethodVisible(AMDecl: TObject;
+                                                 ALine, ACol: Integer);
+var
+  M: TMethodDecl;
+begin
+  if AMDecl = nil then Exit;
+  M := TMethodDecl(AMDecl);
+  { A constructor is always reachable (you must be able to instantiate the
+    type); enforcing visibility on Create would block legitimate construction. }
+  if SameText(M.Name, 'Create') then Exit;
+  AssertMemberVisibleV(M.Visibility, M.OwningUnit, M.OwnerTypeName,
+                       M.Name, ALine, ACol);
+end;
+
+procedure TSemanticAnalyser.AssertMemberVisibleV(AVisibility: TMemberVisibility;
+                                                 const ADeclaringUnit, ADeclaringType: string;
+                                                 const AMemberName: string;
+                                                 ALine, ACol: Integer);
+begin
+  if not MemberVisibleTo(AVisibility, ADeclaringUnit, ADeclaringType,
+                         FCurrentUnitName, FCurrentClass) then
+    SemanticError(
+      Format('''%s'' is not accessible from here', [AMemberName]),
       ALine, ACol);
 end;
 
@@ -3050,6 +3158,7 @@ begin
       for J := 0 to FDecl.Names.Count - 1 do
         NewFDecl.Names.Add(FDecl.Names.Strings[J]);
       NewFDecl.TypeName := SubstTypeParam(FDecl.TypeName, Templ.ParamNames, Args);
+      NewFDecl.Visibility := FDecl.Visibility;
       ClonedCD.Fields.Add(NewFDecl);
     end;
 
@@ -3066,6 +3175,7 @@ begin
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsVirtual     := MDecl.IsVirtual;
       NewMDecl.IsOverride    := MDecl.IsOverride;
+      NewMDecl.Visibility    := MDecl.Visibility;
       if (MDecl.Body <> nil) and (not DeferBodies) then
       begin
         NewMDecl.Body    := CloneBlock(MDecl.Body);
@@ -3108,6 +3218,7 @@ begin
       NewPDecl.IndexParamName := PDecl.IndexParamName;
       NewPDecl.IndexTypeName  := SubstTypeParam(PDecl.IndexTypeName, Templ.ParamNames, Args);
       NewPDecl.IsDefault      := PDecl.IsDefault;
+      NewPDecl.Visibility     := PDecl.Visibility;
       ClonedCD.Properties.Add(NewPDecl);
     end;
 
@@ -3131,6 +3242,9 @@ begin
           RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
           RT.FindField(FldInfo.Name).IsUnretained := FldInfo.IsUnretained;
           RT.FindField(FldInfo.Name).IsWeak       := FldInfo.IsWeak;
+          RT.FindField(FldInfo.Name).Visibility    := FldInfo.Visibility;
+          RT.FindField(FldInfo.Name).DeclaringUnit := FldInfo.DeclaringUnit;
+          RT.FindField(FldInfo.Name).DeclaringType := FldInfo.DeclaringType;
         end;
       end;
     end
@@ -3181,6 +3295,9 @@ begin
       begin
         FldName := NewFDecl.Names.Strings[K];
         RT.AddField(FldName, FldType);
+        RT.FindField(FldName).Visibility    := NewFDecl.Visibility;
+        RT.FindField(FldName).DeclaringUnit := FCurrentUnitName;
+        RT.FindField(FldName).DeclaringType := ATypeName;
       end;
     end;
 
@@ -3272,6 +3389,9 @@ begin
         PropInfo.IndexTypeDesc := FindTypeOrInstantiate(NewPDecl.IndexTypeName);
       PropInfo.IsDefault := NewPDecl.IsDefault;
       PropInfo.IsStatic := NewPDecl.IsStatic;
+      PropInfo.Visibility    := NewPDecl.Visibility;
+      PropInfo.DeclaringUnit := FCurrentUnitName;
+      PropInfo.DeclaringType := ATypeName;
       RT.AddProperty(PropInfo);
     end;
 
@@ -3413,6 +3533,7 @@ begin
       for J := 0 to FDecl.Names.Count - 1 do
         NewFDecl.Names.Add(FDecl.Names.Strings[J]);
       NewFDecl.TypeName := SubstTypeParam(FDecl.TypeName, Templ.ParamNames, Args);
+      NewFDecl.Visibility := FDecl.Visibility;
       ClonedRD.Fields.Add(NewFDecl);
     end;
 
@@ -3423,6 +3544,7 @@ begin
       NewMDecl.Name          := MDecl.Name;
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsRecordMethod := True;
+      NewMDecl.Visibility    := MDecl.Visibility;
       if (MDecl.Body <> nil) and (not DeferBodies) then
       begin
         NewMDecl.Body    := CloneBlock(MDecl.Body);
@@ -3465,6 +3587,9 @@ begin
       begin
         FldName := NewFDecl.Names.Strings[K];
         RT.AddField(FldName, FldType);
+        RT.FindField(FldName).Visibility    := NewFDecl.Visibility;
+        RT.FindField(FldName).DeclaringUnit := FCurrentUnitName;
+        RT.FindField(FldName).DeclaringType := ATypeName;
       end;
     end;
 
@@ -5362,6 +5487,12 @@ begin
               RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
               RT.FindField(FldInfo.Name).IsUnretained := FldInfo.IsUnretained;
               RT.FindField(FldInfo.Name).IsWeak       := FldInfo.IsWeak;
+              { An inherited field keeps the ANCESTOR's visibility + declaring
+                origin — protected/strict checks must resolve against where the
+                field was actually declared, not the subclass that copied it. }
+              RT.FindField(FldInfo.Name).Visibility    := FldInfo.Visibility;
+              RT.FindField(FldInfo.Name).DeclaringUnit := FldInfo.DeclaringUnit;
+              RT.FindField(FldInfo.Name).DeclaringType := FldInfo.DeclaringType;
             end;
           end;
         end;
@@ -5552,12 +5683,16 @@ begin
           Sym.IsGlobal       := True;
           Sym.IsClassVar     := True;
           Sym.GlobalEmitName := ClassVarEmit;
+          Sym.Visibility     := FDecl.Visibility;
+          Sym.OwnerTypeName  := TD.Name;
           if not FTable.Define(Sym) then Sym.Free();
           { Qualified name — usable as TFoo.Name from anywhere. }
           Sym := TSymbol.Create(TD.Name + '.' + FldName, skVariable, FldType);
           Sym.IsGlobal       := True;
           Sym.IsClassVar     := True;
           Sym.GlobalEmitName := ClassVarEmit;
+          Sym.Visibility     := FDecl.Visibility;
+          Sym.OwnerTypeName  := TD.Name;
           if not FTable.Define(Sym) then Sym.Free();
         end
         else
@@ -5570,6 +5705,13 @@ begin
             RT.FindField(FldName).IsWeak := True;
           if FDecl.IsUnretained then
             RT.FindField(FldName).IsUnretained := True;
+          { Carry visibility + declaring origin so member-access checks can be
+            applied without re-walking the AST.  DeclaringType is this class
+            (the one that declares the field); inherited fields copy the
+            ancestor's metadata at the copy site above. }
+          RT.FindField(FldName).Visibility    := FDecl.Visibility;
+          RT.FindField(FldName).DeclaringUnit := FCurrentUnitName;
+          RT.FindField(FldName).DeclaringType := TD.Name;
         end;
       end;
     end;
@@ -5580,6 +5722,11 @@ begin
       begin
         MDecl               := TMethodDecl(MethodList.Items[J]);
         MDecl.OwnerTypeName := TD.Name;
+        { Stamp the declaring unit so member-visibility (private/protected) can
+          enforce the unit privacy boundary.  Only set when empty so a value
+          carried from an imported .bif is not overwritten. }
+        if MDecl.OwningUnit = '' then
+          MDecl.OwningUnit := FCurrentUnitName;
 
         { Compute mangled key and ResolvedQbeName for overloaded methods.
           Non-overloaded methods keep their plain name throughout. }
@@ -5666,6 +5813,9 @@ begin
           PropInfo.IndexTypeDesc := FTable.FindType(PropDecl.IndexTypeName);
         PropInfo.IsDefault := PropDecl.IsDefault;
         PropInfo.IsStatic := PropDecl.IsStatic;
+        PropInfo.Visibility    := PropDecl.Visibility;
+        PropInfo.DeclaringUnit := FCurrentUnitName;
+        PropInfo.DeclaringType := TD.Name;
         RT.AddProperty(PropInfo);
       end;
 
@@ -5965,7 +6115,6 @@ var
   Key:      string;
   Sym:      TSymbol;
   RT:       TRecordTypeDesc;
-  OwnerUnit: string;
 begin
   CurrName := ATypeName;
   while CurrName <> '' do
@@ -5975,13 +6124,11 @@ begin
     if Idx >= 0 then
     begin
       Result := TMethodDecl(FMethodIndex.Objects[Idx]);
-      { Visibility seam: treat the class's owning unit as the member's
-        effective owner.  Currently a no-op (returns True); activates
-        without call-site work when class members gain private/protected. }
-      OwnerUnit := '';
-      Sym := FTable.Lookup(CurrName);
-      if Sym <> nil then OwnerUnit := Sym.OwningUnit;
-      AssertMemberVisible(OwnerUnit, FCurrentClass, AMethodName, 0, 0);
+      { Visibility is NOT enforced here: FindMethodDecl is also used to resolve
+        property getters/setters, Free/Create existence probes, and inherited
+        lookups, where the access is legitimate regardless of the member's
+        declared visibility.  Enforcement happens at the user-written call /
+        member-access sites (EnforceMethodVisible / AssertMemberVisibleV). }
       Exit;
     end;
     { Walk to parent }
@@ -7695,6 +7842,7 @@ begin
           [RT.Name, ACall.Name]),
         ACall.Line, ACall.Col);
     AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
+    EnforceMethodVisible(MDecl, ACall.Line, ACall.Col);
     ACall.ResolvedClassType := RT;
     ACall.ResolvedMethod    := MDecl;
     ACall.IsStaticCall      := True;
@@ -7862,6 +8010,7 @@ begin
       ACall.Line, ACall.Col);
 
   AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
+  EnforceMethodVisible(MDecl, ACall.Line, ACall.Col);
   ACall.ResolvedClassType := RT;
   ACall.ResolvedMethod    := MDecl;
   ACall.IsGlobal          := ObjSym.IsGlobal;
@@ -8252,6 +8401,7 @@ var
   ExprType: TTypeDesc;
   ObjType:  TTypeDesc;
   IntfDesc: TInterfaceTypeDesc;
+  VarSym:   TSymbol;
 begin
   { ObjExpr path: receiver is an arbitrary expression (e.g. typecast result) }
   if AAssign.ObjExpr <> nil then
@@ -8267,6 +8417,10 @@ begin
     if FldInfo = nil then
     begin
       PropInfo := RT.FindProperty(AAssign.FieldName);
+      if PropInfo <> nil then
+        AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
+                             PropInfo.DeclaringType, AAssign.FieldName,
+                             AAssign.Line, AAssign.Col);
       if (PropInfo <> nil) and (PropInfo.WriteField <> '') then
       begin
         AAssign.FieldName := PropInfo.WriteField;
@@ -8276,7 +8430,11 @@ begin
         SemanticError(
           Format('Type ''%s'' has no field ''%s''', [ObjType.Name, AAssign.FieldName]),
           AAssign.Line, AAssign.Col);
-    end;
+    end
+    else
+      AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
+                           FldInfo.DeclaringType, AAssign.FieldName,
+                           AAssign.Line, AAssign.Col);
     AAssign.IsClassAccess := ObjType.Kind = tyClass;
     AAssign.FieldInfo     := FldInfo;
     if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
@@ -8358,6 +8516,30 @@ begin
       Format('Undeclared variable ''%s''', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
   end;
+  { Qualified STATIC (class-level) variable write: 'TFoo.StaticVar := V'.
+    RecordName is a class/record TYPE, not a variable; the static var was
+    registered under the combined key 'TFoo.StaticVar'.  Enforce member
+    visibility first (this is where a strict/private static var written from
+    another type is rejected with a "not accessible" diagnostic).  The write
+    itself from a PERMITTED context still lowers through the bare static-var
+    path (a method writes 'StaticVar := V' unqualified); the qualified write
+    form is not yet lowered by codegen, so report it cleanly rather than emit a
+    bare 'is not a variable'. }
+  if RecSym.Kind = skType then
+  begin
+    VarSym := FTable.Lookup(AAssign.RecordName + '.' + AAssign.FieldName);
+    if (VarSym <> nil) and (VarSym.Kind = skVariable) and VarSym.IsClassVar then
+    begin
+      AssertMemberVisibleV(VarSym.Visibility, VarSym.OwningUnit,
+                           VarSym.OwnerTypeName, AAssign.FieldName,
+                           AAssign.Line, AAssign.Col);
+      SemanticError(Format(
+        'Qualified write to static var ''%s.%s'' is not yet supported; assign ' +
+        'it from a static method of ''%s'' using the unqualified name',
+        [AAssign.RecordName, AAssign.FieldName, AAssign.RecordName]),
+        AAssign.Line, AAssign.Col);
+    end;
+  end;
   if not (RecSym.Kind in [skVariable, skParameter, skVarParameter]) then
     SemanticError(
       Format('''%s'' is not a variable', [AAssign.RecordName]),
@@ -8411,6 +8593,9 @@ begin
     PropInfo := RT.FindProperty(AAssign.FieldName);
     if PropInfo <> nil then
     begin
+      AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
+                           PropInfo.DeclaringType, AAssign.FieldName,
+                           AAssign.Line, AAssign.Col);
       if PropInfo.WriteField <> '' then
       begin
         { Field-backed write: redirect to the backing field }
@@ -8451,7 +8636,12 @@ begin
         Format('Type ''%s'' has no field ''%s''',
           [AAssign.RecordName, AAssign.FieldName]),
         AAssign.Line, AAssign.Col);
-  end;
+  end
+  else
+    { Field write via variable.Field — enforce visibility. }
+    AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
+                         FldInfo.DeclaringType, AAssign.FieldName,
+                         AAssign.Line, AAssign.Col);
 
   AAssign.FieldInfo := FldInfo;
   if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
@@ -10582,6 +10772,7 @@ begin
           [ObjSym.Name, AExpr.Name]),
         AExpr.Line, AExpr.Col);
     AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
+    EnforceMethodVisible(MDecl, AExpr.Line, AExpr.Col);
     AExpr.ResolvedMethod    := MDecl;
     AExpr.ResolvedClassType := ObjSym.TypeDesc;
     AExpr.IsStaticCall      := True;
@@ -10810,6 +11001,7 @@ begin
       AExpr.Line, AExpr.Col);
   end;
 
+  EnforceMethodVisible(MDecl, AExpr.Line, AExpr.Col);
   AExpr.ResolvedClassType := RT;
   AExpr.ResolvedMethod    := MDecl;
   AExpr.IsGlobal          := ObjSym.IsGlobal;
@@ -11100,6 +11292,10 @@ begin
     if FldInfo = nil then
     begin
       PropInfo := RT.FindProperty(AAccess.FieldName);
+      if PropInfo <> nil then
+        AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
+                             PropInfo.DeclaringType, AAccess.FieldName,
+                             AAccess.Line, AAccess.Col);
       if (PropInfo <> nil) and (PropInfo.ReadField <> '') then
       begin
         Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
@@ -11107,6 +11303,7 @@ begin
           Exit;
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
+        AAccess.BackingFieldRedirect := True;
         Exit(PropInfo.TypeDesc);
       end;
       { Method-backed property (including indexed: the parser attaches the
@@ -11167,6 +11364,12 @@ begin
           [BaseType.Name, AAccess.FieldName]),
         AAccess.Line, AAccess.Col);
     end;
+    { Field found via qualified access (Base.Field) — enforce visibility unless
+      this node is a property→backing-field redirect already checked. }
+    if not AAccess.BackingFieldRedirect then
+      AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
+                           FldInfo.DeclaringType, AAccess.FieldName,
+                           AAccess.Line, AAccess.Col);
     AAccess.FieldInfo := FldInfo;
     Result := FldInfo.TypeDesc;
     if AAccess.PropIndexExpr <> nil then
@@ -11546,6 +11749,9 @@ begin
     PropInfo := RT.FindProperty(AAccess.FieldName);
     if PropInfo <> nil then
     begin
+      AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
+                           PropInfo.DeclaringType, AAccess.FieldName,
+                           AAccess.Line, AAccess.Col);
       if PropInfo.ReadField <> '' then
       begin
         { Field-backed read: redirect to the backing field }
@@ -11554,6 +11760,7 @@ begin
           Exit;
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
+        AAccess.BackingFieldRedirect := True;
         Result := PropInfo.TypeDesc;
         AAccess.ResolvedType := Result;
         Exit;
@@ -11610,6 +11817,12 @@ begin
       AAccess.Line, AAccess.Col);
   end;
 
+  { Field found via variable.Field qualified access — enforce visibility unless
+    this node is a property→backing-field redirect already checked. }
+  if not AAccess.BackingFieldRedirect then
+    AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
+                         FldInfo.DeclaringType, AAccess.FieldName,
+                         AAccess.Line, AAccess.Col);
   AAccess.FieldInfo := FldInfo;
   Result := FldInfo.TypeDesc;
   if AAccess.PropIndexExpr <> nil then
