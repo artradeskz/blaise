@@ -17449,6 +17449,7 @@ var
   VD:    TVarDecl;
   Decl:  TMethodDecl;
 begin
+  if FSymTable <> nil then FSymTable.InCodegen := True;
   FCurrentUnitName := AProg.Name;
   FDbgSrcFile := '';
   FProgramName := AProg.Name;
@@ -17724,6 +17725,10 @@ begin
     UnitSym := AUnit.SymbolTable
   else
     UnitSym := FSymTable;
+  { Disable the analysis-time impl-private suppression in Lookup for the table
+    EmitClassSection consults — at codegen the backend must resolve THIS unit's
+    own implementation-section classes (see TSymbolTable.FInCodegen). }
+  if UnitSym <> nil then UnitSym.InCodegen := True;
   { Re-assert the viewing context (see the init-block note above): the class
     section emits unit-qualified typeinfo/vtable/_FieldCleanup names via
     ClassSymName, which must resolve THIS unit's own impl-section classes. }

@@ -28,6 +28,7 @@ type
     procedure TestRun_Enum_ExplicitOrdinals;
     procedure TestRun_Enum_AutoContinueAfterExplicit;
     procedure TestRun_Enum_ExplicitInCase;
+    procedure TestRun_Enum_ScopedAccess;
   end;
 
 implementation
@@ -223,6 +224,40 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcExplicitInCase, Output, RCode));
   AssertEquals('NotFound=404 matches case 404', 'not found', Trim(Output));
+end;
+
+procedure TE2ECaseEnumTests.TestRun_Enum_ScopedAccess;
+const
+  { Two enums in one unit share the member name 'Red'.  The bare name resolves
+    to whichever enum claimed the global slot (TColorA), so TColorB.Red and
+    TColorB.Blue are reachable ONLY through the type-qualified form. }
+  Src =
+    '''
+        program P;
+        type
+          TColorA = (Red, Green);
+          TColorB = (Red, Blue);
+        begin
+          WriteLn(Ord(TColorA.Red));
+          WriteLn(Ord(TColorA.Green));
+          WriteLn(Ord(TColorB.Red));
+          WriteLn(Ord(TColorB.Blue))
+        end.
+        ''';
+var Output: string; RCode: Integer; Lines: TStringList;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  Lines := TStringList.Create();
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('TColorA.Red',  '0', Lines.Strings[0]);
+    AssertEquals('TColorA.Green','1', Lines.Strings[1]);
+    AssertEquals('TColorB.Red',  '0', Lines.Strings[2]);
+    AssertEquals('TColorB.Blue', '1', Lines.Strings[3]);
+  finally
+    Lines.Free();
+  end;
 end;
 
 initialization

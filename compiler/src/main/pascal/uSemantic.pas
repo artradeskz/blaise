@@ -11333,6 +11333,7 @@ var
   BaseType: TTypeDesc;
   IntfDesc: TInterfaceTypeDesc;
   MDecl:    TMethodDecl;
+  EnumOrd:  Integer;
 begin
   { Chained access: A.B.C — base is another expression whose type must be
     a record or class.  Leaf lookup uses Base.ResolvedType; RecordName path
@@ -11677,6 +11678,26 @@ begin
   end;
 
   AAccess.RecordName := RecSym.Name;  { normalise to declared casing }
+
+  { Type-qualified enum member: TMyEnum.meValue.  Resolve the member straight
+    from the named enum's own member list, so the reference is unambiguous even
+    when another enum in scope declares a member of the same name (the bare name
+    resolves to whichever enum claimed the global slot; the qualified form
+    always names this one). }
+  if (RecSym.Kind = skType) and (RecSym.TypeDesc <> nil) and
+     (RecSym.TypeDesc.Kind = tyEnum) then
+  begin
+    EnumOrd := TEnumTypeDesc(RecSym.TypeDesc).OrdinalOf(AAccess.FieldName);
+    if EnumOrd < 0 then
+      SemanticError(
+        Format('Enum ''%s'' has no member ''%s''',
+          [AAccess.RecordName, AAccess.FieldName]),
+        AAccess.Line, AAccess.Col);
+    AAccess.IsConstant   := True;
+    AAccess.ConstValue   := EnumOrd;
+    AAccess.ResolvedType := RecSym.TypeDesc;
+    Exit(RecSym.TypeDesc);
+  end;
 
   { Constructor call: TypeName.Create }
   if RecSym.Kind = skType then

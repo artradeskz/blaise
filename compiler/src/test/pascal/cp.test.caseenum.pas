@@ -61,6 +61,8 @@ type
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Enum_MemberEmitsIntegerCopy;
     procedure TestCodegen_Enum_AssignEmitsStore;
+    procedure TestCodegen_ScopedEnum_QualifiedMemberEmitsOrdinal;
+    procedure TestSemantic_ScopedEnum_UnknownMemberRejected;
 
     { ------------------------------------------------------------------ }
     { enum + case integration                                              }
@@ -574,6 +576,49 @@ begin
   AssertTrue('integer case still emits ceqw', Pos('ceqw', IR) > 0);
   AssertTrue('integer case does NOT emit _StringEquals',
     Pos('_StringEquals', IR) < 0);
+end;
+
+procedure TCaseEnumTests.TestCodegen_ScopedEnum_QualifiedMemberEmitsOrdinal;
+const
+  Src =
+    '''
+        program P;
+        type TDir = (dN, dE, dS, dW);
+        var x: Integer;
+        begin
+          x := Ord(TDir.dS)
+        end.
+        ''';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  { TDir.dS is the third member (ordinal 2); the type-qualified reference must
+    resolve to that member and emit copy 2, exactly as the bare dS would. }
+  AssertTrue('TDir.dS emits copy 2', Pos('copy 2', IR) > 0);
+end;
+
+procedure TCaseEnumTests.TestSemantic_ScopedEnum_UnknownMemberRejected;
+const
+  Src =
+    '''
+        program P;
+        type TDir = (dN, dE, dS, dW);
+        var x: Integer;
+        begin
+          x := Ord(TDir.dNope)
+        end.
+        ''';
+var
+  Raised: Boolean;
+begin
+  Raised := False;
+  try
+    SemanticOK(Src);
+  except
+    on E: Exception do Raised := True;
+  end;
+  AssertTrue('unknown enum member via TEnum.Member rejected', Raised);
 end;
 
 initialization

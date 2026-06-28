@@ -547,6 +547,23 @@ type
       retrieve the canonical TSymbol — without this flag we'd loop. }
     FBypassUsesChain: Boolean;
 
+    FInCodegen: Boolean;             { True while a backend is emitting code.
+                                       Disables the Layer-6 impl-private
+                                       suppression in Lookup: that guard exists
+                                       only to stop an implementation-section
+                                       symbol of unit A leaking into a different
+                                       unit B DURING ANALYSIS.  At codegen time a
+                                       backend legitimately resolves a unit's own
+                                       impl-section classes (to emit their
+                                       typeinfo/vtable/_FieldCleanup and the
+                                       references to them), but FDefineOwningUnit
+                                       can have drifted to a dependency unit
+                                       mid-emit, which made the suppression wrongly
+                                       fire and silently drop the class's typeinfo
+                                       — a dangling symbol the linker binds to
+                                       garbage.  Set by the QBE and native
+                                       backends around Generate/GenerateUnit. }
+
     FDefineOwningUnit: string;       { auto-applied to Sym.OwningUnit on Define
                                        when the symbol has no explicit value;
                                        set by AnalyseUnit/AnalyseUnitForExport
@@ -603,6 +620,9 @@ type
       hook to break recursion. }
     property BypassUsesChain: Boolean read FBypassUsesChain
                                        write FBypassUsesChain;
+
+    { Set by a backend for the duration of code emission; see FInCodegen. }
+    property InCodegen: Boolean read FInCodegen write FInCodegen;
 
     { Type lookup — case-insensitive, returns nil if not found }
     function FindType(const AName: string): TTypeDesc;
@@ -2043,9 +2063,16 @@ begin
     The check only runs while a unit/program is being analysed
     (FDefineOwningUnit <> '') and the chain walker is not mid-callback; outside
     analysis (some codegen-side lookups clear FDefineOwningUnit) the residue is
-    returned unchanged so unit-prefix mangling still resolves owned symbols. }
+    returned unchanged so unit-prefix mangling still resolves owned symbols.
+
+    It is also disabled during code emission (FInCodegen): the leak it guards is
+    purely an analysis-time concern, whereas a backend legitimately resolves a
+    unit's own implementation-section classes to emit their typeinfo/vtable/
+    _FieldCleanup.  FDefineOwningUnit can have drifted to a dependency unit
+    mid-emit, which would otherwise make this suppression wrongly fire and drop
+    the class's typeinfo, leaving a dangling symbol the linker binds to garbage. }
   if (Sym <> nil) and Sym.IsImplPrivate and (FDefineOwningUnit <> '')
-     and not FBypassUsesChain
+     and not FBypassUsesChain and not FInCodegen
      and not SameText(Sym.OwningUnit, FDefineOwningUnit) then
   begin
     Result := nil;

@@ -14472,6 +14472,10 @@ begin
   begin
     SavedDOU := FSymTable.DefineOwningUnit;
     FSymTable.DefineOwningUnit := AUnit.Name;
+    { Disable the analysis-time impl-private suppression in Lookup: at codegen
+      the backend must resolve THIS unit's own implementation-section classes to
+      emit their typeinfo/vtable/_FieldCleanup (see TSymbolTable.FInCodegen). }
+    FSymTable.InCodegen := True;
   end;
 
   { Combined type-decl list (interface first, then implementation) — borrowed
