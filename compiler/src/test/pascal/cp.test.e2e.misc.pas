@@ -56,6 +56,7 @@ type
     procedure TestRun_MethodPtrVirtualCapture_Field;
     procedure TestRun_MethodPtrReturn;
     procedure TestRun_MethodPtrReturn_ReadsSelf;
+    procedure TestRun_MethodPtrImplicitSelfFieldAssign;
     { Unqualified call to a procedural-typed field via implicit Self (FFn(...)
       with no 'Self.' prefix), as an expression and as a statement. }
     procedure TestRun_ImplicitSelfProcField_Expr;
@@ -608,6 +609,36 @@ const
     end.
     ''';
 
+  { Assigning @Self.Method to a bare (implicit-Self) method-pointer field:
+    FFn := @Self.DoIt inside a method, with no 'Self.' on the LHS.  DoIt reads
+    another field through Self, so a wrong Data half (the bug) would crash or
+    print garbage rather than 'T:x'. }
+  SrcMethodPtrImplicitSelfFieldAssign = '''
+    program Prg;
+    type
+      TProc = procedure(const S: string) of object;
+      TA = class
+        FName: string;
+        FFn: TProc;
+        procedure DoIt(const S: string);
+        procedure Fire;
+      end;
+    procedure TA.DoIt(const S: string);
+    begin WriteLn(FName + ':' + S) end;
+    procedure TA.Fire;
+    begin
+      FFn := @Self.DoIt;
+      FFn('x')
+    end;
+    var A: TA;
+    begin
+      A := TA.Create();
+      A.FName := 'T';
+      A.Fire();
+      A.Free()
+    end.
+    ''';
+
   { Unqualified (implicit-Self) call to a procedural-typed field, as an
     expression — FFn(...) with no 'Self.' prefix. }
   SrcImplicitProcFieldExpr = '''
@@ -1026,6 +1057,12 @@ begin
     16-byte method pointer survived: AddBase reads Self.Base (100). }
   AssertRunsOnAll(SrcMethodPtrReturnSelf,
     '107' + LE + '105' + LE + '103' + LE + '109' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_MethodPtrImplicitSelfFieldAssign;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcMethodPtrImplicitSelfFieldAssign, 'T:x' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ImplicitSelfProcField_Expr;

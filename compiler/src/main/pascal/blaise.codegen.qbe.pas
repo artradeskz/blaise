@@ -4249,6 +4249,19 @@ begin
       EmitInterfaceToFieldSlots(AAssign.Expr, ObjTemp, ISAddrT, ISFld.TypeDesc);
       Exit;
     end;
+    { Method-pointer field via implicit Self (bare FFn := @Obj.Method): the RHS
+      evaluates to the address of a 16-byte [Code, Data] block (vtable-resolved
+      by EmitAddrOfExpr); copy the whole block into the field slot.  Must precede
+      the scalar store below, which would deposit only the 8-byte block pointer
+      and leave the Data half garbage — a later call then dispatches on a bad
+      Self and crashes.  Mirrors the simple-variable method-ptr assignment. }
+    if (ISFld.TypeDesc.Kind = tyProcedural) and
+       TProceduralTypeDesc(ISFld.TypeDesc).IsMethodPtr then
+    begin
+      ValTemp := EmitExpr(AAssign.Expr);
+      EmitLine(Format('  call $memcpy(l %s, l %s, l 16)', [ObjTemp, ValTemp]));
+      Exit;
+    end;
     ValTemp := EmitExpr(AAssign.Expr);
     QType := QbeTypeOf(ISFld.TypeDesc);
     if QType = 'w' then

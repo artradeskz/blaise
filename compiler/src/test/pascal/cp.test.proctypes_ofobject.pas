@@ -57,6 +57,7 @@ type
     procedure TestCodegen_MethodPtrField_DirectCall_LoadsCodeAndData;
     procedure TestCodegen_MethodPtrVirtualCapture_LoadsFromVTable;
     procedure TestCodegen_MethodPtrReturn_UsesAggregateABI;
+    procedure TestCodegen_MethodPtrField_ImplicitSelfAssignUsesMemcpy16;
 
     { End-to-end }
     procedure TestE2E_MethodPtr_NoArgs;
@@ -762,6 +763,45 @@ begin
     StrPos('%_var_Result =l alloc8 16', IR) >= 0);
   AssertTrue('method-ptr return is routed through the aggregate return ABI',
     StrPos('_ffi__BlaiseMethodPtr', IR) >= 0);
+end;
+
+procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrField_ImplicitSelfAssignUsesMemcpy16;
+const
+  Src =
+    '''
+        program P;
+        type
+          TProc = procedure(const S: string) of object;
+          TA = class(TObject)
+            FFn: TProc;
+            procedure DoIt(const S: string);
+            procedure Fire;
+          end;
+        procedure TA.DoIt(const S: string);
+        begin WriteLn(S) end;
+        procedure TA.Fire;
+        begin
+          FFn := @Self.DoIt
+        end;
+        var A: TA;
+        begin
+          A := TA.Create();
+          A.Fire();
+          A.Free()
+        end.
+        ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  { Assigning @Self.Method to a bare (implicit-Self) method-pointer field must
+    copy the whole 16-byte (Code, Data) block into the field slot.  The buggy
+    codegen fell through to the scalar-store path and deposited only the 8-byte
+    pointer to the source block, leaving the Data half garbage — a later call
+    then dispatched on a bad Self and crashed. }
+  AssertTrue('implicit-Self method-ptr field assignment emits memcpy',
+    Pos('call $memcpy(', IR) > 0);
+  AssertTrue('memcpy length is 16',
+    Pos(', l 16)', IR) > 0);
 end;
 
 procedure TProcTypesOfObjectTests.TestE2E_MethodPtrField_DirectCall_StmtForm;

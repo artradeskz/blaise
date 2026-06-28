@@ -11045,6 +11045,55 @@ begin
        (Asgn.ResolvedLhsType.Kind <> tyInterface) then
     begin
       ISFld := TFieldInfo(Asgn.ImplicitSelfField);
+      { Method-pointer field via implicit Self (bare FFn := @Obj.Method): store
+        the [CodePtr, ObjPtr] pair into the field's 16-byte slot.  Checked before
+        the ARC/generic stores below, which would route the RHS through
+        EmitExprToEax(@Obj.Method) and raise "must be used in assignment
+        context".  Destination base is Self + field offset; the rest mirrors the
+        simple-variable and explicit-field method-ptr assignment cases. }
+      if (ISFld.TypeDesc.Kind = tyProcedural) and
+         TProceduralTypeDesc(ISFld.TypeDesc).IsMethodPtr and
+         (Asgn.Expr is TAddrOfExpr) and
+         (TAddrOfExpr(Asgn.Expr).Expr is TFieldAccessExpr) and
+         (TFieldAccessExpr(TAddrOfExpr(Asgn.Expr).Expr).ResolvedType <> nil) and
+         (TFieldAccessExpr(TAddrOfExpr(Asgn.Expr).Expr).ResolvedType.Kind = tyProcedural) and
+         TProceduralTypeDesc(TFieldAccessExpr(TAddrOfExpr(Asgn.Expr).Expr).ResolvedType).IsMethodPtr then
+      begin
+        FAE := TFieldAccessExpr(TAddrOfExpr(Asgn.Expr).Expr);
+        MD  := TMethodDecl(FAE.ResolvedMethod);
+        { Destination field address = Self + field offset → %rcx }
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [ISFld.Offset]));
+        { Store the captured object pointer at offset 8 first — a virtual method
+          reads its code pointer from THIS instance's vtable. }
+        if FAE.Base <> nil then
+        begin
+          Self.Emit(#9'pushq %rcx');
+          Self.EmitExprToEax(FAE.Base);
+          Self.Emit(#9'popq %rcx');
+          Self.Emit(#9'movq %rax, 8(%rcx)');
+        end
+        else
+        begin
+          Self.EmitVarBaseToReg(FAE.RecordName, False, '%rax');
+          Self.Emit(#9'movq %rax, 8(%rcx)');
+        end;
+        { Store the code pointer at offset 0, vtable-resolved for a
+          virtual/override method so @Obj.M captures the dynamic override (slot 0
+          is typeinfo, method N at (N+1)*8); static label otherwise. }
+        if MD.VTableSlot >= 0 then
+        begin
+          Self.Emit(#9'movq 8(%rcx), %rax');
+          Self.Emit(#9'movq (%rax), %rax');
+          Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+        end
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [MethodEmitNameNative(MD, MD.OwnerTypeName, FAE.FieldName)]));
+        Self.Emit(#9'movq %rax, (%rcx)');
+        Exit;
+      end;
       { ARC-managed implicit-Self field: retain the new value (unless the RHS
         already owns +1) and release the old before overwriting.  %r15
         (callee-saved) holds the slot address across the ARC calls. }
