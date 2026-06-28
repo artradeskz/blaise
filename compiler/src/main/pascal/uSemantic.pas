@@ -8575,12 +8575,10 @@ begin
   { Qualified STATIC (class-level) variable write: 'TFoo.StaticVar := V'.
     RecordName is a class/record TYPE, not a variable; the static var was
     registered under the combined key 'TFoo.StaticVar'.  Enforce member
-    visibility first (this is where a strict/private static var written from
-    another type is rejected with a "not accessible" diagnostic).  The write
-    itself from a PERMITTED context still lowers through the bare static-var
-    path (a method writes 'StaticVar := V' unqualified); the qualified write
-    form is not yet lowered by codegen, so report it cleanly rather than emit a
-    bare 'is not a variable'. }
+    visibility (a strict/private static var written from another type is
+    rejected with a "not accessible" diagnostic), then mark the node so codegen
+    lowers it as a plain store to the shared global slot — identical to the bare
+    'StaticVar := V' form a static method writes. }
   if RecSym.Kind = skType then
   begin
     VarSym := FTable.Lookup(AAssign.RecordName + '.' + AAssign.FieldName);
@@ -8589,11 +8587,21 @@ begin
       AssertStaticVarVisible(VarSym.Visibility, VarSym.OwningUnit,
                              VarSym.OwnerTypeName, AAssign.FieldName,
                            AAssign.Line, AAssign.Col);
-      SemanticError(Format(
-        'Qualified write to static var ''%s.%s'' is not yet supported; assign ' +
-        'it from a static method of ''%s'' using the unqualified name',
-        [AAssign.RecordName, AAssign.FieldName, AAssign.RecordName]),
+      AAssign.IsClassVarWrite  := True;
+      AAssign.ClassVarEmitName := VarSym.GlobalEmitName;
+      AAssign.ClassVarLhsType  := VarSym.TypeDesc;
+      AAssign.IsGlobal         := True;
+      if (VarSym.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then
+      begin
+        AnalyseSetLiteralExpr(TArrayLiteralExpr(AAssign.Expr),
+          TSetTypeDesc(VarSym.TypeDesc));
+        Exit;
+      end;
+      ResolveDiamond(AAssign.Expr, VarSym.TypeDesc);
+      ExprType := AnalyseExpr(AAssign.Expr);
+      CheckTypesMatch(VarSym.TypeDesc, ExprType, 'static var assignment',
         AAssign.Line, AAssign.Col);
+      Exit;
     end;
   end;
   if not (RecSym.Kind in [skVariable, skParameter, skVarParameter]) then

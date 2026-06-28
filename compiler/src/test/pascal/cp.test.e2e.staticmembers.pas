@@ -29,6 +29,8 @@ type
     procedure TestRun_StaticMethod_NoSelf;
     procedure TestRun_StaticVar_SharedAcrossCalls;
     procedure TestRun_StaticVar_QualifiedRead;
+    procedure TestRun_StaticVar_QualifiedWrite_Scalar;
+    procedure TestRun_StaticVar_QualifiedWrite_ClassARC;
     procedure TestRun_StaticProperty_QualifiedRead;
     procedure TestRun_Singleton_LazyGetInstance;
     procedure TestRun_StaticConst_OnClass;
@@ -117,6 +119,54 @@ const Src =
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertRunsOnAll(Src, '20' + LineEnding, 0);
+end;
+
+procedure TE2EStaticMembersTests.TestRun_StaticVar_QualifiedWrite_Scalar;
+const Src =
+  '''
+  program P;
+  type
+    TFoo = class
+    public static var
+      GCount: Integer;
+    end;
+  begin
+    TFoo.GCount := 5;
+    TFoo.GCount := TFoo.GCount + 37;
+    WriteLn(TFoo.GCount)
+  end.
+  ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertRunsOnAll(Src, '42' + LineEnding, 0);
+end;
+
+procedure TE2EStaticMembersTests.TestRun_StaticVar_QualifiedWrite_ClassARC;
+const Src =
+  '''
+  program P;
+  type
+    TObj = class
+    public
+      V: Integer;
+    end;
+    THolder = class
+    public static var
+      GObj: TObj;
+    end;
+  var local: TObj;
+  begin
+    THolder.GObj := TObj.Create();
+    local := THolder.GObj;
+    local.V := 99;
+    WriteLn(local.V);
+    THolder.GObj := nil;
+    if THolder.GObj = nil then WriteLn('released')
+  end.
+  ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertRunsOnAll(Src, '99' + LineEnding + 'released' + LineEnding, 0);
 end;
 
 procedure TE2EStaticMembersTests.TestRun_StaticProperty_QualifiedRead;

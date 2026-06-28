@@ -428,6 +428,16 @@ type
                               FieldName has been rewritten to the SETTER method;
                               codegen dispatches it through the itab with Expr
                               as the single argument }
+    IsClassVarWrite: Boolean; { set by uSemantic — qualified STATIC (class-level)
+                              variable write 'TFoo.StaticVar := V'.  The target is
+                              the single shared global emitted under
+                              ClassVarEmitName; codegen lowers it exactly like a
+                              bare global store (delegates to EmitAssignment),
+                              ignoring RecordName/FieldName. }
+    [Unretained] ClassVarLhsType: TTypeDesc;  { set with IsClassVarWrite — the
+                              static var's type, for the delegated store. }
+    ClassVarEmitName: string; { set with IsClassVarWrite — the mangled data-label
+                              of the static var's storage slot. }
     destructor Destroy; override;
   end;
 

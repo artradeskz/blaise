@@ -10903,6 +10903,7 @@ var
   RepS:  TRepeatStmt;
   Asgn:  TAssignment;
   FA:    TFieldAssignment;
+  CVStore: TAssignment;
   FAE:   TFieldAccessExpr;
   SSA:   TStaticSubscriptAssign;
   MD:    TMethodDecl;
@@ -12217,6 +12218,25 @@ begin
   if AStmt is TFieldAssignment then
   begin
     FA := TFieldAssignment(AStmt);
+    { Qualified STATIC var write 'TFoo.X := V': lower exactly like a bare global
+      store to the shared slot.  Delegate to the TAssignment path via a borrowed
+      synthetic node (Expr nilled before Free so the shared expression is not
+      released twice) — reuses the scalar / class-ARC / interface store logic. }
+    if FA.IsClassVarWrite then
+    begin
+      CVStore := TAssignment.Create();
+      try
+        CVStore.Name            := FA.ClassVarEmitName;
+        CVStore.IsGlobal        := True;
+        CVStore.ResolvedLhsType := FA.ClassVarLhsType;
+        CVStore.Expr            := FA.Expr;
+        Self.EmitStmt(CVStore);
+      finally
+        CVStore.Expr := nil;
+        CVStore.Free();
+      end;
+      Exit;
+    end;
     { Interface property write: I.Prop := V — FieldName holds the SETTER
       (rewritten by semantic); dispatch through the itab with V as the
       single argument. }

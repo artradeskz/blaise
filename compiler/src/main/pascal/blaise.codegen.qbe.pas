@@ -6291,8 +6291,30 @@ var
   IntfDesc: TInterfaceTypeDesc;
   SlotOff: Integer;
   ObjReleaseTemp: string;
+var
+  CVStore: TAssignment;
 begin
   ObjReleaseTemp := '';
+  { Qualified STATIC var write 'TFoo.X := V': lower exactly like a bare global
+    store to the shared slot.  Delegate to EmitAssignment via a borrowed
+    TAssignment so the scalar / class-ARC / interface-fat-pointer store logic is
+    reused verbatim.  The temp BORROWS Expr (nilled before Free so the shared
+    expression is not released twice). }
+  if AAssign.IsClassVarWrite then
+  begin
+    CVStore := TAssignment.Create();
+    try
+      CVStore.Name            := AAssign.ClassVarEmitName;
+      CVStore.IsGlobal        := True;
+      CVStore.ResolvedLhsType := AAssign.ClassVarLhsType;
+      CVStore.Expr            := AAssign.Expr;
+      EmitAssignment(CVStore);
+    finally
+      CVStore.Expr := nil;   { borrowed — do not release the shared node }
+      CVStore.Free();
+    end;
+    Exit;
+  end;
   { Interface property write: I.Prop := V — FieldName holds the SETTER
     (rewritten by semantic); dispatch it through the itab with V as the
     single argument, mirroring EmitMethodCall's interface branch. }

@@ -196,6 +196,8 @@ TFieldAssignment.PropIndexExpr  serialise
 TFieldAssignment.PropOwnerType  safe
 TFieldAssignment.PropAccessorVSlot  safe
 TFieldAssignment.IsElemWrite  safe
+TFieldAssignment.IsClassVarWrite  safe
+TFieldAssignment.ClassVarEmitName  safe
 
 # TStaticSubscriptAssign (uAST.pas:425)
 TStaticSubscriptAssign.ArrayName  serialise
