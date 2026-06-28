@@ -89,6 +89,11 @@ type
     IsVirtual:    Boolean;       { virtual method that allocates a new
                                    vtable slot }
     IsOverride:   Boolean;       { override that replaces a parent slot }
+    IsStatic:     Boolean;       { static (class-level) method — takes no
+                                   implicit Self.  VTableSlot is -1 for both
+                                   static and final non-virtual instance
+                                   methods, so this is a distinct flag rather
+                                   than being inferred from the slot. }
     constructor Create;
     destructor Destroy; override;
   end;

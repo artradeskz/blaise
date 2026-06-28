@@ -4480,9 +4480,18 @@ begin
       ParseUsesList(Result.ImplUsedUnits);  { implementation-only deps — loaded but not re-exported }
     while Check(tkProcedure) or Check(tkFunction) or
           Check(tkConstructor) or Check(tkDestructor) or
-          Check(tkVar) or Check(tkThreadVar) or Check(tkConst) or Check(tkType) do
+          Check(tkVar) or Check(tkThreadVar) or Check(tkConst) or Check(tkType) or
+          (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+           (PeekKind() in [tkFunction, tkProcedure])) do
     begin
-      if Check(tkFunction) then
+      if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+         (PeekKind() in [tkFunction, tkProcedure]) then
+        { Out-of-line static-method body in the implementation section:
+          `static function T.M ...`.  Mirror the program-level standalone path
+          (ParseStandaloneDecl) — consume `static`, parse the routine, mark it
+          IsStatic so it reconciles against the in-class static declaration. }
+        ParseStandaloneDecl(Result.ImplBlock)
+      else if Check(tkFunction) then
         Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True, True))
       else if Check(tkVar) or Check(tkThreadVar) then
         ParseVarBlock(Result.ImplBlock)

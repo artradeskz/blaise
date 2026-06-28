@@ -230,6 +230,10 @@ begin
   Result.ResolvedQbeName := ASrc.ResolvedQbeName;
   Result.IsVirtual    := ASrc.IsVirtual;
   Result.IsOverride   := ASrc.IsOverride;
+  { Carry static-ness so a cross-unit TypeName.StaticMethod() call resolves —
+    VTableSlot alone cannot distinguish a static method from a final
+    non-virtual instance method (both are -1). }
+  Result.IsStatic     := ASrc.IsStatic;
   Result.ReturnType   := ResolveTypeRef(ASrc.ReturnTypeName, AIface, ADeps);
 
   for I := 0 to ASrc.Params.Count - 1 do

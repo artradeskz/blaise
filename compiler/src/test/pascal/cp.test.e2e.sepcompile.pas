@@ -107,6 +107,19 @@ type
       walk dead-ended and reported "Undeclared procedure". }
     procedure TestIncrementalRebuild_QualifiedGrandparentMethod;
     procedure TestDebugOpdf_PerUnitSection_InDependencyObject;
+    { Regression (F1-followup cross-unit static members): a class with `static`
+      members — a static var, a static method, and a static const — declared in
+      one unit and used through the COMPILED .bif boundary from another unit.
+      The wire format already encoded the static facts, but the export clone
+      dropped TFieldDecl.IsClassVar/ClassVarEmitName, TMethodDecl.IsStatic and
+      TPropertyDecl.IsStatic before encoding; the importer ignored them and the
+      decoded ConstDecls; and TRoutineSig carried no IsStatic field at all.  So
+      a cross-unit TReg.Next() failed with "is not a static method", a static
+      var did not register as a shared global, and TReg.Tag did not resolve.
+      Driving through --unit-cache exercises the real .bif write+read path on
+      both backends. }
+    procedure TestStaticMembers_CrossUnit_QBE;
+    procedure TestStaticMembers_CrossUnit_Native;
   end;
 
 implementation
@@ -1420,6 +1433,135 @@ begin
   AssertEquals('use_opdfdep exit code', 0, Rc);
   AssertEquals('use_opdfdep stdout', 'Hello, World' + #10 + 'Count is 2' + #10,
     Captured)
+end;
+
+{ Shared source for the two cross-unit static-member tests below.  RegModU
+  declares a class with all three static member forms; the consuming program
+  reaches them across the compiled .bif boundary. }
+const
+  StaticRegModSrc =
+    '''
+    unit RegModU;
+    interface
+    type
+      TReg = class
+      private static var
+        FCount: Integer;
+      public
+        static function Next: Integer;
+      public static const
+        Tag = 7;
+      end;
+    implementation
+    static function TReg.Next: Integer;
+    begin
+      FCount := FCount + 1;
+      Result := FCount;
+    end;
+    end.
+    ''';
+  StaticRegProgSrc =
+    '''
+    program UseReg;
+    uses RegModU;
+    begin
+      WriteLn(TReg.Next());
+      WriteLn(TReg.Next());
+      WriteLn(TReg.Tag)
+    end.
+    ''';
+
+procedure TSepCompileTests.TestStaticMembers_CrossUnit_QBE;
+var
+  UnitPas, ProgPas, ProgBin, CacheDir: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  UnitPas  := FScratch + '/RegModU.pas';
+  ProgPas  := FScratch + '/use_reg_qbe.pas';
+  ProgBin  := FScratch + '/use_reg_qbe';
+  CacheDir := FScratch + '/units-static-qbe';
+
+  WriteFile(UnitPas, StaticRegModSrc);
+  WriteFile(ProgPas, StaticRegProgSrc);
+  ForceDirectories(CacheDir);
+
+  { Build 1 (clean cache): RegModU compiled from source, .o/.bif cached. }
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'qbe',
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('qbe build1 exit (out: ' + Captured + ')', 0, Rc);
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('qbe build1 run exit', 0, Rc);
+  AssertEquals('qbe build1 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured);
+
+  { Build 2 (warm cache): RegModU loaded purely from its cached .bif — the
+    static facts must survive the .bif round-trip. }
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'qbe',
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('qbe build2 exit (out: ' + Captured + ')', 0, Rc);
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('qbe build2 run exit', 0, Rc);
+  AssertEquals('qbe build2 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured)
+end;
+
+procedure TSepCompileTests.TestStaticMembers_CrossUnit_Native;
+var
+  UnitPas, ProgPas, ProgBin, CacheDir: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  UnitPas  := FScratch + '/RegModU.pas';
+  ProgPas  := FScratch + '/use_reg_native.pas';
+  ProgBin  := FScratch + '/use_reg_native';
+  CacheDir := FScratch + '/units-static-native';
+
+  WriteFile(UnitPas, StaticRegModSrc);
+  WriteFile(ProgPas, StaticRegProgSrc);
+  ForceDirectories(CacheDir);
+
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'native',
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('native build1 exit (out: ' + Captured + ')', 0, Rc);
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('native build1 run exit', 0, Rc);
+  AssertEquals('native build1 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured);
+
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'native',
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('native build2 exit (out: ' + Captured + ')', 0, Rc);
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('native build2 run exit', 0, Rc);
+  AssertEquals('native build2 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured)
 end;
 
 initialization

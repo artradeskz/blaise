@@ -290,17 +290,18 @@ TRoutineSig.VTableSlot  serialise
 TRoutineSig.ResolvedQbeName  serialise
 TRoutineSig.IsVirtual  serialise
 TRoutineSig.IsOverride  serialise
+TRoutineSig.IsStatic  serialise
 
-# TConstEntry (uUnitInterface.pas:97)
+# TConstEntry (uUnitInterface.pas:102)
 TConstEntry.Decl  serialise
 TConstEntry.TypeRef  serialise
 
-# TVarEntry (uUnitInterface.pas:105)
+# TVarEntry (uUnitInterface.pas:110)
 TVarEntry.Name  serialise
 TVarEntry.TypeRef  serialise
 TVarEntry.IsThreadVar  serialise
 
-# TUnitInterface (uUnitInterface.pas:169)
+# TUnitInterface (uUnitInterface.pas:174)
 TUnitInterface.Name  serialise
 TUnitInterface.SourceFile  serialise
 TUnitInterface.SourceHash  serialise

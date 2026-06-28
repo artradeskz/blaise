@@ -263,6 +263,16 @@ type
       preserves statements/expressions through write+read. }
     procedure TestDiskPath_GenericRoutine_BodyPreserved;
     procedure TestRoundTrip_InlineBody_Preserved;
+    { Static (class-level) member facts must survive export-clone → encode →
+      decode.  The export clone previously dropped TFieldDecl.IsClassVar /
+      ClassVarEmitName, TMethodDecl.IsStatic and TPropertyDecl.IsStatic, so
+      they encoded as defaults. }
+    procedure TestRoundTrip_StaticMembers_Preserved;
+    { Pre-existing clone bug uncovered alongside the static-members work: a
+      [Weak] field and a `default` property round-tripped as plain owning /
+      non-default because CloneFieldDecl / ClonePropertyDecl dropped IsWeak
+      and IsDefault before encoding. }
+    procedure TestRoundTrip_WeakField_And_DefaultProperty_Preserved;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -2681,11 +2691,11 @@ begin
   Iface := TUnitInterface.Create('U');
   try
     Buf := WriteUnitInterface(Iface);
-    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 3 since the
-      static-members fields (IsClassVar/ClassVarEmitName, property IsStatic,
-      record/class ConstDecls) were added to the encoded layout. }
+    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 4 since
+      TRoutineSig.IsStatic was added to the method-sig encoded layout (on top
+      of v3's IsClassVar/ClassVarEmitName, property IsStatic, ConstDecls). }
     AssertTrue('starts with magic',
-      Pos('BLAISE-IFACE 3', Buf) = 0);
+      Pos('BLAISE-IFACE 4', Buf) = 0);
   finally
     Iface.Free();
   end;
@@ -3392,6 +3402,121 @@ begin
       AssertTrue('Square inline body present', IB <> nil);
       AssertTrue('block carried', IB.Block <> nil);
       AssertTrue('has at least one stmt', IB.Block.Stmts.Count >= 1);
+    finally
+      Round.Free();
+    end;
+  finally
+    Iface.Free();
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_StaticMembers_Preserved;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TReg = class' + #10 +
+    '  private static var' + #10 +
+    '    FCount: Integer;' + #10 +
+    '  public' + #10 +
+    '    static function Next: Integer;' + #10 +
+    '    static property Counter: Integer read Next;' + #10 +
+    '  public static const' + #10 +
+    '    Tag = 7;' + #10 +
+    'end;' + #10 +
+    'implementation' + #10 +
+    'static function TReg.Next: Integer; begin Result := FCount end;' + #10 +
+    'end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  Def:          TClassTypeDef;
+  Fld:          TFieldDecl;
+  M:            TRoutineSig;
+  Prop:         TPropertyDecl;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TReg');
+      AssertTrue('TReg present', E <> nil);
+      Def := TClassTypeDef(E.Def);
+
+      { static var FCount: IsClassVar set, mangled emit label round-tripped. }
+      AssertEquals('1 field decl', 1, Def.Fields.Count);
+      Fld := TFieldDecl(Def.Fields.Items[0]);
+      AssertEquals('field name', 'FCount', Fld.Names.Strings[0]);
+      AssertTrue('FCount IsClassVar', Fld.IsClassVar);
+      AssertEquals('FCount emit label', 'U_TReg_FCount', Fld.ClassVarEmitName);
+
+      { static method Next: IsStatic carried on the routine sig. }
+      AssertEquals('1 method', 1, E.Methods.Count);
+      M := TRoutineSig(E.Methods.Items[0]);
+      AssertEquals('method name', 'Next', M.Name);
+      AssertTrue('Next IsStatic', M.IsStatic);
+
+      { static property Counter: IsStatic carried on the property decl. }
+      AssertEquals('1 property', 1, Def.Properties.Count);
+      Prop := TPropertyDecl(Def.Properties.Items[0]);
+      AssertEquals('prop name', 'Counter', Prop.Name);
+      AssertTrue('Counter IsStatic', Prop.IsStatic);
+
+      { static const Tag: carried in the class ConstDecls list. }
+      AssertEquals('1 const decl', 1, Def.ConstDecls.Count);
+      AssertEquals('const name', 'Tag',
+        TConstDecl(Def.ConstDecls.Items[0]).Name);
+      AssertEquals('const value', 7,
+        TConstDecl(Def.ConstDecls.Items[0]).IntVal);
+    finally
+      Round.Free();
+    end;
+  finally
+    Iface.Free();
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_WeakField_And_DefaultProperty_Preserved;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TNode = class' + #10 +
+    '    [Weak] FNext: TNode;' + #10 +
+    '    function Get(I: Integer): Integer;' + #10 +
+    '    property Items[I: Integer]: Integer read Get; default;' + #10 +
+    'end;' + #10 +
+    'implementation' + #10 +
+    'function TNode.Get(I: Integer): Integer; begin Result := I end;' + #10 +
+    'end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  Def:          TClassTypeDef;
+  Fld:          TFieldDecl;
+  Prop:         TPropertyDecl;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TNode');
+      AssertTrue('TNode present', E <> nil);
+      Def := TClassTypeDef(E.Def);
+
+      AssertEquals('1 field decl', 1, Def.Fields.Count);
+      Fld := TFieldDecl(Def.Fields.Items[0]);
+      AssertEquals('field name', 'FNext', Fld.Names.Strings[0]);
+      AssertTrue('FNext IsWeak survives clone+round-trip', Fld.IsWeak);
+
+      AssertEquals('1 property', 1, Def.Properties.Count);
+      Prop := TPropertyDecl(Def.Properties.Items[0]);
+      AssertEquals('prop name', 'Items', Prop.Name);
+      AssertTrue('Items IsDefault survives clone+round-trip', Prop.IsDefault);
     finally
       Round.Free();
     end;

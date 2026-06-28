@@ -2269,6 +2269,15 @@ begin
     Result.Names.Add(ASrc.Names.Strings[I]);
   for I := 0 to ASrc.Attributes.Count - 1 do
     Result.Attributes.Add(ASrc.Attributes.Strings[I]);
+  { Carry the resolved semantic flags through the export clone.  Without
+    these, the .bif encoder sees defaults: a [Weak]/[Unretained] field
+    round-trips as a plain owning field, and a `static var` loses both its
+    class-var marker and its mangled emit label — so a cross-unit consumer
+    cannot register the shared global. }
+  Result.IsWeak          := ASrc.IsWeak;
+  Result.IsUnretained    := ASrc.IsUnretained;
+  Result.IsClassVar      := ASrc.IsClassVar;
+  Result.ClassVarEmitName := ASrc.ClassVarEmitName;
 end;
 
 function ClonePropertyDecl(ASrc: TPropertyDecl): TPropertyDecl;
@@ -2280,6 +2289,10 @@ begin
   Result.WriteName      := ASrc.WriteName;
   Result.IndexParamName := ASrc.IndexParamName;
   Result.IndexTypeName  := ASrc.IndexTypeName;
+  { IsDefault round-trips the `default` directive; IsStatic marks a static
+    property whose accessors take no Self.  Both were silently dropped. }
+  Result.IsDefault      := ASrc.IsDefault;
+  Result.IsStatic       := ASrc.IsStatic;
 end;
 
 function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl;
@@ -2394,6 +2407,10 @@ begin
   Result.ExternalName   := ASrc.ExternalName;
   Result.CallingConv    := ASrc.CallingConv;
   Result.IsRecordMethod := ASrc.IsRecordMethod;
+  { Static (class-level) methods take no implicit Self.  Dropping this in the
+    export clone made every cross-unit static method look like a normal
+    instance method, so TypeName.StaticMethod() resolution failed. }
+  Result.IsStatic       := ASrc.IsStatic;
   for I := 0 to ASrc.Params.Count - 1 do
     Result.Params.Add(CloneMethodParam(TMethodParam(ASrc.Params.Items[I])));
   if ASrc.TypeParams <> nil then

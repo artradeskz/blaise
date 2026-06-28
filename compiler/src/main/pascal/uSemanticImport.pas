@@ -260,6 +260,74 @@ begin
   ART.SetVTableSlotAt(ASig.VTableSlot, ASig.Name, ImplName);
 end;
 
+{ Register the shared globals for a `static var` (class variable) imported
+  from a .bif.  Mirrors uSemantic.AnalyseTypeDecls (the IsClassVar branch):
+  a static var is NOT an instance field, so it must not advance the type
+  layout — instead it becomes one shared global reachable both bare (inside
+  the type's own methods) and qualified ('TFoo.Name' from anywhere).
+
+  CRITICAL: ClassVarEmitName is the mangled label computed at the DEFINING
+  unit's export time and serialised verbatim.  The importer must use the
+  DECODED value, never recompute it — the importing unit's own prefix
+  differs, so re-deriving would produce a label that does not match the data
+  slot the exporting unit emitted. }
+procedure RegisterImportedClassVar(const ATypeName, AFieldName,
+                                   AEmitName: string;
+                                   AFieldType: TTypeDesc;
+                                   ATable: TSymbolTable);
+var
+  Sym: TSymbol;
+begin
+  { Bare name — usable unqualified inside the type's own methods. }
+  Sym := TSymbol.Create(AFieldName, skVariable, AFieldType);
+  Sym.IsGlobal       := True;
+  Sym.IsClassVar     := True;
+  Sym.GlobalEmitName := AEmitName;
+  if not ATable.Define(Sym) then Sym.Free();
+  { Qualified name — usable as TFoo.Name from anywhere. }
+  Sym := TSymbol.Create(ATypeName + '.' + AFieldName, skVariable, AFieldType);
+  Sym.IsGlobal       := True;
+  Sym.IsClassVar     := True;
+  Sym.GlobalEmitName := AEmitName;
+  if not ATable.Define(Sym) then Sym.Free();
+end;
+
+{ Register class/record-level `static const` declarations imported from a
+  .bif.  Mirrors the within-unit registration in uSemantic.AnalyseTypeDecls:
+  each const is reachable both bare and qualified ('TFoo.Tag').  Array consts
+  are out of scope here (the within-unit path supports them, but no cached
+  consumer needs them yet); only scalar int/string consts are imported. }
+procedure RegisterImportedTypeConsts(const ATypeName: string;
+                                     AConstDecls: TObjectList;
+                                     ATable: TSymbolTable);
+var
+  J:   Integer;
+  CD:  TConstDecl;
+  Par: TTypeDesc;
+  Sym: TSymbol;
+begin
+  if AConstDecls = nil then Exit;
+  for J := 0 to AConstDecls.Count - 1 do
+  begin
+    CD := TConstDecl(AConstDecls.Items[J]);
+    if CD.IsArrayConst then Continue;  { array static consts not yet imported }
+    if CD.IsString then
+      Par := ATable.FindType('string')
+    else
+      Par := ATable.FindType('Integer');
+    { Unqualified name — usable inside the type's own methods without prefix. }
+    Sym := TSymbol.Create(CD.Name, skConstant, Par);
+    Sym.ConstValue  := CD.IntVal;
+    Sym.ConstString := CD.StrVal;
+    if not ATable.Define(Sym) then Sym.Free();
+    { Qualified name — usable as TFoo.Tag from anywhere. }
+    Sym := TSymbol.Create(ATypeName + '.' + CD.Name, skConstant, Par);
+    Sym.ConstValue  := CD.IntVal;
+    Sym.ConstString := CD.StrVal;
+    if not ATable.Define(Sym) then Sym.Free();
+  end;
+end;
+
 function ResolveParentClassByName(const AParentName: string;
                                   ATable: TSymbolTable): TRecordTypeDesc;
 var
@@ -473,8 +541,17 @@ begin
       raise EImportError.CreateFmt(
         'Class %s field type %s unresolved',
         [AEntry.Name, FldDecl.TypeName]);
-    for J := 0 to FldDecl.Names.Count - 1 do
-      RT.AddField(FldDecl.Names.Strings[J], FldType);
+    if FldDecl.IsClassVar then
+      { `static var`: a shared global, NOT an instance field — do not AddField
+        (that would advance the layout).  Register the global under the
+        DECODED emit label.  Multi-name static-var decls are not produced by
+        the parser (ClassVarEmitName is only set for single-name decls), so
+        the single decoded label applies to FldDecl.Names[0]. }
+      RegisterImportedClassVar(AEntry.Name, FldDecl.Names.Strings[0],
+        FldDecl.ClassVarEmitName, FldType, ATable)
+    else
+      for J := 0 to FldDecl.Names.Count - 1 do
+        RT.AddField(FldDecl.Names.Strings[J], FldType);
   end;
 
   { Methods: walk TRoutineSig list; for virtual/override, register
@@ -550,8 +627,15 @@ begin
       if (FldSym <> nil) and (FldSym.Kind = skType) then
         PropInfo.IndexTypeDesc := FldSym.TypeDesc;
     end;
+    { Static-property facts — TypeName.Prop reads/writes dispatch with no
+      implicit Self.  Mirrors the within-unit pass (PropInfo.IsStatic). }
+    PropInfo.IsDefault := PropDecl.IsDefault;
+    PropInfo.IsStatic  := PropDecl.IsStatic;
     RT.AddProperty(PropInfo);
   end;
+
+  { Class-level `static const` declarations — reachable bare and qualified. }
+  RegisterImportedTypeConsts(AEntry.Name, ClassDef.ConstDecls, ATable);
 
   { Class attributes.  uSemanticExport currently copies the raw
     attribute names ('Threaded', not 'ThreadedAttribute') — but
@@ -609,9 +693,17 @@ begin
       raise EImportError.CreateFmt(
         'Record %s field type %s unresolved',
         [AEntry.Name, FldDecl.TypeName]);
-    for J := 0 to FldDecl.Names.Count - 1 do
-      RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
+    if FldDecl.IsClassVar then
+      { record-level `static var`: shared global, not an instance field. }
+      RegisterImportedClassVar(AEntry.Name, FldDecl.Names.Strings[0],
+        FldDecl.ClassVarEmitName, FldType, ATable)
+    else
+      for J := 0 to FldDecl.Names.Count - 1 do
+        RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
   end;
+
+  { record-level `static const` declarations — reachable bare and qualified. }
+  RegisterImportedTypeConsts(AEntry.Name, RecDef.ConstDecls, ATable);
 end;
 
 procedure RegisterProcType(AEntry: TTypeEntry; ATable: TSymbolTable;
@@ -866,6 +958,9 @@ begin
   Result.VTableSlot := ASig.VTableSlot;
   Result.IsVirtual  := ASig.IsVirtual;
   Result.IsOverride := ASig.IsOverride;
+  { Carry static-ness so the semantic pass's TypeName.StaticMethod() resolution
+    (which checks MDecl.IsStatic) succeeds for a method imported from a .bif. }
+  Result.IsStatic   := ASig.IsStatic;
   for J := 0 to ASig.Params.Count - 1 do
   begin
     Param := TMethodParam(ASig.Params.Items[J]);

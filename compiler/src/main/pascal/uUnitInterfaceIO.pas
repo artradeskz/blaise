@@ -53,7 +53,14 @@ uses
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 3;  { v3 (this cycle): `static` (class-level) member facts now
+  IFACE_VERSION = 4;  { v4 (this cycle): TRoutineSig.IsStatic added to
+                          EncodeMethodSig/ReadMethodSig so a cross-unit
+                          TypeName.StaticMethod() call resolves through the
+                          cached .bif (VTableSlot alone cannot distinguish a
+                          static method from a final non-virtual instance
+                          method — both are -1).  The method-sig layout grew,
+                          so v3 readers must reject these .bif and recompile.
+                        v3: `static` (class-level) member facts now
                           serialised — TFieldDecl.IsClassVar + ClassVarEmitName in
                           EncodeFieldList/ReadFieldList, TPropertyDecl.IsStatic in
                           EncodePropertyList/ReadPropertyList, and record/class
@@ -325,6 +332,9 @@ begin
     EncodeBool (AR.IsOverride) +
     EncodeLpstr(AR.ResolvedQbeName) +
     EncodeLpstr(IntToStr(AR.VTableSlot)) +
+    { static-method flag — distinct from VTableSlot (both static and final
+      non-virtual instance methods carry slot -1). }
+    EncodeBool (AR.IsStatic) +
     EncodeCount(AR.Params.Count);
   for J := 0 to AR.Params.Count - 1 do
   begin
@@ -1888,6 +1898,8 @@ begin
   Result.IsOverride  := DecodeBool(AText, APos);
   Result.ResolvedQbeName := ReadLpstrAt(AText, APos);
   Result.VTableSlot  := StrToInt(ReadLpstrAt(AText, APos));
+  { Order must mirror EncodeMethodSig: IsStatic follows VTableSlot. }
+  Result.IsStatic    := DecodeBool(AText, APos);
   Pc := DecodeCount(AText, APos);
   for J := 1 to Pc do
   begin
