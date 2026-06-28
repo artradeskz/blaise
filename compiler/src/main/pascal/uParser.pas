@@ -845,7 +845,9 @@ begin
       as required when concatenating multiple Pascal units into one file. }
     while Check(tkType) or Check(tkVar) or Check(tkThreadVar) or
           Check(tkProcedure) or Check(tkFunction) or Check(tkConst) or
-          Check(tkConstructor) or Check(tkDestructor) do
+          Check(tkConstructor) or Check(tkDestructor) or
+          (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+           (PeekKind() in [tkFunction, tkProcedure])) do
     begin
       if Check(tkType) then
         ParseTypeSection(Result)
@@ -873,7 +875,11 @@ end;
 procedure TParser.ParseTypeSection(ABlock: TBlock);
 begin
   Expect(tkType);
-  while Check(tkIdent) or Check(tkLBracket) do
+  while (Check(tkIdent) or Check(tkLBracket)) and
+        { Stop the type section at a leading `static function/procedure` — that
+          is an out-of-line static-method implementation, not a type decl. }
+        not (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+             (PeekKind() in [tkFunction, tkProcedure])) do
     ParseTypeDecl(ABlock);
 end;
 
@@ -1298,6 +1304,21 @@ begin
   Expect(tkConst);
   while Check(tkIdent) do
   begin
+    { Stop at a class/record section keyword: a const section inside a class or
+      record body is terminated by the next visibility/`static` section or by a
+      `property` member.  A genuine const decl is always `IDENT (':' | '=')`, so
+      if the current identifier is a section keyword and is NOT immediately
+      followed by `:` or `=`, it begins the next section, not another const.
+      (Top-level const blocks never hit this: they are followed by `var`/`type`/
+      `begin`, which are not tkIdent.) }
+    if (SameText(FCurrent.Value, 'private')   or
+        SameText(FCurrent.Value, 'protected') or
+        SameText(FCurrent.Value, 'public')    or
+        SameText(FCurrent.Value, 'published') or
+        SameText(FCurrent.Value, 'static')    or
+        SameText(FCurrent.Value, 'property')) and
+       not (PeekKind() in [tkColon, tkEquals]) then
+      Break;
     CD      := TConstDecl.Create();
     CD.Line := FCurrent.Line;
     CD.Col  := FCurrent.Col;
@@ -1904,25 +1925,73 @@ end;
 
 function TParser.ParseRecordDef: TRecordTypeDef;
 var
-  MethDecl: TMethodDecl;
+  MethDecl:         TMethodDecl;
+  CurrStatic:       Boolean;   { current section's static (class-level) association }
+  LocalStatic:      Boolean;
+  FieldCountBefore: Integer;
+  FieldIdx:         Integer;
 begin
   Result := TRecordTypeDef.Create();
+  CurrStatic := False;
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkRecord);
     repeat
-      if Check(tkIdent) or Check(tkLBracket) then
-        ParseFieldDecl(Result.Fields)
-      else if Check(tkFunction) then
+      { Bare `static var` / `static const` SECTION keyword.  `static` is a soft
+        keyword: a section qualifier only when followed by `var`/`const`; a
+        field literally named `Static` (`Static: Integer;`) falls through. }
+      if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+         (PeekKind() in [tkVar, tkConst]) then
       begin
-        MethDecl := ParseMethodDecl(True);
+        CurrStatic := True;
+        Advance();  { the following var/const section belongs to this static section }
+      end
+      { Visibility section keywords are accepted (and currently cosmetic), with
+        an optional trailing `static`.  A new visibility section resets static. }
+      else if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
+                                  SameText(FCurrent.Value, 'public') or
+                                  SameText(FCurrent.Value, 'protected')) then
+      begin
+        CurrStatic := False;
+        Advance();
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+           (PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure]) then
+        begin
+          CurrStatic := True;
+          Advance();
+        end;
+      end
+      else if Check(tkConst) then
+        ParseConstBlock(Result.ConstDecls)
+      else if Check(tkVar) then
+        Advance()  { optional `var` keyword before field declarations }
+      { Method declarations — before the field branch so a leading `static`
+        prefix is not mistaken for a field name. }
+      else if Check(tkFunction) or Check(tkProcedure) or
+              (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+               (PeekKind() in [tkFunction, tkProcedure])) then
+      begin
+        LocalStatic := CurrStatic;
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') then
+        begin
+          LocalStatic := True;
+          Advance();
+        end;
+        if Check(tkFunction) then
+          MethDecl := ParseMethodDecl(True)
+        else
+          MethDecl := ParseMethodDecl(False);
+        MethDecl.IsStatic := LocalStatic;
         Result.Methods.Add(MethDecl);
       end
-      else if Check(tkProcedure) then
+      else if Check(tkIdent) or Check(tkLBracket) then
       begin
-        MethDecl := ParseMethodDecl(False);
-        Result.Methods.Add(MethDecl);
+        FieldCountBefore := Result.Fields.Count;
+        ParseFieldDecl(Result.Fields);
+        if CurrStatic then
+          for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
+            TFieldDecl(Result.Fields.Items[FieldIdx]).IsClassVar := True;
       end
       else
         Break;
@@ -1967,8 +2036,13 @@ end;
 
 function TParser.ParseClassDef: TClassTypeDef;
 var
-  CurrPublished: Boolean;
-  MethDecl:      TMethodDecl;
+  CurrPublished:    Boolean;
+  CurrStatic:       Boolean;   { current section's static (class-level) association }
+  LocalStatic:      Boolean;   { effective static for the member being parsed }
+  MethDecl:         TMethodDecl;
+  PropDecl:         TPropertyDecl;
+  FieldCountBefore: Integer;
+  FieldIdx:         Integer;
 begin
   Result := TClassTypeDef.Create();
   try
@@ -2004,34 +2078,104 @@ begin
       is then attached to each method decl so codegen can emit a
       published-method table entry. }
     CurrPublished := False;
+    CurrStatic    := False;
     repeat
+      { Visibility section keyword (private/public/protected/published),
+        optionally followed by a `static` qualifier.  A visibility keyword
+        resets the static section (you must re-state `static` after it). }
       if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
                               SameText(FCurrent.Value, 'public') or
                               SameText(FCurrent.Value, 'protected') or
                               SameText(FCurrent.Value, 'published')) then
       begin
         CurrPublished := SameText(FCurrent.Value, 'published');
+        CurrStatic    := False;  { a new visibility section is non-static unless
+                                   `static` follows }
         Advance();  { consume the visibility modifier }
+        { Optional trailing `static` section qualifier.  `static` is a soft
+          keyword: treat it as a qualifier only when it introduces a static
+          member (followed by var/const/method/property), NOT when it is a
+          field literally named `Static` (`private Static: Boolean;`). }
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+           ((PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure,
+                            tkConstructor, tkDestructor]) or
+            ((PeekKind() = tkIdent) and SameText(PeekValueAt(1), 'property'))) then
+        begin
+          CurrStatic := True;
+          Advance();
+        end;
+      end
+      { Bare `static` SECTION keyword — `static var` / `static const` only.
+        `static` is a soft keyword: it acts as a section qualifier only when
+        immediately followed by `var` or `const`.  Followed by anything else
+        (e.g. `Static: Boolean;` — a field literally named Static, or `Static,`)
+        it is an ordinary field identifier and falls through to the field
+        branch.  The `static function/procedure/property` PREFIX forms are
+        handled in the method/property branches below. }
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+              (PeekKind() in [tkVar, tkConst]) then
+      begin
+        CurrStatic := True;
+        Advance();  { consume `static`; the following `var`/`const` section is
+                     part of this static section }
       end
       else if Check(tkConst) then
         ParseConstBlock(Result.ConstDecls)
       else if Check(tkVar) then
         Advance()  { optional 'var' keyword before field declarations — consume and continue }
-      else if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
-        Result.Properties.Add(ParsePropertyDecl())
-      else if Check(tkIdent) or Check(tkLBracket) then
-        ParseFieldDecl(Result.Fields)
-      else if Check(tkFunction) then
+      else if (Check(tkIdent) and SameText(FCurrent.Value, 'property')) or
+              (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+               (PeekKind() = tkIdent) and SameText(PeekValueAt(1), 'property')) then
       begin
-        MethDecl := ParseMethodDecl(True);
+        LocalStatic := CurrStatic;
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') then
+        begin
+          LocalStatic := True;
+          Advance();  { consume per-member `static` prefix }
+        end;
+        PropDecl := ParsePropertyDecl();
+        PropDecl.IsStatic := LocalStatic;
+        Result.Properties.Add(PropDecl);
+      end
+      { Method declarations — checked BEFORE the generic field branch so that a
+        leading `static` prefix on a method is not mistaken for a field name. }
+      else if Check(tkFunction) or Check(tkProcedure) or
+              Check(tkConstructor) or Check(tkDestructor) or
+              (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+               (PeekKind() in [tkFunction, tkProcedure, tkConstructor, tkDestructor])) then
+      begin
+        LocalStatic := CurrStatic;
+        if Check(tkIdent) and SameText(FCurrent.Value, 'static') then
+        begin
+          LocalStatic := True;
+          Advance();  { consume per-member `static` prefix }
+        end;
+        if Check(tkConstructor) or Check(tkDestructor) then
+        begin
+          if LocalStatic then
+            raise EParseError.Create(Format(
+              'A constructor or destructor cannot be declared static at line %d col %d in %s'
+              + ' — Blaise has no type-initialiser (class constructor); use the unit'
+              + ' initialization/finalization sections',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          MethDecl := ParseMethodDecl(False);
+        end
+        else if Check(tkFunction) then
+          MethDecl := ParseMethodDecl(True)
+        else
+          MethDecl := ParseMethodDecl(False);
         MethDecl.IsPublished := CurrPublished;
+        MethDecl.IsStatic    := LocalStatic;
         Result.Methods.Add(MethDecl);
       end
-      else if Check(tkProcedure) or Check(tkConstructor) or Check(tkDestructor) then
+      else if Check(tkIdent) or Check(tkLBracket) then
       begin
-        MethDecl := ParseMethodDecl(False);
-        MethDecl.IsPublished := CurrPublished;
-        Result.Methods.Add(MethDecl);
+        FieldCountBefore := Result.Fields.Count;
+        ParseFieldDecl(Result.Fields);
+        { Stamp class-var flag on every field this decl produced. }
+        if CurrStatic then
+          for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
+            TFieldDecl(Result.Fields.Items[FieldIdx]).IsClassVar := True;
       end
       else
         Break;
@@ -2301,7 +2445,6 @@ begin
                SameText(FCurrent.Value, 'pascal')      or
                SameText(FCurrent.Value, 'safecall')    or
                SameText(FCurrent.Value, 'reintroduce') or
-               SameText(FCurrent.Value, 'static')      or
                SameText(FCurrent.Value, 'final')       or
                SameText(FCurrent.Value, 'assembler')   or
                SameText(FCurrent.Value, 'nostackframe') or
@@ -2482,11 +2625,24 @@ end;
 
 procedure TParser.ParseStandaloneDecl(ABlock: TBlock);
 var
-  IsFunc: Boolean;
-  MD:     TMethodDecl;
+  IsFunc:   Boolean;
+  IsStat:   Boolean;
+  MD:       TMethodDecl;
 begin
+  { Leading `static` on an out-of-line implementation: `static function T.M ...`.
+    Consume it and record the static-ness on the parsed decl, where it is later
+    reconciled against the in-class declaration. }
+  IsStat := False;
+  if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
+     (PeekKind() in [tkFunction, tkProcedure]) then
+  begin
+    IsStat := True;
+    Advance();
+  end;
   IsFunc := Check(tkFunction);
   MD     := ParseMethodDecl(IsFunc, True);  { True = may have nested proc/func decls }
+  if IsStat then
+    MD.IsStatic := True;
   ABlock.ProcDecls.Add(MD);
 end;
 

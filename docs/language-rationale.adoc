@@ -5341,3 +5341,262 @@ the reference and definition sites would disagree.
   context.* Heavier plumbing for the same effect; the analyser already owns one
   shared table that carries every unit's symbols, so scoping the *view* to the
   emitted unit is the smaller, sufficient change.
+
+== `static` Class Members — One Keyword, No `class`-Keyword Overload
+
+=== Decision
+
+Type-associated (class-level) members — fields, constants, methods, and
+properties that belong to the type itself rather than to an instance — are
+declared with the `static` keyword:
+
+[source,pascal]
+----
+type
+  TRegistry = class
+  private static var
+    FInstance: TRegistry;          { one shared slot, not per-instance }
+  private static const
+    MaxEntries = 256;
+  private
+    FItems: TList<TEntry>;         { ordinary instance field }
+    static function GetInstance: TRegistry;   { no Self; type-associated }
+    function GetItem(I: Integer): TEntry;     { ordinary instance method }
+  public
+    static property Instance: TRegistry read GetInstance;
+    property Items[I: Integer]: TEntry read GetItem;
+  end;
+
+static function TRegistry.GetInstance: TRegistry;   { out-of-line impl }
+begin
+  if FInstance = nil then
+    FInstance := TRegistry.Create();              { lazy singleton }
+  Result := FInstance;
+end;
+----
+
+`static` may appear in two positions:
+
+* as a *section qualifier* — `private static var`, `public static const`,
+  `protected static` — applying to every member declared until the next
+  visibility or section keyword; and
+* as a *member prefix* — `static function`, `static procedure`,
+  `static property` — applying to that one member.
+
+A `static` member receives no implicit `Self`. A `static var` / `static const`
+occupies a single shared storage slot for the whole type, addressed as a
+global; it does not advance the instance layout and is not copied per object.
+A `static function` / `static procedure` is an ordinary routine that happens to
+be name-qualified by its owning type and may read the type's other `static`
+members. A `static property` is pure sugar over a `static` getter/setter.
+
+Inside a record, a method declared `static` is the record's factory /
+namespaced-function form — it takes no hidden `Self` pointer and is called as
+`RecType.Method(...)`. (An ordinary record method still receives `Self` by
+pointer; see <<_record_methods>>.) Records may also carry `static var` and
+`static const` members.
+
+Blaise has *no* `class` keyword in member position. The word `class` appears
+only where it introduces a reference type (`T = class`), never as a member
+qualifier. There is also no `static constructor` / `static destructor` — see
+_No type-initialiser construct_ below.
+
+=== Rationale
+
+Delphi and FPC overload the single word `class` into three unrelated meanings:
+the reference-type introducer (`T = class`), the member-association qualifier
+(`class var`, `class function`, `class property`), and the type-initialiser
+form (`class constructor`, `class destructor`). The three concepts have nothing
+in common; sharing one keyword forces the reader to disambiguate by position
+every time. Blaise has no existing source to keep compatible, so it splits the
+concerns: `class` keeps only its structural meaning, and `static` carries the
+member-association meaning it already carries in Java, C#, Swift, Rust, Go, and
+Kotlin (`companion`/`static`). One keyword, one meaning.
+
+The member-association concept is genuinely needed: the canonical singleton /
+registry pattern (a private shared instance reached through a type-level
+accessor) cannot be expressed with instance members alone. `static`
+delivers it with a single, universally-understood keyword.
+
+==== No type-initialiser construct (`static`/`class constructor`)
+
+Blaise deliberately omits Delphi's `class constructor` / `class destructor`
+(the run-once-at-startup type initialiser and its teardown counterpart). The
+construct is unnecessary in Blaise because the two jobs it does are already
+covered:
+
+* *Zeroing a `static var`.* Blaise guarantees every variable — including
+  globals — holds its zero value before any code runs (see
+  <<_zero_initialisation_of_variables>>). A `static var FInstance: TRegistry`
+  is therefore `nil` at startup with no initialiser. Delphi needs the type
+  constructor here only because it makes no such guarantee.
+
+* *Non-trivial one-time setup or teardown.* A lazy singleton initialises itself
+  on first access inside its `static` getter (the `if FInstance = nil` pattern
+  above); eager setup or teardown that genuinely must run once belongs in the
+  unit's existing `initialization` / `finalization` sections, which live in the
+  implementation section where code is permitted and run once in dependency
+  order. This is exactly Go's package-level `init()` model.
+
+Re-using the spelling `static constructor Create` was rejected for the same
+reason `class` was: it overloads `constructor` for something that is not a
+callable constructor (it takes no arguments, is never invoked by name, and
+cannot be overloaded). A nameless `static begin … end` initialiser block (the
+Java/Kotlin shape) was also rejected: Pascal forbids code in the interface
+section, where the class declaration lives, so an inline initialiser block
+there would be alien to the language. The unit `initialization` section is the
+idiomatic Pascal home and needs no new syntax.
+
+=== Cross-language comparison
+
+[cols="1,1,1,1,2", options="header"]
+|===
+| Language | Static field | Static method | Static property | Type initialiser
+
+| *Blaise*
+| `static var`
+| `static function`
+| `static property`
+| none — zero-init + unit `initialization`
+
+| Java
+| `static`
+| `static`
+| (getter)
+| `static { }` block (lazy)
+
+| C#
+| `static`
+| `static`
+| `static P { }`
+| `static TFoo()` static constructor (lazy)
+
+| Swift
+| `static let/var`
+| `static func`
+| `static var { }`
+| none — `static let` lazily initialised per-field
+
+| Rust
+| `static` / assoc `const`
+| assoc `fn` (no `self`)
+| (none)
+| none — `static` is const-expr; lazy is library-level
+
+| Go
+| package `var`
+| package func
+| (none)
+| `func init()` (package, once at startup)
+
+| Kotlin
+| `companion object`
+| companion `fun`
+| companion `val/var`
+| companion `init { }`
+
+| Delphi / FPC / Oxygene
+| `class var`
+| `class function`
+| `class property`
+| `class constructor` (lazy)
+|===
+
+The languages divide on the type-initialiser question. Java, C#, Kotlin, and
+the Delphi family provide an explicit type-constructor block because a static
+field can be left null/indeterminate and the programmer must run code to
+populate it. Swift, Rust, and Go barely need one — either every static is
+zero/const-initialised by the language, or lazy init is a per-field runtime
+feature. Blaise sits with the second group precisely because of its zero-init
+guarantee, so it follows Swift/Rust/Go and omits the type-constructor entirely
+rather than following the Java/C#/Delphi machinery.
+
+=== Visibility
+
+`static` is orthogonal to visibility. It composes with `private`,
+`protected`, and `public` (and, once visibility enforcement lands, with
+`strict private`). `static` governs *storage and dispatch* — where the slot
+lives and whether `Self` is passed — not *who may see the member*. The two
+are independent axes and are implemented as independent features (see
+<<_member_visibility_enforcement_private_protected_strict>>).
+
+=== Alternatives rejected
+
+* *Keep Delphi's `class var` / `class function` / `class property`.* Rejected.
+  It preserves the `class`-keyword overload that is the whole confusion this
+  decision removes, for no compatibility benefit Blaise can collect.
+* *Infer static-ness of a record method from whether its body touches `Self`.*
+  Rejected. The hidden-`Self` ABI would then flip silently when an edit adds or
+  removes a `Self` reference. `static` makes the calling convention explicit at
+  the declaration. (See <<_record_methods>>.)
+* *Adopt a `static constructor` or `static begin … end` type initialiser.*
+  Rejected — see _No type-initialiser construct_ above.
+
+== Member Visibility Enforcement — `private` / `protected` / `strict`
+
+=== Status
+
+_Decided; implemented as the second half of the static-members work. This entry
+records the decision; the spelling and enforcement rules below are the
+committed design._
+
+=== Decision
+
+Visibility modifiers on class and record members are *enforced*, not merely
+parsed. A member declared `private` is visible only within the unit that
+declares the owning type; a `protected` member is additionally visible within
+descendant types; a `public` (or `published`) member is visible everywhere the
+type is. Blaise additionally supports `strict private` and `strict protected`,
+which narrow visibility to the declaring *type* itself (and, for
+`strict protected`, its descendants) rather than the whole declaring unit.
+
+`strict` composes with `static`: `strict private static var FInstance: TFoo;`
+is permitted, exactly as in Delphi. The `strict`-ness (who may see the member)
+is independent of the `static`-ness (where the slot lives and whether `Self`
+is passed).
+
+A non-`strict` `private` member remains visible to the unit's
+`initialization` / `finalization` sections and to other code in the same unit,
+because those sections are part of the declaring unit. A `strict private`
+member is *not* visible to them — it is reachable only from the methods of the
+declaring type. This is the one interaction point between visibility and the
+static-members feature: a `static var` that the unit `initialization` section
+must populate eagerly must therefore not be `strict private`.
+
+=== Rationale
+
+Before this change, Blaise parsed `private` / `protected` / `published` but
+enforced none of them, and had no `strict` keyword at all. `private` was
+effectively a comment. Enforcing visibility closes a real gap — a unit's
+internal class members were silently part of its usable surface — and makes the
+`static` singleton pattern honest: a `private static var FInstance` can now be
+genuinely unreachable from outside while the `public static property Instance`
+is the sole entry point.
+
+`strict` is included because the unit-scoped `private` of classic Pascal is
+looser than most programmers coming from Java, C#, Swift, or Rust expect; those
+languages scope `private` to the *type*. Offering both the Pascal unit-scoped
+`private` and the type-scoped `strict private` lets the author choose, matching
+Delphi and FPC.
+
+=== Implementation order
+
+Visibility enforcement lands *after* the `static`-members feature, as a
+separate commit. Static members are on the critical path (they unblock real
+code and exercise the codegen/OPDF stack); visibility enforcement is a pure
+rejection pass with no codegen impact, and is cleaner to write once against the
+complete, final set of member kinds (instance and static fields, methods, and
+properties) than to write first and revisit when `static` arrives.
+
+=== Alternatives rejected
+
+* *Leave visibility unenforced (status quo).* Rejected — `private` that
+  protects nothing is a latent footgun and undermines the `static` singleton
+  pattern's encapsulation.
+* *Enforce only the unit-scoped `private` (no `strict`).* Rejected — the
+  type-scoped `strict private` is the form most non-Pascal programmers expect,
+  and omitting it would force every genuinely type-private member to leak to
+  the whole unit.
+* *Bundle visibility enforcement into the static-members commit.* Rejected —
+  the two are independent axes; sequencing them keeps each commit focused and
+  lets the codegen-touching feature accumulate field exposure first.

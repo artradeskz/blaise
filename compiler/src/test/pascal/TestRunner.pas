@@ -122,6 +122,8 @@ uses
   cp.test.proctypes,
   cp.test.overload,
   cp.test.classof,
+  cp.test.staticmembers,
+  cp.test.e2e.staticmembers,
   cp.test.publishedrtti,
   cp.test.attributes,
   cp.test.proctypes_ofobject,

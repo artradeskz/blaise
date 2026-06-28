@@ -259,6 +259,7 @@ type
     function ConstElemQbeDataType(const AElemType: string): string;
     procedure EmitArrayConstData(CD: TConstDecl; const APrefix: string);
     procedure EmitClassConstData(AClassDef: TClassTypeDef; const AClassName: string);
+    procedure EmitClassVarData(AFields: TObjectList; const AClassName: string);
     procedure EmitGlobalConstData(ABlock: TBlock);
     procedure EmitLocalArrayConstsInBlock(ABlock: TBlock);
     procedure EmitLocalArrayConstsInTypeDecls(ABlock: TBlock);
@@ -266,6 +267,7 @@ type
     procedure EmitLocalArrayConstsInUnit(AUnit: TUnit);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitArcCleanup(ABlock: TBlock);
+    procedure EmitStaticVarReleases(ABlock: TBlock);
     procedure EmitExcPathArcCleanup(ABlock: TBlock);
     procedure EmitExcUnwind(ATargetDepth: Integer);
     procedure EmitStmt(AStmt: TASTStmt);
@@ -2254,6 +2256,74 @@ begin
     EmitArrayConstData(TConstDecl(AClassDef.ConstDecls.Items[I]), AClassName);
 end;
 
+{ Emit one shared global data slot per STATIC (class-level) variable.  The label
+  must match the semantic pass's GlobalEmitName: ClassUnitPrefix(Class)+Class+'_'+
+  Field.  Static vars are never instance fields, so they appear here, not in the
+  record's field layout.  v1 supports only unmanaged element types (the semantic
+  pass rejects managed ones), so no ARC init/cleanup is needed. }
+procedure TCodeGenQBE.EmitClassVarData(AFields: TObjectList; const AClassName: string);
+var
+  I, J:    Integer;
+  FDecl:   TFieldDecl;
+  T:       TTypeDesc;
+  Nm:      string;
+  Pfx:     string;
+begin
+  if AFields = nil then Exit;
+  Pfx := 'export data';
+  for I := 0 to AFields.Count - 1 do
+  begin
+    FDecl := TFieldDecl(AFields.Items[I]);
+    if not FDecl.IsClassVar then Continue;
+    T := FDecl.ResolvedType;
+    if T = nil then Continue;
+    for J := 0 to FDecl.Names.Count - 1 do
+    begin
+      if (FDecl.ClassVarEmitName <> '') and (FDecl.Names.Count = 1) then
+        Nm := FDecl.ClassVarEmitName
+      else
+        Nm := ClassUnitPrefix(AClassName) + AClassName + '_' + FDecl.Names.Strings[J];
+      case T.Kind of
+        tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
+          EmitLine(Format('%s $%s = { w 0 }', [Pfx, Nm]));
+        tySmallInt, tyWord:
+          EmitLine(Format('%s $%s = { h 0 }', [Pfx, Nm]));
+        tyInt64, tyUInt64, tyPointer, tyPChar:
+          EmitLine(Format('%s $%s = { l 0 }', [Pfx, Nm]));
+        tyDouble:
+          EmitLine(Format('%s $%s = { d 0 }', [Pfx, Nm]));
+        tySingle:
+          EmitLine(Format('%s $%s = { s 0 }', [Pfx, Nm]));
+        tySet:
+          if TSetTypeDesc(T).BitCount <= 32 then
+            EmitLine(Format('%s $%s = { w 0 }', [Pfx, Nm]))
+          else if TSetTypeDesc(T).BitCount <= 64 then
+            EmitLine(Format('%s $%s = { l 0 }', [Pfx, Nm]))
+          else
+            EmitLine(Format('%s $%s = { z %d }', [Pfx, Nm, TSetTypeDesc(T).RawSize()]));
+        tyRecord:
+          if TRecordTypeDesc(T).TotalSize() > 0 then
+            EmitLine(Format('%s $%s = { z %d }', [Pfx, Nm, TRecordTypeDesc(T).TotalSize()]))
+          else
+            EmitLine(Format('%s $%s = { l 0 }', [Pfx, Nm]));
+        tyStaticArray:
+          if TStaticArrayTypeDesc(T).ByteSize() > 0 then
+            EmitLine(Format('%s $%s = { z %d }', [Pfx, Nm, TStaticArrayTypeDesc(T).ByteSize()]))
+          else
+            EmitLine(Format('%s $%s = { l 0 }', [Pfx, Nm]));
+        tyInterface:
+          { Contiguous 16-byte fat pointer (obj at +0, itab at +8) under the
+            '_obj' suffix, matching program-global interface vars so itab
+            accesses ($Name_obj + 8) stay adjacent. }
+          EmitLine(Format('%s $%s_obj = { l 0, l 0 }', [Pfx, Nm]));
+      else
+        { tyClass and every other pointer-sized kind: a single nil slot. }
+        EmitLine(Format('%s $%s = { l 0 }', [Pfx, Nm]));
+      end;
+    end;
+  end;
+end;
+
 procedure TCodeGenQBE.EmitGlobalConstData(ABlock: TBlock);
 { Emit QBE data-section entries for array-typed constants.
   Each array const is emitted as a labelled data object whose elements are
@@ -2270,7 +2340,12 @@ begin
   begin
     TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
     if TD.Def is TClassTypeDef then
+    begin
       EmitClassConstData(TClassTypeDef(TD.Def), TD.Name);
+      EmitClassVarData(TClassTypeDef(TD.Def).Fields, TD.Name);
+    end
+    else if TD.Def is TRecordTypeDef then
+      EmitClassVarData(TRecordTypeDef(TD.Def).Fields, TD.Name);
   end;
 end;
 
@@ -2441,6 +2516,57 @@ begin
   end;
 end;
 
+procedure TCodeGenQBE.EmitStaticVarReleases(ABlock: TBlock);
+{ Release class- and interface-typed static (class-level) variables at program
+  exit.  A static var is a single shared global pointer slot (the mangled
+  ClassVarEmitName), zero-initialised to nil; the slot holds at most one
+  retained reference, so one balancing release at teardown is correct.  Value
+  static vars (Integer, record, …) and the still-deferred string/dynarray kinds
+  emit nothing here.  Mirrors EmitArcCleanup, but sourced from the type decls'
+  IsClassVar fields rather than the block's var decls. }
+var
+  I, K, N:  Integer;
+  TD:       TTypeDecl;
+  Flds:     TObjectList;
+  FDecl:    TFieldDecl;
+  T:        TTypeDesc;
+  Nm:       string;
+  ValTemp:  string;
+begin
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
+    Flds := nil;
+    if TD.Def is TClassTypeDef then
+      Flds := TClassTypeDef(TD.Def).Fields
+    else if TD.Def is TRecordTypeDef then
+      Flds := TRecordTypeDef(TD.Def).Fields;
+    if Flds = nil then Continue;
+    for K := 0 to Flds.Count - 1 do
+    begin
+      FDecl := TFieldDecl(Flds.Items[K]);
+      if not FDecl.IsClassVar then Continue;
+      T := FDecl.ResolvedType;
+      if T = nil then Continue;
+      if not (T.Kind in [tyClass, tyInterface]) then Continue;
+      for N := 0 to FDecl.Names.Count - 1 do
+      begin
+        if (FDecl.ClassVarEmitName <> '') and (FDecl.Names.Count = 1) then
+          Nm := FDecl.ClassVarEmitName
+        else
+          Nm := ClassUnitPrefix(TD.Name) + TD.Name + '_' + FDecl.Names.Strings[N];
+        ValTemp := AllocTemp();
+        if T.Kind = tyInterface then
+          EmitLine(Format('  %s =l loadl $%s_obj', [ValTemp, Nm]))
+        else
+          EmitLine(Format('  %s =l loadl $%s', [ValTemp, Nm]));
+        EmitLine(Format('  call $_ClassRelease(l %s)', [ValTemp]));
+      end;
+    end;
+  end;
+end;
+
 procedure TCodeGenQBE.EmitBlock(ABlock: TBlock);
 var
   I: Integer;
@@ -2457,6 +2583,12 @@ begin
     EmitLine('@' + FExitLabel);
   end;
   EmitArcCleanup(ABlock);
+  { Program exit: release class/interface-typed static (class-level) variables.
+    They are shared globals not present in ABlock.Decls, so EmitArcCleanup does
+    not cover them.  Only the program's top block carries the 'main_exit' label,
+    so this fires exactly once, at process teardown. }
+  if FExitLabel = 'main_exit' then
+    EmitStaticVarReleases(ABlock);
 end;
 
 procedure TCodeGenQBE.EmitExcPathArcCleanup(ABlock: TBlock);
@@ -5753,6 +5885,47 @@ begin
     end;
     MDecl := TMethodDecl(MCallExpr.ResolvedMethod);
     RetType := TRecordTypeDesc(MDecl.ResolvedReturnType);
+    { Static (class-level) record-returning function: TypeName.Make(args).
+      No Self — the visible args begin with the first user parameter.  (A record
+      factory is the canonical case; the user opted records into requiring an
+      explicit `static` marker for factory methods.) }
+    if MCallExpr.IsStaticCall then
+    begin
+      FuncName := '$' + MethodEmitName(MDecl,
+        TRecordTypeDesc(MCallExpr.ResolvedClassType).Name, MCallExpr.Name);
+      VisArgs := '';
+      for I := 0 to MCallExpr.Args.Count - 1 do
+      begin
+        Par := TMethodParam(MDecl.Params.Items[I]);
+        if Par.IsVarParam then
+        begin
+          if VisArgs <> '' then VisArgs := VisArgs + ', ';
+          VisArgs := VisArgs + Format('l %s',
+            [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))]);
+        end
+        else if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
+        begin
+          if VisArgs = '' then
+            VisArgs := Copy(InterfaceArgFragment(TASTExpr(MCallExpr.Args.Items[I]),
+              Par.ResolvedType), 2, MaxInt)
+          else
+            VisArgs := VisArgs + InterfaceArgFragment(TASTExpr(MCallExpr.Args.Items[I]),
+              Par.ResolvedType);
+        end
+        else
+        begin
+          ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
+          ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
+            QbeTypeOf(Par.ResolvedType));
+          if VisArgs <> '' then VisArgs := VisArgs + ', ';
+          VisArgs := VisArgs + Format('%s %s',
+            [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+        end;
+      end;
+      EmitRecordReturnCallSite(FuncName, VisArgs, RetType, ASretAddr);
+      FlushPendingReleases(PMark);
+      Exit;
+    end;
     if MCallExpr.ObjExpr <> nil then
       SelfTemp := EmitExpr(MCallExpr.ObjExpr)
     else if MDecl.IsRecordMethod and MCallExpr.IsVarParam then
@@ -6633,6 +6806,55 @@ begin
     Exit;
   end;
 
+  { Static (class-level) method call in statement position: TypeName.M(args).
+    No Self; a plain call to the mangled method symbol. }
+  if ACall.IsStaticCall and (ACall.ResolvedMethod <> nil) then
+  begin
+    RT    := TRecordTypeDesc(ACall.ResolvedClassType);
+    MDecl := TMethodDecl(ACall.ResolvedMethod);
+    ArgLine  := '';
+    ArgTemps := TStringList.Create();
+    try
+      for I := 0 to ACall.Args.Count - 1 do
+      begin
+        Par := TMethodParam(MDecl.Params.Items[I]);
+        if ArgLine <> '' then ArgLine := ArgLine + ', ';
+        if Par.IsOpenArray then
+        begin
+          ArgTemps.Add('');
+          ArgLine := ArgLine + OpenArrayArgFragment(TASTExpr(ACall.Args.Items[I]));
+        end
+        else if Par.IsVarParam then
+        begin
+          ArgTemps.Add('');
+          ArgLine := ArgLine + Format('l %s',
+            [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))]);
+        end
+        else if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
+        begin
+          ArgTemps.Add('');
+          ArgLine := ArgLine +
+            InterfaceArgFragment(TASTExpr(ACall.Args.Items[I]), Par.ResolvedType);
+        end
+        else
+        begin
+          ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+          ArgTemps.Add(ArgTemp);
+          ArgLine := ArgLine + Format('%s %s',
+            [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+        end;
+      end;
+      FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
+      EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+      EmitOwnedArgReleases(ACall.Args, ArgTemps, MDecl.Params);
+      ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
+    finally
+      ArgTemps.Free();
+    end;
+    FlushPendingReleases(PMark);
+    Exit;
+  end;
+
   { Interface method dispatch: load obj + itab, index by method slot }
   if (ACall.ResolvedClassType <> nil) and
      (ACall.ResolvedClassType.Kind = tyInterface) then
@@ -7337,9 +7559,13 @@ var
   I:   Integer;
   Par: TMethodParam;
 begin
-  { Self: store incoming pointer into a local slot }
-  EmitLine('  %_var_Self =l alloc8 1');
-  EmitLine('  storel %_par_Self, %_var_Self');
+  { Self: store incoming pointer into a local slot.  A STATIC method has no
+    Self — skip the slot entirely. }
+  if not AMethod.IsStatic then
+  begin
+    EmitLine('  %_var_Self =l alloc8 1');
+    EmitLine('  storel %_par_Self, %_var_Self');
+  end;
 
   { Explicit params }
   for I := 0 to AMethod.Params.Count - 1 do
@@ -7442,6 +7668,7 @@ procedure TCodeGenQBE.EmitMethodDef(const ATypeName: string;
   AMethod: TMethodDecl);
 var
   Sig:           string;
+  ParSep:        string;
   I:             Integer;
   Par:           TMethodParam;
   FuncName:      string;
@@ -7463,31 +7690,52 @@ begin
   if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
     RC := Self.ClassifyRecordReturn(TRecordTypeDesc(AMethod.ResolvedReturnType));
 
-  Sig := 'l %_par_Self';
-  if IsFunc and ((AMethod.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
-     ((AMethod.ResolvedReturnType.Kind = tySet) and
-      TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo())) then
-    Sig := 'l %_par__sret, l %_par_Self'
-  else if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
-    EmitRecordReturnSignature(Sig, RC);
+  { A STATIC (class-level) method takes no implicit Self.  Its signature starts
+    empty (or with just the sret pointer for aggregate returns). }
+  if AMethod.IsStatic then
+  begin
+    Sig := '';
+    if IsFunc and ((AMethod.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
+       ((AMethod.ResolvedReturnType.Kind = tySet) and
+        TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo())) then
+      Sig := 'l %_par__sret'
+    else if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
+      { Sig is '' here, so EmitRecordReturnSignature yields just the sret ptr. }
+      EmitRecordReturnSignature(Sig, RC);
+  end
+  else
+  begin
+    Sig := 'l %_par_Self';
+    if IsFunc and ((AMethod.ResolvedReturnType.Kind in [tyInterface, tyStaticArray]) or
+       ((AMethod.ResolvedReturnType.Kind = tySet) and
+        TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo())) then
+      Sig := 'l %_par__sret, l %_par_Self'
+    else if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
+      EmitRecordReturnSignature(Sig, RC);
+  end;
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params.Items[I]);
+    { A static method with a scalar return has an empty Sig at this point, so
+      the first user parameter must NOT be prefixed with ', ' (that would emit
+      'function w $F(, w %x)', which QBE rejects as an invalid class specifier).
+      The separator is empty only when nothing precedes this parameter. }
+    if Sig <> '' then ParSep := ', ' else ParSep := '';
     if Par.IsOpenArray then
-      Sig := Sig + Format(', l %%_par_%s, l %%_par_%s_high',
+      Sig := Sig + ParSep + Format('l %%_par_%s, l %%_par_%s_high',
         [Par.ParamName, Par.ParamName])
     else if Par.IsVarParam then
-      Sig := Sig + Format(', l %%_par_%s', [Par.ParamName])
+      Sig := Sig + ParSep + Format('l %%_par_%s', [Par.ParamName])
     else if (Par.ResolvedType <> nil) and
             (Par.ResolvedType.Kind = tyInterface) then
       { Interfaces are two-slot fat pointers (obj + itab); caller passes both,
         callee allocs two local slots in EmitParamAllocs.  Mirrors the
         standalone-routine path so method dispatch and value-param ARC both
         find %_var_<p>_obj / %_var_<p>_itab. }
-      Sig := Sig + Format(', l %%_par_%s_obj, l %%_par_%s_itab',
+      Sig := Sig + ParSep + Format('l %%_par_%s_obj, l %%_par_%s_itab',
         [Par.ParamName, Par.ParamName])
     else
-      Sig := Sig + Format(', %s %%_par_%s',
+      Sig := Sig + ParSep + Format('%s %%_par_%s',
         [QbeParamTypeOf(Par.ResolvedType), Par.ParamName]);
   end;
 
@@ -11035,6 +11283,61 @@ begin
   begin
     MCallExpr := TMethodCallExpr(AExpr);
 
+    { Static (class-level) function call in expression position:
+      TypeName.F(args).  No Self; plain call to the mangled symbol, returning
+      the result.  v1: scalar/pointer return only (managed/record-return static
+      functions can be added later via the record-return ABI path). }
+    if MCallExpr.IsStaticCall and (MCallExpr.ResolvedMethod <> nil) then
+    begin
+      RT    := TRecordTypeDesc(MCallExpr.ResolvedClassType);
+      MDecl := TMethodDecl(MCallExpr.ResolvedMethod);
+      ArgLine  := '';
+      ArgTemps := TStringList.Create();
+      try
+        for I := 0 to MCallExpr.Args.Count - 1 do
+        begin
+          Par := TMethodParam(MDecl.Params.Items[I]);
+          if ArgLine <> '' then ArgLine := ArgLine + ', ';
+          if Par.IsOpenArray then
+          begin
+            ArgTemps.Add('');
+            ArgLine := ArgLine + OpenArrayArgFragment(TASTExpr(MCallExpr.Args.Items[I]));
+          end
+          else if Par.IsVarParam then
+          begin
+            ArgTemps.Add('');
+            ArgLine := ArgLine + Format('l %s',
+              [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))]);
+          end
+          else if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
+          begin
+            ArgTemps.Add('');
+            ArgLine := ArgLine +
+              InterfaceArgFragment(TASTExpr(MCallExpr.Args.Items[I]), Par.ResolvedType);
+          end
+          else
+          begin
+            ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
+            ArgTemps.Add(ArgTemp);
+            ArgLine := ArgLine + Format('%s %s',
+              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+          end;
+        end;
+        FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
+        Result := AllocTemp();
+        if MDecl.ResolvedReturnType <> nil then
+          EmitLine(Format('  %s =%s call %s(%s)',
+            [Result, QbeTypeOf(MDecl.ResolvedReturnType), FuncName, ArgLine]))
+        else
+          EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+        EmitOwnedArgReleases(MCallExpr.Args, ArgTemps, MDecl.Params);
+        ReleaseConstStringArgs(MCallExpr.Args, ArgTemps, MDecl.Params);
+      finally
+        ArgTemps.Free();
+      end;
+      Exit(Result);
+    end;
+
     { Procedure-type field call expression: load (Code, Data) pair and
       dispatch indirectly. Only applies to function-of-object fields that
       return a value (otherwise they go through TMethodCallStmt). }
@@ -11801,6 +12104,30 @@ begin
       EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, Ptr]));
       if BaseReleaseTemp <> '' then
         EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
+      Exit(T);
+    end;
+    { Static var read: TypeName.StaticVar — a plain global load of the mangled
+      label resolved by the semantic pass. }
+    if FldAccess.IsClassVarRead then
+    begin
+      QType     := QbeTypeOf(FldAccess.ResolvedType);
+      LoadInstr := LoadInstrFor(FldAccess.ResolvedType);
+      T         := AllocTemp();
+      EmitLine(Format('  %s =%s %s $%s',
+        [T, QType, LoadInstr, FldAccess.ClassVarEmitName]));
+      Exit(T);
+    end;
+    { Static property read: TypeName.StaticProp — call the static getter
+      (no Self argument). }
+    if FldAccess.IsStaticPropGet then
+    begin
+      MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+      QType := QbeTypeOf(MDecl.ResolvedReturnType);
+      T := AllocTemp();
+      EmitLine(Format('  %s =%s call $%s()',
+        [T, QType,
+         MethodEmitName(MDecl,
+           TRecordTypeDesc(FldAccess.ResolvedClassType).Name, MDecl.Name)]));
       Exit(T);
     end;
     if FldAccess.IsImplicitSelf then

@@ -269,13 +269,17 @@ IntSubrange
  * enum-bounded subranges (TLow..THigh, red..blue) are not a named-type form. *)
 
 RecordDef
-    = [ PACKED ] RECORD { FieldDecl | MethodDecl } END
+    = [ PACKED ] RECORD { VisibilitySection | FieldDecl | MethodDecl | ConstSection } END
     ;
 
 (* Records may declare methods alongside fields.  Method bodies are written
- * out-of-line as TRecordName.MethodName, identical to classes.  The
- * receiver is passed by pointer (`Self` is a `var` parameter under the hood);
- * the language gives normal value semantics — assignments copy the record.
+ * out-of-line as TRecordName.MethodName, identical to classes.  An ordinary
+ * record method receives the receiver by pointer (`Self` is a `var` parameter
+ * under the hood); the language gives normal value semantics — assignments
+ * copy the record.  A method declared STATIC (see VisibilitySection /
+ * MethodDecl) receives no `Self` and is the record's factory / namespaced
+ * function form, called as TRecordName.Method(...).  Records may also carry
+ * STATIC VAR / STATIC CONST members.
  * No constructors, destructors, or virtual methods are allowed in records.
  *
  * `packed` is permitted only in front of `record`.  It disables natural
@@ -289,10 +293,33 @@ RecordDef
 
 ClassDef
     = CLASS [ LPAREN GenericName { COMMA GenericName } RPAREN ]
-             { ConstSection | FieldList }
-             MethodDeclList
+             { VisibilitySection | ConstSection | FieldList | MethodDeclList }
              END
     ;
+
+(* A class body is a sequence of members in any order, optionally grouped under
+ * visibility / storage sections.  A VisibilitySection keyword sets the current
+ * visibility (and, with STATIC, the current member-association) for every
+ * member that follows until the next such keyword. *)
+
+VisibilitySection
+    = ( PRIVATE | PROTECTED | PUBLIC | PUBLISHED ) [ STATIC ]
+    | STATIC                                   (* STATIC alone keeps current visibility *)
+    ;
+
+(* STATIC as a section qualifier (e.g. `private static`, or a bare `static`
+ * continuing the current visibility) makes every field, const, method, and
+ * property declared until the next section keyword a type-associated (class-
+ * level) member: no implicit Self, a single shared storage slot for vars/
+ * consts.  STATIC may equally be written as a per-member prefix on a single
+ * method or property (see MethodDecl / PropertyDecl).  `private static var`
+ * and `private static const` are the section forms for static fields and
+ * static constants.  There is no `class var` / `class function` /
+ * `class property` — the word `class` is never a member qualifier in Blaise.
+ *
+ * Visibility keywords (PRIVATE/PROTECTED/PUBLIC/PUBLISHED) and STATIC are
+ * contextual: outside a class/record body they remain usable as identifiers,
+ * except those already reserved elsewhere. *)
 
 GenericName
     = IDENT [ LESS TypeArgList GREATER ]   (* plain name or generic specialisation *)
@@ -363,7 +390,8 @@ MethodDeclList
     ;
 
 MethodDecl
-    = ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
+    = [ STATIC ]                          (* per-member static prefix (no implicit Self) *)
+      ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
       [ LESS TypeParamList GREATER ]      (* optional generic type params *)
       [ LPAREN ParamList RPAREN ]
       [ COLON TypeName ]                  (* return type for functions *)
@@ -371,6 +399,12 @@ MethodDecl
       { MethodDirective SEMICOLON }
       [ ( Block | AsmBlock ) SEMICOLON ]  (* body absent for forward, external, or abstract decls *)
     ;
+
+(* A STATIC method (whether via the per-member prefix here or an enclosing
+ * STATIC VisibilitySection) takes no implicit Self.  CONSTRUCTOR / DESTRUCTOR
+ * may NOT be declared STATIC: Blaise has no type-initialiser construct (no
+ * `class constructor`); eager one-time setup belongs in the unit
+ * initialization / finalization sections.  See language-rationale.adoc. *)
 
 MethodDirective
     = VIRTUAL
@@ -401,9 +435,13 @@ ExternalDirective
     = EXTERNAL [ NAME StrLit ]
     ;
 
-(* Standalone procedure/function/constructor/destructor — top-level or within a block. *)
+(* Standalone procedure/function/constructor/destructor — top-level or within a block.
+ * A leading STATIC marks an out-of-line static-method implementation
+ * (`static function TName.Method ...`); it must agree with the in-class
+ * declaration's static-ness and takes no implicit Self. *)
 StandaloneDecl
-    = ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
+    = [ STATIC ]
+      ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
       [ DOT IDENT ]                                          (* TTypeName.MethodName — non-generic class impl *)
       [ LESS TypeParamList GREATER DOT IDENT ]               (* TName<T>.MethodName  — generic class impl    *)
       [ LESS TypeParamList GREATER ]                         (* function Identity<T> — generic standalone    *)
@@ -437,7 +475,8 @@ MethodSignatureList
     ;
 
 PropertyDecl
-    = "property" IDENT
+    = [ STATIC ]                                    (* per-member static prefix *)
+      "property" IDENT
       [ LBRACKET IDENT COLON TypeName RBRACKET ]   (* optional index parameter *)
       COLON TypeName
       [ "read"  IDENT ]
@@ -445,6 +484,10 @@ PropertyDecl
       SEMICOLON
       [ "default" SEMICOLON ]                      (* default array property *)
     ;
+
+(* A STATIC property (via the prefix here or an enclosing STATIC section) is
+ * sugar over a STATIC getter/setter: it occupies no slot and dispatches with
+ * no Self.  A static property's accessors must themselves be static. *)
 
 (* If the index parameter is present, the property is indexed:
  *   property Items[Index: Integer]: Pointer read Get write Put;

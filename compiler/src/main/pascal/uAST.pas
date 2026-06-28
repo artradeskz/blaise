@@ -145,6 +145,9 @@ type
     PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property read (e.g. List.Items[i]) }
     IsCharAccess:  Boolean;   { set by uSemantic — PropIndexExpr indexes a string field: S.Field[N] }
     IsArrayAccess: Boolean;   { set by uSemantic — PropIndexExpr subscripts an array field: R.Arr[I] }
+    IsClassVarRead:   Boolean; { set by uSemantic — TypeName.StaticVar read; lower as a global load of ClassVarEmitName }
+    ClassVarEmitName: string;  { mangled global label for an IsClassVarRead access }
+    IsStaticPropGet:  Boolean; { set by uSemantic — TypeName.StaticProp read; ResolvedMethod is the static getter }
     destructor Destroy; override;
   end;
 
@@ -554,6 +557,9 @@ type
     IsBuiltinToString:  Boolean;     { set by uSemantic — built-in TObject.ToString virtual dispatch }
     IsConstructorCall:  Boolean;     { set by uSemantic — metaclass-var Create in stmt position }
     IsMetaclassDispatch: Boolean;    { set by uSemantic — receiver is a metaclass var }
+    IsStaticCall:       Boolean;     { set by uSemantic — TypeName.StaticMethod(): a static
+                                       (class-level) call with NO Self.  Codegen lowers it as a
+                                       plain call to the mangled method symbol, no receiver. }
     IsProcFieldCall:    Boolean;     { set by uSemantic — Name is a procedural-typed field of
                                        the receiver, invoked directly (F.Handler;).  Codegen
                                        loads the (Code, Data) pair from the field slot and
@@ -732,14 +738,26 @@ type
     Attributes:   TStringList;  { owned — see TVarDecl.Attributes. }
     IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved. }
     IsUnretained: Boolean;      { set by uSemantic when [Unretained] is resolved. }
+    IsClassVar:   Boolean;      { set by uParser — declared `static var` (a.k.a.
+                                  class variable): one shared storage slot for the
+                                  whole type, not a per-instance field.  Lowered to
+                                  a global slot by uSemantic; never gets an instance
+                                  offset. }
+    ClassVarEmitName: string;   { set by uSemantic for an IsClassVar field — the
+                                  mangled global data-label (CurrentUnitPrefix +
+                                  Class + '_' + Name).  Single source of truth so
+                                  BOTH backends emit the slot under the exact label
+                                  the read/write sites use, without re-deriving the
+                                  unit prefix. }
     constructor Create;
     destructor Destroy; override;
   end;
 
   TRecordTypeDef = class(TASTTypeDef)
   public
-    Fields:   TObjectList;  { owned TFieldDecl }
-    Methods:  TObjectList;  { owned TMethodDecl }
+    Fields:     TObjectList;  { owned TFieldDecl }
+    Methods:    TObjectList;  { owned TMethodDecl }
+    ConstDecls: TObjectList;  { owned TConstDecl — record-level constants (static const) }
     IsPacked: Boolean;      { True iff declared `packed record` — disables
                               field alignment padding and tail padding;
                               ARC-managed fields (string/class/intf) still
@@ -826,6 +844,11 @@ type
                                        block that owns the whole frame; codegen
                                        emits no compiler prologue/epilogue }
     IsRecordMethod:     Boolean;     { set by uSemantic — owner type is a record (not a class) }
+    IsStatic:           Boolean;     { set by uParser — declared `static` (class method):
+                                       no implicit Self; type-associated dispatch.
+                                       Distinct from VTableSlot's "static dispatch"
+                                       (= non-virtual); a static method also never
+                                       receives a Self pointer. }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     TypeParams:         TStringList; { non-nil = generic function template; owns param names }
     TypeParamConstraints: TStringList; { parallel to TypeParams; '' = unconstrained,
@@ -865,6 +888,8 @@ type
     [Unretained] ResolvedMethod:     TObject;     { TMethodDecl — not owned }
     IsConstructorCall:  Boolean;    { set by uSemantic — TypeName.Create(args) }
     IsMetaclassDispatch: Boolean;  { set by uSemantic — receiver is a metaclass var }
+    IsStaticCall:       Boolean;    { set by uSemantic — TypeName.StaticMethod(): static
+                                      (class-level) call with NO Self; plain call to mangled name }
     IsGlobal:           Boolean;    { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;    { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:    Boolean;  { set by uSemantic — built-in TObject.ToString virtual dispatch }
@@ -886,6 +911,8 @@ type
     IndexParamName: string;  { '' = non-indexed property }
     IndexTypeName: string;  { type name of the index parameter; '' when non-indexed }
     IsDefault:      Boolean; { declared with the `default` directive (Obj[I] sugar) }
+    IsStatic:       Boolean; { set by uParser — declared `static`: sugar over a
+                               static getter/setter; no implicit Self. }
   end;
 
   TClassTypeDef = class(TASTTypeDef)
@@ -1460,8 +1487,9 @@ end;
 constructor TRecordTypeDef.Create;
 begin
   inherited Create();
-  Fields  := TObjectList.Create(True);
-  Methods := TObjectList.Create(True);
+  Fields     := TObjectList.Create(True);
+  Methods    := TObjectList.Create(True);
+  ConstDecls := TObjectList.Create(True);
 end;
 
 destructor TRecordTypeDef.Destroy;

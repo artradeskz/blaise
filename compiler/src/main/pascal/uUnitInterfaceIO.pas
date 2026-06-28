@@ -53,7 +53,14 @@ uses
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 2;  { v1: shipped through release v0.11.x (last public commit
+  IFACE_VERSION = 3;  { v3 (this cycle): `static` (class-level) member facts now
+                          serialised — TFieldDecl.IsClassVar + ClassVarEmitName in
+                          EncodeFieldList/ReadFieldList, TPropertyDecl.IsStatic in
+                          EncodePropertyList/ReadPropertyList, and record/class
+                          static-const declarations (ConstDecls) in the record/class
+                          payloads.  The layout grew, so v2 readers must reject these
+                          .bif and recompile.
+                        v1: shipped through release v0.11.x (last public commit
                             d56bdbf).
                         v2 (release v0.12.0): a batch of META/record additions
                           made this cycle, all gated by this single bump since
@@ -266,7 +273,39 @@ begin
       Result := Result +
                 EncodeLpstr(F.Names.Strings[J]) +
                 EncodeLpstr(F.TypeName) +
-                EncodeBool(F.IsWeak);
+                EncodeBool(F.IsWeak) +
+                { `static var` (class variable) facts: IsClassVar marks the field
+                  as a shared global rather than an instance slot; ClassVarEmitName
+                  is the defining unit's mangled global label (set by uSemantic).
+                  An importer cannot re-derive that label — its own unit prefix
+                  differs — so the label is carried verbatim.  Both default to
+                  False/'' for ordinary instance fields. }
+                EncodeBool(F.IsClassVar) +
+                EncodeLpstr(F.ClassVarEmitName);
+  end;
+end;
+
+{ Record/class-level `static const` declarations.  These are scalar
+  constants folded by the semantic pass; we serialise the same five-
+  field scalar shape the unit-level CONST block uses (Name, TypeName,
+  IntVal, StrVal, IsString/IsFloat flags).  Non-scalar const forms
+  (array consts, unfolded expression tokens) are not carried here —
+  static const members are scalar in the current language surface. }
+function EncodeConstDeclList(AConsts: TObjectList): string;
+var
+  I: Integer;
+  C: TConstDecl;
+begin
+  Result := EncodeCount(AConsts.Count);
+  for I := 0 to AConsts.Count - 1 do
+  begin
+    C := TConstDecl(AConsts.Items[I]);
+    Result := Result +
+              EncodeLpstr(C.Name) +
+              EncodeLpstr(C.TypeName) +
+              EncodeInt64(C.IntVal) +
+              EncodeLpstr(C.StrVal) +
+              EncodeFlags(C.IsString, C.IsFloat);
   end;
 end;
 
@@ -313,7 +352,9 @@ var
 begin
   Def := TRecordTypeDef(AEntry.Def);
   Result := EncodeBool(Def.IsPacked) +
-            EncodeFieldList(Def.Fields);
+            EncodeFieldList(Def.Fields) +
+            { record-level `static const` declarations. }
+            EncodeConstDeclList(Def.ConstDecls);
 end;
 
 function EncodePropertyList(AList: TObjectList): string;
@@ -332,7 +373,10 @@ begin
               EncodeLpstr(P.WriteName) +
               EncodeLpstr(P.IndexParamName) +
               EncodeLpstr(P.IndexTypeName) +
-              EncodeBool(P.IsDefault);
+              EncodeBool(P.IsDefault) +
+              { `static property` — accessors take no implicit Self.  An importer
+                needs this to dispatch reads/writes without a receiver. }
+              EncodeBool(P.IsStatic);
   end;
 end;
 
@@ -348,7 +392,9 @@ begin
     EncodeStringList(AEntry.Implements) +
     EncodeFieldList(Def.Fields) +
     EncodeMethodList(AEntry.Methods) +
-    EncodePropertyList(Def.Properties);
+    EncodePropertyList(Def.Properties) +
+    { class-level `static const` declarations. }
+    EncodeConstDeclList(Def.ConstDecls);
 end;
 
 { Encode a TMethodDecl (AST) using the same per-method payload shape
@@ -1769,11 +1815,13 @@ end;
 procedure ReadFieldList(const AText: string; var APos: Integer;
                         ATarget: TObjectList);
 var
-  C, I:    Integer;
-  FldName: string;
-  FldType: string;
-  IsWeak:  Boolean;
-  F:       TFieldDecl;
+  C, I:        Integer;
+  FldName:     string;
+  FldType:     string;
+  IsWeak:      Boolean;
+  IsClassVar:  Boolean;
+  ClassVarEmit: string;
+  F:           TFieldDecl;
 begin
   C := DecodeCount(AText, APos);
   for I := 1 to C do
@@ -1781,11 +1829,41 @@ begin
     FldName := ReadLpstrAt(AText, APos);
     FldType := ReadLpstrAt(AText, APos);
     IsWeak  := DecodeBool(AText, APos);
+    { Order must mirror EncodeFieldList: IsClassVar then ClassVarEmitName. }
+    IsClassVar   := DecodeBool(AText, APos);
+    ClassVarEmit := ReadLpstrAt(AText, APos);
     F := TFieldDecl.Create();
     F.Names.Add(FldName);
     F.TypeName := FldType;
     F.IsWeak   := IsWeak;
+    F.IsClassVar      := IsClassVar;
+    F.ClassVarEmitName := ClassVarEmit;
     ATarget.Add(F);
+  end;
+end;
+
+{ Inverse of EncodeConstDeclList — rebuild record/class `static const`
+  decls.  Mirrors the writer's five-field scalar shape exactly. }
+procedure ReadConstDeclList(const AText: string; var APos: Integer;
+                            ATarget: TObjectList);
+var
+  C, I:     Integer;
+  CD:       TConstDecl;
+  IsString: Boolean;
+  IsFloat:  Boolean;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+  begin
+    CD := TConstDecl.Create();
+    CD.Name     := ReadLpstrAt(AText, APos);
+    CD.TypeName := ReadLpstrAt(AText, APos);
+    CD.IntVal   := ReadInt64At(AText, APos);
+    CD.StrVal   := ReadLpstrAt(AText, APos);
+    ReadFlagsAt(AText, APos, IsString, IsFloat);
+    CD.IsString := IsString;
+    CD.IsFloat  := IsFloat;
+    ATarget.Add(CD);
   end;
 end;
 
@@ -1840,6 +1918,7 @@ begin
   Def := TRecordTypeDef.Create();
   Def.IsPacked := DecodeBool(AText, APos);
   ReadFieldList(AText, APos, Def.Fields);
+  ReadConstDeclList(AText, APos, Def.ConstDecls);
   AEntry.Def := Def;
 end;
 
@@ -1862,6 +1941,7 @@ begin
   ReadFieldList(AText, APos, Def.Fields);
   ReadMethodList(AText, APos, AEntry.Methods);
   ReadPropertyList(AText, APos, Def.Properties);
+  ReadConstDeclList(AText, APos, Def.ConstDecls);
   AEntry.IsClass := True;
   AEntry.Def     := Def;
 end;
@@ -1919,6 +1999,8 @@ begin
     P.IndexParamName := ReadLpstrAt(AText, APos);
     P.IndexTypeName  := ReadLpstrAt(AText, APos);
     P.IsDefault      := DecodeBool(AText, APos);
+    { Order must mirror EncodePropertyList: IsStatic follows IsDefault. }
+    P.IsStatic       := DecodeBool(AText, APos);
     ATarget.Add(P);
   end;
 end;

@@ -3271,6 +3271,7 @@ begin
       if NewPDecl.IndexTypeName <> '' then
         PropInfo.IndexTypeDesc := FindTypeOrInstantiate(NewPDecl.IndexTypeName);
       PropInfo.IsDefault := NewPDecl.IsDefault;
+      PropInfo.IsStatic := NewPDecl.IsStatic;
       RT.AddProperty(PropInfo);
     end;
 
@@ -4839,6 +4840,7 @@ var
   MethodList: TObjectList;
   Grp:        TObjectList;
   FDecl:      TFieldDecl;
+  ClassVarEmit: string;
   MDecl:      TMethodDecl;
   Par:        TMethodParam;
   ParType:    TTypeDesc;
@@ -5523,14 +5525,52 @@ begin
       for K := 0 to FDecl.Names.Count - 1 do
       begin
         FldName := FDecl.Names.Strings[K];
-        RT.AddField(FldName, FldType);
-        { Propagate the weak/unretained flags to the just-added field info so
-          codegen and the field cleanup emitter can consult them without
-          walking back to the AST. }
-        if FDecl.IsWeak then
-          RT.FindField(FldName).IsWeak := True;
-        if FDecl.IsUnretained then
-          RT.FindField(FldName).IsUnretained := True;
+        if FDecl.IsClassVar then
+        begin
+          { STATIC (class-level) variable: not an instance field — do NOT call
+            AddField (that would advance the instance layout).  Register a single
+            shared global instead, under a mangled emit label, reachable by both
+            the bare name (inside methods) and the qualified 'TFoo.Name' form.
+            Class- and interface-typed static vars ARE supported: they are a
+            single shared pointer slot, zero-initialised to nil, and assignment
+            goes through the normal managed-global store ARC (retain new /
+            release old).  String and dynamic-array static vars remain deferred
+            (their exit-time release story is not yet wired). }
+          if (FldType.Kind = tyString) or (FldType.Kind = tyDynArray) then
+            SemanticError(Format(
+              'static var ''%s'': string and dynamic-array static fields are ' +
+              'not yet supported (class and interface are)', [FldName]),
+              FDecl.Line, FDecl.Col);
+          ClassVarEmit := CurrentUnitPrefix() + TD.Name + '_' + FldName;
+          { Single source of truth for codegen: stash the mangled label on the
+            field decl (used by both backends to emit the data slot, even for a
+            read-only static var that no assignment auto-registers). }
+          if FDecl.Names.Count = 1 then
+            FDecl.ClassVarEmitName := ClassVarEmit;
+          { Bare name — usable unqualified inside the class's own methods. }
+          Sym := TSymbol.Create(FldName, skVariable, FldType);
+          Sym.IsGlobal       := True;
+          Sym.IsClassVar     := True;
+          Sym.GlobalEmitName := ClassVarEmit;
+          if not FTable.Define(Sym) then Sym.Free();
+          { Qualified name — usable as TFoo.Name from anywhere. }
+          Sym := TSymbol.Create(TD.Name + '.' + FldName, skVariable, FldType);
+          Sym.IsGlobal       := True;
+          Sym.IsClassVar     := True;
+          Sym.GlobalEmitName := ClassVarEmit;
+          if not FTable.Define(Sym) then Sym.Free();
+        end
+        else
+        begin
+          RT.AddField(FldName, FldType);
+          { Propagate the weak/unretained flags to the just-added field info so
+            codegen and the field cleanup emitter can consult them without
+            walking back to the AST. }
+          if FDecl.IsWeak then
+            RT.FindField(FldName).IsWeak := True;
+          if FDecl.IsUnretained then
+            RT.FindField(FldName).IsUnretained := True;
+        end;
       end;
     end;
 
@@ -5625,6 +5665,7 @@ begin
         if PropDecl.IndexTypeName <> '' then
           PropInfo.IndexTypeDesc := FTable.FindType(PropDecl.IndexTypeName);
         PropInfo.IsDefault := PropDecl.IsDefault;
+        PropInfo.IsStatic := PropDecl.IsStatic;
         RT.AddProperty(PropInfo);
       end;
 
@@ -5847,18 +5888,29 @@ begin
     Exit;
   end;
   SavedClass    := FCurrentClass;
-  FCurrentClass := AClassType;
+  { A STATIC (class-level) method has no instance receiver.  Leave FCurrentClass
+    at its saved value (do NOT bind it to AClassType) so that an implicit
+    instance-member reference inside the body resolves as an undeclared
+    identifier rather than silently binding to a non-existent Self.  Static
+    members of the same type remain reachable through their registered bare
+    global symbols. }
+  if not AMethod.IsStatic then
+    FCurrentClass := AClassType;
   FTable.PushScope();
   Inc(FScopeDepth);
   try
     { Record methods receive the record by pointer (like a var param); class
       methods receive the object pointer as a value.  Declaring Self as
-      skVarParameter for records makes the codegen dereference it correctly. }
-    if AMethod.IsRecordMethod then
-      Sym := TSymbol.Create('Self', skVarParameter, AClassType)
-    else
-      Sym := TSymbol.Create('Self', skVariable, AClassType);
-    FTable.Define(Sym);
+      skVarParameter for records makes the codegen dereference it correctly.
+      A static method receives NO Self. }
+    if not AMethod.IsStatic then
+    begin
+      if AMethod.IsRecordMethod then
+        Sym := TSymbol.Create('Self', skVarParameter, AClassType)
+      else
+        Sym := TSymbol.Create('Self', skVariable, AClassType);
+      FTable.Define(Sym);
+    end;
 
     { For function methods, define Result as a writable variable }
     if AMethod.ResolvedReturnType <> nil then
@@ -7622,6 +7674,35 @@ begin
   end;
 
   ObjSym := FTable.Lookup(ACall.ObjectName);
+  { TypeName.StaticMethod() — a static (class-level) method called through the
+    class name in statement position.  Resolve the method on the class; it must
+    be declared static.  Lowered with NO Self. }
+  if (ObjSym <> nil) and (ObjSym.Kind = skType) and (ObjSym.TypeDesc <> nil) and
+     (ObjSym.TypeDesc.Kind = tyClass) then
+  begin
+    RT := TRecordTypeDesc(ObjSym.TypeDesc);
+    for I := 0 to ACall.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+    MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
+      ACall.Line, ACall.Col);
+    if MDecl = nil then
+      SemanticError(
+        Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
+        ACall.Line, ACall.Col);
+    if not MDecl.IsStatic then
+      SemanticError(
+        Format('''%s.%s'' is not a static method — call it on an instance',
+          [RT.Name, ACall.Name]),
+        ACall.Line, ACall.Col);
+    AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
+    ACall.ResolvedClassType := RT;
+    ACall.ResolvedMethod    := MDecl;
+    ACall.IsStaticCall      := True;
+    if (MDecl.ResolvedReturnType <> nil) and
+       (MDecl.ResolvedReturnType.Kind = tyRecord) then
+      ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
+    Exit;
+  end;
   { Inside a method, class fields shadow same-named globals.  Try the
     implicit Self.Field path when there is no match (ObjSym=nil) OR when
     the only match is a global variable that a class field should shadow. }
@@ -7858,6 +7939,11 @@ begin
       AAssign.Line, AAssign.Col);
 
   AAssign.Name            := VarSym.Name;  { normalise to declared casing }
+  { Static (class-level) var: the assignment target is the single shared global
+    emitted under the mangled GlobalEmitName, so the LHS name must be that label
+    (matches the read path in AnalyseIdentExpr). }
+  if VarSym.IsClassVar and (VarSym.GlobalEmitName <> '') then
+    AAssign.Name := VarSym.GlobalEmitName;
   AAssign.IsVarParam      := (VarSym.Kind = skVarParameter);
   AAssign.ResolvedLhsType := VarSym.TypeDesc;
   AAssign.IsWeakLhs       := VarSym.IsWeak;
@@ -10472,6 +10558,38 @@ begin
   if SameText(ObjSym.Name, AExpr.ObjectName) then
     AExpr.ObjectName := ObjSym.Name;
 
+  { TypeName.StaticFunction(args) in expression position — a static (class-level)
+    method reached through the class name.  Must be declared static; lowered with
+    NO Self.  Checked before the Create-constructor branch so a non-Create static
+    method resolves here rather than falling through to "is not a variable". }
+  if (ObjSym.Kind = skType) and (ObjSym.TypeDesc <> nil) and
+     (ObjSym.TypeDesc.Kind in [tyClass, tyRecord]) and
+     not (SameText(AExpr.Name, 'Create') or (StrPos('Create', AExpr.Name) = 0)) then
+  begin
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+    MDecl := ResolveMethodOverload(ObjSym.Name, AExpr.Name, AExpr.Args,
+      AExpr.Line, AExpr.Col);
+    if MDecl = nil then
+      MDecl := FindMethodDecl(ObjSym.Name, AExpr.Name);
+    if MDecl = nil then
+      SemanticError(
+        Format('Type ''%s'' has no method ''%s''', [ObjSym.Name, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    if not MDecl.IsStatic then
+      SemanticError(
+        Format('''%s.%s'' is not a static method — call it on an instance',
+          [ObjSym.Name, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
+    AExpr.ResolvedMethod    := MDecl;
+    AExpr.ResolvedClassType := ObjSym.TypeDesc;
+    AExpr.IsStaticCall      := True;
+    Result := MDecl.ResolvedReturnType;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   { Constructor call with args: TypeName.Create(arg1, arg2, ...) or any
     method on a class type starting with Create (e.g. CreateFmt). }
   if (ObjSym.Kind = skType) and
@@ -10791,6 +10909,12 @@ begin
       the QBE ABI level: the local slot holds a pointer, not the aggregate
       bytes.  Codegen must dereference the slot before reading fields. }
     TIdentExpr(AExpr).Name      := Sym.Name;  { normalise to declared casing }
+    { A static (class-level) variable resolves to a single shared global whose
+      emit label is the mangled GlobalEmitName, distinct from the lookup key
+      ('FInstance' or 'TFoo.FInstance' both reach the one slot).  Rewrite the
+      node's emitted name to that label so codegen lowers $TFoo_FInstance. }
+    if Sym.IsClassVar and (Sym.GlobalEmitName <> '') then
+      TIdentExpr(AExpr).Name := Sym.GlobalEmitName;
     if Sym.Kind = skVarParameter then
       TIdentExpr(AExpr).ParamMode := pmVar
     else if (Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
@@ -10944,6 +11068,7 @@ var
   PropInfo: TPropertyInfo;
   BaseType: TTypeDesc;
   IntfDesc: TInterfaceTypeDesc;
+  MDecl:    TMethodDecl;
 begin
   { Chained access: A.B.C — base is another expression whose type must be
     a record or class.  Leaf lookup uses Base.ResolvedType; RecordName path
@@ -11261,6 +11386,41 @@ begin
         end;
         AAccess.ResolvedType := Sym.TypeDesc;
         Exit(Sym.TypeDesc);
+      end;
+      { Static (class-level) variable read: TypeName.StaticVar.  The qualified
+        symbol carries the mangled GlobalEmitName; rewrite the access to a plain
+        global read of that label (codegen lowers it like a global ident). }
+      if (Sym <> nil) and (Sym.Kind = skVariable) and Sym.IsClassVar then
+      begin
+        AAccess.IsClassVarRead := True;
+        AAccess.IsGlobal       := True;
+        AAccess.ClassVarEmitName := Sym.GlobalEmitName;
+        AAccess.ResolvedType   := Sym.TypeDesc;
+        Exit(Sym.TypeDesc);
+      end;
+      { Static property read: TypeName.StaticProp.  Resolve to its (static)
+        getter and lower as a static getter call.  Only method-backed static
+        getters are supported (a field-backed static property would resolve to
+        the static var directly). }
+      PropInfo := TRecordTypeDesc(RecSym.TypeDesc).FindProperty(AAccess.FieldName);
+      if (PropInfo <> nil) and PropInfo.IsStatic then
+      begin
+        if PropInfo.ReadMethod = '' then
+          SemanticError(
+            Format('Static property ''%s.%s'' has no readable static getter',
+              [AAccess.RecordName, AAccess.FieldName]),
+            AAccess.Line, AAccess.Col);
+        MDecl := FindMethodDecl(TRecordTypeDesc(RecSym.TypeDesc).Name, PropInfo.ReadMethod);
+        if (MDecl = nil) or not MDecl.IsStatic then
+          SemanticError(
+            Format('Static property ''%s.%s'' getter ''%s'' is not a static method',
+              [AAccess.RecordName, AAccess.FieldName, PropInfo.ReadMethod]),
+            AAccess.Line, AAccess.Col);
+        AAccess.IsStaticPropGet := True;
+        AAccess.ResolvedMethod  := MDecl;
+        AAccess.ResolvedClassType := RecSym.TypeDesc;
+        AAccess.ResolvedType    := MDecl.ResolvedReturnType;
+        Exit(MDecl.ResolvedReturnType);
       end;
       SemanticError(
         Format('Unknown class method ''%s'' on type ''%s''',

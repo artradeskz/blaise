@@ -2681,9 +2681,11 @@ begin
   Iface := TUnitInterface.Create('U');
   try
     Buf := WriteUnitInterface(Iface);
-    { Blaise Pos is 0-based; match-at-start returns 0. }
+    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 3 since the
+      static-members fields (IsClassVar/ClassVarEmitName, property IsStatic,
+      record/class ConstDecls) were added to the encoded layout. }
     AssertTrue('starts with magic',
-      Pos('BLAISE-IFACE 2', Buf) = 0);
+      Pos('BLAISE-IFACE 3', Buf) = 0);
   finally
     Iface.Free();
   end;

@@ -219,6 +219,7 @@ type
     IndexParamName: string;  { '' = non-indexed property }
     [Unretained] IndexTypeDesc: TTypeDesc;  { not owned; non-nil when IndexParamName <> '' }
     IsDefault:      Boolean; { declared with the `default` directive (Obj[I] sugar) }
+    IsStatic:       Boolean; { declared `static property` — accessors are static (no Self) }
   end;
 
   { Type descriptor for zero-GUID interface types (Phase 3). }
@@ -368,6 +369,16 @@ type
                                 of the strong addref/release pattern. }
     IsGlobal:   Boolean;      { true for program-level variables; codegen uses
                                 QBE data-section storage instead of stack alloc }
+    IsClassVar: Boolean;      { true for a STATIC (class-level) variable.  Stored
+                                as a single shared global (IsGlobal is also True),
+                                under the mangled GlobalEmitName, not as a
+                                per-instance field. }
+    GlobalEmitName: string;   { when non-empty, the mangled data-label this symbol
+                                emits/loads/stores under (e.g. 'TFoo_FInstance').
+                                Lets a bare lookup key ('FInstance') and a
+                                qualified one ('TFoo.FInstance') resolve to ONE
+                                storage slot.  Mirrors ConstArrayQbe for consts.
+                                Empty = emit under Name. }
     IsThreadVar: Boolean;     { true for threadvar declarations; codegen emits
                                 TLS storage instead of plain global data }
     IsOverload:   Boolean;    { true when declared with the 'overload' directive;

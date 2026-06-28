@@ -196,6 +196,7 @@ type
       registration's type wins).  The width and signedness drive both the
       .data directive and every load/store of the slot. }
     procedure AddGlobal(const AName: string; AType: TTypeDesc);
+    procedure RegisterClassVars(AFields: TObjectList);
     procedure MarkThreadVar(const AName: string);
     procedure MarkWeakGlobal(const AName: string);
     function IsThreadVarGlobal(const AName: string): Boolean;
@@ -1005,6 +1006,26 @@ begin
     FDataGlobals.Add(AName, AType);
 end;
 
+{ Register a shared data global for every STATIC (class-level) variable in a
+  class/record field list, under the mangled ClassVarEmitName stamped by the
+  semantic pass.  EmitDataSection then emits a correctly-sized zero slot.  This
+  covers read-only static vars that no assignment site auto-registers. }
+procedure TX86_64Backend.RegisterClassVars(AFields: TObjectList);
+var
+  I: Integer;
+  FDecl: TFieldDecl;
+begin
+  if AFields = nil then Exit;
+  for I := 0 to AFields.Count - 1 do
+  begin
+    FDecl := TFieldDecl(AFields.Items[I]);
+    if not FDecl.IsClassVar then Continue;
+    if FDecl.ClassVarEmitName = '' then Continue;
+    if FDecl.ResolvedType = nil then Continue;
+    Self.AddGlobal(FDecl.ClassVarEmitName, FDecl.ResolvedType);
+  end;
+end;
+
 procedure TX86_64Backend.MarkThreadVar(const AName: string);
 begin
   if not FThreadVarGlobals.ContainsKey(AName) then
@@ -1574,6 +1595,19 @@ begin
             [Self.ConstElemAsmDir(CD.ArrayElemType), CD.ArrayElements[K]]));
       end;
     end;
+  end;
+  { Static (class-level) variables: register one shared global per IsClassVar
+    field so EmitDataSection emits a zero-initialised slot under the mangled
+    label (ClassVarEmitName).  Done for BOTH class and record types, and
+    independently of any assignment (a read-only static var has no assignment to
+    auto-register it via AddGlobal at the write site). }
+  for I := 0 to ABlock.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
+    if TD.Def is TClassTypeDef then
+      RegisterClassVars(TClassTypeDef(TD.Def).Fields)
+    else if TD.Def is TRecordTypeDef then
+      RegisterClassVars(TRecordTypeDef(TD.Def).Fields);
   end;
   for I := 0 to ABlock.TypeDecls.Count - 1 do
   begin
@@ -3979,8 +4013,11 @@ begin
       Self.AddSlot('_cap_' + ADecl.CapturedVars.Strings[I], nil, Offset);
 
   { For class methods, Self is the implicit first integer param (%rdi).
-    Allocate a pointer-size slot for it; normal params start at IntIdx=1. }
-  if ADecl.OwnerTypeName <> '' then
+    Allocate a pointer-size slot for it; normal params start at IntIdx=1.
+    A `static` method takes NO implicit Self (like a class function/Java
+    static), so no Self slot is reserved and the first user param occupies
+    %rdi directly. }
+  if (ADecl.OwnerTypeName <> '') and not ADecl.IsStatic then
     Self.AddSlot('Self', nil, Offset);  { nil = pointer size (8 bytes) }
 
   { Params: first 6 integer register slots are register-passed (spilled to
@@ -4000,8 +4037,8 @@ begin
       Inc(IntIdx2, ADecl.CapturedVars.Count);
     if FSretFunc then
       Inc(IntIdx2);  { sret buffer pointer in %rdi }
-    if (ADecl.OwnerTypeName <> '') then
-      Inc(IntIdx2);  { Self in the next integer register }
+    if (ADecl.OwnerTypeName <> '') and not ADecl.IsStatic then
+      Inc(IntIdx2);  { Self in the next integer register (static methods have none) }
     for I := 0 to ADecl.Params.Count - 1 do
     begin
       P := TMethodParam(ADecl.Params.Items[I]);
@@ -7168,6 +7205,32 @@ begin
     Exit;
   end;
 
+  { Static var read: TypeName.StaticVar — a plain global load of the mangled
+    label resolved by the semantic pass (no Self, no instance). }
+  if (AExpr is TFieldAccessExpr) and TFieldAccessExpr(AExpr).IsClassVarRead then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    Self.Emit(Format(#9'movq %s(%%rip), %%rax',
+      [NativeMangle(FAE.ClassVarEmitName)]));
+    if (FAE.ResolvedType <> nil) and IsIntFamily(FAE.ResolvedType) then
+      Self.EmitNarrowToType(FAE.ResolvedType);
+    Exit;
+  end;
+
+  { Static property read: TypeName.StaticProp — call the static getter (no Self
+    argument); result in %rax. }
+  if (AExpr is TFieldAccessExpr) and TFieldAccessExpr(AExpr).IsStaticPropGet then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    MD  := TMethodDecl(FAE.ResolvedMethod);
+    Self.Emit(#9'callq ' +
+      MethodEmitNameNative(MD,
+        TRecordTypeDesc(FAE.ResolvedClassType).Name, MD.Name));
+    if (FAE.ResolvedType <> nil) and IsIntFamily(FAE.ResolvedType) then
+      Self.EmitNarrowToType(FAE.ResolvedType);
+    Exit;
+  end;
+
   if (AExpr is TFieldAccessExpr) and
      TFieldAccessExpr(AExpr).IsInterfaceCall then
   begin
@@ -8281,6 +8344,20 @@ begin
       'native backend: TMethodCallExpr has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
+  { Static method call (TypeName.StaticMethod(args)): NO implicit Self — the
+    callee shifts every parameter down one register (first user arg in %rdi).
+    A value-returning static method is exactly a plain function call to the
+    method's mangled symbol, so route it through EmitCall, which marshals args
+    into %rdi.. with no receiver.  Record-returning static factories use the
+    sret ABI and are handled in EmitMethodSretCall. }
+  if ACall.IsStaticCall then
+  begin
+    Sym := MethodEmitNameNative(MD,
+             TRecordTypeDesc(ACall.ResolvedClassType).Name, ACall.Name);
+    Self.EmitCall(Sym, MD, ACall.Args);
+    Exit;
+  end;
+
   UserSlots  := Self.CountArgSlots(MD.Params);
   TotalSlots := UserSlots + 1;
 
@@ -9313,6 +9390,37 @@ begin
     raise ENativeCodeGenError.Create(
       'native backend: TMethodCallStmt has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
+
+  { Static method call in statement position (TypeName.StaticMethod(args), result
+    discarded): NO implicit Self.  A void/scalar-returning static method is a
+    plain function call (EmitCall marshals args into %rdi.., result ignored).  A
+    record-returning static factory whose result is discarded needs a throwaway
+    sret buffer, dispatched via EmitSretCall, with its managed fields released. }
+  if ACall.IsStaticCall then
+  begin
+    Sym := MethodEmitNameNative(MD,
+             TRecordTypeDesc(ACall.ResolvedClassType).Name, ACall.Name);
+    if (ACall.ResolvedReturnTypeDesc <> nil) and
+       (ACall.ResolvedReturnTypeDesc.Kind = tyRecord) then
+    begin
+      SretRT      := TRecordTypeDesc(ACall.ResolvedReturnTypeDesc);
+      SretBufSize := (SretRT.TotalSize() + 15) and (-16);
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(Format(#9'subq $%d, %%rsp', [SretBufSize]));
+      Self.Emit(#9'movq %rsp, %rbx');
+      Self.EmitSretCall(Sym, MD, ACall.Args, '(%rbx)', False);
+      { EmitSretCall may have clobbered %rbx during arg evaluation; %rsp still
+        points at the buffer, so re-derive its address before releasing. }
+      Self.Emit(#9'movq %rsp, %rbx');
+      if not Self.IsRecordManagedClean(SretRT) then
+        Self.EmitRecordFieldReleases(SretRT, '%rbx');
+      Self.Emit(Format(#9'addq $%d, %%rsp', [SretBufSize]));
+      Self.Emit(#9'popq %rbx');
+    end
+    else
+      Self.EmitCall(Sym, MD, ACall.Args);
+    Exit;
+  end;
 
   IsSretDiscard := (ACall.ResolvedReturnTypeDesc <> nil) and
     (ACall.ResolvedReturnTypeDesc.Kind = tyRecord) and
@@ -15235,6 +15343,19 @@ begin
       'native backend: method-sret call has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
+  { Record-returning static factory (TypeName.Make(args): TRec): NO implicit
+    Self, so it follows the plain record-return ABI exactly — sret buffer in
+    %rdi, user args in %rsi.. — which is what EmitSretCall (the free-function
+    record-return emitter) already produces.  Delegate to it with the method's
+    mangled symbol; the Self-threading code below is for instance methods only. }
+  if ACall.IsStaticCall then
+  begin
+    Sym := MethodEmitNameNative(MD,
+             TRecordTypeDesc(ACall.ResolvedClassType).Name, ACall.Name);
+    Self.EmitSretCall(Sym, MD, ACall.Args, ASretAddr, ASretIsIndirect);
+    Exit;
+  end;
+
   { Record-returning-call receiver (e.g. A.Plus(B).Scale(2), where the OUTER
     method Scale itself returns a record via sret): materialise the inner call
     result into a stack buffer up front and carry its address in callee-saved
@@ -16531,9 +16652,11 @@ begin
     Self.Emit(Format(#9'movq %%rdi, %s', [Self.VarOperand('Result')]));
     IntIdx := 1;
   end;
-  if ADecl.OwnerTypeName <> '' then
+  if (ADecl.OwnerTypeName <> '') and not ADecl.IsStatic then
   begin
-    { Class method: spill Self from the first int arg register into its slot. }
+    { Class method: spill Self from the first int arg register into its slot.
+      A `static` method has NO implicit Self — its first user parameter is the
+      first integer arg (%rdi), so no Self spill and IntIdx stays put. }
     Self.Emit(Format(#9'movq %s, %s',
       [SysVArg64(IntIdx), Self.VarOperand('Self')]));
     Inc(IntIdx);

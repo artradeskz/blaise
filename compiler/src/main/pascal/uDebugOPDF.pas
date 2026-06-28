@@ -74,6 +74,7 @@ type
     procedure EmitConstantsFromList(AList: TObjectList);
     procedure EmitTypesFromBlock(ABlock: TBlock);
     procedure EmitGlobalVarsFromList(AList: TObjectList);
+    procedure EmitStaticVarsFromBlock(ABlock: TBlock);
     procedure EmitAllTypes;
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
@@ -1264,15 +1265,58 @@ begin
   end;
 end;
 
+{ Static (class-level) variables are shared global pointer/value slots, not
+  instance fields, so they are not in any block's var-decl list and EmitFields
+  (instance fields only) skips them.  Emit one recGlobalVar per IsClassVar field
+  under its mangled ClassVarEmitName so a debugger can print TFoo.FInstance. }
+procedure TOPDFEmitter.EmitStaticVarsFromBlock(ABlock: TBlock);
+var
+  I, K, N: Integer;
+  TD:      TTypeDecl;
+  Flds:    TObjectList;
+  FDecl:   TFieldDecl;
+  Nm:      string;
+begin
+  if ABlock = nil then Exit;
+  for I := 0 to ABlock.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
+    Flds := nil;
+    if TD.Def is TClassTypeDef then
+      Flds := TClassTypeDef(TD.Def).Fields
+    else if TD.Def is TRecordTypeDef then
+      Flds := TRecordTypeDef(TD.Def).Fields;
+    if Flds = nil then Continue;
+    for K := 0 to Flds.Count - 1 do
+    begin
+      FDecl := TFieldDecl(Flds.Items[K]);
+      if not FDecl.IsClassVar then Continue;
+      for N := 0 to FDecl.Names.Count - 1 do
+      begin
+        if (FDecl.ClassVarEmitName <> '') and (FDecl.Names.Count = 1) then
+          Nm := FDecl.ClassVarEmitName
+        else
+          Continue;  { multi-name static vars carry no per-name emit label yet }
+        EmitGlobalVar(Nm, FDecl.ResolvedType);
+      end;
+    end;
+  end;
+end;
+
 procedure TOPDFEmitter.EmitGlobalVars;
 begin
   if FUnit <> nil then
   begin
     EmitGlobalVarsFromList(FUnit.IntfBlock.Decls);
     EmitGlobalVarsFromList(FUnit.ImplBlock.Decls);
+    EmitStaticVarsFromBlock(FUnit.IntfBlock);
+    EmitStaticVarsFromBlock(FUnit.ImplBlock);
   end
   else if FProgram <> nil then
+  begin
     EmitGlobalVarsFromList(FProgram.Block.Decls);
+    EmitStaticVarsFromBlock(FProgram.Block);
+  end;
 end;
 
 procedure TOPDFEmitter.SetFacts(AFacts: TDbgFacts);
