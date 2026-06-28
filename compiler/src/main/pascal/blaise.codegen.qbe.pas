@@ -14447,6 +14447,11 @@ begin
         All require FSymTable to look up resolved TRecordTypeDesc. }
       if FSymTable <> nil then
       begin
+        { Re-assert the viewing context (see the init-block note below): method-body
+          emission above can leave DefineOwningUnit pointing at a dependency unit,
+          which would make ClassUnitPrefix emit this unit's own impl-section class
+          typeinfo/vtable symbols under bare, unqualified names. }
+        FSymTable.DefineOwningUnit := AUnit.Name;
         { Interface typeinfo blocks }
         for I := 0 to AllTD.Count - 1 do
         begin
@@ -14731,6 +14736,16 @@ begin
       { Initialization section: emit as export function $<Unit>_init() }
       if (AUnit.InitStmts <> nil) and (AUnit.InitStmts.Count > 0) then
       begin
+        { Re-assert THIS unit as the viewing context.  Method-body emission above
+          (type resolution that walks the uses chain) can leave DefineOwningUnit
+          pointing at a dependency unit; if the init block references one of THIS
+          unit's own implementation-section (IsImplPrivate) classes — e.g. a
+          metaclass value passed to a registrar — TSymbolTable.Lookup would
+          otherwise suppress it as a cross-unit leak and ClassUnitPrefix would fall
+          back to a bare, unqualified, undefined typeinfo symbol (silent link-time
+          garbage). }
+        if FSymTable <> nil then
+          FSymTable.DefineOwningUnit := AUnit.Name;
         FUnitInitNames.Add(AUnit.Name);
         EmitLine('');
         EmitLine('export function w $' + AUnit.Name + '_init() {');

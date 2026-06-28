@@ -57,6 +57,15 @@ type
       alongside IntfBlock ones. }
     procedure TestNativeImplSectionClass_Compiles;
     procedure TestQBEImplSectionClass_Compiles;
+    { Regression: an IMPLEMENTATION-section class referenced as a METACLASS value
+      (class-of / `TFoo` used as a value) in the unit's OWN initialization block.
+      Per-unit codegen left DefineOwningUnit pointing at a dependency unit by the
+      time the init block was emitted, so the impl-section class symbol was
+      suppressed by Lookup's cross-unit-leak guard and the metaclass ref mangled
+      to a bare, undefined typeinfo symbol -> link-time garbage -> SIGSEGV.
+      Both backends. }
+    procedure TestNativeImplSectionMetaclassInInit_Runs;
+    procedure TestQBEImplSectionMetaclassInInit_Runs;
     { Regression: a class declared in unit A's IMPLEMENTATION section must NOT
       be visible to an unrelated unit B that never `uses` A — it previously
       leaked through the flat global scope. }
@@ -792,6 +801,160 @@ begin
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('use_implclsq exit code', 0, Rc);
   AssertEquals('use_implclsq stdout', '7' + #10, Captured)
+end;
+
+procedure TSepCompileTests.TestNativeImplSectionMetaclassInInit_Runs;
+{ The unit's INITIALIZATION block references an impl-section class as a metaclass
+  value (assigns the class to a `class of` global).  Before the
+  DefineOwningUnit re-assertion fix, per-unit codegen emitted that metaclass ref
+  under a bare, undefined `typeinfo_<TFoo>` symbol, linking to garbage and
+  crashing at runtime.  Native (default) path. }
+const
+  UnitSrc =
+    '''
+    unit ImplMetaN;
+    interface
+    function MakeViaMeta: Integer;
+    implementation
+    type
+      TFoo = class
+        FX: Integer;
+        constructor Create;
+        function GetX: Integer;
+      end;
+      TFooClass = class of TFoo;
+    var
+      GCls: TFooClass;
+    constructor TFoo.Create;
+    begin FX := 42 end;
+    function TFoo.GetX: Integer;
+    begin Result := FX end;
+    function MakeViaMeta: Integer;
+    var F: TFoo;
+    begin
+      F := GCls.Create();
+      Result := F.GetX();
+      F.Free()
+    end;
+    initialization
+      GCls := TFoo;
+    end.
+    ''';
+  ProgSrc =
+    '''
+    program UseImplMetaN;
+    uses ImplMetaN;
+    begin
+      WriteLn(MakeViaMeta())
+    end.
+    ''';
+var
+  UnitPas, ProgPas, ProgBin: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  UnitPas := FScratch + '/ImplMetaN.pas';
+  ProgPas := FScratch + '/use_implmetan.pas';
+  ProgBin := FScratch + '/use_implmetan';
+
+  WriteFile(UnitPas, UnitSrc);
+  WriteFile(ProgPas, ProgSrc);
+
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'native',
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('blaise(use_implmetan) exit code (out: ' + Captured + ')', 0, Rc);
+  AssertTrue('use_implmetan exists', FileExists(ProgBin));
+
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('use_implmetan exit code', 0, Rc);
+  AssertEquals('use_implmetan stdout', '42' + #10, Captured)
+end;
+
+procedure TSepCompileTests.TestQBEImplSectionMetaclassInInit_Runs;
+{ Same as TestNativeImplSectionMetaclassInInit_Runs but forces the QBE backend. }
+const
+  UnitSrc =
+    '''
+    unit ImplMetaQ;
+    interface
+    function MakeViaMeta: Integer;
+    implementation
+    type
+      TFoo = class
+        FX: Integer;
+        constructor Create;
+        function GetX: Integer;
+      end;
+      TFooClass = class of TFoo;
+    var
+      GCls: TFooClass;
+    constructor TFoo.Create;
+    begin FX := 42 end;
+    function TFoo.GetX: Integer;
+    begin Result := FX end;
+    function MakeViaMeta: Integer;
+    var F: TFoo;
+    begin
+      F := GCls.Create();
+      Result := F.GetX();
+      F.Free()
+    end;
+    initialization
+      GCls := TFoo;
+    end.
+    ''';
+  ProgSrc =
+    '''
+    program UseImplMetaQ;
+    uses ImplMetaQ;
+    begin
+      WriteLn(MakeViaMeta())
+    end.
+    ''';
+var
+  UnitPas, ProgPas, ProgBin: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  UnitPas := FScratch + '/ImplMetaQ.pas';
+  ProgPas := FScratch + '/use_implmetaq.pas';
+  ProgBin := FScratch + '/use_implmetaq';
+
+  WriteFile(UnitPas, UnitSrc);
+  WriteFile(ProgPas, ProgSrc);
+
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'qbe',
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('blaise(use_implmetaq) exit code (out: ' + Captured + ')', 0, Rc);
+  AssertTrue('use_implmetaq exists', FileExists(ProgBin));
+
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('use_implmetaq exit code', 0, Rc);
+  AssertEquals('use_implmetaq stdout', '42' + #10, Captured)
 end;
 
 procedure TSepCompileTests.TestImplSectionClass_DoesNotLeakCrossUnit;

@@ -17361,6 +17361,17 @@ begin
     the native main footer; emitted but only init is invoked.) }
   if (AUnit.InitStmts <> nil) and (AUnit.InitStmts.Count > 0) then
   begin
+    { Re-assert THIS unit as the viewing context.  Earlier emit passes in this
+      procedure (method-body type resolution that walks the uses chain) can
+      leave DefineOwningUnit pointing at a dependency unit; if the init block
+      references one of THIS unit's own implementation-section (IsImplPrivate)
+      classes — e.g. a metaclass value passed to a registrar — TSymbolTable.Lookup
+      would otherwise suppress it as a cross-unit leak and ClassSymName would fall
+      back to a bare, unqualified, undefined typeinfo symbol (silent link-time
+      garbage).  See the impl-section-class visibility guard in
+      TSymbolTable.Lookup. }
+    if FSymTable <> nil then
+      FSymTable.DefineOwningUnit := AUnit.Name;
     FUnitInitNames.Add(NativeMangle(AUnit.Name));
     Self.ClearFrame();
     FExitLabel := '';
@@ -17391,6 +17402,11 @@ begin
     UnitSym := AUnit.SymbolTable
   else
     UnitSym := FSymTable;
+  { Re-assert the viewing context (see the init-block note above): the class
+    section emits unit-qualified typeinfo/vtable/_FieldCleanup names via
+    ClassSymName, which must resolve THIS unit's own impl-section classes. }
+  if FSymTable <> nil then
+    FSymTable.DefineOwningUnit := AUnit.Name;
   Self.EmitClassSection(AUnit.IntfBlock.TypeDecls, AUnit.GenericInstances,
                         UnitSym);
   { Impl-section classes' typeinfo / vtable / _FieldCleanup (generics already
