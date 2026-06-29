@@ -31,6 +31,7 @@ type
     procedure TestRun_StaticVar_QualifiedRead;
     procedure TestRun_StaticVar_QualifiedWrite_Scalar;
     procedure TestRun_StaticVar_QualifiedWrite_ClassARC;
+    procedure TestRun_StaticVar_InterfaceStore;
     procedure TestRun_StaticProperty_QualifiedRead;
     procedure TestRun_Singleton_LazyGetInstance;
     procedure TestRun_StaticConst_OnClass;
@@ -167,6 +168,58 @@ const Src =
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertRunsOnAll(Src, '99' + LineEnding + 'released' + LineEnding, 0);
+end;
+
+procedure TE2EStaticMembersTests.TestRun_StaticVar_InterfaceStore;
+{ Interface-typed static var: the bare store inside a static method
+  (FCache := X) must write BOTH slots of the 2-slot fat pointer (obj + itab)
+  with correct ARC, and the bare read (Result := FCache) must reconstruct it.
+  Regression for the static-call interface-arg leading-comma bug that made
+  THolder.SetIt(T) emit an invalid QBE call and segfault native. }
+const Src =
+  '''
+  program P;
+  type
+    IThing = interface
+      procedure Speak;
+    end;
+    TThing = class(IThing)
+    public
+      Tag: Integer;
+      procedure Speak;
+    end;
+    THolder = class
+    public static var
+      FCache: IThing;
+      static procedure SetIt(X: IThing);
+      static function GetIt: IThing;
+    end;
+  procedure TThing.Speak;
+  begin
+    WriteLn('thing ', Tag);
+  end;
+  static procedure THolder.SetIt(X: IThing);
+  begin
+    FCache := X;
+  end;
+  static function THolder.GetIt: IThing;
+  begin
+    Result := FCache;
+  end;
+  var
+    T: TThing;
+    Got: IThing;
+  begin
+    T := TThing.Create();
+    T.Tag := 7;
+    THolder.SetIt(T);
+    Got := THolder.GetIt();
+    Got.Speak();
+  end.
+  ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertRunsOnAll(Src, 'thing 7' + LineEnding, 0);
 end;
 
 procedure TE2EStaticMembersTests.TestRun_StaticProperty_QualifiedRead;

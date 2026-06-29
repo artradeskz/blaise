@@ -587,6 +587,7 @@ type
     procedure TestIR_StaticVar_QualifiedRead_LoadsGlobal;
     procedure TestIR_StaticProperty_QualifiedRead_CallsGetter;
     procedure TestIR_ClassStaticVar_ReleasedAtExit;
+    procedure TestIR_StaticCall_InterfaceArg_NoLeadingComma;
   end;
 
 function TStaticMembersSemTests.AnalyseSrc(const ASrc: string): TProgram;
@@ -991,6 +992,53 @@ begin
     Pos('data $TFoo_FInst', IR) >= 0);
   AssertTrue('static var released at @main_exit',
     (Pos('@main_exit', IR) >= 0) and (Pos('loadl $TFoo_FInst', IR) >= 0));
+end;
+
+procedure TStaticMembersSemTests.TestIR_StaticCall_InterfaceArg_NoLeadingComma;
+{ A static method whose FIRST parameter is interface-typed must be CALLED with
+  a well-formed argument list: 'call $T_M(l obj, l itab)'.  The interface arg
+  fragment carries a leading ', ' (it is normally appended after Self/a prior
+  arg); in a static call it is the first arg, so the codegen must strip that
+  comma — otherwise QBE rejects 'call $T_M(, l obj, l itab)' as an invalid
+  class specifier. }
+const
+  Src =
+    '''
+        program P;
+        type
+          IThing = interface
+            procedure Speak;
+          end;
+          TThing = class(IThing)
+          public
+            procedure Speak;
+          end;
+          THolder = class
+          public
+            static procedure SetIt(X: IThing);
+          end;
+        procedure TThing.Speak;
+        begin
+        end;
+        static procedure THolder.SetIt(X: IThing);
+        begin
+        end;
+        var T: TThing;
+        begin
+          T := TThing.Create();
+          THolder.SetIt(T);
+        end.
+        ''';
+var IR: string; CallPos: Integer;
+begin
+  IR := GenIR(Src);
+  CallPos := Pos('call $THolder_SetIt(', IR);
+  AssertTrue('static interface-arg call emitted', CallPos >= 0);
+  { The call must not begin its argument list with a comma. }
+  AssertFalse('no leading comma in static interface-arg call',
+    Pos('call $THolder_SetIt(,', IR) >= 0);
+  AssertTrue('call passes obj+itab pair',
+    Pos('call $THolder_SetIt(l ', IR) >= 0);
 end;
 
 initialization

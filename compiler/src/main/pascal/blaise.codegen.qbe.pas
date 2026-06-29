@@ -6855,8 +6855,14 @@ begin
         else if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
         begin
           ArgTemps.Add('');
-          ArgLine := ArgLine +
-            InterfaceArgFragment(TASTExpr(ACall.Args.Items[I]), Par.ResolvedType);
+          { InterfaceArgFragment returns a leading-comma pair ', l obj, l itab'
+            (designed to be appended directly after a preceding arg).  This
+            loop already inserts the ', ' separator at the top (line ~6843),
+            so strip the fragment's own leading ', ' to avoid a double comma —
+            and to avoid a leading comma when the interface is the FIRST arg of
+            a static call (which QBE rejects as "invalid class specifier"). }
+          ArgLine := ArgLine + Copy(InterfaceArgFragment(
+            TASTExpr(ACall.Args.Items[I]), Par.ResolvedType), 2, MaxInt);
         end
         else
         begin

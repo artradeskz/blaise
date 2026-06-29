@@ -16276,6 +16276,62 @@ begin
       'native backend: class sret interface call has no ResolvedMethod (' +
       ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
+
+  { Static method returning an interface (TypeName.GetIt: IFoo): there is NO
+    receiver, so the call follows the plain free-function interface-sret ABI —
+    sret buffer in %rdi, user args from %rsi (base 1), and a direct callq to the
+    mangled static symbol.  Without this branch the code below would treat the
+    bare TypeName (ACall.ObjectName) as a global Self and emit a load of an
+    undefined `TypeName` symbol.  Mirrors the non-Self `else` arm of
+    EmitIntfSretCall. }
+  if ACall.IsStaticCall then
+  begin
+    Sym := MethodEmitNameNative(MD,
+             TRecordTypeDesc(ACall.ResolvedClassType).Name, ACall.Name);
+    UserSlots := Self.CountArgSlots(MD.Params);
+    HD := TList<Integer>.Create();
+    HK := TList<Integer>.Create();
+    HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', ACall.Args, HD, HK);
+    Self.Emit(#9'subq $16, %rsp');
+    Self.Emit(#9'movq $0, (%rsp)');
+    Self.Emit(#9'movq $0, 8(%rsp)');
+    Pushed := 0;
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      Par := TMethodParam(MD.Params.Items[I]);
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      if HK.Get(I) >= akRecCall then
+      begin
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [16 + HTotal - HD.Get(I) + Pushed]));
+        Self.Emit(#9'pushq %rax');
+        Pushed := Pushed + 8;
+      end
+      else
+      begin
+        Self.EmitMethodArgPush(Par, Arg);
+        if Par.IsOpenArray or
+           ((Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface)) then
+          Pushed := Pushed + 16
+        else
+          Pushed := Pushed + 8;
+      end;
+    end;
+    { Base 1: %rdi = sret buffer, user args from %rsi; no Self register. }
+    OverflowBytes := Self.EmitSretRegArgs(UserSlots, 1);
+    Self.Emit(#9'movq %rsp, %rdi');
+    if OverflowBytes > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rdi', [OverflowBytes]));
+    Self.Emit(#9'callq ' + Sym);
+    if OverflowBytes > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [OverflowBytes]));
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
+    Self.EmitSretBufferSlideDown(HTotal);
+    HD.Free();
+    HK.Free();
+    Exit;
+  end;
+
   UserSlots := Self.CountArgSlots(MD.Params);
   { %rdi = sret buffer, %rsi = Self leave four integer arg registers; further
     slots spill to the stack via EmitSretRegArgs (ABase = 2). }
