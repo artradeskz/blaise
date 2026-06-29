@@ -53,7 +53,17 @@ uses
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 5;  { v5 (this cycle): member Visibility (private/protected/
+  IFACE_VERSION = 6;  { v6 (this cycle): the `overload` directive now round-trips.
+                          TRoutineSig.IsOverload added to EncodeMethodSig/
+                          ReadMethodSig (one extra byte after IsStatic) and
+                          TMethodDecl.IsOverload added to EncodeMethodDecl/
+                          ReadMethodDecl (after IsOverride; this is the
+                          interface- and generic-template-method path).  Without
+                          it a cross-unit overload set split across an imported
+                          class and its ancestor is truncated by the importer's
+                          hiding walk.  Both method layouts grew, so v5 readers
+                          must reject these .bif and recompile.
+                        v5: member Visibility (private/protected/
                           strict) now serialised — field, method, and property
                           payloads each carry one extra byte for the visibility
                           ordinal, so v4 readers must reject these .bif and
@@ -342,6 +352,9 @@ begin
     { static-method flag — distinct from VTableSlot (both static and final
       non-virtual instance methods carry slot -1). }
     EncodeBool (AR.IsStatic) +
+    { `overload` directive — must round-trip so a split overload set is not
+      truncated by the importer's hiding walk. }
+    EncodeBool (AR.IsOverload) +
     { member visibility ordinal }
     EncodeLpstr(IntToStr(Ord(AR.Visibility))) +
     EncodeCount(AR.Params.Count);
@@ -437,6 +450,9 @@ begin
                                          resolved cross-unit refs }
     EncodeBool (AM.IsVirtual) +
     EncodeBool (AM.IsOverride) +
+    EncodeBool (AM.IsOverload) +      { `overload` directive — generic-template
+                                         and interface methods share this path
+                                         and may be overloaded }
     EncodeCount(AM.Params.Count);
   for J := 0 to AM.Params.Count - 1 do
   begin
@@ -1913,9 +1929,10 @@ begin
   Result.IsOverride  := DecodeBool(AText, APos);
   Result.ResolvedQbeName := ReadLpstrAt(AText, APos);
   Result.VTableSlot  := StrToInt(ReadLpstrAt(AText, APos));
-  { Order must mirror EncodeMethodSig: IsStatic follows VTableSlot, then the
-    visibility ordinal. }
+  { Order must mirror EncodeMethodSig: IsStatic follows VTableSlot, then
+    IsOverload, then the visibility ordinal. }
   Result.IsStatic    := DecodeBool(AText, APos);
+  Result.IsOverload  := DecodeBool(AText, APos);
   Result.Visibility  := TMemberVisibility(StrToInt(ReadLpstrAt(AText, APos)));
   Pc := DecodeCount(AText, APos);
   for J := 1 to Pc do
@@ -1989,6 +2006,7 @@ begin
   if not HasReturn then Result.ReturnTypeName := '';
   Result.IsVirtual      := DecodeBool(AText, APos);
   Result.IsOverride     := DecodeBool(AText, APos);
+  Result.IsOverload     := DecodeBool(AText, APos);
   Pc := DecodeCount(AText, APos);
   for J := 1 to Pc do
   begin

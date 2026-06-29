@@ -245,6 +245,8 @@ type
     procedure TestRoundTrip_ViaFile;
     procedure TestRoundTrip_Record;
     procedure TestRoundTrip_Class_WithVirtualMethod;
+    procedure TestRoundTrip_Class_WithOverloadedMethods;
+    procedure TestRoundTrip_Interface_WithOverloadedMethods;
     procedure TestRoundTrip_Interface;
     procedure TestRoundTrip_Interface_WithProperty;
     procedure TestRoundTrip_ProceduralType;
@@ -2691,12 +2693,12 @@ begin
   Iface := TUnitInterface.Create('U');
   try
     Buf := WriteUnitInterface(Iface);
-    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 5 since
-      member Visibility (private/protected/strict) was added to the field,
-      method, and property encoded layouts (on top of v4's TRoutineSig.IsStatic
-      and v3's static-member facts). }
+    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 6 since the
+      `overload` directive (TRoutineSig.IsOverload + TMethodDecl.IsOverload) was
+      added to the method encoded layouts (on top of v5's member Visibility,
+      v4's TRoutineSig.IsStatic, and v3's static-member facts). }
     AssertTrue('starts with magic',
-      Pos('BLAISE-IFACE 5', Buf) = 0);
+      Pos('BLAISE-IFACE 6', Buf) = 0);
   finally
     Iface.Free();
   end;
@@ -2956,6 +2958,98 @@ begin
       AssertTrue('IsVirtual', M.IsVirtual);
       AssertEquals('ResolvedQbeName', 'U_TFoo_Speak', M.ResolvedQbeName);
       AssertTrue('VTableSlot assigned', M.VTableSlot >= 0);
+    finally
+      Round.Free();
+    end;
+  finally
+    Iface.Free();
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Class_WithOverloadedMethods;
+{ Regression (bugs.txt: imported methods lose IsOverload).  A class with an
+  overloaded method set must round-trip the `overload` directive through the
+  .bif: ResolveMethodOverload's hiding walk stops at the first NON-overload
+  candidate, so a method imported with IsOverload=False would wrongly truncate
+  an overload set that is split across an imported class and its ancestor. }
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TFoo = class' + #10 +
+    '  procedure Add(A: Integer); overload;' + #10 +
+    '  procedure Add(A: string); overload;' + #10 +
+    'end;' + #10 +
+    'implementation' + #10 +
+    'procedure TFoo.Add(A: Integer); begin end;' + #10 +
+    'procedure TFoo.Add(A: string); begin end;' + #10 +
+    'end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  M:            TRoutineSig;
+  I:            Integer;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TFoo');
+      AssertTrue('TFoo present', E <> nil);
+      AssertEquals('2 methods', 2, E.Methods.Count);
+      { Every Add overload must carry IsOverload across the .bif boundary. }
+      for I := 0 to E.Methods.Count - 1 do
+      begin
+        M := TRoutineSig(E.Methods.Items[I]);
+        AssertEquals('overload method name', 'Add', M.Name);
+        AssertTrue('IsOverload preserved for ' + M.ResolvedQbeName, M.IsOverload);
+      end;
+    finally
+      Round.Free();
+    end;
+  finally
+    Iface.Free();
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Interface_WithOverloadedMethods;
+{ Interface methods serialise via EncodeMethodDecl/ReadMethodDecl (the AST
+  TMethodDecl path, distinct from the class TRoutineSig path).  That path also
+  dropped IsOverload, so an overloaded interface method imported from a .bif
+  would lose its `overload` directive. }
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type IShape = interface' + #10 +
+    '  procedure Draw(X: Integer); overload;' + #10 +
+    '  procedure Draw(X: string); overload;' + #10 +
+    'end;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  M:            TMethodDecl;
+  I:            Integer;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('IShape');
+      AssertTrue('IShape present', E <> nil);
+      AssertTrue('is interface', E.Def is TInterfaceTypeDef);
+      AssertEquals('2 methods', 2, TInterfaceTypeDef(E.Def).Methods.Count);
+      for I := 0 to TInterfaceTypeDef(E.Def).Methods.Count - 1 do
+      begin
+        M := TMethodDecl(TInterfaceTypeDef(E.Def).Methods.Items[I]);
+        AssertEquals('overload method name', 'Draw', M.Name);
+        AssertTrue('IsOverload preserved', M.IsOverload);
+      end;
     finally
       Round.Free();
     end;

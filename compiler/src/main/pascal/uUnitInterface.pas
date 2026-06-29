@@ -94,6 +94,12 @@ type
                                    static and final non-virtual instance
                                    methods, so this is a distinct flag rather
                                    than being inferred from the slot. }
+    IsOverload:   Boolean;       { declared with the `overload` directive.
+                                   ResolveMethodOverload's hiding walk stops at
+                                   the first non-overload candidate, so this must
+                                   survive the .bif or an overload set split
+                                   across an imported class and its ancestor is
+                                   truncated to the more-derived level. }
     Visibility:   TMemberVisibility; { member access scope; default mvPublic }
     constructor Create;
     destructor Destroy; override;

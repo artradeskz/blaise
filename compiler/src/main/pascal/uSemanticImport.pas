@@ -981,6 +981,10 @@ begin
   { Carry static-ness so the semantic pass's TypeName.StaticMethod() resolution
     (which checks MDecl.IsStatic) succeeds for a method imported from a .bif. }
   Result.IsStatic   := ASig.IsStatic;
+  { Carry the `overload` directive so ResolveMethodOverload's hiding walk treats
+    an imported overload as overloadable — otherwise an overload set split
+    across an imported class and its ancestor is truncated to the derived level. }
+  Result.IsOverload := ASig.IsOverload;
   { Carry visibility so cross-unit private/protected method access is enforced. }
   Result.Visibility := ASig.Visibility;
   for J := 0 to ASig.Params.Count - 1 do

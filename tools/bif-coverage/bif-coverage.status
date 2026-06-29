@@ -294,6 +294,7 @@ TRoutineSig.ResolvedQbeName  serialise
 TRoutineSig.IsVirtual  serialise
 TRoutineSig.IsOverride  serialise
 TRoutineSig.IsStatic  serialise
+TRoutineSig.IsOverload  serialise
 TRoutineSig.Visibility  serialise
 
 # TConstEntry (uUnitInterface.pas:102)
