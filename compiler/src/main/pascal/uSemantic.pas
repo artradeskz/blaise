@@ -11340,6 +11340,53 @@ begin
   if AAccess.Base <> nil then
   begin
     BaseType := AnalyseExpr(AAccess.Base);
+    { Metaclass base: 'TypeName.StaticVar' or 'TypeName.StaticProp' arriving as
+      a chained access (Base is the bare class-name ident resolving to
+      'class of TypeName') rather than the simple RecordName form.  This is how
+      the parser shapes a qualified static-var/property used as the BASE of a
+      further chain on an l-value, e.g. 'TFoo.GObj.V := x' or 'TFoo.GObj.M()'.
+      Resolve it exactly like the RecordName static-var/static-prop read below,
+      so the result type feeds the outer chain. }
+    if BaseType.Kind = tyMetaClass then
+    begin
+      RT  := TRecordTypeDesc(TMetaClassTypeDesc(BaseType).BaseClass);
+      Sym := FTable.Lookup(RT.Name + '.' + AAccess.FieldName);
+      if (Sym <> nil) and (Sym.Kind = skVariable) and Sym.IsClassVar then
+      begin
+        AssertStaticVarVisible(Sym.Visibility, Sym.OwningUnit,
+                               Sym.OwnerTypeName, AAccess.FieldName,
+                               AAccess.Line, AAccess.Col);
+        AAccess.IsClassVarRead   := True;
+        AAccess.IsGlobal         := True;
+        AAccess.ClassVarEmitName := Sym.GlobalEmitName;
+        AAccess.ResolvedType     := Sym.TypeDesc;
+        Exit(Sym.TypeDesc);
+      end;
+      PropInfo := RT.FindProperty(AAccess.FieldName);
+      if (PropInfo <> nil) and PropInfo.IsStatic then
+      begin
+        if PropInfo.ReadMethod = '' then
+          SemanticError(
+            Format('Static property ''%s.%s'' has no readable static getter',
+              [RT.Name, AAccess.FieldName]),
+            AAccess.Line, AAccess.Col);
+        MDecl := FindMethodDecl(RT.Name, PropInfo.ReadMethod);
+        if (MDecl = nil) or not MDecl.IsStatic then
+          SemanticError(
+            Format('Static property ''%s.%s'' getter ''%s'' is not a static method',
+              [RT.Name, AAccess.FieldName, PropInfo.ReadMethod]),
+            AAccess.Line, AAccess.Col);
+        AAccess.IsStaticPropGet   := True;
+        AAccess.ResolvedMethod    := MDecl;
+        AAccess.ResolvedClassType := BaseType;
+        AAccess.ResolvedType      := MDecl.ResolvedReturnType;
+        Exit(MDecl.ResolvedReturnType);
+      end;
+      SemanticError(
+        Format('Unknown static member ''%s'' on type ''%s''',
+          [AAccess.FieldName, RT.Name]),
+        AAccess.Line, AAccess.Col);
+    end;
     if not (BaseType.Kind in [tyRecord, tyClass]) then
       SemanticError(
         Format('Field access ''.%s'' requires a record or class base, got ''%s''',

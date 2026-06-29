@@ -4941,6 +4941,18 @@ begin
     begin
       Exit(EmitExpr(Fld));
     end;
+    { Qualified static-var read used as an instance pointer (TFoo.GObj.Field /
+      TFoo.GObj.Method()): the class-typed static var's global slot holds the
+      instance pointer — load it directly.  Static getter (IsStaticPropGet)
+      results are full expressions, so EmitExpr handles those. }
+    if Fld.IsClassVarRead then
+    begin
+      Loaded := AllocTemp();
+      EmitLine(Format('  %s =l loadl $%s', [Loaded, Fld.ClassVarEmitName]));
+      Exit(Loaded);
+    end;
+    if Fld.IsStaticPropGet then
+      Exit(EmitExpr(Fld));
     if Fld.Base <> nil then
       Base := EmitInstancePtr(Fld.Base)
     else if Fld.IsImplicitSelf then
@@ -11959,6 +11971,21 @@ begin
       EmitLine(Format('  %s =l call %s(l %s)', [T, FPtrTemp, L]));
       if (FldAccess.Base <> nil) and ExprOwnsRef(FldAccess.Base) then
         EmitLine(Format('  call $_ClassRelease(l %s)', [L]));
+      Exit(T);
+    end;
+
+    { Static var read: TypeName.StaticVar — a plain global load of the mangled
+      label.  Checked BEFORE the chained-access branch: a qualified static var
+      shaped by the parser as a Base-form access (Base is the bare class-name
+      ident) still has IsClassVarRead set and must NOT be treated as a chained
+      field of the metaclass. }
+    if FldAccess.IsClassVarRead then
+    begin
+      QType     := QbeTypeOf(FldAccess.ResolvedType);
+      LoadInstr := LoadInstrFor(FldAccess.ResolvedType);
+      T         := AllocTemp();
+      EmitLine(Format('  %s =%s %s $%s',
+        [T, QType, LoadInstr, FldAccess.ClassVarEmitName]));
       Exit(T);
     end;
 

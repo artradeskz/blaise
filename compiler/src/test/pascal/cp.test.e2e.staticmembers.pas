@@ -32,6 +32,7 @@ type
     procedure TestRun_StaticVar_QualifiedWrite_Scalar;
     procedure TestRun_StaticVar_QualifiedWrite_ClassARC;
     procedure TestRun_StaticVar_InterfaceStore;
+    procedure TestRun_StaticVar_ChainedLValueBase;
     procedure TestRun_StaticProperty_QualifiedRead;
     procedure TestRun_Singleton_LazyGetInstance;
     procedure TestRun_StaticConst_OnClass;
@@ -220,6 +221,47 @@ const Src =
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   AssertRunsOnAll(Src, 'thing 7' + LineEnding, 0);
+end;
+
+procedure TE2EStaticMembersTests.TestRun_StaticVar_ChainedLValueBase;
+{ A qualified static var of class type used as the BASE of a further l-value
+  chain: 'TFoo.GObj.Field := V' (field write through the chained base) and
+  'TFoo.GObj.Method()' (method call on the chained base).  The read form
+  (TFoo.GObj.Field as an expression) already worked; the write/call receiver
+  path through the chained base was unresolved ("Field access requires a record
+  or class base, got 'class of TFoo'"). }
+const Src =
+  '''
+  program P;
+  type
+    TObj = class
+    public
+      V: Integer;
+      procedure Bump;
+    end;
+    THolder = class
+    public static var
+      GObj: TObj;
+    end;
+  procedure TObj.Bump;
+  begin
+    V := V + 1;
+  end;
+  begin
+    THolder.GObj := TObj.Create();
+    WriteLn(THolder.GObj.V);
+    THolder.GObj.V := 5;
+    WriteLn(THolder.GObj.V);
+    THolder.GObj.Bump();
+    WriteLn(THolder.GObj.V);
+    THolder.GObj := nil
+  end.
+  ''';
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll(Src, '0' + LE + '5' + LE + '6' + LE, 0);
 end;
 
 procedure TE2EStaticMembersTests.TestRun_StaticProperty_QualifiedRead;

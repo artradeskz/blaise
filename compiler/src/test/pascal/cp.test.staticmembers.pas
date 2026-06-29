@@ -588,6 +588,7 @@ type
     procedure TestIR_StaticProperty_QualifiedRead_CallsGetter;
     procedure TestIR_ClassStaticVar_ReleasedAtExit;
     procedure TestIR_StaticCall_InterfaceArg_NoLeadingComma;
+    procedure TestIR_StaticVar_ChainedLValueBase_LoadsGlobal;
   end;
 
 function TStaticMembersSemTests.AnalyseSrc(const ASrc: string): TProgram;
@@ -1039,6 +1040,38 @@ begin
     Pos('call $THolder_SetIt(,', IR) >= 0);
   AssertTrue('call passes obj+itab pair',
     Pos('call $THolder_SetIt(l ', IR) >= 0);
+end;
+
+procedure TStaticMembersSemTests.TestIR_StaticVar_ChainedLValueBase_LoadsGlobal;
+{ A qualified static var of class type used as the base of a further l-value
+  chain (THolder.GObj.V := 5) must resolve and lower: the base instance pointer
+  is loaded from the static var's mangled global slot.  Without the fix the
+  semantic pass rejected the write with "requires a record or class base, got
+  'class of THolder'". }
+const
+  Src =
+    '''
+        program P;
+        type
+          TObj = class
+          public
+            V: Integer;
+          end;
+          THolder = class
+          public static var
+            GObj: TObj;
+          end;
+        begin
+          THolder.GObj := TObj.Create();
+          THolder.GObj.V := 5;
+        end.
+        ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  { The chained write loads the base instance pointer from the static var slot. }
+  AssertTrue('chained l-value base loads static var global',
+    Pos('loadl $THolder_GObj', IR) >= 0);
 end;
 
 initialization
