@@ -140,6 +140,8 @@ const
 
   SK_INTEGER = 0;
   SK_BOOLEAN = 1;
+  { SK_CHAR = 2; SK_WIDECHAR = 3; — reserved by the OPDF spec, not emitted yet }
+  SK_FLOAT   = 4;  { Single, Double — pdr renders via TFloatEvaluator }
 
   LOC_RBP = 1;
   LOC_RBP_INDIRECT = 3;  { frame slot holds the value's address }
@@ -369,7 +371,8 @@ begin
   if HasBeenEmitted(CName) then Exit;
   case AType.Kind of
     tyInteger, tyInt64, tyUInt32, tyUInt64,
-    tySmallInt, tyWord, tyByte, tyBoolean:
+    tySmallInt, tyWord, tyByte, tyBoolean,
+    tyDouble, tySingle:
       EmitPrimitive(AType);
     tyString:
       EmitUtf8Str();
@@ -407,6 +410,10 @@ begin
     tyBoolean:         begin SubKind := SK_BOOLEAN; IsSigned := 0; end;
     tyInt64, tyInteger, tySmallInt:
                        begin SubKind := SK_INTEGER;  IsSigned := 1; end;
+    tyDouble, tySingle:
+                       { Single (4B) / Double (8B) — pdr keys off SubKind=skFloat
+                         and reads the IEEE 754 value by SizeInBytes. }
+                       begin SubKind := SK_FLOAT;    IsSigned := 1; end;
   else
     SubKind := SK_INTEGER; IsSigned := 0;
   end;

@@ -27,6 +27,8 @@ type
     procedure TestOPDF_Primitive_Integer;
     procedure TestOPDF_Primitive_Boolean;
     procedure TestOPDF_Primitive_Int64;
+    procedure TestOPDF_Primitive_Double_SubKindFloat;
+    procedure TestOPDF_Primitive_Single_SubKindFloat;
     procedure TestOPDF_AnsiStr_Record;
     procedure TestOPDF_GlobalVar_QuadLabel;
     procedure TestOPDF_GlobalVar_RecType;
@@ -173,6 +175,44 @@ var
 begin
   IR := GenOPDF('program P; begin end.');
   AssertTrue('recPrimitive Int64 present', Contains(IR, '# recPrimitive: Int64'));
+end;
+
+procedure TOPDFTests.TestOPDF_Primitive_Double_SubKindFloat;
+{ Regression: float types emitted NO recPrimitive at all, so a Double/Single
+  variable referenced a TypeID with no type record and pdr could not print it
+  (locals/print/gl all failed for floats).  A Double must now emit a recPrimitive
+  with SubKind=SK_FLOAT(4) and SizeInBytes=8 so pdr's TFloatEvaluator
+  (Category=tcFloat, keyed off SubKind in [skFloat, skCurrency]) renders it. }
+var
+  IR: string;
+  P:  Integer;
+begin
+  IR := GenOPDF('program P; var D: Double; begin D := 1.5 end.');
+  AssertTrue('recPrimitive Double comment', Contains(IR, '# recPrimitive: Double'));
+  AssertTrue('Double name emitted', Contains(IR, '.ascii "Double"'));
+  P := Pos('# recPrimitive: Double', IR);
+  AssertTrue('Double recPrimitive present', P >= 0);
+  { SubKind must be SK_FLOAT (4) and size 8, in the Double record's payload. }
+  AssertTrue('Double SubKind = 4 (skFloat)',
+    Pos('.byte 4  # SubKind', Copy(IR, P, 220)) >= 0);
+  AssertTrue('Double SizeInBytes = 8',
+    Pos('.byte 8  # SizeInBytes', Copy(IR, P, 220)) >= 0);
+end;
+
+procedure TOPDFTests.TestOPDF_Primitive_Single_SubKindFloat;
+{ Single is the 4-byte float counterpart; same recPrimitive shape, size 4. }
+var
+  IR: string;
+  P:  Integer;
+begin
+  IR := GenOPDF('program P; var S: Single; begin S := 1.5 end.');
+  AssertTrue('recPrimitive Single comment', Contains(IR, '# recPrimitive: Single'));
+  P := Pos('# recPrimitive: Single', IR);
+  AssertTrue('Single recPrimitive present', P >= 0);
+  AssertTrue('Single SubKind = 4 (skFloat)',
+    Pos('.byte 4  # SubKind', Copy(IR, P, 220)) >= 0);
+  AssertTrue('Single SizeInBytes = 4',
+    Pos('.byte 4  # SizeInBytes', Copy(IR, P, 220)) >= 0);
 end;
 
 procedure TOPDFTests.TestOPDF_AnsiStr_Record;
