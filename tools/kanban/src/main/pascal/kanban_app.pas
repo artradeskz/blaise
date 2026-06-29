@@ -67,7 +67,7 @@ begin
     Arg := ParamStr(I);
 
     if (Arg = '--help') or (Arg = '-h') then
-      PrintUsage
+      PrintUsage()
 
     else if Arg = '--add' then
     begin
