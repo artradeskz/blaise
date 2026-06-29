@@ -117,6 +117,11 @@ type
     ConstArraySymbol:  string;      { set by uSemantic — non-empty when this ident resolves
                                       to an array const; the mangled QBE data-label codegen
                                       must reference instead of $Name. }
+    QualifierUnit:     string;      { set by the parser — non-empty when written as a
+                                      unit-qualified reference 'Unit.Symbol'.  uSemantic
+                                      resolves the name against this specific unit's
+                                      exports (per-unit cache) instead of the uses chain,
+                                      so a same-named const in another unit can't shadow it. }
   end;
 
   TFieldAccessExpr = class(TASTExpr)

@@ -38,6 +38,13 @@ type
       the order flips the winner. }
     procedure TestRun_CrossUnitConst_LastWins;
     procedure TestRun_CrossUnitConst_LastWins_Reversed;
+    { Unit-qualified const disambiguation: a 'Unit.Foo' reference resolves
+      against that specific unit's exports, so it is never shadowed by a
+      same-named const in another used unit, regardless of `uses` order. }
+    procedure TestRun_CrossUnitConst_QualifiedDisambig;
+    { Unit-qualified ancestor in a class declaration: class(Unit.TParent)
+      binds to that unit's type so inheritance works across units. }
+    procedure TestRun_QualifiedInheritance;
   end;
 
 implementation
@@ -244,6 +251,72 @@ begin
     CompileAndRunWithUnits(UA_Const, UB_Const, DrvSrc, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('last-in-uses (ua) wins', '100' + LE, Output);
+end;
+
+procedure TE2EUsesChainTests.TestRun_CrossUnitConst_QualifiedDisambig;
+const
+  DrvSrc = '''
+    program P;
+    uses ua, ub;
+    begin
+      WriteLn(ua.Foo);
+      WriteLn(ub.Foo)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { Both ua and ub export `Foo`; qualified references pick each unit's own
+    value (ua.Foo = 100, ub.Foo = 200) independent of the bare last-wins rule. }
+  AssertTrue('compile+link+run',
+    CompileAndRunWithUnits(UA_Const, UB_Const, DrvSrc, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('ua.Foo then ub.Foo', '100' + LE + '200' + LE, Output);
+end;
+
+procedure TE2EUsesChainTests.TestRun_QualifiedInheritance;
+const
+  UnitSrc = '''
+    unit ua;
+    interface
+    type
+      TParent = class
+        function Base: Integer;
+      end;
+    implementation
+    function TParent.Base: Integer;
+    begin
+      Result := 41
+    end;
+    end.
+    ''';
+  DrvSrc = '''
+    program P;
+    uses ua;
+    type
+      TChild = class(ua.TParent)
+        function Plus1: Integer;
+      end;
+    function TChild.Plus1: Integer;
+    begin
+      Result := Base() + 1
+    end;
+    var
+      C: TChild;
+    begin
+      C := TChild.Create();
+      WriteLn(C.Plus1())
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { class(ua.TParent) resolves the qualified ancestor to ua's type; the child
+    inherits Base (41) and adds 1 -> 42. }
+  AssertTrue('compile+link+run',
+    CompileAndRunWithUnit('ua', UnitSrc, DrvSrc, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('inherited Base + 1', '42' + LE, Output);
 end;
 
 initialization

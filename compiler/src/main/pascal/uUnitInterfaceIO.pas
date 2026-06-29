@@ -802,7 +802,8 @@ begin
     Result := EncodeLpstr('nillit')
   else if AE is TIdentExpr then
     Result := EncodeLpstr('id') +
-              EncodeLpstr(TIdentExpr(AE).Name)
+              EncodeLpstr(TIdentExpr(AE).Name) +
+              EncodeLpstr(TIdentExpr(AE).QualifierUnit)
   else if AE is TBinaryExpr then
     Result := EncodeLpstr('bin') +
               EncodeLpstr(IntToStr(Ord(TBinaryExpr(AE).Op))) +
@@ -1494,6 +1495,7 @@ begin
   begin
     IE := TIdentExpr.Create();
     IE.Name := ReadLpstrAt(AText, APos);
+    IE.QualifierUnit := ReadLpstrAt(AText, APos);
     Result := IE;
   end
   else if Kind = 'bin' then

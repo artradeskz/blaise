@@ -493,6 +493,17 @@ type
       the chain without going through the flat global. }
     function FindUnitSymbol(const AUnitName, ASymName: string): TSymbol;
 
+    { Directed lookup — "look in unit AUnit for the symbol AName".
+      This is THE single entry point for every unit-qualified reference
+      'Unit.Symbol' (idents, type names, statement targets): a unit
+      prefix means resolve against that specific unit's exports, never
+      the flat table or the uses chain.  Returns the symbol AUnit
+      exports under AName (of any kind — const/var/type/routine), or nil
+      when AUnit exports no such name.  Consults the per-unit cache
+      first, then the unit's interface as a fallback for symbols not yet
+      harvested into the cache. }
+    function ResolveQualified(const AUnit, AName: string): TSymbol;
+
     { Record one enum member in the reverse index (FEnumMemberIndex).
       Called once per member as its enum type is analysed.  Enum members
       are NOT registered as bare global symbols any more — a bare member
@@ -2367,6 +2378,35 @@ begin
     Result := nil;
 end;
 
+function TSemanticAnalyser.ResolveQualified(const AUnit,
+                                            AName: string): TSymbol;
+begin
+  Result := nil;
+  if (AUnit = '') or (FTable = nil) then Exit;
+
+  { 1. Per-unit cache: direct keyed retrieval — the symbol AUnit defined.
+       This is what disambiguates two units exporting the same name (a
+       collision winner is evicted from the flat table but kept here). }
+  Result := FindUnitSymbol(AUnit, AName);
+  if Result <> nil then Exit;
+
+  { 2. Flat-table fallback: covers paths/harnesses that populate the flat
+       global but not the per-unit cache (the cache is only filled by the
+       driver's RegisterUnitIface loop; the in-process test harness skips
+       it).  Accept the symbol unless it demonstrably belongs to a DIFFERENT
+       unit — same leniency as the LookupViaUsesChain fallback: an empty
+       OwningUnit is treated as a match, a non-empty mismatch is rejected. }
+  FTable.BypassUsesChain := True;
+  try
+    Result := FTable.Lookup(AName);
+  finally
+    FTable.BypassUsesChain := False;
+  end;
+  if (Result <> nil) and (Result.OwningUnit <> '')
+     and not SameText(Result.OwningUnit, AUnit) then
+    Result := nil;
+end;
+
 function TSemanticAnalyser.LookupViaUsesChain(const AName: string): TSymbol;
 var
   I:        Integer;
@@ -3337,6 +3377,16 @@ begin
       DotPos := I;
   if DotPos >= 0 then
   begin
+    { Unit-qualified type 'Unit.TypeName' — directed lookup against that
+      unit's own exports first, so two units declaring the same type name
+      are disambiguated.  Falls back to bare-tail resolution via the uses
+      chain when that unit's per-unit cache has no such type (covers dotted
+      stdlib qualifiers like System.SysUtils.TFoo whose iface key differs
+      from the dotted prefix, and qualified generic instances). }
+    Sym := ResolveQualified(Copy(AName, 0, DotPos),
+                            StrCopyTail(AName, DotPos + 1));
+    if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc <> nil) then
+      Exit(Sym.TypeDesc);
     Result := FindTypeOrInstantiate(StrCopyTail(AName, DotPos + 1));
     Exit;
   end;
@@ -5104,6 +5154,7 @@ var
   CD:     TConstDecl;
   Sym:    TSymbol;
   RefSym: TSymbol;
+  Prev:   TSymbol;
   TD:     TTypeDesc;
   Resolved: string;
   IsSameBlockDup: Boolean;
@@ -5204,13 +5255,20 @@ begin
         SemanticError(Format('Duplicate identifier ''%s''', [CD.Name]), CD.Line, CD.Col);
       end;
       { Cross-unit collision: last-in-uses wins.  Detach the prior unit's
-        const — kept alive via the per-unit cache for qualified access
-        (Unit.Const) — and install this unit's const as the flat winner.
-        Mirrors RegisterConsts on the prebuilt-import path so source-loaded
-        and prebuilt deps behave identically. }
-      FTable.ExtractLocal(CD.Name);
+        const and stash it in the per-unit cache so a qualified reference
+        (Unit.Const) can still reach the shadowed value; install this unit's
+        const as the flat winner.  Mirrors RegisterConsts on the prebuilt-
+        import path so source-loaded and prebuilt deps behave identically. }
+      Prev := FTable.ExtractLocal(CD.Name);
+      if (Prev <> nil) and (Prev.OwningUnit <> '') then
+        RegisterUnitSymbol(Prev.OwningUnit, Prev);
       FTable.Define(Sym);
     end;
+    { Register every interface const in the per-unit cache keyed by its owning
+      unit, so a qualified reference resolves against the declaring unit's own
+      value regardless of which unit won the bare (flat) slot. }
+    if Sym.OwningUnit <> '' then
+      RegisterUnitSymbol(Sym.OwningUnit, Sym);
   end;
 end;
 
@@ -5901,10 +5959,14 @@ begin
         end;
         if TClassTypeDef(TD.Def).ParentName <> '' then
         begin
-          ParentSym := FTable.Lookup(TClassTypeDef(TD.Def).ParentName);
+          { Resolve through the type machinery (not a literal FTable.Lookup) so
+            a unit-qualified ancestor 'Unit.TParent' binds to that unit's type
+            and disambiguates a same-named class in another unit.
+            FindTypeOrInstantiate handles both bare and dotted names. }
+          GenParentDesc := FindTypeOrInstantiate(TClassTypeDef(TD.Def).ParentName);
           { If the first name in class(...) is an interface, not a class,
             treat it as an implements entry — TObject becomes the implicit parent. }
-          if (ParentSym <> nil) and (ParentSym.TypeDesc is TInterfaceTypeDesc) then
+          if (GenParentDesc <> nil) and (GenParentDesc is TInterfaceTypeDesc) then
           begin
             TClassTypeDef(TD.Def).ImplementsNames.Insert(
               0, TClassTypeDef(TD.Def).ParentName);
@@ -5912,12 +5974,12 @@ begin
           end
           else
           begin
-            if (ParentSym = nil) or not (ParentSym.TypeDesc is TRecordTypeDesc) then
+            if (GenParentDesc = nil) or not (GenParentDesc is TRecordTypeDesc) then
               SemanticError(
                 Format('Unknown parent class ''%s'' for ''%s''',
                   [TClassTypeDef(TD.Def).ParentName, TD.Name]),
                 TD.Line, TD.Col);
-            ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
+            ParentRT     := TRecordTypeDesc(GenParentDesc);
             RT.Parent    := ParentRT;
             RT.CopyVTableFrom(ParentRT);
             for K := 0 to ParentRT.Fields.Count - 1 do
@@ -11538,6 +11600,26 @@ begin
       a spurious second ambiguity warning. }
     if TIdentExpr(AExpr).IsConstant and (AExpr.ResolvedType <> nil) then
       Exit(AExpr.ResolvedType);
+    { Unit-qualified reference 'Unit.Symbol' (parser preserved the unit in
+      QualifierUnit).  Resolve via the directed-lookup primitive against
+      that specific unit's exports: a same-named symbol in another used
+      unit cannot shadow it, the uses-chain last-wins rule does not apply,
+      and an explicit qualifier is never shadowed by a class field.  An
+      absent member is a hard error at the qualification site.  No const/
+      var/type special-casing here — it falls through to the shared symbol
+      normalisation below, dispatched on Sym.Kind like any other symbol. }
+    if TIdentExpr(AExpr).QualifierUnit <> '' then
+    begin
+      Sym := ResolveQualified(TIdentExpr(AExpr).QualifierUnit,
+                              TIdentExpr(AExpr).Name);
+      if Sym = nil then
+        SemanticError(Format(
+          'Identifier ''%s'' not declared in unit ''%s''',
+          [TIdentExpr(AExpr).Name, TIdentExpr(AExpr).QualifierUnit]),
+          AExpr.Line, AExpr.Col);
+    end
+    else
+    begin
     { Resolution order (matches AnalyseProcCall / AnalyseFuncCall):
       local vars/params > implicit Self.member > unit-level.  Without
       this priority, a bare identifier inside a method binds to the
@@ -11626,6 +11708,7 @@ begin
         Format('Undeclared identifier ''%s''', [TIdentExpr(AExpr).Name]),
         AExpr.Line, AExpr.Col);
     end;
+    end;  { end else: unqualified resolution (qualified set Sym above) }
     { Var-params and value-record/array params are both passed by reference at
       the QBE ABI level: the local slot holds a pointer, not the aggregate
       bytes.  Codegen must dereference the slot before reading fields. }

@@ -73,7 +73,8 @@ type
     function  PeekLineAt(N: Integer): Integer;
     function  PeekColAt(N: Integer): Integer;
     function  TryCollapseUnitQualifier(var AName: string;
-                                       var ALine, ACol: Integer): Boolean;
+                                       var ALine, ACol: Integer;
+                                       out AUnit: string): Boolean;
     procedure Advance;
     function  PeekKind(): TTokenKind;
     function  PeekKind2(): TTokenKind;  { two tokens ahead }
@@ -324,15 +325,23 @@ end;
   a same-prefixed record/field chain (My.Pkg := x) is left intact — the required
   trailing '.Symbol' is what distinguishes the two. }
 function TParser.TryCollapseUnitQualifier(var AName: string;
-  var ALine, ACol: Integer): Boolean;
+  var ALine, ACol: Integer; out AUnit: string): Boolean;
 var
-  Cand: string;
+  Cand, BestUnit: string;
   Comps, BestComps, J, DotIdx, IdentIdx: Integer;
 begin
   Result := False;
+  AUnit  := '';
+  BestUnit := '';
   Cand := AName;
   Comps := 0;
-  if IsUsedUnit(Cand) then BestComps := 0 else BestComps := -1;
+  if IsUsedUnit(Cand) then
+  begin
+    BestComps := 0;
+    BestUnit  := Cand;
+  end
+  else
+    BestComps := -1;
   { Greedily absorb '.ident' components while the candidate stays a viable unit
     prefix; remember the longest position that is an exact used-unit match. }
   J := 1;
@@ -346,7 +355,11 @@ begin
       Break;
     Cand := Cand + '.' + PeekValueAt(IdentIdx);
     Comps := J;
-    if IsUsedUnit(Cand) then BestComps := Comps;
+    if IsUsedUnit(Cand) then
+    begin
+      BestComps := Comps;
+      BestUnit  := Cand;
+    end;
     Inc(J);
   end;
   if BestComps < 0 then Exit;  { AName does not lead to a used unit }
@@ -359,6 +372,7 @@ begin
   AName := PeekValueAt(IdentIdx);
   ALine := PeekLineAt(IdentIdx);
   ACol  := PeekColAt(IdentIdx);
+  AUnit := BestUnit;
   for J := 1 to IdentIdx + 1 do Advance();  { consume unit name, dot, symbol }
   Result := True;
 end;
@@ -2121,13 +2135,16 @@ begin
     if Check(tkLParen) then
     begin
       Advance();
-      { First name may be a plain class name or a generic interface name like IFoo<T> }
-      Result.ParentName := ParseGenericName();
+      { First name may be a plain class name, a unit-qualified ancestor
+        (Unit.TParent), or a generic interface name like IFoo<T>.  ParseTypeName
+        already absorbs the unit qualifier and (nested) generic arguments, so a
+        qualified ancestor disambiguates a same-named type via the resolver. }
+      Result.ParentName := ParseTypeName();
       { Additional names after a comma are implemented interface names }
       while Check(tkComma) do
       begin
         Advance();
-        Result.ImplementsNames.Add(ParseGenericName());
+        Result.ImplementsNames.Add(ParseTypeName());
       end;
       Expect(tkRParen);
     end;
@@ -2997,6 +3014,7 @@ end;
 function TParser.ParseStmt: TASTStmt;
 var
   Name:        string;
+  QualUnit:    string;  { matched unit from a 'Unit.Symbol' target; unused here }
   Line, Col:   Integer;
   Call:        TProcCall;
   Assign:      TAssignment;
@@ -3156,7 +3174,7 @@ begin
     treats it as an unqualified procedure call or assignment target resolved
     through the uses chain.  No-op (consumes nothing) for a same-prefixed
     record/field chain — see TryCollapseUnitQualifier. }
-  TryCollapseUnitQualifier(Name, Line, Col);
+  TryCollapseUnitQualifier(Name, Line, Col, QualUnit);
 
   if Check(tkLBracket) then
   begin
@@ -4851,6 +4869,7 @@ var
   Inner:      TASTExpr;
   Name:       string;
   SecondName: string;
+  QualUnit:   string;
   Line, Col:  Integer;
   ZeroNode:   TIntLiteral;
   NegNode:    TBinaryExpr;
@@ -4978,8 +4997,10 @@ begin
           so everything below resolves Symbol through the uses chain as an
           unqualified reference — a free call when '(' follows, otherwise a
           plain identifier / indexed / chained / generic access.  No-op for a
-          same-prefixed record/field chain. }
-        TryCollapseUnitQualifier(Name, Line, Col);
+          same-prefixed record/field chain.  QualUnit captures the matched
+          unit so a plain identifier can be resolved against that unit's own
+          exports (see IdNode.QualifierUnit below). }
+        TryCollapseUnitQualifier(Name, Line, Col, QualUnit);
         { Generic constructor: TypeName<Args>.Method  or diamond TypeName<>.Method
           Heuristic: '<' followed by IDENT followed by '>' or ',' is treated as
           generic type args.  '<>' (empty) is the diamond operator — type args
@@ -5231,6 +5252,7 @@ begin
           IdNode.Line := Line;
           IdNode.Col  := Col;
           IdNode.Name := Name;
+          IdNode.QualifierUnit := QualUnit;
           Result := IdNode;
         end;
         { Postfix dereference: Expr^ and optional Expr^.Field chaining }
