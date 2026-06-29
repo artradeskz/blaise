@@ -1612,6 +1612,10 @@ const
         FCount: Integer;
       public
         static function Next: Integer;
+        { Static property whose getter is a static method: exercises
+          TPropertyDecl.IsStatic surviving the .bif round-trip (a non-static
+          import would dispatch with a bogus Self). }
+        static property Counter: Integer read Next;
       public static const
         Tag = 7;
       end;
@@ -1630,6 +1634,7 @@ const
     begin
       WriteLn(TReg.Next());
       WriteLn(TReg.Next());
+      WriteLn(TReg.Counter);
       WriteLn(TReg.Tag)
     end.
     ''';
@@ -1668,7 +1673,7 @@ begin
   AssertEquals('qbe build1 exit (out: ' + Captured + ')', 0, Rc);
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('qbe build1 run exit', 0, Rc);
-  AssertEquals('qbe build1 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured);
+  AssertEquals('qbe build1 stdout', '1' + #10 + '2' + #10 + '3' + #10 + '7' + #10, Captured);
 
   { Build 2 (warm cache): RegModU loaded purely from its cached .bif — the
     static facts must survive the .bif round-trip. }
@@ -1679,7 +1684,7 @@ begin
   AssertEquals('qbe build2 exit (out: ' + Captured + ')', 0, Rc);
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('qbe build2 run exit', 0, Rc);
-  AssertEquals('qbe build2 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured)
+  AssertEquals('qbe build2 stdout', '1' + #10 + '2' + #10 + '3' + #10 + '7' + #10, Captured)
 end;
 
 procedure TSepCompileTests.TestStaticMembers_CrossUnit_Native;
@@ -1715,7 +1720,7 @@ begin
   AssertEquals('native build1 exit (out: ' + Captured + ')', 0, Rc);
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('native build1 run exit', 0, Rc);
-  AssertEquals('native build1 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured);
+  AssertEquals('native build1 stdout', '1' + #10 + '2' + #10 + '3' + #10 + '7' + #10, Captured);
 
   Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
                    '--backend', 'native',
@@ -1724,7 +1729,7 @@ begin
   AssertEquals('native build2 exit (out: ' + Captured + ')', 0, Rc);
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('native build2 run exit', 0, Rc);
-  AssertEquals('native build2 stdout', '1' + #10 + '2' + #10 + '7' + #10, Captured)
+  AssertEquals('native build2 stdout', '1' + #10 + '2' + #10 + '3' + #10 + '7' + #10, Captured)
 end;
 
 initialization
