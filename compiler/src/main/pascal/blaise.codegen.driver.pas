@@ -98,6 +98,11 @@ type
                                    runtime.start.static.<os>) replaces libc; the
                                    linker emits a non-PIE ET_EXEC with no
                                    PT_INTERP.  docs/linux-syscall-migration.adoc }
+    LinkLibs: TStringList;       { extra libraries to link (-l<name>), unioned by
+                                   the frontend from the program's and its used
+                                   units' 'external ''lib''' declarations
+                                   (TUnitInterface.LinkLibs).  nil = none.  Owned;
+                                   ARC-released with the opts object. }
   end;
 
   TBackendDriver = class
@@ -631,6 +636,12 @@ begin
       Args.Add(RTLObjs.Strings[I]);
     Args.Add('-lm');       { math functions (sqrt, sin, cos, etc.) }
     Args.Add('-lpthread'); { POSIX threads (blaise_thread unit) }
+    { Libraries declared via 'external ''lib''' in the program or any used unit
+      (unioned by the frontend into AOpts.LinkLibs).  Emitted as -l<name> — ld
+      expands to lib<name>.so/.a.  Additive to the always-needed -lm/-lpthread. }
+    if AOpts.LinkLibs <> nil then
+      for I := 0 to AOpts.LinkLibs.Count - 1 do
+        Args.Add('-l' + AOpts.LinkLibs.Strings[I]);
     ExitCode := RunProcess(Self.ToolPath('linker', AOpts.Target), Args, Msg);
   finally
     RTLObjs.Free();

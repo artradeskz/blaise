@@ -197,6 +197,16 @@ var
 begin
   Result := '';
 
+  { The internal linker links only Blaise ELF objects (+ the source-built RTL);
+    it has no concept of -l<name> system libraries.  A program that declares an
+    `external 'lib'` dependency therefore cannot be linked this way — fail loudly
+    rather than silently drop the library and emit a binary with unresolved
+    symbols.  Use the external toolchain linker (the default) for such programs. }
+  if (AOpts.LinkLibs <> nil) and (AOpts.LinkLibs.Count > 0) then
+    Exit('internal linker cannot resolve external library ''' +
+      AOpts.LinkLibs.Strings[0] +
+      ''' (from an ''external ''''lib'''''' declaration); use --linker external');
+
   { Build the linker with the resolved target's TLinkTarget so the emitted ELF
     carries the right EI_OSABI / machine / load base for AOpts.Target — without
     this the internal linker always produced a Linux-shaped ELF regardless of

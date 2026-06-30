@@ -502,6 +502,7 @@ var
                                any ExportUnitInterface bugs against real
                                codebases. }
   I:        Integer;
+  J:        Integer;
   IR:       string;
   IRFile:   string;
   LinkErr:  string;      { Driver.LinkProgram result ('' on success) }
@@ -1055,6 +1056,22 @@ begin
         if PrebuiltObjPaths.IndexOf(Loader.LinkOnlyObjects.Strings[I]) < 0 then
           PrebuiltObjPaths.Add(Loader.LinkOnlyObjects.Strings[I]);
     end;
+    { Capture link-library deps (-l<name>) off the program AST and every used
+      unit's interface before Prog/Loader are freed below — the link step runs
+      after this finally block.  Unioned into Opts.LinkLibs; the driver emits one
+      -l<name> each, additive to the RTL's -lm/-lpthread. }
+    if Opts.LinkLibs = nil then Opts.LinkLibs := TStringList.Create();
+    if (Prog <> nil) and (Prog.LinkLibs <> nil) then
+      for I := 0 to Prog.LinkLibs.Count - 1 do
+        if Opts.LinkLibs.IndexOf(TLinkLibDecl(Prog.LinkLibs.Items[I]).LibName) < 0 then
+          Opts.LinkLibs.Add(TLinkLibDecl(Prog.LinkLibs.Items[I]).LibName);
+    if Loader <> nil then
+      for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
+        for J := 0 to TUnitInterface(Loader.PrebuiltIfaces.Items[I]).LinkLibs.Count - 1 do
+          if Opts.LinkLibs.IndexOf(
+               TUnitInterface(Loader.PrebuiltIfaces.Items[I]).LinkLibs.Strings[J]) < 0 then
+            Opts.LinkLibs.Add(
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).LinkLibs.Strings[J]);
     Units.Free();
     Loader.Free();
     SearchPaths.Free();

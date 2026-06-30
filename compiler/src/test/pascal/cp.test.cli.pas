@@ -75,6 +75,14 @@ type
     procedure TestEmitAsm_WithExplicitQbeBackend_Rejected;
     procedure TestEmitIr_WithoutBackend_StillWorks;
     procedure TestEmitIr_WithExplicitQbeBackend_StillWorks;
+    { ---- external 'lib' propagates a -l<name> to the real link command ---- }
+    { A program declaring `external 'lib'` for a NON-EXISTENT library must fail
+      the link with the linker's "cannot find -l<lib>" — which only happens if
+      the driver actually emitted -l<lib>.  The e2e harness can't test this (it
+      links with a hardcoded `cc ... -lm -lpthread` and never calls
+      LinkViaToolchain), so this drives the real compiler binary end to end. }
+    procedure TestExternalLib_MissingLib_FailsLink_QBE;
+    procedure TestExternalLib_MissingLib_FailsLink_Native;
     { ---- div/mod by zero raises a catchable EDivByZero (needs stdlib) ---- }
     procedure TestDivByZeroCaught_QBE;
     procedure TestDivByZeroCaught_Native;
@@ -556,6 +564,52 @@ const
     '    on E: EDivByZero do WriteLn(''mod caught'')' + LineEnding +
     '  end' + LineEnding +
     'end.';
+
+const
+  { Declares an external from a library that does not exist.  The function is
+    never called, but the parser collects the library into Prog.LinkLibs at
+    parse time, so the driver must still emit -lnosuchlib_blaise_xyz on the link
+    line — which the system linker then rejects.  If the -l<name> propagation
+    were broken (no flag emitted), the link would SUCCEED. }
+  SrcMissingExternalLib =
+    'program P;' + LineEnding +
+    'function f(X: Integer): Integer;' +
+    ' external ''nosuchlib_blaise_xyz'' name ''nope'';' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(''unreached'')' + LineEnding +
+    'end.';
+
+procedure TCLIContractTests.TestExternalLib_MissingLib_FailsLink_QBE;
+var SrcPath, BinPath, Out_: string; EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  SrcPath := WriteScratchSource(SrcMissingExternalLib);
+  BinPath := FScratch + 'cli_misslib_qbe_' + IntToStr(FCounter);
+  EC := RunCompiler(['--source', SrcPath, '--backend', 'qbe',
+    '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
+    '--output', BinPath], Out_);
+  AssertTrue('link must fail (missing library)', EC <> 0);
+  AssertTrue('linker reports the -l<name> it could not find',
+    Pos('nosuchlib_blaise_xyz', Out_) >= 0);
+end;
+
+procedure TCLIContractTests.TestExternalLib_MissingLib_FailsLink_Native;
+var SrcPath, BinPath, Out_: string; EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  SrcPath := WriteScratchSource(SrcMissingExternalLib);
+  BinPath := FScratch + 'cli_misslib_nat_' + IntToStr(FCounter);
+  { --linker external: the internal linker cannot resolve -l<name> system
+    libraries (it errors out separately); the toolchain linker is what emits
+    and consumes -l<name>. }
+  EC := RunCompiler(['--source', SrcPath, '--backend', 'native',
+    '--linker', 'external',
+    '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
+    '--output', BinPath], Out_);
+  AssertTrue('link must fail (missing library)', EC <> 0);
+  AssertTrue('linker reports the -l<name> it could not find',
+    Pos('nosuchlib_blaise_xyz', Out_) >= 0);
+end;
 
 procedure TCLIContractTests.TestDivByZeroCaught_QBE;
 var Out_: string; EC: Integer;
