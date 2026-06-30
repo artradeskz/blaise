@@ -738,8 +738,17 @@ QualIdent
 ArrayType
     = ARRAY LBRACKET ArrayBound DOTDOT ArrayBound
             { COMMA ArrayBound DOTDOT ArrayBound } RBRACKET OF TypeName
-    | ARRAY LBRACKET IDENT RBRACKET OF TypeName   (* ordinal/enum-indexed *)
+    | ARRAY LBRACKET IDENT RBRACKET OF TypeName   (* ordinal-indexed *)
     ;
+
+(* The IDENT form names an ORDINAL index type.  Two ordinal kinds are admitted:
+ *   - an enumeration type (array[TColor] of T folds to array[0..N-1] of T,
+ *     where N is the member count), and
+ *   - a NAMED integer subrange (type TIdx = lo..hi;  array[TIdx] of T folds to
+ *     array[lo..hi] of T).  The subrange supplies only the index range; the
+ *     values it yields remain ordinary unchecked integers of the subrange's
+ *     underlying storage type.
+ * See language-rationale.adoc "Array index types". *)
 
 ArrayBound
     = ConstArithExpr

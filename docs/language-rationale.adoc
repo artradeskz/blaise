@@ -1154,6 +1154,9 @@ Blaise supports fixed-size, stack-allocated arrays declared as
 | `array[TEnum] of T` — enum-type index
 | Supported
 
+| `array[TSubrange] of T` — named integer-subrange index
+| Supported. The subrange (`type TIdx = lo..hi;`) supplies the index range, so `array[TIdx] of T` folds to `array[lo..hi] of T`; the subrange's values remain ordinary unchecked integers of its underlying storage type.
+
 | `array[L..H, M..N] of T` — multi-dimensional
 | Supported
 
