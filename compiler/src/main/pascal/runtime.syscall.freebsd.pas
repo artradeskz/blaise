@@ -83,6 +83,17 @@ function mmap(Addr: Pointer; Length: Int64; Prot, Flags, Fd: Integer;
              Offset: Int64): Pointer;
 function munmap(Addr: Pointer; Length: Int64): Integer;
 
+{ mremap(old, oldsz, newsz, flags): FreeBSD has NO in-place remap syscall, so
+  this is a stub that always reports failure (MAP_FAILED = -1).  runtime.mem's
+  large-realloc path already treats an mremap failure as "grow the slow way":
+  it allocates a fresh region, memcpy's the old contents across, and frees the
+  old one (see the MapFailed fall-through in _BlaiseReallocMem).  Exporting the
+  `mremap` symbol as a failing stub therefore gives the allocator its no-mremap
+  grow fallback with no allocator changes.  Signature matches the Linux leaf so
+  runtime.mem's `external name 'mremap'` binds on both targets. }
+function mremap(OldAddr: Pointer; OldSize, NewSize: Int64; Flags: Integer;
+               NewAddr: Pointer): Pointer;
+
 { Time. }
 function nanosleep(Req, Rem: Pointer): Integer;
 function clock_gettime(ClockId: Integer; Ts: Pointer): Integer;
@@ -93,6 +104,9 @@ function execve(Path: PChar; Argv, Envp: Pointer): Integer;
 function wait4(Pid: Integer; Status: Pointer; Options: Integer;
                Rusage: Pointer): Integer;
 function kill(Pid, Sig: Integer): Integer;
+{ getrandom(buf, count, flags): fill buf with count random bytes; returns the
+  count written or -errno.  Used by mkstemp's random suffix. }
+function getrandom(Buf: Pointer; Count: Int64; Flags: Integer): Int64;
 { Raw __getcwd(2): fills Buf (up to Size); returns 0 on success or -errno.  The
   wrapper in the posix layer adapts that to libc's buffer-pointer contract. }
 function sys_getcwd(Buf: PChar; Size: Int64): Int64;
@@ -134,6 +148,7 @@ const
   SYS_mkdir         = 136;
   SYS_rmdir         = 137;
   SYS_getcwd        = 326;   { __getcwd }
+  SYS_getrandom     = 563;
   SYS_clock_gettime = 232;
   SYS_nanosleep     = 240;
   SYS_mmap          = 477;   { ino64 (legacy freebsd6 mmap = 197) }
@@ -360,6 +375,14 @@ asm
     ret
 end;
 
+{ mremap: no FreeBSD in-place-remap syscall.  Always return MAP_FAILED (-1) so
+  the allocator takes its alloc-new-copy-free fallback (see the interface note). }
+function mremap(OldAddr: Pointer; OldSize, NewSize: Int64; Flags: Integer;
+               NewAddr: Pointer): Pointer;
+begin
+  Result := Pointer(-1);
+end;
+
 function nanosleep(Req, Rem: Pointer): Integer;
   assembler; nostackframe;
 asm
@@ -426,6 +449,17 @@ asm
     jae  .Lok_kill
     negq %rax
 .Lok_kill:
+    ret
+end;
+
+function getrandom(Buf: Pointer; Count: Int64; Flags: Integer): Int64;
+  assembler; nostackframe;
+asm
+    movq $563, %rax          { SYS_getrandom }
+    syscall
+    jae  .Lok_getrandom
+    negq %rax
+.Lok_getrandom:
     ret
 end;
 

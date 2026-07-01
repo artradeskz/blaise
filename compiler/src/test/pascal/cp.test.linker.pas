@@ -92,6 +92,11 @@ type
       CF-error-translation idiom (jae + negq).  Standalone — no FreeBSD
       emulation, header/byte shape only. }
     procedure TestLink_FreeBSDSyscallLeaf_SymbolsAndNumbers;
+    { Step 4b: the FreeBSD leaf additions — getrandom uses the FreeBSD number
+      (563, not Linux's 318) and the mremap stub is a plain function that returns
+      MAP_FAILED (-1) so runtime.mem takes its alloc-copy-free grow fallback (no
+      in-place remap syscall on FreeBSD).  Standalone byte/symbol shape. }
+    procedure TestLink_FreeBSDSyscallLeaf_GetrandomAndMremapStub;
   end;
 
   TDynLinkerTests = class(TTestCase)
@@ -1207,6 +1212,62 @@ begin
   { mmap's arg4 shuffle: movq %rcx, %r10 (49 89 CA). }
   AssertTrue('movq %rcx,%r10 (mmap arg4) present',
     Pos(Chr($49) + Chr($89) + Chr($CA), Bytes) >= 0);
+end;
+
+procedure TLinkerE2ETests.TestLink_FreeBSDSyscallLeaf_GetrandomAndMremapStub;
+const
+  { getrandom is a raw syscall with the FreeBSD number 563 (Linux's is 318).
+    mremap has no FreeBSD syscall, so the leaf's stub just returns MAP_FAILED
+    (-1) — a mov of -1 into %rax then ret; runtime.mem's realloc path treats
+    that as "grow the slow way".  A leading _start keeps the entry resolvable. }
+  FixtureAsm =
+    '.text' + LineEnding +
+    '.globl _start' + LineEnding +
+    '_start:' + LineEnding +
+    '  callq getrandom' + LineEnding +
+    '  callq mremap' + LineEnding +
+    '  xorl %edi, %edi' + LineEnding +
+    '  movq $1, %rax' + LineEnding +        { SYS_exit }
+    '  syscall' + LineEnding +
+    '  hlt' + LineEnding +
+    '.globl getrandom' + LineEnding +
+    'getrandom:' + LineEnding +
+    '  movq $563, %rax' + LineEnding +      { SYS_getrandom (FreeBSD) }
+    '  syscall' + LineEnding +
+    '  jae .Lok_gr' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_gr:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl mremap' + LineEnding +
+    'mremap:' + LineEnding +
+    '  movq $-1, %rax' + LineEnding +       { MAP_FAILED — no FreeBSD mremap }
+    '  ret' + LineEnding;
+  function MovRaxImm4b(AImm: Integer): string;
+  begin
+    Result := Chr($48) + Chr($C7) + Chr($C0) +
+              Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
+              Chr((AImm shr 16) and $FF) + Chr((AImm shr 24) and $FF);
+  end;
+var
+  Lk: TLinker;
+  Obj: TElfObjectFile;
+  Bytes: string;
+begin
+  Lk := TLinker.Create(FreeBSDX86_64Target());
+  try
+    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbsys2.o');
+    Lk.AddOwnedObject(Obj);
+    Bytes := Lk.LinkToBytes('_start');
+    AssertTrue('getrandom defined', Lk.AddrOfSymbol('getrandom') > 0);
+    AssertTrue('mremap defined',    Lk.AddrOfSymbol('mremap') > 0);
+  finally
+    Lk.Free();
+  end;
+  { getrandom uses the FreeBSD number 563 — NOT Linux's 318. }
+  AssertTrue('SYS_getrandom=563 movq imm present', Pos(MovRaxImm4b(563), Bytes) >= 0);
+  AssertTrue('Linux SYS_getrandom=318 NOT present', Pos(MovRaxImm4b(318), Bytes) < 0);
+  { mremap stub loads -1 (movq $-1,%rax = 48 C7 C0 FF FF FF FF). }
+  AssertTrue('mremap stub returns -1 (MAP_FAILED)', Pos(MovRaxImm4b(-1), Bytes) >= 0);
 end;
 
 { ---- TDynLinkerTests ---- }
