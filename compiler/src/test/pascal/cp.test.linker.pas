@@ -85,6 +85,13 @@ type
       PT_INTERP — the Strategy-B shape a cross-compiled FreeBSD binary needs.
       Asserts header shape only (it cannot run on the Linux host). }
     procedure TestLink_FreeBSDStart_StaticExecShape;
+    { Step 4a: a fixture that mirrors the runtime.syscall.freebsd file/process
+      leaves (open/read/write/mmap/stat) links under the FreeBSD target with the
+      bare POSIX symbols DEFINED, and the linked .text carries the FreeBSD
+      ino64 syscall NUMBERS (open=5, write=4, mmap=477, fstatat=552) plus the
+      CF-error-translation idiom (jae + negq).  Standalone — no FreeBSD
+      emulation, header/byte shape only. }
+    procedure TestLink_FreeBSDSyscallLeaf_SymbolsAndNumbers;
   end;
 
   TDynLinkerTests = class(TTestCase)
@@ -1088,6 +1095,118 @@ begin
     if PType = 3 then FoundInterp := True;
   end;
   AssertTrue('static ET_EXEC must have no PT_INTERP', not FoundInterp);
+end;
+
+procedure TLinkerE2ETests.TestLink_FreeBSDSyscallLeaf_SymbolsAndNumbers;
+const
+  { Mirrors the runtime.syscall.freebsd leaf bodies byte-for-byte (a handful of
+    representative leaves): each is `movq $N, %rax; syscall; jae ok; negq %rax;
+    ok: ret`, with mmap's `movq %rcx, %r10` and stat lowered to
+    fstatat(AT_FDCWD, path, buf, 0).  Names are the bare POSIX symbols posix
+    imports.  A leading _start keeps the linker's entry resolvable. }
+  FixtureAsm =
+    '.text' + LineEnding +
+    '.globl _start' + LineEnding +
+    '_start:' + LineEnding +
+    '  callq open' + LineEnding +
+    '  callq read' + LineEnding +
+    '  callq write' + LineEnding +
+    '  callq mmap' + LineEnding +
+    '  callq stat' + LineEnding +
+    '  xorl %edi, %edi' + LineEnding +
+    '  movq $1, %rax' + LineEnding +        { SYS_exit }
+    '  syscall' + LineEnding +
+    '  hlt' + LineEnding +
+    '.globl open' + LineEnding +
+    'open:' + LineEnding +
+    '  movq $5, %rax' + LineEnding +        { SYS_open }
+    '  syscall' + LineEnding +
+    '  jae .Lok_open' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_open:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl read' + LineEnding +
+    'read:' + LineEnding +
+    '  movq $3, %rax' + LineEnding +        { SYS_read }
+    '  syscall' + LineEnding +
+    '  jae .Lok_read' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_read:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl write' + LineEnding +
+    'write:' + LineEnding +
+    '  movq $4, %rax' + LineEnding +        { SYS_write }
+    '  syscall' + LineEnding +
+    '  jae .Lok_write' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_write:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl mmap' + LineEnding +
+    'mmap:' + LineEnding +
+    '  movq %rcx, %r10' + LineEnding +
+    '  movq $477, %rax' + LineEnding +      { SYS_mmap (ino64) }
+    '  syscall' + LineEnding +
+    '  jae .Lok_mmap' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_mmap:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl stat' + LineEnding +
+    'stat:' + LineEnding +
+    '  movq %rsi, %rdx' + LineEnding +
+    '  movq %rdi, %rsi' + LineEnding +
+    '  movq $-100, %rdi' + LineEnding +     { AT_FDCWD }
+    '  xorq %r10, %r10' + LineEnding +
+    '  movq $552, %rax' + LineEnding +      { SYS_fstatat (ino64) }
+    '  syscall' + LineEnding +
+    '  jae .Lok_stat' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_stat:' + LineEnding +
+    '  ret' + LineEnding;
+  { Encoded `movq $imm32, %rax` = 48 C7 C0 <imm32-LE>.  These byte strings must
+    appear in the linked .text if the correct syscall number was emitted. }
+  function MovRaxImm(AImm: Integer): string;
+  begin
+    Result := Chr($48) + Chr($C7) + Chr($C0) +
+              Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
+              Chr((AImm shr 16) and $FF) + Chr((AImm shr 24) and $FF);
+  end;
+var
+  Lk: TLinker;
+  Obj: TElfObjectFile;
+  Bytes: string;
+begin
+  Lk := TLinker.Create(FreeBSDX86_64Target());
+  try
+    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbsys.o');
+    Lk.AddOwnedObject(Obj);
+    Bytes := Lk.LinkToBytes('_start');
+
+    { 1. The bare POSIX leaf symbols must be DEFINED (non-zero address). }
+    AssertTrue('open defined',  Lk.AddrOfSymbol('open') > 0);
+    AssertTrue('read defined',  Lk.AddrOfSymbol('read') > 0);
+    AssertTrue('write defined', Lk.AddrOfSymbol('write') > 0);
+    AssertTrue('mmap defined',  Lk.AddrOfSymbol('mmap') > 0);
+    AssertTrue('stat defined',  Lk.AddrOfSymbol('stat') > 0);
+  finally
+    Lk.Free();
+  end;
+
+  { 2. FreeBSD ino64 syscall NUMBERS present in the linked .text as the
+    `movq $N, %rax` encoding — NOT Linux's numbers. }
+  AssertTrue('SYS_open=5 movq imm present',   Pos(MovRaxImm(5), Bytes) >= 0);
+  AssertTrue('SYS_read=3 movq imm present',   Pos(MovRaxImm(3), Bytes) >= 0);
+  AssertTrue('SYS_write=4 movq imm present',  Pos(MovRaxImm(4), Bytes) >= 0);
+  AssertTrue('SYS_mmap=477 movq imm present', Pos(MovRaxImm(477), Bytes) >= 0);
+  AssertTrue('SYS_fstatat=552 movq imm present (stat via fstatat)',
+    Pos(MovRaxImm(552), Bytes) >= 0);
+
+  { 3. The CF-error-translation idiom: negq %rax (48 F7 D8) must appear.  This
+    is the FreeBSD-specific errno translation the Linux leaf does not emit. }
+  AssertTrue('negq %rax (CF translation) present',
+    Pos(Chr($48) + Chr($F7) + Chr($D8), Bytes) >= 0);
+  { mmap's arg4 shuffle: movq %rcx, %r10 (49 89 CA). }
+  AssertTrue('movq %rcx,%r10 (mmap arg4) present',
+    Pos(Chr($49) + Chr($89) + Chr($CA), Bytes) >= 0);
 end;
 
 { ---- TDynLinkerTests ---- }
