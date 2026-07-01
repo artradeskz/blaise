@@ -391,6 +391,20 @@ links the `_start` fixture with the FreeBSD target and asserts the static
 
 === Step 4 — FreeBSD syscall leaf (the libc-replacement work)
 
+NOTE: Done (4a/4b/4c).  4a: the file/process leaves grew in
+`runtime.syscall.freebsd` with the FreeBSD ino64 syscall numbers and the
+carry-flag -> -errno translation.  4b: `getrandom` + an `mremap`-failure stub
+(the allocator already falls back to alloc-copy-free), and
+`runtime.libc2.freebsd` (atexit/exit/abort/date-math/mkstemp/system) — with
+`memcpy/memset/memcmp/strlen` and the x86-64 `jmp_buf` reused unchanged as
+target-invariant.  4c: `thr_new`/`_umtx_op`/`thr_exit`/`sysarch` leaves, the
+FreeBSD `%fs`-base TLS setup in `runtime.start.static.freebsd`, and the new
+`runtime.thread.static.freebsd` (pthread_* on thr_new + _umtx_op).  All units
+are standalone (nothing in the Linux build graph uses them), so the Linux
+self-host is untouched; verified via the four fixpoints, the full suite, and the
+`cp.test.linker` FreeBSD fixtures.  End-to-end execution under emulation is
+Step 8.
+
 * Provide a FreeBSD syscall trampoline as inline-assembly Pascal stubs (the RTL
   is now pure Pascal with `asm … end` bodies — there are no `.s` files; this
   mirrors the Linux direct-syscall leaf `runtime.syscall.linux.pas` already
