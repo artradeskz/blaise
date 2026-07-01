@@ -247,6 +247,22 @@ type
 function RunProcess(const AExe: string; AArgs: TStringList;
   out AOutput: string): Integer;
 
+{ Build the leaf-first RTL unit list for a target.  The base list is shared;
+  the OS-specific bits are selected from AOS:
+
+    * the platform-layout adapter (rtl.platform.layout.<os>), and
+    * for a --static (freestanding, no-libc) link, the kernel leaf that
+      replaces libc — the freestanding runtime.start.static.<os> in place of
+      the libc runtime.start, plus runtime.syscall.<os> / runtime.libc.<os> /
+      runtime.libc2.<os> / runtime.thread.static.<os> and the OS-invariant
+      runtime.cstub.
+
+  A dynamic (libc) link keeps the plain list with only the layout adapter
+  swapped.  Exposed for unit testing; EnsureRTLObjects drives it off
+  AOpts.Static and AOpts.Target.OS.  Caller owns and frees the result. }
+function BuildRTLUnitList(AStatic: Boolean;
+  AOS: TTargetOS): TStringList;
+
 { Format one --help flag line with the shared 2-space indent and flag
   column.  Single source of truth for the column width so the common
   usage block (Blaise.pas PrintUsage) and each driver's DescribeOptions
@@ -433,6 +449,50 @@ const
     'runtime.weak', 'runtime.float', 'runtime.thread', 'runtime.exc',
     'rtl.platform.layout.linux', 'rtl.platform.posix');
 
+{ Lower-case OS suffix used in the OS-specific RTL unit names
+  (rtl.platform.layout.<os>, runtime.syscall.<os>, …). }
+function RTLOSSuffix(AOS: TTargetOS): string;
+begin
+  case AOS of
+    osFreeBSD: Result := 'freebsd';
+  else
+    { Linux is the default host leaf; other OSes gain their own suffix as
+      their adapter set lands. }
+    Result := 'linux';
+  end;
+end;
+
+function BuildRTLUnitList(AStatic: Boolean; AOS: TTargetOS): TStringList;
+var
+  I: Integer;
+  OS: string;
+begin
+  OS := RTLOSSuffix(AOS);
+  Result := TStringList.Create();
+  { The base list, in leaf-first order.  Two OS-specific substitutions:
+    the platform-layout adapter always follows the target, and for a --static
+    link the libc entry point (runtime.start) is replaced by the freestanding
+    per-OS start.  A dynamic link keeps runtime.start. }
+  for I := 0 to High(RTL_UNITS) do
+    if SameText(RTL_UNITS[I], 'rtl.platform.layout.linux') then
+      Result.Add('rtl.platform.layout.' + OS)
+    else if AStatic and SameText(RTL_UNITS[I], 'runtime.start') then
+      Result.Add('runtime.start.static.' + OS)
+    else
+      Result.Add(RTL_UNITS[I]);
+  { The freestanding kernel leaf that replaces libc under --static: the raw
+    syscall stubs, the OS-invariant freestanding C functions (runtime.cstub),
+    the libc-shim layers, and the static-TLS thread leaf. }
+  if AStatic then
+  begin
+    Result.Add('runtime.syscall.' + OS);
+    Result.Add('runtime.cstub');
+    Result.Add('runtime.libc.' + OS);
+    Result.Add('runtime.libc2.' + OS);
+    Result.Add('runtime.thread.static.' + OS);
+  end;
+end;
+
 function TBackendDriver.EnsureRTLObjects(AOpts: TBackendOpts;
   AIncludeStartup: Boolean; AAlreadyProvided, AObjPaths: TStringList): string;
 var
@@ -492,25 +552,12 @@ begin
   ForceDirectories(BuildDir);
   BlaiseBin := ParamStr(0);
 
-  { The unit list to build/link, in leaf-first order.  For a --static link the
-    kernel leaf replaces libc: drop runtime.start (libc/__libc_start_main entry)
-    in favour of the freestanding runtime.start.static.<os>, and add the raw
-    syscall stubs (runtime.syscall.<os>) + the freestanding C functions
-    (runtime.cstub).  A dynamic (libc) link uses the plain RTL_UNITS. }
-  Units := TStringList.Create();
-  for I := 0 to High(RTL_UNITS) do
-    if AOpts.Static and SameText(RTL_UNITS[I], 'runtime.start') then
-      Units.Add('runtime.start.static.linux')
-    else
-      Units.Add(RTL_UNITS[I]);
-  if AOpts.Static then
-  begin
-    Units.Add('runtime.syscall.linux');
-    Units.Add('runtime.cstub');
-    Units.Add('runtime.libc.linux');
-    Units.Add('runtime.libc2.linux');
-    Units.Add('runtime.thread.static.linux');
-  end;
+  { The unit list to build/link, in leaf-first order.  Selection is driven off
+    the target (AOpts.Target.OS) and link mode (AOpts.Static): the platform
+    layout adapter follows the target, and a --static link swaps in the
+    freestanding per-OS kernel leaf (start / syscall / libc shims / thread) in
+    place of libc.  See BuildRTLUnitList. }
+  Units := BuildRTLUnitList(AOpts.Static, AOpts.Target.OS);
 
   for I := 0 to Units.Count - 1 do
   begin

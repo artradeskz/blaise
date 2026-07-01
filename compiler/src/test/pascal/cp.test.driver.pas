@@ -22,12 +22,24 @@ interface
 uses
   SysUtils, Classes, blaise.testing,
   blaise.codegen.driver,
+  blaise.codegen.target,          { TTargetOS: osLinux / osFreeBSD }
   blaise.codegen.qbe.driver,      { registers the QBE driver }
   blaise.codegen.native.driver;   { registers the native driver }
 
 type
   TBackendDriverContractTests = class(TTestCase)
+  private
+    function ListContains(AList: TStringList; const AName: string): Boolean;
   published
+    { Per-target RTL unit-list selection (FreeBSD Step 5).  BuildRTLUnitList is
+      the pure selection helper EnsureRTLObjects drives off AOpts.Static +
+      AOpts.Target.OS; these assert Linux vs FreeBSD swaps without invoking the
+      whole compile+link pipeline. }
+    procedure TestRTLUnits_LinuxDynamic_UsesLinuxLayout;
+    procedure TestRTLUnits_LinuxStatic_SwapsLinuxLeaf;
+    procedure TestRTLUnits_FreeBSDStatic_SwapsFreeBSDLeaf;
+    procedure TestRTLUnits_FreeBSDStatic_NoLinuxLeaf;
+
     { ClaimsEmitIR selection policy. }
     procedure TestQBE_ClaimsEmitIR_True;
     procedure TestNative_ClaimsEmitIR_False;
@@ -53,6 +65,107 @@ type
   end;
 
 implementation
+
+function TBackendDriverContractTests.ListContains(AList: TStringList;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to AList.Count - 1 do
+    if SameText(AList.Strings[I], AName) then
+      Exit(True);
+end;
+
+procedure TBackendDriverContractTests.TestRTLUnits_LinuxDynamic_UsesLinuxLayout;
+var
+  U: TStringList;
+begin
+  { A dynamic (libc) Linux link keeps the plain RTL list: the Linux layout
+    adapter is present and no freestanding kernel leaf is pulled in. }
+  U := BuildRTLUnitList(False, osLinux);
+  try
+    AssertTrue('linux layout present',
+      ListContains(U, 'rtl.platform.layout.linux'));
+    AssertFalse('no static start in dynamic mode',
+      ListContains(U, 'runtime.start.static.linux'));
+    AssertFalse('no syscall leaf in dynamic mode',
+      ListContains(U, 'runtime.syscall.linux'));
+  finally
+    U.Free();
+  end;
+end;
+
+procedure TBackendDriverContractTests.TestRTLUnits_LinuxStatic_SwapsLinuxLeaf;
+var
+  U: TStringList;
+begin
+  { A --static Linux link swaps runtime.start for the freestanding
+    runtime.start.static.linux and adds the Linux syscall/cstub/libc leaf. }
+  U := BuildRTLUnitList(True, osLinux);
+  try
+    AssertTrue('freestanding start present',
+      ListContains(U, 'runtime.start.static.linux'));
+    AssertFalse('libc start dropped',
+      ListContains(U, 'runtime.start'));
+    AssertTrue('linux syscall leaf present',
+      ListContains(U, 'runtime.syscall.linux'));
+    AssertTrue('linux libc2 present',
+      ListContains(U, 'runtime.libc2.linux'));
+    AssertTrue('linux static thread leaf present',
+      ListContains(U, 'runtime.thread.static.linux'));
+    AssertTrue('linux layout present',
+      ListContains(U, 'rtl.platform.layout.linux'));
+  finally
+    U.Free();
+  end;
+end;
+
+procedure TBackendDriverContractTests.TestRTLUnits_FreeBSDStatic_SwapsFreeBSDLeaf;
+var
+  U: TStringList;
+begin
+  { A --static FreeBSD link selects the FreeBSD adapter set: the FreeBSD
+    layout, freestanding start, syscall leaf, libc2 and static thread leaf. }
+  U := BuildRTLUnitList(True, osFreeBSD);
+  try
+    AssertTrue('freebsd layout present',
+      ListContains(U, 'rtl.platform.layout.freebsd'));
+    AssertTrue('freebsd freestanding start present',
+      ListContains(U, 'runtime.start.static.freebsd'));
+    AssertTrue('freebsd syscall leaf present',
+      ListContains(U, 'runtime.syscall.freebsd'));
+    AssertTrue('freebsd libc2 present',
+      ListContains(U, 'runtime.libc2.freebsd'));
+    AssertTrue('freebsd static thread leaf present',
+      ListContains(U, 'runtime.thread.static.freebsd'));
+  finally
+    U.Free();
+  end;
+end;
+
+procedure TBackendDriverContractTests.TestRTLUnits_FreeBSDStatic_NoLinuxLeaf;
+var
+  U: TStringList;
+begin
+  { The FreeBSD list must contain NO Linux-specific RTL unit — the whole point
+    of the per-target swap. }
+  U := BuildRTLUnitList(True, osFreeBSD);
+  try
+    AssertFalse('no linux layout',
+      ListContains(U, 'rtl.platform.layout.linux'));
+    AssertFalse('no linux start',
+      ListContains(U, 'runtime.start.static.linux'));
+    AssertFalse('no linux syscall leaf',
+      ListContains(U, 'runtime.syscall.linux'));
+    AssertFalse('no linux libc2',
+      ListContains(U, 'runtime.libc2.linux'));
+    AssertFalse('no linux static thread leaf',
+      ListContains(U, 'runtime.thread.static.linux'));
+  finally
+    U.Free();
+  end;
+end;
 
 procedure TBackendDriverContractTests.TestQBE_ClaimsEmitIR_True;
 begin
