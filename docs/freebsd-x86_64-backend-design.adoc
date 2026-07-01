@@ -426,6 +426,18 @@ Step 8.
 
 === Step 5 — Per-target RTL
 
+NOTE: Done. `BuildRTLUnitList(AStatic, AOS)` (`blaise.codegen.driver`) is the
+pure, unit-tested selection helper `EnsureRTLObjects` drives off `AOpts.Static`
+and `AOpts.Target.OS`. The platform-layout adapter follows the target
+(`rtl.platform.layout.<os>`); a `--static` link swaps in the freestanding per-OS
+kernel leaf (`runtime.start.static.<os>`, `runtime.syscall.<os>`,
+`runtime.libc.<os>`, `runtime.libc2.<os>`, `runtime.thread.static.<os>`) plus the
+OS-invariant `runtime.cstub`, replacing libc. FreeBSD selects its full adapter
+set with no Linux/libc RTL unit present. Tests:
+`TBackendDriverContractTests.TestRTLUnits_*` in `cp.test.driver`. The Linux link
+path is behaviourally unchanged (verified: `--static` Linux hello-world still
+runs; all four fixpoints + QBE & native TestRunner green).
+
 * The compiler must link a FreeBSD-built RTL (the FreeBSD `TPlatformLayout` and
   kernel-stub) into a `--target freebsd-x86_64` program, not the host RTL.
 * The RTL-unification track (`docs/native-target-architecture.adoc`) has already
