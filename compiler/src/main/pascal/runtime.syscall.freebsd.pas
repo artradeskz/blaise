@@ -111,6 +111,32 @@ function getrandom(Buf: Pointer; Count: Int64; Flags: Integer): Int64;
   wrapper in the posix layer adapts that to libc's buffer-pointer contract. }
 function sys_getcwd(Buf: PChar; Size: Int64): Int64;
 
+{ Threads + TLS (Step 4c) — the FreeBSD primitives runtime.thread.static.freebsd
+  and runtime.start.static.freebsd build on.  These have no Linux equivalents
+  (Linux uses clone/futex/arch_prctl); the numbers are FreeBSD-specific. }
+
+{ sysarch(op, parms) — SYS 165.  The FreeBSD way to set the %fs base for TLS:
+  op = AMD64_SET_FSBASE (129), parms = a POINTER to the base value (NOT the value
+  itself).  Returns 0 on success or -errno (CF-translated). }
+function sysarch(Op: Integer; Parms: Pointer): Integer;
+
+{ _umtx_op(obj, op, val, uaddr, uaddr2) — SYS 454.  The FreeBSD futex analogue.
+  op = UMTX_OP_WAIT_UINT_PRIVATE (15) blocks while obj^ = val (returns at once if
+  obj^ <> val, like futex); op = UMTX_OP_WAKE_PRIVATE (16) wakes up to val waiters
+  on obj.  5-arg syscall: arg4 (uaddr) arrives in %rcx -> moved to %r10. }
+function _umtx_op(Obj: Pointer; Op, Val: Integer; Uaddr, Uaddr2: Pointer): Integer;
+
+{ thr_new(param, param_size) — SYS 455.  Creates a new thread from a filled-in
+  `struct thr_param` (param_size = sizeof = 104 on amd64).  The FreeBSD analogue
+  of clone(2).  Returns 0 on success or -errno. }
+function thr_new(Param: Pointer; ParamSize: Integer): Integer;
+
+{ thr_exit(state) — SYS 431.  Terminates JUST the calling thread (NOT the whole
+  process — that is exit(2)/SYS_exit).  If state is non-nil the kernel writes 1
+  there and _umtx_op-wakes it; we clear/wake the join word ourselves and pass nil.
+  Never returns. }
+procedure thr_exit(State: Pointer);
+
 { _exit(2) — SYS_exit = 1.  Terminates the process; never returns.  The
   unit-level routine name `_exit` already emits the unmangled `_exit` symbol that
   satisfies posix's `external name '_exit'`. }
@@ -157,6 +183,10 @@ const
   SYS_fstatat       = 552;   { ino64 (legacy freebsd11_fstatat = 493) }
   SYS_pipe2         = 542;   { pipe(2) legacy 42 deprecated }
   SYS_execve        = 59;
+  SYS_sysarch       = 165;   { %fs-base setup for TLS (AMD64_SET_FSBASE) }
+  SYS_thr_exit      = 431;   { terminate ONE thread (NOT exit(2)) }
+  SYS_umtx_op       = 454;   { the FreeBSD futex analogue }
+  SYS_thr_new       = 455;   { the FreeBSD clone(2) analogue }
   AT_FDCWD          = -100;  { dirfd for path-relative *at() syscalls at cwd }
 { The asm bodies use literal immediates (the assembler needs a literal, not a
   symbol); the const block above documents the number-to-name mapping. }
@@ -471,6 +501,54 @@ asm
     jae  .Lok_getcwd
     negq %rax
 .Lok_getcwd:
+    ret
+end;
+
+{ sysarch(op, parms) — 2 args, both in %rdi/%rsi already; SYS 165.  Used with
+  AMD64_SET_FSBASE to set the %fs base to the thread pointer. }
+function sysarch(Op: Integer; Parms: Pointer): Integer;
+  assembler; nostackframe;
+asm
+    movq $165, %rax          { SYS_sysarch }
+    syscall
+    jae  .Lok_sysarch
+    negq %rax
+.Lok_sysarch:
+    ret
+end;
+
+{ _umtx_op(obj, op, val, uaddr, uaddr2) — 5 args; arg4 (uaddr) arrives in %rcx
+  (C ABI) but the kernel wants it in %r10.  Move it before the syscall.  SYS 454. }
+function _umtx_op(Obj: Pointer; Op, Val: Integer; Uaddr, Uaddr2: Pointer): Integer;
+  assembler; nostackframe;
+asm
+    movq %rcx, %r10
+    movq $454, %rax          { SYS__umtx_op }
+    syscall
+    jae  .Lok_umtx
+    negq %rax
+.Lok_umtx:
+    ret
+end;
+
+{ thr_new(param, param_size) — 2 args, both in %rdi/%rsi already; SYS 455. }
+function thr_new(Param: Pointer; ParamSize: Integer): Integer;
+  assembler; nostackframe;
+asm
+    movq $455, %rax          { SYS_thr_new }
+    syscall
+    jae  .Lok_thr_new
+    negq %rax
+.Lok_thr_new:
+    ret
+end;
+
+{ thr_exit(state) — SYS 431.  Terminates JUST this thread; never returns, so no
+  CF translation is needed.  State arrives in %rdi (nil in our use). }
+procedure thr_exit(State: Pointer); assembler; nostackframe;
+asm
+    movq $431, %rax          { SYS_thr_exit }
+    syscall
     ret
 end;
 

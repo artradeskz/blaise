@@ -97,6 +97,11 @@ type
       MAP_FAILED (-1) so runtime.mem takes its alloc-copy-free grow fallback (no
       in-place remap syscall on FreeBSD).  Standalone byte/symbol shape. }
     procedure TestLink_FreeBSDSyscallLeaf_GetrandomAndMremapStub;
+    { Step 4c: the FreeBSD threads/TLS leaf — thr_new (455), _umtx_op (454) and
+      thr_exit (431) link under the FreeBSD target with their FreeBSD syscall
+      numbers present in the linked .text, and NOT Linux's clone (56) / futex
+      (202).  Standalone byte/symbol shape. }
+    procedure TestLink_FreeBSDThreadLeaf_SyscallNumbers;
   end;
 
   TDynLinkerTests = class(TTestCase)
@@ -1268,6 +1273,82 @@ begin
   AssertTrue('Linux SYS_getrandom=318 NOT present', Pos(MovRaxImm4b(318), Bytes) < 0);
   { mremap stub loads -1 (movq $-1,%rax = 48 C7 C0 FF FF FF FF). }
   AssertTrue('mremap stub returns -1 (MAP_FAILED)', Pos(MovRaxImm4b(-1), Bytes) >= 0);
+end;
+
+procedure TLinkerE2ETests.TestLink_FreeBSDThreadLeaf_SyscallNumbers;
+const
+  { Mirrors the runtime.syscall.freebsd threads/TLS leaf bodies: thr_new (455),
+    _umtx_op (454, with its arg4 %rcx->%r10 shuffle) and thr_exit (431).  These
+    are the FreeBSD analogues of Linux's clone (56) / futex (202) / exit (60);
+    the numbers MUST be FreeBSD's, not Linux's.  A leading _start keeps the
+    linker's entry resolvable. }
+  FixtureAsm =
+    '.text' + LineEnding +
+    '.globl _start' + LineEnding +
+    '_start:' + LineEnding +
+    '  callq thr_new' + LineEnding +
+    '  callq _umtx_op' + LineEnding +
+    '  callq thr_exit' + LineEnding +
+    '  xorl %edi, %edi' + LineEnding +
+    '  movq $1, %rax' + LineEnding +        { SYS_exit }
+    '  syscall' + LineEnding +
+    '  hlt' + LineEnding +
+    '.globl thr_new' + LineEnding +
+    'thr_new:' + LineEnding +
+    '  movq $455, %rax' + LineEnding +      { SYS_thr_new }
+    '  syscall' + LineEnding +
+    '  jae .Lok_thr_new' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_thr_new:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl _umtx_op' + LineEnding +
+    '_umtx_op:' + LineEnding +
+    '  movq %rcx, %r10' + LineEnding +
+    '  movq $454, %rax' + LineEnding +      { SYS__umtx_op }
+    '  syscall' + LineEnding +
+    '  jae .Lok_umtx' + LineEnding +
+    '  negq %rax' + LineEnding +
+    '.Lok_umtx:' + LineEnding +
+    '  ret' + LineEnding +
+    '.globl thr_exit' + LineEnding +
+    'thr_exit:' + LineEnding +
+    '  movq $431, %rax' + LineEnding +      { SYS_thr_exit }
+    '  syscall' + LineEnding +
+    '  ret' + LineEnding;
+  { Encoded `movq $imm32, %rax` = 48 C7 C0 <imm32-LE>. }
+  function MovRaxImm4c(AImm: Integer): string;
+  begin
+    Result := Chr($48) + Chr($C7) + Chr($C0) +
+              Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
+              Chr((AImm shr 16) and $FF) + Chr((AImm shr 24) and $FF);
+  end;
+var
+  Lk: TLinker;
+  Obj: TElfObjectFile;
+  Bytes: string;
+begin
+  Lk := TLinker.Create(FreeBSDX86_64Target());
+  try
+    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbthr.o');
+    Lk.AddOwnedObject(Obj);
+    Bytes := Lk.LinkToBytes('_start');
+    { The bare thread-primitive symbols must be DEFINED (non-zero address). }
+    AssertTrue('thr_new defined',  Lk.AddrOfSymbol('thr_new') > 0);
+    AssertTrue('_umtx_op defined', Lk.AddrOfSymbol('_umtx_op') > 0);
+    AssertTrue('thr_exit defined', Lk.AddrOfSymbol('thr_exit') > 0);
+  finally
+    Lk.Free();
+  end;
+  { FreeBSD thread syscall NUMBERS present in the linked .text. }
+  AssertTrue('SYS_thr_new=455 movq imm present',  Pos(MovRaxImm4c(455), Bytes) >= 0);
+  AssertTrue('SYS__umtx_op=454 movq imm present', Pos(MovRaxImm4c(454), Bytes) >= 0);
+  AssertTrue('SYS_thr_exit=431 movq imm present', Pos(MovRaxImm4c(431), Bytes) >= 0);
+  { NOT Linux's clone (56) / futex (202) — those numbers must be absent. }
+  AssertTrue('Linux SYS_clone=56 NOT present',  Pos(MovRaxImm4c(56), Bytes) < 0);
+  AssertTrue('Linux SYS_futex=202 NOT present', Pos(MovRaxImm4c(202), Bytes) < 0);
+  { _umtx_op's arg4 shuffle: movq %rcx, %r10 (49 89 CA). }
+  AssertTrue('movq %rcx,%r10 (_umtx_op arg4) present',
+    Pos(Chr($49) + Chr($89) + Chr($CA), Bytes) >= 0);
 end;
 
 { ---- TDynLinkerTests ---- }
