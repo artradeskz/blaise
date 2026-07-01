@@ -453,6 +453,23 @@ runs; all four fixpoints + QBE & native TestRunner green).
 
 === Step 6 — Drive target selection through the linker
 
+NOTE: Done. `TargetIsFreestanding(target)` (`blaise.codegen.target`) marks
+FreeBSD as Strategy-B: `LinkViaInternalLinker` sets dynamic mode to `not
+(AOpts.Static or freestanding)` and `EnsureRTLObjects` selects the freestanding
+kernel-leaf unit list the same way, so a `freebsd-x86_64` target links static
+`ET_EXEC` / freestanding `_start` / no `PT_INTERP` / no libc regardless of
+`--static`. The per-target `TPlatformLayout` is injected by the compiler as a
+direct `main` call to `rtl.platform.layout.<os>_init`
+(`PlatformLayoutInitSym`), selected from the compile-time `--target`;
+`rtl.platform.posix` no longer `uses` a concrete layout (a weak
+`_BlaisePlatformInit` trampoline in each layout unit is the bootstrap fallback
+for older codegens, and lets both layouts coexist in one link without a
+duplicate symbol). New `runtime.libc.freebsd` supplies the libc-shaped leaf
+(getcwd/getenv/time/waitpid/execvp/sysconf; `sysctl(hw.ncpu)` via
+`SYS___sysctl`). Test:
+`TInternalLinkerE2ETests.TestCompile_FreeBSDTarget_EmitsStaticFreeBSDExe`
+(EI_OSABI=9, ET_EXEC, no PT_INTERP; the binary cannot run on the Linux host).
+
 * `LinkViaInternalLinker` already builds the resolved toolkit's `TLinkTarget`
   (Step 1), but the driver still drives the Linux dynamic-libc link line.  For
   the Strategy-B static path, when the target is `freebsd-x86_64` skip dynamic
@@ -462,6 +479,12 @@ runs; all four fixpoints + QBE & native TestRunner green).
   a Linux host with no external tools invoked.
 
 === Step 7 — `--target` CLI surface
+
+NOTE: Done (satisfied by Steps 1 + 6). `Blaise.pas` already parses `--target
+<os>-<cpu>` into `AOpts.Target` via `ParseTargetName` and defaults to
+`HostTarget()` when omitted. The Step-6 e2e test above is exactly this step's
+verify: `blaise --source hello.pas --target freebsd-x86_64 --output hello`
+produces a FreeBSD/x86_64 ELF.
 
 * Ensure `Blaise.pas` threads `--target freebsd-x86_64` into `AOpts.Target`
   and that defaulting (no `--target`) still resolves to the host.
