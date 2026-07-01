@@ -1247,7 +1247,7 @@ const
     'mremap:' + LineEnding +
     '  movq $-1, %rax' + LineEnding +       { MAP_FAILED — no FreeBSD mremap }
     '  ret' + LineEnding;
-  function MovRaxImm4b(AImm: Integer): string;
+  function MovRaxImm(AImm: Integer): string;
   begin
     Result := Chr($48) + Chr($C7) + Chr($C0) +
               Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
@@ -1269,10 +1269,10 @@ begin
     Lk.Free();
   end;
   { getrandom uses the FreeBSD number 563 — NOT Linux's 318. }
-  AssertTrue('SYS_getrandom=563 movq imm present', Pos(MovRaxImm4b(563), Bytes) >= 0);
-  AssertTrue('Linux SYS_getrandom=318 NOT present', Pos(MovRaxImm4b(318), Bytes) < 0);
+  AssertTrue('SYS_getrandom=563 movq imm present', Pos(MovRaxImm(563), Bytes) >= 0);
+  AssertTrue('Linux SYS_getrandom=318 NOT present', Pos(MovRaxImm(318), Bytes) < 0);
   { mremap stub loads -1 (movq $-1,%rax = 48 C7 C0 FF FF FF FF). }
-  AssertTrue('mremap stub returns -1 (MAP_FAILED)', Pos(MovRaxImm4b(-1), Bytes) >= 0);
+  AssertTrue('mremap stub returns -1 (MAP_FAILED)', Pos(MovRaxImm(-1), Bytes) >= 0);
 end;
 
 procedure TLinkerE2ETests.TestLink_FreeBSDThreadLeaf_SyscallNumbers;
@@ -1316,7 +1316,7 @@ const
     '  syscall' + LineEnding +
     '  ret' + LineEnding;
   { Encoded `movq $imm32, %rax` = 48 C7 C0 <imm32-LE>. }
-  function MovRaxImm4c(AImm: Integer): string;
+  function MovRaxImm(AImm: Integer): string;
   begin
     Result := Chr($48) + Chr($C7) + Chr($C0) +
               Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
@@ -1340,12 +1340,12 @@ begin
     Lk.Free();
   end;
   { FreeBSD thread syscall NUMBERS present in the linked .text. }
-  AssertTrue('SYS_thr_new=455 movq imm present',  Pos(MovRaxImm4c(455), Bytes) >= 0);
-  AssertTrue('SYS__umtx_op=454 movq imm present', Pos(MovRaxImm4c(454), Bytes) >= 0);
-  AssertTrue('SYS_thr_exit=431 movq imm present', Pos(MovRaxImm4c(431), Bytes) >= 0);
+  AssertTrue('SYS_thr_new=455 movq imm present',  Pos(MovRaxImm(455), Bytes) >= 0);
+  AssertTrue('SYS__umtx_op=454 movq imm present', Pos(MovRaxImm(454), Bytes) >= 0);
+  AssertTrue('SYS_thr_exit=431 movq imm present', Pos(MovRaxImm(431), Bytes) >= 0);
   { NOT Linux's clone (56) / futex (202) — those numbers must be absent. }
-  AssertTrue('Linux SYS_clone=56 NOT present',  Pos(MovRaxImm4c(56), Bytes) < 0);
-  AssertTrue('Linux SYS_futex=202 NOT present', Pos(MovRaxImm4c(202), Bytes) < 0);
+  AssertTrue('Linux SYS_clone=56 NOT present',  Pos(MovRaxImm(56), Bytes) < 0);
+  AssertTrue('Linux SYS_futex=202 NOT present', Pos(MovRaxImm(202), Bytes) < 0);
   { _umtx_op's arg4 shuffle: movq %rcx, %r10 (49 89 CA). }
   AssertTrue('movq %rcx,%r10 (_umtx_op arg4) present',
     Pos(Chr($49) + Chr($89) + Chr($CA), Bytes) >= 0);

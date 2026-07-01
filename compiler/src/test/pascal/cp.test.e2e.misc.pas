@@ -99,6 +99,15 @@ type
       with one extra dereference; without it the element address resolved to a
       global symbol and the writes/reads hit the wrong storage. }
     procedure TestRun_NestedProc_CapturesVarArrayParam;
+    { Two sibling outer routines each declare a same-named nested function.
+      Each call must resolve to the nested function of its own enclosing
+      routine.  Previously the call fell through to the global overload index
+      (which does not list nested procs) and errored with "Cannot find
+      declaration". }
+    procedure TestRun_NestedProc_SiblingSameName_ResolvesPerScope;
+    { As above but the enclosing routines are METHODS.  Nested-in-method
+      functions must be scoped to their method body, not registered globally. }
+    procedure TestRun_NestedFunc_InSiblingMethods_ResolvesPerScope;
 
     { Diamond operator: TFoo<> infers type args from LHS }
     procedure TestRun_Diamond_SingleArg_WorksAtRuntime;
@@ -1204,6 +1213,83 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('x=5, inner mutates to 15, outer sees 15',
     '5' + LE + '15' + LE + '15' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_NestedProc_SiblingSameName_ResolvesPerScope;
+const
+  Src =
+    '''
+        program Prg;
+        procedure First;
+          function Helper(X: Integer): Integer;
+          begin
+            Result := X + 1
+          end;
+        begin
+          WriteLn(IntToStr(Helper(10)))
+        end;
+        procedure Second;
+          function Helper(X: Integer): Integer;
+          begin
+            Result := X + 2
+          end;
+        begin
+          WriteLn(IntToStr(Helper(20)))
+        end;
+        begin
+          First();
+          Second()
+        end.
+        ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('First.Helper(10)=11, Second.Helper(20)=22',
+    '11' + LE + '22' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_NestedFunc_InSiblingMethods_ResolvesPerScope;
+const
+  Src =
+    '''
+        program Prg;
+        type
+          TFoo = class
+            procedure MethodA;
+            procedure MethodB;
+          end;
+        procedure TFoo.MethodA;
+          function Helper(X: Integer): Integer;
+          begin
+            Result := X + 1
+          end;
+        begin
+          WriteLn(IntToStr(Helper(10)))
+        end;
+        procedure TFoo.MethodB;
+          function Helper(X: Integer): Integer;
+          begin
+            Result := X + 2
+          end;
+        begin
+          WriteLn(IntToStr(Helper(20)))
+        end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.MethodA();
+          F.MethodB()
+        end.
+        ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('MethodA.Helper(10)=11, MethodB.Helper(20)=22',
+    '11' + LE + '22' + LE, Output);
 end;
 
 procedure TE2EMiscTests.TestRun_NestedProc_CapturesVarRecordParam;

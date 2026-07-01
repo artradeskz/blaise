@@ -7113,11 +7113,14 @@ begin
       ADecl.ResolvedQbeName := ADecl.Name;
 
     { Index for call resolution — overloaded names appear multiple times.
-      Nested procs (those inside another proc's body) are resolved via the
+      Nested procs (those inside another routine's body) are resolved via the
       scoped symbol table only; adding them to the global FProcIndex would
-      make same-named nested procs in different outer procs appear as
-      ambiguous overloads of each other. }
-    if FCurrentEnclosingDecl = nil then
+      make same-named nested procs in different outer routines appear as
+      ambiguous overloads of each other.  A proc is nested when it sits
+      inside a standalone routine (FCurrentEnclosingDecl set) OR inside a
+      method body (FCurrentMethodOwner set) — both cases must be excluded
+      from the global index. }
+    if (FCurrentEnclosingDecl = nil) and (FCurrentMethodOwner = nil) then
       RegisterProcDecl(ADecl.Name, ADecl);
 
     { Register in symbol table }
@@ -11256,6 +11259,43 @@ begin
     AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     Result := FTable.TypeInteger;
     AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  { Scoped nested routine: a function declared inside another routine's body
+    is registered in the symbol table only, never in the global FProcIndex /
+    FProcGroups (so same-named nested procs in sibling outer routines do not
+    collide as ambiguous overloads).  When the call name misses the global
+    index but the scoped Sym carries its backing decl, resolve directly
+    against that single decl rather than the overload group. }
+  if (FProcIndex.IndexOf(AExpr.Name) < 0) and (Sym <> nil) and
+     (Sym.Decl <> nil) and (Sym.Decl is TMethodDecl) then
+  begin
+    MDecl := TMethodDecl(Sym.Decl);
+    HintBareEnumArgs(AExpr.Name, AExpr.Args);
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+    if (AExpr.Args.Count < MinArity(MDecl)) or
+       (AExpr.Args.Count > MDecl.Params.Count) then
+      SemanticError(
+        Format('''%s'' expects %d argument(s), got %d',
+          [AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+        AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+    begin
+      Par := TMethodParam(MDecl.Params.Items[I]);
+      if Par.IsVarParam then
+      begin
+        ArgType := TASTExpr(AExpr.Args.Items[I]).ResolvedType;
+        CheckTypesMatch(Par.ResolvedType, ArgType,
+          Format('var argument %d of ''%s''', [I + 1, AExpr.Name]),
+          AExpr.Line, AExpr.Col);
+      end;
+    end;
+    RetypeSetLiteralArgs(AExpr.Args, MDecl);
+    AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
+    AExpr.ResolvedDecl := MDecl;
+    Result := MDecl.ResolvedReturnType;
     Exit;
   end;
 
