@@ -59,6 +59,7 @@ type
     { Static relocations }
     procedure TestReloc_PC32CrossObjectCall;
     procedure TestReloc_Quad64_ResolvesToAbsoluteAddr;
+    procedure TestReloc_Abs32_ResolvesInStaticMode;
     { Executable structure }
     procedure TestExe_ElfHeaderIsExec;
     procedure TestExe_EntryPointMatchesSymbol;
@@ -835,6 +836,49 @@ begin
     AssertTrue('static R_X86_64_64 link produced no output', Length(Bytes) >= 64);
     AssertEquals('e_type ET_EXEC', 2,
       (Ord(Bytes[16]) and $FF) or ((Ord(Bytes[17]) and $FF) shl 8));
+  finally
+    Lk.Free();
+  end;
+end;
+
+procedure TLinkerTests.TestReloc_Abs32_ResolvesInStaticMode;
+var
+  Lk: TLinker;
+  Bytes: string;
+  Addr, Got: Int64;
+  I, Slot: Integer;
+begin
+  { An absolute 32-bit data reference (.long target, R_X86_64_32) is
+    resolvable at link time in a non-PIE ET_EXEC: the image is linked at a
+    fixed base (0x400000) and every mapped address fits in 32 bits.  The
+    OPDF emitter uses exactly this form (.long label) inside the .opdf
+    section, so a static FreeBSD link with debug info must accept it.
+    A marker word (0xDEADBEEF as decimal) precedes the slot so the test can
+    locate the patched bytes in the flat image. }
+  Lk := LinkObjs(
+    ['.data' + LineEnding +
+     'marker:' + LineEnding + '.long 3735928559' + LineEnding +
+     'ptr32:' + LineEnding + '.long target' + LineEnding +
+     '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
+     LineEnding + 'ret' + LineEnding +
+     '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
+  try
+    Addr := Lk.AddrOfSymbol('target');
+    AssertTrue('target resolved above base', Addr > $400000);
+    { Find the marker; the patched abs32 slot follows it. }
+    Slot := -1;
+    for I := 0 to Length(Bytes) - 9 do
+      if (OrdAt(Bytes, I) = $EF) and (OrdAt(Bytes, I + 1) = $BE) and
+         (OrdAt(Bytes, I + 2) = $AD) and (OrdAt(Bytes, I + 3) = $DE) then
+      begin
+        Slot := I + 4;
+        Break;
+      end;
+    AssertTrue('marker found in image', Slot >= 0);
+    Got := OrdAt(Bytes, Slot) or (OrdAt(Bytes, Slot + 1) shl 8) or
+           (OrdAt(Bytes, Slot + 2) shl 16) or (OrdAt(Bytes, Slot + 3) shl 24);
+    AssertEquals('abs32 slot patched with target address', Addr, Got);
   finally
     Lk.Free();
   end;

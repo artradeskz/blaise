@@ -1669,9 +1669,10 @@ begin
   raise ELinker.Create('undefined reference to `' + Sym.Name + '''');
 end;
 
-{ Patch the merged section bytes for every relocation.  In static
-  mode (Phase B) only PC-relative forms are supported; in dynamic mode
-  (Phase C) absolute, GOT-relative and TLS relocations are handled. }
+{ Patch the merged section bytes for every relocation.  Static mode
+  (Phase B) supports PC-relative and absolute forms (every symbol has a
+  final link-time address in a non-PIE ET_EXEC); dynamic mode (Phase C)
+  additionally handles GOT-relative and emits RELATIVE fixups. }
 procedure TLinker.ApplyRelocations;
 var
   Oi, Ri: Integer;
@@ -1744,11 +1745,29 @@ begin
 
         R_X86_64_32, R_X86_64_32S:
           begin
-            if not FDynamic then
-              raise ELinker.Create(Ctx
-                + ': absolute 32-bit relocation unsupported in static mode');
             S := Self.ResolveSymbolAddr(Obj, Rel.SymIndex, Ctx);
             Val := S + Rel.Addend;
+            if M.ShType = SHT_NOBITS then
+              raise ELinker.Create(Ctx
+                + ': relocation into a NOBITS section');
+            { Resolvable in BOTH modes: static ET_EXEC links at a fixed base
+              (0x400000) where every mapped address fits in 32 bits, and in
+              PIE mode the patched value is the unslid link-time address
+              (the OPDF reader applies the run-time slide itself; code never
+              uses abs32 in PIE objects).  Range-check like GNU ld does:
+              R_X86_64_32 must fit zero-extended, R_X86_64_32S sign-extended. }
+            if Rel.RelocType = R_X86_64_32 then
+            begin
+              if (Val < 0) or (Val > $FFFFFFFF) then
+                raise ELinker.Create(Ctx
+                  + ': R_X86_64_32 overflow against ' + Sym.Name);
+            end
+            else
+            begin
+              if (Val < -2147483648) or (Val > 2147483647) then
+                raise ELinker.Create(Ctx
+                  + ': R_X86_64_32S overflow against ' + Sym.Name);
+            end;
             LkPatch32(M.Data, PFileOff, Val and $FFFFFFFF);
           end;
 
