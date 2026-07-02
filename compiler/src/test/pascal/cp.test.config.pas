@@ -31,6 +31,8 @@ type
     procedure TestParseRtlSrc_Absolute_SetsValue;
     procedure TestParseRtlSrc_Relative_ResolvedAgainstBaseDir;
     procedure TestParseRtlSrc_Absent_LeavesSeedUnchanged;
+    procedure TestParseTildePath_ExpandsToHome;
+    procedure TestParseRtlSrcTilde_ExpandsToHome;
     procedure TestFindConfigFile_NextToBinary;
   end;
 
@@ -283,6 +285,51 @@ begin
     ParseConfigLines(Lines, '/base', Paths, Rtl);
     AssertEquals('seed unchanged when config has no rtl-src',
       '/cli/override', Rtl);
+  finally
+    Lines.Free();
+    Paths.Free();
+  end;
+end;
+
+procedure TConfigTests.TestParseTildePath_ExpandsToHome;
+var
+  Lines, Paths: TStringList;
+  Home: string;
+begin
+  Home := GetEnvironmentVariable('HOME');
+  if Home = '' then begin Ignore('no $HOME'); Exit end;
+  Lines := TStringList.Create();
+  Paths := TStringList.Create();
+  try
+    { A '~/...' unit-path expands to $HOME/..., NOT resolved against the base. }
+    Lines.Add('unit-path=~/devel/blaise/runtime');
+    ParseConfigLines(Lines, '/some/base', Paths);
+    AssertEquals('one path', 1, Paths.Count);
+    AssertEquals('~ expanded to $HOME',
+      IncludeTrailingPathDelimiter(Home) + 'devel/blaise/runtime',
+      Paths.Strings[0]);
+  finally
+    Lines.Free();
+    Paths.Free();
+  end;
+end;
+
+procedure TConfigTests.TestParseRtlSrcTilde_ExpandsToHome;
+var
+  Lines, Paths: TStringList;
+  Rtl, Home: string;
+begin
+  Home := GetEnvironmentVariable('HOME');
+  if Home = '' then begin Ignore('no $HOME'); Exit end;
+  Lines := TStringList.Create();
+  Paths := TStringList.Create();
+  try
+    Rtl := '';
+    Lines.Add('rtl-src=~/devel/blaise/compiler/src/main/pascal');
+    ParseConfigLines(Lines, '/some/base', Paths, Rtl);
+    AssertEquals('~ in rtl-src expanded to $HOME',
+      IncludeTrailingPathDelimiter(Home) + 'devel/blaise/compiler/src/main/pascal',
+      Rtl);
   finally
     Lines.Free();
     Paths.Free();

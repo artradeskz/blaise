@@ -53,6 +53,36 @@ begin
   Result := '';
 end;
 
+{ Resolve a blaise.cfg path value.  An absolute path (leading '/') is used as
+  is; a leading '~' or '~/' expands to $HOME (so a config can name paths under
+  the user's home directory); anything else is relative and resolved against
+  ABaseDir (the config file's own directory). }
+function ResolveCfgPath(const AValue, ABaseDir: string): string;
+var
+  Home: string;
+begin
+  if Length(AValue) = 0 then
+    Exit('');
+  { Home expansion: '~' alone, or a '~/...' prefix. }
+  if (Copy(AValue, 0, 1) = '~') and
+     ((Length(AValue) = 1) or (Copy(AValue, 1, 1) = '/')) then
+  begin
+    Home := GetEnvironmentVariable('HOME');
+    if Home <> '' then
+    begin
+      if Length(AValue) = 1 then
+        Exit(Home);
+      { drop the '~', keep the rest (which starts with '/') }
+      Exit(IncludeTrailingPathDelimiter(Home) + Copy(AValue, 2, Length(AValue)));
+    end;
+    { No $HOME — leave '~' untouched rather than mis-resolving. }
+    Exit(AValue);
+  end;
+  if Copy(AValue, 0, 1) = '/' then
+    Exit(AValue);
+  Result := IncludeTrailingPathDelimiter(ABaseDir) + AValue;
+end;
+
 procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
   APaths: TStringList; var ARtlSrc: string);
 var
@@ -75,17 +105,9 @@ begin
     Key   := Trim(Copy(Line, 0, EqPos));
     Value := Trim(Copy(Line, EqPos + 1, Length(Line)));
     if SameText(Key, 'unit-path') then
-    begin
-      if (Length(Value) > 0) and (Copy(Value, 0, 1) <> '/') then
-        Value := IncludeTrailingPathDelimiter(ABaseDir) + Value;
-      APaths.Add(Value);
-    end
+      APaths.Add(ResolveCfgPath(Value, ABaseDir))
     else if SameText(Key, 'rtl-src') then
-    begin
-      if (Length(Value) > 0) and (Copy(Value, 0, 1) <> '/') then
-        Value := IncludeTrailingPathDelimiter(ABaseDir) + Value;
-      ARtlSrc := Value;
-    end
+      ARtlSrc := ResolveCfgPath(Value, ABaseDir)
     else
       ; { silently skip unrecognised keys }
   end;
