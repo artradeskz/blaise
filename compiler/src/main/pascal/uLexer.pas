@@ -151,6 +151,8 @@ type
     { Define a conditional-compilation symbol before lexing (e.g. from the
       -d command-line flag).  Case-insensitive. }
     procedure AddDefine(const ASym: string);
+    { Drop the host OS predefines so a cross-target's OS symbol replaces them. }
+    procedure ClearOSDefines;
     function Next: TToken;
   end;
 
@@ -187,15 +189,29 @@ end;
 
 { Seed the always-on predefined conditional symbols.  BLAISE identifies this
   compiler (the headline use case: cross-compiler IFDEF BLAISE / ELSE / ENDIF);
-  the CPU/OS symbols mirror the FPC family so portable source compiles
-  unchanged.  Targets beyond Linux/x86-64 will extend this set. }
+  the CPU/OS symbols mirror the FPC family so portable source compiles unchanged.
+  The OS symbols follow the HOST this compiler was built for, via compile-time
+  conditional compilation, so a FreeBSD-built blaise seeds FREEBSD (matching
+  HostTarget), which is what makes it default to producing FreeBSD binaries.
+  A cross-target does not re-seed these; source that switches on the target OS
+  is rare and the RTL selects per-target units structurally (BuildRTLUnitList),
+  not via conditional compilation. }
 procedure TLexer.SeedPredefines;
 begin
   Self.DefineSymbol('BLAISE');
   Self.DefineSymbol('CPUX86_64');
   Self.DefineSymbol('CPUAMD64');   { FPC's alias for the same target }
+{$IFDEF FREEBSD}
+  Self.DefineSymbol('FREEBSD');
+  Self.DefineSymbol('UNIX');
+{$ELSE}
+  {$IFDEF WINDOWS}
+  Self.DefineSymbol('WINDOWS');
+  {$ELSE}
   Self.DefineSymbol('LINUX');
   Self.DefineSymbol('UNIX');
+  {$ENDIF}
+{$ENDIF}
 end;
 
 function TLexer.IsDefined(const ASym: string): Boolean;
@@ -216,6 +232,17 @@ begin
   Idx := FDefines.IndexOf(ASym);
   if Idx >= 0 then
     FDefines.Delete(Idx);
+end;
+
+{ Remove all OS predefines seeded for the host, so a cross --target's OS symbol
+  can take their place (the driver calls this before applying target defines). }
+procedure TLexer.ClearOSDefines;
+begin
+  Self.UndefSymbol('LINUX');
+  Self.UndefSymbol('FREEBSD');
+  Self.UndefSymbol('WINDOWS');
+  Self.UndefSymbol('DARWIN');
+  Self.UndefSymbol('UNIX');
 end;
 
 procedure TLexer.AddDefine(const ASym: string);

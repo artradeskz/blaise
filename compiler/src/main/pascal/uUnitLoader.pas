@@ -103,6 +103,15 @@ type
 
 implementation
 
+{ True if ASym is one of the OS conditional-compilation symbols (the target's
+  OS define, injected by the driver, replaces the lexer's host-seeded ones). }
+function DefineIsOS(const ASym: string): Boolean;
+begin
+  Result := SameText(ASym, 'LINUX')   or SameText(ASym, 'FREEBSD') or
+            SameText(ASym, 'WINDOWS') or SameText(ASym, 'DARWIN')  or
+            SameText(ASym, 'UNIX');
+end;
+
 function TUnitLoader.IsBuiltin(const AName: string): Boolean;
 begin
   Result :=
@@ -240,16 +249,27 @@ var
   L:  TLexer;
   P:  TParser;
   DI: Integer;
+  HasOS: Boolean;
 begin
   SL := TStringList.Create();
   try
     SL.LoadFromFile(APath);
     L := TLexer.Create(SL.Text, APath);
     { Apply the same -d/--define symbols the main program got, so IFDEF
-      directives resolve consistently across the program and all its units. }
+      directives resolve consistently across the program and all its units.
+      If the set carries an OS symbol (the target's, injected by the driver),
+      drop the lexer's host-seeded OS symbols first so the target wins here too
+      — mirrors AddDefinesTo in Blaise.pas. }
     if FDefines <> nil then
+    begin
+      HasOS := False;
+      for DI := 0 to FDefines.Count - 1 do
+        if DefineIsOS(FDefines.Strings[DI]) then HasOS := True;
+      if HasOS then
+        L.ClearOSDefines();
       for DI := 0 to FDefines.Count - 1 do
         L.AddDefine(FDefines.Strings[DI]);
+    end;
     try
       P := TParser.Create(L);
       try

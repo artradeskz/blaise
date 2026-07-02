@@ -267,7 +267,18 @@ asm
     jmp main
 end;
 
-{ The C-level entry: SP points at the kernel's initial stack (argc at [SP]). }
+
+
+{ The C-level entry.  The kernel hands us the initial process stack: argc, then
+  argv[], NULL, envp[], NULL, auxv.  On FreeBSD the entry %rsp must be 16-byte
+  aligned, and the kernel achieves that by inserting a ZERO PAD WORD immediately
+  below argc when the argument-vector layout would otherwise leave argc at an
+  8-mod-16 address (this depends on the argc+envc pointer-count parity, so it
+  varies between the shell-launched top-level and an execve'd child with a
+  different environment).  So argc is at [SP] usually, but at [SP+8] when a pad
+  word is present.  Detect the pad: a real argc is a small non-negative count
+  and the slot after it (argv[0]) is a valid pointer; a pad word reads 0.  If
+  [SP] is 0 and [SP+8] is a plausible argc, skip the pad word. }
 procedure _BlaiseStartC(SP: Pointer);
 var
   Argc: Int64;
@@ -275,6 +286,13 @@ var
   Ret: Integer;
 begin
   Argc := PInt64(SP)^;
+  { Skip a kernel alignment pad word below argc, if present. }
+  if Argc = 0 then
+  begin
+    if PInt64(Pointer(PChar(SP) + 8))^ > 0 then
+      SP := Pointer(PChar(SP) + 8);
+    Argc := PInt64(SP)^;
+  end;
   Argv := Pointer(PChar(SP) + 8);
   { envp = &argv[argc+1] }
   Envp := Pointer(PChar(Argv) + (Argc + 1) * 8);

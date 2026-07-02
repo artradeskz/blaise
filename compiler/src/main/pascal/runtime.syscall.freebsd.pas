@@ -457,6 +457,14 @@ asm
     ret
 end;
 
+{ FreeBSD fork(2) has a two-register return the libc wrapper normalises and a
+  raw syscall must replicate: the kernel returns the child pid in %rax for the
+  PARENT with %edx = 0, but for the CHILD it returns the PARENT's pid in %rax
+  with %edx = 1 as the child indicator.  Without zeroing the child's %eax when
+  %edx != 0, the child sees a non-zero "pid" and every `if fork() = 0 then
+  (child path)` check runs the PARENT branch in the child — so a spawned
+  subprocess never execve's its target and the parent reaps exit 127.  Mirror
+  libc: if %edx != 0, this is the child -> return 0. }
 function fork: Integer;
   assembler; nostackframe;
 asm
@@ -464,7 +472,12 @@ asm
     syscall
     jae  .Lok_fork
     negq %rax
+    ret
 .Lok_fork:
+    testl %edx, %edx         { %edx = 1 in the child, 0 in the parent }
+    jz   .Lparent_fork
+    xorl %eax, %eax          { child: return 0 }
+.Lparent_fork:
     ret
 end;
 

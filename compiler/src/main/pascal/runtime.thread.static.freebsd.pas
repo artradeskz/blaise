@@ -209,10 +209,15 @@ begin
   CB := PThreadCB(CBPtr);
   Entry := CB^.StartRoutine;
   CallEntry(Entry, CB^.Arg);
-  { Signal completion to any joiner, then terminate this thread only. }
-  CB^.JoinWord := 1;
-  _umtx_op(@CB^.JoinWord, UMTX_OP_WAKE_PRIVATE, 1, nil, nil);
-  thr_exit(nil);
+  { Terminate this thread AND signal the joiner in one kernel step: pass the
+    join word as thr_exit's `state`.  The kernel does `suword(state, 1)` +
+    umtx-wake on it AFTER the thread has stopped executing on its stack — so the
+    joiner cannot free the stack while this thread is still running on it.  (The
+    previous code set JoinWord + WAKEd here, on the stack, BEFORE thr_exit, which
+    let pthread_join munmap the shared stack/CB region out from under this still-
+    live thread → SIGSEGV during teardown.  Never touch the stack after the wake;
+    let thr_exit's kernel-side wake be the last event on this word.) }
+  thr_exit(@CB^.JoinWord);
 end;
 
 { Store an 8-byte value at Base + Offset (used to fill struct thr_param). }

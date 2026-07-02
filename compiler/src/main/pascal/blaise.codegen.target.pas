@@ -107,14 +107,22 @@ end;
 
 function HostTarget: TTargetDesc;
 begin
-  { A '.exe' suffix on our own path means we are running on Windows (incl.
-    under wine).  Unix hosts carry no extension; we can't cheaply tell
-    linux/macos/freebsd apart here, and only the Windows distinction matters
-    for tool extensions today, so default the unix case to linux. }
-  if LowerCase(ExtractFileExt(ParamStr(0))) = '.exe' then
-    MakeTarget(osWindows, cpuX86_64, Result)
-  else
-    MakeTarget(osLinux, cpuX86_64, Result);
+  { The host OS is a COMPILE-TIME property of this binary: a blaise built with
+    `--target freebsd-x86_64` runs on FreeBSD, so its HostTarget must report
+    FreeBSD.  The OS conditional symbols are target-driven (injected by the
+    driver from the resolved --target; see Blaise.pas and uLexer.SeedPredefines),
+    the IFDEF FREEBSD below is true exactly when THIS compiler was built for
+    FreeBSD.  This is what lets a FreeBSD-hosted blaise default (no --target) to
+    producing FreeBSD binaries — the basis of self-hosting on FreeBSD. }
+{$IFDEF FREEBSD}
+  MakeTarget(osFreeBSD, cpuX86_64, Result);
+{$ELSE}
+  {$IFDEF WINDOWS}
+  MakeTarget(osWindows, cpuX86_64, Result);
+  {$ELSE}
+  MakeTarget(osLinux, cpuX86_64, Result);
+  {$ENDIF}
+{$ENDIF}
 end;
 
 function PtrSize(const ATarget: TTargetDesc): Integer;

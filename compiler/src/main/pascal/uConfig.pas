@@ -15,10 +15,22 @@ uses
 
 function FindConfigFile: string;
 
+{ Parse blaise.cfg lines.  Recognised keys (KEY=VALUE, '#' comments, blank lines
+  ignored): `unit-path=<dir>` appends to APaths; `rtl-src=<dir>` sets ARtlSrc.
+  A relative VALUE is resolved against ABaseDir (the config file's directory).
+  ARtlSrc is only written when an rtl-src line is present (left unchanged
+  otherwise), so a caller can pre-seed it and let the config override only if
+  set. }
 procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
-  APaths: TStringList);
+  APaths: TStringList; var ARtlSrc: string); overload;
 
-procedure LoadConfigPaths(APaths: TStringList);
+{ Convenience overload for callers that only want unit-paths (ignores rtl-src). }
+procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
+  APaths: TStringList); overload;
+
+{ Load the resolved blaise.cfg: appends unit-path entries to APaths and returns
+  any rtl-src via ARtlSrc (unchanged if the file has none / no file). }
+procedure LoadConfigPaths(APaths: TStringList; var ARtlSrc: string);
 
 implementation
 
@@ -42,7 +54,7 @@ begin
 end;
 
 procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
-  APaths: TStringList);
+  APaths: TStringList; var ARtlSrc: string);
 var
   I:     Integer;
   Line:  string;
@@ -68,12 +80,27 @@ begin
         Value := IncludeTrailingPathDelimiter(ABaseDir) + Value;
       APaths.Add(Value);
     end
+    else if SameText(Key, 'rtl-src') then
+    begin
+      if (Length(Value) > 0) and (Copy(Value, 0, 1) <> '/') then
+        Value := IncludeTrailingPathDelimiter(ABaseDir) + Value;
+      ARtlSrc := Value;
+    end
     else
       ; { silently skip unrecognised keys }
   end;
 end;
 
-procedure LoadConfigPaths(APaths: TStringList);
+procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
+  APaths: TStringList);
+var
+  IgnoredRtlSrc: string;
+begin
+  IgnoredRtlSrc := '';
+  ParseConfigLines(ALines, ABaseDir, APaths, IgnoredRtlSrc);
+end;
+
+procedure LoadConfigPaths(APaths: TStringList; var ARtlSrc: string);
 var
   CfgFile: string;
   Lines:   TStringList;
@@ -86,7 +113,7 @@ begin
   try
     Lines.LoadFromFile(CfgFile);
     BaseDir := ExtractFilePath(CfgFile);
-    ParseConfigLines(Lines, BaseDir, APaths);
+    ParseConfigLines(Lines, BaseDir, APaths, ARtlSrc);
   finally
     Lines.Free();
   end;

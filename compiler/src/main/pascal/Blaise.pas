@@ -93,12 +93,17 @@ begin
   WriteLn(FormatFlagLine('--output <path>', 'Output binary path'));
   WriteLn(FormatFlagLine('--unit-path <dir>',
     'Add directory to unit search path (repeatable)'));
+  WriteLn(FormatFlagLine('--rtl-src <dir>',
+    'RTL source directory (default: beside the binary; or $BLAISE_RTL_SRC).'));
+  WriteLn(FormatFlagLine('',
+    'Needed when the binary is moved away from its source tree.'));
   WriteLn(FormatFlagLine('--define <sym> | -d <sym>',
     'Define a conditional-compilation symbol (repeatable)'));
   WriteLn(FormatFlagLine('--backend <id>', BackendUsageLine()));
   WriteLn(FormatFlagLine('--target <os>-<cpu>',
-    'linux-x86_64 (default), linux-i386, linux-arm64,'));
-  WriteLn(FormatFlagLine('', 'freebsd-x86_64, windows-x86_64, macos-arm64'));
+    'Cross-compile target (default: ' + TargetName(HostTarget()) + ', the host).'));
+  WriteLn(FormatFlagLine('', 'linux-x86_64, linux-i386, linux-arm64, freebsd-x86_64,'));
+  WriteLn(FormatFlagLine('', 'windows-x86_64, macos-arm64'));
   WriteLn(FormatFlagLine('--emit-ir', 'Print QBE IR to stdout and exit'));
   WriteLn(FormatFlagLine('--emit-asm',
     'Print native assembly to stdout (requires --backend native)'));
@@ -134,8 +139,10 @@ begin
     'Emit OPDF debug info (.opdf.s companion file)'));
   WriteLn('');
   WriteLn('Configuration:');
-  WriteLn('  Unit search paths can also be set in blaise.cfg (one unit-path=<dir>');
-  WriteLn('  per line). Searched next to the binary, then ~/.blaise.cfg.');
+  WriteLn('  blaise.cfg (next to the binary, then ~/.blaise.cfg) can set, one');
+  WriteLn('  per line: unit-path=<dir> (repeatable) and rtl-src=<dir>.  A relative');
+  WriteLn('  path is resolved against the config file''s directory; --rtl-src on');
+  WriteLn('  the command line overrides rtl-src= in the config.');
 end;
 
 { Populate the two caller-constructed opts objects from the command line.
@@ -147,11 +154,29 @@ end;
   bad flag; the caller owns and frees both objects regardless. }
 { Apply each -d/--define symbol in ADefines to ALexer's conditional-compilation
   table.  No-op when ADefines is nil/empty. }
+{ True if ASym is one of the OS conditional-compilation symbols. }
+function IsOSDefine(const ASym: string): Boolean;
+var U: string;
+begin
+  U := UpperCase(ASym);
+  Result := (U = 'LINUX') or (U = 'FREEBSD') or (U = 'WINDOWS')
+         or (U = 'DARWIN') or (U = 'UNIX');
+end;
+
 procedure AddDefinesTo(ALexer: TLexer; ADefines: TStringList);
 var
   I: Integer;
+  HasOS: Boolean;
 begin
   if ADefines = nil then Exit;
+  { If the caller supplies an OS symbol (a cross --target injects the target's),
+    it REPLACES the host OS symbols the lexer seeded in SeedPredefines: drop
+    those first so an IFDEF LINUX etc. reflects the target, not the host. }
+  HasOS := False;
+  for I := 0 to ADefines.Count - 1 do
+    if IsOSDefine(ADefines.Strings[I]) then HasOS := True;
+  if HasOS then
+    ALexer.ClearOSDefines();
   for I := 0 to ADefines.Count - 1 do
     ALexer.AddDefine(ADefines.Strings[I]);
 end;
@@ -444,6 +469,7 @@ var
   SourceFile, OutputFile: string;
   SearchPaths: TStringList;
   ConfigPaths: TStringList;
+  CfgRtlSrc:   string;
   EmitIR:      Boolean;
   EmitAsm:     Boolean;
   DumpAST:     Boolean;
@@ -531,6 +557,23 @@ begin
     Halt(1);
   end;
 
+  { The OS conditional-compilation symbols follow the resolved --target (which
+    defaults to the host).  Inject them into Front.Defines; AddDefinesTo then
+    replaces the lexer's host-seeded OS symbols with these on every lexer (top
+    program and, via the unit loader, each dependency unit).  So an IFDEF
+    FREEBSD in compiled source reflects the TARGET, not this compiler's host,
+    which is what makes cross-compiling blaise itself for FreeBSD bake
+    HostTarget=FreeBSD into the result. }
+  case Opts.Target.OS of
+    osFreeBSD: Front.Defines.Add('FREEBSD');
+    osWindows: Front.Defines.Add('WINDOWS');
+    osMacOS:   Front.Defines.Add('DARWIN');
+  else
+    Front.Defines.Add('LINUX');
+  end;
+  if Opts.Target.OS <> osWindows then
+    Front.Defines.Add('UNIX');
+
   { Seed the working locals from the opts objects.  Keeping the locals lets
     the (large) main body read them unchanged; the parser owns the objects.
     SearchPaths is the object's owned list (not copied) so config-path
@@ -556,7 +599,14 @@ begin
 
   ConfigPaths := TStringList.Create();
   try
-    LoadConfigPaths(ConfigPaths);
+    { blaise.cfg supplies extra unit-paths and, optionally, rtl-src.  A CLI
+      --rtl-src (already in Opts.RTLSrcDir) takes precedence: only let the config
+      set it when the CLI did not.  Seed CfgRtlSrc with the CLI value so the
+      config only overrides an EMPTY one. }
+    CfgRtlSrc := Opts.RTLSrcDir;
+    LoadConfigPaths(ConfigPaths, CfgRtlSrc);
+    if Opts.RTLSrcDir = '' then
+      Opts.RTLSrcDir := CfgRtlSrc;
     for I := ConfigPaths.Count - 1 downto 0 do
       SearchPaths.Insert(0, ConfigPaths.Strings[I]);
   finally

@@ -28,6 +28,9 @@ type
     procedure TestParseRelativePath_ResolvedAgainstBaseDir;
     procedure TestParseAbsolutePath_NotModified;
     procedure TestParseUnknownKey_IgnoredSilently;
+    procedure TestParseRtlSrc_Absolute_SetsValue;
+    procedure TestParseRtlSrc_Relative_ResolvedAgainstBaseDir;
+    procedure TestParseRtlSrc_Absent_LeavesSeedUnchanged;
     procedure TestFindConfigFile_NextToBinary;
   end;
 
@@ -221,6 +224,65 @@ begin
     Lines.Add('unit-path=/opt/blaise/runtime');
     ParseConfigLines(Lines, '/base', Paths);
     AssertEquals('one path only', 1, Paths.Count);
+  finally
+    Lines.Free();
+    Paths.Free();
+  end;
+end;
+
+procedure TConfigTests.TestParseRtlSrc_Absolute_SetsValue;
+var
+  Lines, Paths: TStringList;
+  Rtl: string;
+begin
+  Lines := TStringList.Create();
+  Paths := TStringList.Create();
+  try
+    Rtl := '';
+    Lines.Add('rtl-src=/opt/blaise/rtl');
+    ParseConfigLines(Lines, '/base', Paths, Rtl);
+    AssertEquals('rtl-src set', '/opt/blaise/rtl', Rtl);
+    AssertEquals('rtl-src is not a unit-path', 0, Paths.Count);
+  finally
+    Lines.Free();
+    Paths.Free();
+  end;
+end;
+
+procedure TConfigTests.TestParseRtlSrc_Relative_ResolvedAgainstBaseDir;
+var
+  Lines, Paths: TStringList;
+  Rtl: string;
+begin
+  Lines := TStringList.Create();
+  Paths := TStringList.Create();
+  try
+    Rtl := '';
+    Lines.Add('rtl-src=src/main/pascal');
+    ParseConfigLines(Lines, '/base/', Paths, Rtl);
+    AssertEquals('relative rtl-src resolved against base dir',
+      '/base/src/main/pascal', Rtl);
+  finally
+    Lines.Free();
+    Paths.Free();
+  end;
+end;
+
+procedure TConfigTests.TestParseRtlSrc_Absent_LeavesSeedUnchanged;
+var
+  Lines, Paths: TStringList;
+  Rtl: string;
+begin
+  Lines := TStringList.Create();
+  Paths := TStringList.Create();
+  try
+    { Seed a value (as the driver does with a CLI --rtl-src); a config with no
+      rtl-src line must leave it untouched. }
+    Rtl := '/cli/override';
+    Lines.Add('unit-path=/opt/blaise/runtime');
+    ParseConfigLines(Lines, '/base', Paths, Rtl);
+    AssertEquals('seed unchanged when config has no rtl-src',
+      '/cli/override', Rtl);
   finally
     Lines.Free();
     Paths.Free();
