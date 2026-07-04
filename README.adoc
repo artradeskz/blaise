@@ -1,206 +1,185 @@
-= Blaise Pascal Compiler
+---
+
+= Компилятор Pascal Blaise
 :icons: font
 :source-highlighter: rouge
 
-image:https://github.com/graemeg/blaise/actions/workflows/bootstrap.yml/badge.svg["Build status", link="https://github.com/graemeg/blaise/actions/workflows/bootstrap.yml"]
+image:https://github.com/graemeg/blaise/actions/workflows/bootstrap.yml/badge.svg["Статус сборки", link="https://github.com/graemeg/blaise/actions/workflows/bootstrap.yml"]
 
-**The Pascal you love, reimagined for the modern era.**
+**Pascal, который вы любите, переосмысленный для современной эпохи.**
 
-Blaise is a next-generation Object Pascal compiler built from the ground up to eliminate decades of legacy baggage. It prioritizes developer productivity, memory safety, and high-performance execution.
-
-
-== ✨ The Vision
-
-The Object Pascal ecosystem has two options: Embarcadero Delphi (proprietary,
-Windows-first) and Free Pascal (open source but carrying 30 years of accumulated
-complexity — five language modes, five string types, and thousands of include files).
-
-This compiler takes a different approach:
-
-* *One language mode.* No `{$mode}` switches; no legacy dialect support.
-* *One string type.* UTF-8 reference-counted string and 0-based indexing. `RawBytes` for binary data.
-* *One memory model.* Automatic reference counting applies uniformly to
-  strings, classes, and interfaces. No manual/auto split between `TObject`
-  and `TInterfacedObject`; `[Weak]` breaks cycles. `Free` is retained as a
-  synonym for immediate release.
-* *Clean interfaces.* No COM GUIDs; interface dispatch via compile-time vtable mapping.
-* *Reified generics.* Monomorphization at compile time — no type erasure.
-* *Modern build system.* PasBuild with `project.xml`; no makefiles.
-* *First-class debugger.* OPDF is the default debug format; DWARF is not required.
-
-See link:docs/design.adoc[docs/design.adoc] for the full architecture and
-implementation plan.
-
-The result — A modern, cross-platform Object Pascal compiler targeting native code
-via two backends: a direct native x86-64 code generator (the default since
-v0.12.0) and https://c9x.me/compile/[QBE] (now opt-in via `--backend qbe`).
-Single language mode, single string type, zero-GUID interfaces, reified
-generics, and first-class
-https://github.com/graemeg/opdebugger[OPDF] debug format support — including
-full source-level debugging of incrementally-compiled multi-unit programs.
+Blaise — это компилятор Object Pascal нового поколения, созданный с нуля для устранения десятилетий устаревшего наследия. Он ставит во главу угла производительность разработчика, безопасность памяти и высокую производительность выполнения.
 
 
-== 🚀 Project Status
+== ✨ Видение
 
-* **Self-Hosting:** Yes. Blaise bootstraps and recompiles itself with byte-for-byte fixpoint. FPC is no longer required — the entire toolchain runs on Blaise alone.
-* **Testing:** 3800+ tests and growing (Test-Driven Development from day one). The test suite itself compiles under Blaise.
-* **Backends:** Two code-generation backends — a direct native x86-64 backend (the default since v0.12.0) and QBE (opt-in via `--backend qbe`). Both pass the full fixpoint and test suite.
-* **Standard library:** A growing opt-in stdlib — generics collections, JSON (DOM + parser + writer), SHA-1 and Base64, RFC 4122 GUIDs, TCP sockets, WebSockets, a minimal HTTP/1.1 server, and a `blaise.testing` unit-test framework.
+Экосистема Object Pascal имеет два варианта: Embarcadero Delphi (проприетарный, ориентированный на Windows) и Free Pascal (открытый исходный код, но несущий 30 лет накопленной сложности — пять режимов языка, пять строковых типов и тысячи файлов включений).
+
+Этот компилятор использует другой подход:
+
+* *Один режим языка.* Без переключателей `{$mode}`; без поддержки устаревших диалектов.
+* *Один строковый тип.* Строка UTF-8 с подсчётом ссылок и индексацией с 0. `RawBytes` для бинарных данных.
+* *Одна модель памяти.* Автоматический подсчёт ссылок единообразно применяется к строкам, классам и интерфейсам. Нет разделения на ручное/автоматическое между `TObject` и `TInterfacedObject`; `[Weak]` разрывает циклы. `Free` сохранён как синоним для немедленного освобождения.
+* *Чистые интерфейсы.* Без COM-идентификаторов GUID; диспетчеризация интерфейсов через таблицу виртуальных методов на этапе компиляции.
+* *Реифицированные обобщения.* Мономорфизация на этапе компиляции — без стирания типов.
+* *Современная система сборки.* PasBuild с `project.xml`; без makefile'ов.
+* *Полноценный отладчик.* OPDF — формат отладки по умолчанию; DWARF не требуется.
+
+См. link:docs/design.adoc[docs/design.adoc] для полной архитектуры и плана реализации.
+
+Результат — современный кроссплатформенный компилятор Object Pascal, генерирующий нативный код через два бэкенда: прямой генератор кода для x86-64 (по умолчанию с v0.12.0) и https://c9x.me/compile/[QBE] (опционально через `--backend qbe`). Один режим языка, один строковый тип, интерфейсы без GUID, реифицированные обобщения и полноценная поддержка формата отладки https://github.com/graemeg/opdebugger[OPDF] — включая полноценную отладку на уровне исходного кода для инкрементально компилируемых многомодульных программ.
+
+
+== 🚀 Статус проекта
+
+* **Самохостинг:** Да. Blaise загружается и перекомпилирует себя с точностью байт-в-байт. FPC больше не требуется — весь инструментарий работает на одном Blaise.
+* **Тестирование:** Более 3800 тестов и их число растёт (разработка через тестирование с первого дня). Набор тестов компилируется в Blaise.
+* **Бэкенды:** Два бэкенда генерации кода — прямой нативный бэкенд для x86-64 (по умолчанию с v0.12.0) и QBE (опционально через `--backend qbe`). Оба проходят полный цикл фикспойнта и набор тестов.
+* **Стандартная библиотека:** Растущая подключаемая стандартная библиотека — обобщённые коллекции, JSON (DOM + парсер + писатель), SHA-1 и Base64, GUID по RFC 4122, TCP-сокеты, WebSockets, минимальный HTTP/1.1 сервер и фреймворк для модульного тестирования `blaise.testing`.
 
 
 [cols="1,3,1", options="header"]
 |===
-| Phase | Goal | Status
+| Этап | Цель | Статус
 
 | 1
-| Bootstrap pipeline — Hello World on Linux x86_64 via PasBuild
-| Complete ✅
+| Конвейер загрузки — Hello World на Linux x86_64 через PasBuild
+| Выполнен ✅
 
 | 2
-| Type system — classes, records, ARC, exceptions
-| Complete ✅
+| Система типов — классы, записи, ARC, исключения
+| Выполнен ✅
 
 | 3
-| Generics + zero-GUID interfaces
-| Complete ✅
+| Обобщения + интерфейсы без GUID
+| Выполнен ✅
 
 | 4
-| OPDF debug info emission
-| Complete ✅
+| Генерация отладочной информации OPDF
+| Выполнен ✅
 
 | 5
-| Self-hosting
-| Complete ✅
+| Самохостинг
+| Выполнен ✅
 
 | 6
-| Language improvements + expand RTL & StdLib + bug fixing
-| Ongoing 🔄
+| Улучшения языка + расширение RTL и StdLib + исправление ошибок
+| В процессе 🔄
 
 | 7
-| Native backend feature parity (default backend, internal assembler + linker)
-| Complete ✅
+| Паритет функций нативного бэкенда (бэкенд по умолчанию, внутренний ассемблер + компоновщик)
+| Выполнен ✅
 
 | 8
-| Windows + macOS ARM64 targets
-| Planned
+| Цели Windows + macOS ARM64
+| Запланировано
 
 | 9
-| LSP + VS Code extension
-| Planned
+| LSP + расширение для VS Code
+| Запланировано
 
 | 10
-| Migration analyser for FPC/Delphi codebases
-| Planned
+| Анализатор миграции для кодовых баз FPC/Delphi
+| Запланировано
 |===
 
-== What Is Dropped From Classic Pascal
+== Что исключено из классического Pascal
 
 [cols="1,3", options="header"]
 |===
-| Feature | Reason for removal
+| Особенность | Причина удаления
 
 | `ShortString`, `AnsiString`, `WideString`, `UnicodeString`
-| Replaced by a single UTF-8 reference-counted `string` type
+| Заменены единым строковым типом `string` в UTF-8 с подсчётом ссылок
 
-| `with` statement
-| Source of hard-to-diagnose symbol resolution bugs; breaks static analysis
+| Оператор `with`
+| Источник трудно диагностируемых ошибок разрешения символов; нарушает статический анализ
 
-| Old-style `object` types
-| Use `record` (stack/value) or `class` (heap/reference) instead
+| Устаревшие типы `object`
+| Используйте `record` (стек/значение) или `class` (куча/ссылка) вместо них
 
-| COM-style interface GUIDs
-| Interface dispatch via compile-time vtable; GUIDs are unnecessary complexity
+| Интерфейсные GUID в стиле COM
+| Диспетчеризация интерфейсов через таблицу виртуальных методов на этапе компиляции; GUID — излишняя сложность
 
-| Multiple language modes
-| One dialect, maintained well, beats five dialects maintained poorly
+| Множественные режимы языка
+| Один диалект, поддерживаемый хорошо, лучше, чем пять диалектов, поддерживаемых плохо
 
 | `assign`, `reset`, `rewrite`, `blockread`
-| Replaced by a stream-based I/O RTL
+| Заменены RTL с потоковым вводом-выводом
 
-| `TObject` vs `TInterfacedObject` split
-| One unified class model under automatic reference counting; `[Weak]`
-  breaks cycles
+| Разделение `TObject` и `TInterfacedObject`
+| Единая модель классов с автоматическим подсчётом ссылок; `[Weak]` разрывает циклы
 |===
 
-== 📢 Community
+== 📢 Сообщество
 
-The core architecture is still being finalised, so the project is not yet
-accepting code contributions. Feedback on language design, syntax choices, and
-the future direction of Blaise is very welcome — please use the
-https://github.com/graemeg/blaise/discussions[Discussions] tab on GitHub.
+Базовая архитектура всё ещё дорабатывается, поэтому проект пока не принимает вклад в код. Обратная связь по дизайну языка, синтаксическим решениям и будущему направлению Blaise очень приветствуется — используйте вкладку https://github.com/graemeg/blaise/discussions[Discussions] на GitHub.
 
 
-== Repository Layout
+== Структура репозитория
 
-This project uses PasBuild's multi-module layout. Each subdirectory with a
-`project.xml` is an independent module; the root `project.xml` is the aggregator.
+Этот проект использует многомодульную структуру PasBuild. Каждый подкаталог с `project.xml` является независимым модулем; корневой `project.xml` является агрегатором.
 
 ....
-project.xml                       Root aggregator (packaging=pom)
+project.xml                       Корневой агрегатор (packaging=pom)
 │
-├── compiler/                     The compiler binary (packaging=application)
+├── compiler/                     Бинарный файл компилятора (packaging=application)
 │   ├── project.xml
 │   └── src/
 │       ├── main/pascal/          uLexer, uParser, uAST, blaise.codegen.qbe, blaise.codegen.native.*, ...
-│       └── test/pascal/          Test suite (blaise.testing, compiled by Blaise)
+│       └── test/pascal/          Набор тестов (blaise.testing, компилируется Blaise)
 │
-├── runtime/                      Always-linked runtime (packaging=library)
+├── runtime/                      Время выполнения, всегда компонуется (packaging=library)
 │   ├── project.xml
 │   ├── Makefile
 │   └── src/
-│       ├── main/asm/              Platform assembly (setjmp, atomics, UTF-8)
+│       ├── main/asm/             Ассемблер для платформы (setjmp, атомарные операции, UTF-8)
 │       ├── main/pascal/          system.pas, blaise_str.pas, blaise_arc.pas, ...
-│       └── test/pascal/          Runtime tests (punit, compiled by Blaise)
+│       └── test/pascal/          Тесты времени выполнения (punit, компилируются Blaise)
 │
-├── stdlib/                       Standard library — opt-in via uses clause
+├── stdlib/                       Стандартная библиотека — подключается через uses
 │   ├── project.xml
 │   └── src/
 │       └── main/pascal/          sysutils.pas, classes.pas, math.pas, ...
 │
 ├── tools/
-│   └── migration-analyser/       FPC/Delphi migration report tool (packaging=application)
-│       ├── project.xml           depends on compiler module
+│   └── migration-analyser/       Инструмент для отчётов по миграции из FPC/Delphi (packaging=application)
+│       ├── project.xml           зависит от модуля компилятора
 │       └── src/
 │           ├── main/pascal/
 │           └── test/pascal/
 │
-├── vendor/qbe/                   Vendored QBE backend source (pinned, built from source)
-└── docs/                         Design documents and specifications
+├── vendor/qbe/                   Исходный код бэкенда QBE (закреплённая версия, собирается из исходников)
+└── docs/                         Документы по дизайну и спецификации
 ....
 
-PasBuild compiles each module to its own `target/` subdirectory. Build output is
-never committed to the repository.
+PasBuild компилирует каждый модуль в свой подкаталог `target/`. Результаты сборки никогда не сохраняются в репозитории.
 
-== Building
+== Сборка
 
-=== Prerequisites
+=== Предварительные требования
 
-* A previously released Blaise binary (see `releases/`)
+* Ранее выпущенный бинарный файл Blaise (см. `releases/`)
 * https://github.com/graemeg/pasbuild[PasBuild]
-* A C compiler (`gcc` or `clang`) for building the vendored QBE backend and linking
-* GNU `make` for the runtime build
+* Компилятор C (`gcc` или `clang`) для сборки вендорского бэкенда QBE и компоновки
+* GNU `make` для сборки времени выполнения
 
-NOTE: FPC is *not* required. Blaise is fully self-hosting — each release binary
-compiles the next version. The bootstrap chain starts from the binary in
-`releases/`.
+ПРИМЕЧАНИЕ: FPC *не* требуется. Blaise полностью самохостовый — каждый бинарник релиза компилирует следующую версию. Цепочка загрузки начинается с бинарника в `releases/`.
 
-=== Bootstrap from a release
+=== Загрузка из релиза
 
-The runtime build compiles its Pascal units (`blaise_str.pas`, `blaise_arc.pas`,
-`blaise_sys.pas`) using the Blaise binary at `compiler/target/blaise`. On a
-clean checkout that binary does not exist yet, so the release binary must be
-passed explicitly via the `BLAISE` make variable.
+Сборка времени выполнения компилирует свои модули Pascal (`blaise_str.pas`, `blaise_arc.pas`, `blaise_sys.pas`) с использованием бинарника Blaise по пути `compiler/target/blaise`. В чистом виде этого бинарника ещё нет, поэтому бинарник релиза должен быть передан явно через переменную make `BLAISE`.
 
 [source,shell]
 ----
-# Resolve the newest release binary (substitute the path below for $RELEASE).
-RELEASE=$(ls -d releases/v*/ | sort -V | tail -1)blaise   # e.g. releases/v0.12.0/blaise
+# Определить новейший бинарник релиза (подставьте путь вместо $RELEASE).
+RELEASE=$(ls -d releases/v*/ | sort -V | tail -1)blaise   # например releases/v0.12.0/blaise
 
-# 1. Build the runtime using the release binary (BLAISE= avoids chicken-and-egg)
+# 1. Собрать время выполнения с использованием бинарника релиза (BLAISE= предотвращает проблему курицы и яйца)
 cd runtime && make BLAISE=../$RELEASE && make install && cd ..
 
-# 2. Compile the compiler using the release binary (native backend — the
-#    default since v0.12.0 — needs no external assembler or QBE)
+# 2. Скомпилировать компилятор с использованием бинарника релиза (нативный бэкенд —
+#    по умолчанию с v0.12.0 — не требует внешнего ассемблера или QBE)
 $RELEASE \
   --source compiler/src/main/pascal/Blaise.pas \
   --unit-path compiler/src/main/pascal \
@@ -209,30 +188,19 @@ $RELEASE \
   --output compiler/target/blaise
 ----
 
-Once `compiler/target/blaise` exists, subsequent RTL rebuilds (`make && make install`)
-work without the override.
+После появления `compiler/target/blaise` последующие пересборки RTL (`make && make install`) работают без переопределения.
 
-The native backend (default) emits and links a binary directly — no external
-tools.  To bootstrap via the opt-in QBE backend instead, build the vendored QBE
-once (`cd vendor/qbe && make`), add `--backend qbe --emit-ir > /tmp/blaise.ssa`
-to step 2, then `vendor/qbe/qbe -o /tmp/blaise.s /tmp/blaise.ssa` and
-`gcc -o compiler/target/blaise /tmp/blaise.s compiler/target/blaise_rtl.a`.
+Нативный бэкенд (по умолчанию) генерирует и компонует бинарник напрямую — без внешних инструментов. Для загрузки через опциональный бэкенд QBE вместо этого соберите вендорский QBE один раз (`cd vendor/qbe && make`), добавьте `--backend qbe --emit-ir > /tmp/blaise.ssa` к шагу 2, затем `vendor/qbe/qbe -o /tmp/blaise.s /tmp/blaise.ssa` и `gcc -o compiler/target/blaise /tmp/blaise.s compiler/target/blaise_rtl.a`.
 
-=== Bootstrap a development checkout
+=== Загрузка из разработческой версии
 
-The procedure above works while the latest release binary is new enough to
-compile the current source. Between releases that ceases to hold: once a commit
-teaches the parser a new feature and a later commit uses it in the
-runtime/compiler, the release binary can no longer build `master` directly.
+Эта процедура работает, пока последний бинарник релиза достаточно новый, чтобы скомпилировать текущий исходный код. Между релизами это перестаёт работать: как только коммит добавляет новую возможность в парсер, а последующий коммит использует её в среде выполнения/компиляторе, бинарник релиза больше не может собрать `master` напрямую.
 
-`scripts/rolling-bootstrap.sh` rebuilds the chain commit-by-commit from the last
-release binary up to the checked-out revision, producing a working `-pre`
-bootstrap binary. See link:scripts/BOOTSTRAP.adoc[scripts/BOOTSTRAP.adoc] for the
-prerequisite (placing the release binary under `releases/`) and usage.
+`scripts/rolling-bootstrap.sh` пересобирает цепочку коммит за коммитом, начиная с последнего бинарника релиза и до проверенной ревизии, создавая рабочий `-pre` бинарник загрузки. См. link:scripts/BOOTSTRAP.adoc[scripts/BOOTSTRAP.adoc] для предварительных требований (размещение бинарника релиза в `releases/`) и использования.
 
-=== Build via PasBuild
+=== Сборка через PasBuild
 
-PasBuild can drive the full compile and test cycle using a Blaise binary:
+PasBuild может управлять полным циклом компиляции и тестирования с использованием бинарника Blaise:
 
 [source,shell]
 ----
@@ -240,51 +208,50 @@ pasbuild compile -m blaise-compiler --compiler compiler/target/blaise
 pasbuild test -m blaise-compiler --compiler compiler/target/blaise
 ----
 
-=== Run tests
+=== Запуск тестов
 
 [source,shell]
 ----
 pasbuild test -m blaise-compiler --compiler compiler/target/blaise
 ----
 
-=== Verify self-hosting fixpoint
+=== Проверка фикспойнта самохостинга
 
-After any compiler change, verify that the compiler reproduces itself:
+После любого изменения компилятора проверьте, что компилятор воспроизводит себя:
 
 [source,shell]
 ----
 ./scripts/fixpoint.sh
 ----
 
-This generates stage-2 and stage-3 IR and confirms they are identical.
+Это генерирует промежуточное представление (IR) для этапов 2 и 3 и подтверждает их идентичность.
 
-=== Running the compiler
+=== Запуск компилятора
 
-Once built, the compiler binary is at `compiler/target/blaise`.
+После сборки бинарник компилятора находится по пути `compiler/target/blaise`.
 
 [source,shell]
 ----
-# Compile a single-file program (native backend — default, no external tools)
+# Скомпилировать однострочную программу (нативный бэкенд — по умолчанию, без внешних инструментов)
 compiler/target/blaise --source Hello.pas --output Hello
 
-# Compile via the opt-in QBE backend (emits QBE IR, assembled + linked separately)
+# Скомпилировать через опциональный бэкенд QBE (генерирует QBE IR, собирается и компонуется отдельно)
 compiler/target/blaise --source Hello.pas --backend qbe --emit-ir > Hello.ssa
 vendor/qbe/qbe -o Hello.s Hello.ssa
 gcc -o Hello Hello.s compiler/target/blaise_rtl.a
 
-# Compile with unit search paths
+# Скомпилировать с путями поиска модулей
 compiler/target/blaise --source MyApp.pas \
   --unit-path src/units \
   --emit-ir > MyApp.ssa
 
-# Emit QBE IR only (useful for debugging the compiler itself)
+# Сгенерировать только QBE IR (полезно для отладки самого компилятора)
 compiler/target/blaise --source Hello.pas --emit-ir
 ----
 
-== Licence
+== Лицензия
 
-Apache License v2.0 with Runtime Library Exception. See link:LICENSE[LICENSE].
+Apache License v2.0 с исключением для библиотеки времени выполнения. См. link:LICENSE[LICENSE].
 
 
 ---
-*Built with ❤️ for the Pascal community by Graeme.*
