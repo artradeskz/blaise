@@ -12,11 +12,11 @@
   Blaise strings are 0-based: S[0] is the first character, Pos returns
   a 0-based index (-1 = not found), Copy takes a 0-based From argument.
 
-  Usage:
-    - Replace s[1] with StrAt(s, 0)
-    - Replace Pos(sub, s) > 0  with Pos(sub, s) >= 0
-    - Replace Copy(s, n, len)  with Copy(s, n, len)  (already 0-based in Blaise)
-    - Use StrAt(s, i) instead of s[i+1] style char access
+  UTF-8 aware functions added for lexer/parser support:
+    - UTF8CharLen: returns byte length of UTF-8 sequence starting at given byte
+    - UTF8CodePoint: decodes Unicode codepoint from UTF-8 bytes at position
+    - IsUTF8Letter: checks if codepoint is a letter (Latin, Cyrillic) or underscore
+    - IsUTF8Digit: checks if codepoint is an ASCII digit 0-9
 }
 
 unit uStrCompat;
@@ -52,6 +52,24 @@ function ParseIntLiteral(const S: string): Int64;
   as UInt64).  Raises EConvertError on overflow past UInt64. }
 procedure ParseIntOrUInt64Literal(const S: string;
   var AValue: Int64; var AIsUInt64: Boolean);
+
+{ UTF-8 helper routines }
+
+{ Return number of bytes in the UTF-8 sequence that starts at byte I.
+  Returns 1 for ASCII, 2 for Cyrillic (U+0080..U+07FF), 0 for invalid. }
+function UTF8CharLen(const S: string; I: Integer): Integer;
+
+{ Decode a Unicode codepoint from the UTF-8 sequence starting at byte I.
+  Returns the codepoint (e.g. $041F for 'П'), or -1 if the sequence is
+  invalid or truncated. }
+function UTF8CodePoint(const S: string; I: Integer): Integer;
+
+{ Returns True if the codepoint is a letter (Latin A-Z, a-z, Cyrillic
+  А-Я, а-я, Ё, ё) or underscore (_). }
+function IsUTF8Letter(CP: Integer): Boolean;
+
+{ Returns True if the codepoint is an ASCII digit 0-9. }
+function IsUTF8Digit(CP: Integer): Boolean;
 
 implementation
 
@@ -202,6 +220,154 @@ begin
   if IsU then
     raise EConvertError.Create('Integer literal exceeds Int64 range: ''' + S + '''');
   Result := V;
+end;
+
+{ ------------------------------------------------------------------------ }
+{  UTF-8 helper routines                                                    }
+{ ------------------------------------------------------------------------ }
+
+function UTF8CharLen(const S: string; I: Integer): Integer;
+var
+  B: Integer;
+begin
+  if (I < 0) or (I >= Length(S)) then
+  begin
+    Result := 0;
+    Exit;
+  end;
+  B := OrdAt(S, I);
+  if B <= 127 then
+    Result := 1
+  else if (B >= $C2) and (B <= $DF) then
+  begin
+    { 2-byte sequence: need 1 continuation byte }
+    if I + 1 < Length(S) then
+      Result := 2
+    else
+      Result := 0;  { truncated }
+  end
+  else if (B >= $E0) and (B <= $EF) then
+  begin
+    { 3-byte sequence: need 2 continuation bytes }
+    if I + 2 < Length(S) then
+      Result := 3
+    else
+      Result := 0;
+  end
+  else if (B >= $F0) and (B <= $F4) then
+  begin
+    { 4-byte sequence: need 3 continuation bytes }
+    if I + 3 < Length(S) then
+      Result := 4
+    else
+      Result := 0;
+  end
+  else
+    Result := 0;  { invalid leading byte or continuation byte alone }
+end;
+
+function UTF8CodePoint(const S: string; I: Integer): Integer;
+var
+  B0, B1, B2, B3: Integer;
+  Len: Integer;
+begin
+  Len := Length(S);
+  if (I < 0) or (I >= Len) then
+  begin
+    Result := -1;
+    Exit;
+  end;
+  B0 := OrdAt(S, I);
+  if B0 <= 127 then
+  begin
+    Result := B0;
+    Exit;
+  end
+  else if (B0 >= $C2) and (B0 <= $DF) then
+  begin
+    if I + 1 >= Len then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    B1 := OrdAt(S, I + 1);
+    if (B1 and $C0) <> $80 then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    Result := ((B0 and $1F) shl 6) or (B1 and $3F);
+  end
+  else if (B0 >= $E0) and (B0 <= $EF) then
+  begin
+    if I + 2 >= Len then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    B1 := OrdAt(S, I + 1);
+    B2 := OrdAt(S, I + 2);
+    if ((B1 and $C0) <> $80) or ((B2 and $C0) <> $80) then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    Result := ((B0 and $0F) shl 12) or ((B1 and $3F) shl 6) or (B2 and $3F);
+  end
+  else if (B0 >= $F0) and (B0 <= $F4) then
+  begin
+    if I + 3 >= Len then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    B1 := OrdAt(S, I + 1);
+    B2 := OrdAt(S, I + 2);
+    B3 := OrdAt(S, I + 3);
+    if ((B1 and $C0) <> $80) or ((B2 and $C0) <> $80) or ((B3 and $C0) <> $80) then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    Result := ((B0 and $07) shl 18) or ((B1 and $3F) shl 12) or
+              ((B2 and $3F) shl 6) or (B3 and $3F);
+  end
+  else
+    Result := -1;  { invalid byte }
+end;
+
+function IsUTF8Letter(CP: Integer): Boolean;
+begin
+  { ASCII letters }
+  if ((CP >= 65) and (CP <= 90)) or ((CP >= 97) and (CP <= 122)) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  { Underscore }
+  if CP = 95 then
+  begin
+    Result := True;
+    Exit;
+  end;
+  { Cyrillic basic: U+0410..U+044F (А-Я, а-я) }
+  if (CP >= $0410) and (CP <= $044F) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  { Ё (U+0401) and ё (U+0451) }
+  if (CP = $0401) or (CP = $0451) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+end;
+
+function IsUTF8Digit(CP: Integer): Boolean;
+begin
+  Result := (CP >= 48) and (CP <= 57);
 end;
 
 end.

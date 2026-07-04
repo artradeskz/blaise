@@ -19,6 +19,10 @@
 
     Ported from the fpGUI IDE tokeniser (same author).
 
+    UTF-8 support: identifiers may contain Latin (A-Z, a-z) and Cyrillic
+    (А-Я, а-я, Ё, ё) letters plus underscore and digits.  Peek/Advance
+    operate on whole Unicode codepoints, not raw bytes.
+
     Implementation uses OrdAt and integer-based char comparisons throughout
     so the unit compiles under both FPC and the self-hosted Blaise compiler.
 }
@@ -26,7 +30,7 @@ unit uPasTokeniser;
 
 interface
 
-uses Classes, SysUtils;
+uses Classes, SysUtils, uStrCompat;
 
 type
   TFpgPasTokenKind = (
@@ -47,20 +51,35 @@ type
     Kind: TFpgPasTokenKind;
     Line: Integer;       { 1-based line number }
     Column: Integer;     { 1-based column }
-    Len: Integer;        { character length in source }
+    Len: Integer;        { character length in source (bytes) }
     TextStart: Integer;  { 1-based index into source string }
   end;
 
   TFpgPascalTokeniser = class(TObject)
+  private
     FSource: string;
-    FPos: Integer;
+    FPos: Integer;        { 1-based byte position in FSource }
     FLine: Integer;
     FLineStart: Integer;
     FToken: TFpgPasToken;
+
+    { Return the Unicode codepoint at FPos (decodes UTF-8 if multi-byte).
+      Returns 0 at end-of-source. }
     function Peek: Integer;
+
+    { Return the Unicode codepoint at FPos + AOffset bytes.  AOffset is a
+      raw byte offset from FPos — used only for small lookaheads (1–3 bytes)
+      where the caller knows the first byte is ASCII or the previous char
+      was single-byte.  Returns 0 if out of bounds. }
     function PeekAt(AOffset: Integer): Integer;
+
+    { Advance FPos past the current character (1 byte for ASCII, 2+ for
+      multi-byte UTF-8). }
     procedure Advance;
+
+    { Advance one source line (called after consuming a line ending). }
     procedure AdvanceLine;
+
     procedure ReadWhitespace;
     procedure ReadLineEnding;
     procedure ReadIdentifierOrKeyword;
@@ -71,6 +90,7 @@ type
     procedure ReadParenStarCommentOrDirective;
     procedure ReadLineComment;
     procedure ReadSymbol;
+  public
     constructor Create;
     procedure SetSource(const ASource: string);
     function NextToken: TFpgPasToken;
@@ -108,6 +128,8 @@ begin
   KwList := TStringList.Create();
   KwList.Sorted := True;
   KwList.CaseSensitive := True;
+
+  { Оригинальные английские ключевые слова }
   KwList.Add('ABSOLUTE');     KwList.Add('AND');          KwList.Add('ARRAY');
   KwList.Add('AS');           KwList.Add('ASM');          KwList.Add('BEGIN');
   KwList.Add('BITPACKED');    KwList.Add('CASE');         KwList.Add('CLASS');
@@ -135,7 +157,89 @@ begin
   KwList.Add('TRUE');         KwList.Add('TRY');          KwList.Add('TYPE');
   KwList.Add('UNIT');         KwList.Add('UNTIL');        KwList.Add('USES');
   KwList.Add('VAR');          KwList.Add('WHILE');        KwList.Add('WITH');
-  KwList.Add('XOR')
+  KwList.Add('XOR');
+
+  { Русские синонимы ключевых слов }
+  KwList.Add('АБСОЛЮТНЫЙ');     // ABSOLUTE
+  KwList.Add('И');             // AND
+  KwList.Add('МАССИВ');        // ARRAY
+  KwList.Add('КАК');           // AS
+  KwList.Add('АССЕМБЛЕР');     // ASM
+  KwList.Add('НАЧАЛО');        // BEGIN
+  KwList.Add('БИТОВЫЙ');       // BITPACKED
+  KwList.Add('ВЫБОР');         // CASE
+  KwList.Add('КЛАСС');         // CLASS
+  KwList.Add('КОНСТ');         // CONST
+  KwList.Add('КОНСТСЫЛКА');    // CONSTREF
+  KwList.Add('СОЗДАТЕЛЬ');     // CONSTRUCTOR
+  KwList.Add('СОДЕРЖИТ');      // CONTAINS
+  KwList.Add('УНИЧТОЖИТЕЛЬ');  // DESTRUCTOR
+  KwList.Add('ДИСПИНТЕРФЕЙС'); // DISPINTERFACE
+  KwList.Add('ЦЕЛДЕЛ');        // DIV
+  KwList.Add('ВЫПОЛНИТЬ');     // DO
+  KwList.Add('ДО');            // DOWNTO
+  KwList.Add('ИНАЧЕ');         // ELSE
+  KwList.Add('КОНЕЦ');         // END
+  KwList.Add('ИСКЛЮЧЕНИЕ');    // EXCEPT
+  KwList.Add('ЭКСПОРТЫ');      // EXPORTS
+  KwList.Add('ЛОЖЬ');          // FALSE
+  KwList.Add('ФАЙЛ');          // FILE
+  KwList.Add('ФИНАЛИЗАЦИЯ');   // FINALIZATION
+  KwList.Add('НАКОНЕЦ');       // FINALLY
+  KwList.Add('ДЛЯ');           // FOR
+  KwList.Add('ФУНКЦИЯ');       // FUNCTION
+  KwList.Add('ОБОБЩЁННЫЙ');    // GENERIC
+  KwList.Add('ПЕРЕЙТИ');       // GOTO
+  KwList.Add('ЕСЛИ');          // IF
+  KwList.Add('РЕАЛИЗАЦИЯ');    // IMPLEMENTATION
+  KwList.Add('В');             // IN
+  KwList.Add('НАСЛЕДОВАН');    // INHERITED
+  KwList.Add('ИНИЦИАЛИЗАЦИЯ'); // INITIALIZATION
+  KwList.Add('ВСТРОЕННЫЙ');    // INLINE
+  KwList.Add('ИНТЕРФЕЙС');     // INTERFACE
+  KwList.Add('ЭТО');           // IS
+  KwList.Add('МЕТКА');         // LABEL
+  KwList.Add('БИБЛИОТЕКА');    // LIBRARY
+  KwList.Add('ОСТАТОК');       // MOD
+  KwList.Add('НИЧТО');         // NIL
+  KwList.Add('НЕ');            // NOT
+  KwList.Add('ОБЬЕКТКАТЕГОРИЯ'); // OBJCCATEGORY
+  KwList.Add('ОБЬЕКТКЛАСС');   // OBJCCLASS
+  KwList.Add('ОБЬЕКТПРОТОКОЛ'); // OBJCPROTOCOL
+  KwList.Add('ОБЬЕКТ');        // OBJECT
+  KwList.Add('ИЗ');            // OF
+  KwList.Add('ОПЕРАТОР');      // OPERATOR
+  KwList.Add('ИЛИ');           // OR
+  KwList.Add('ИНАЧЕ');         // OTHERWISE  (note: same as ELSE in Russian)
+  KwList.Add('ПАКЕТ');         // PACKAGE
+  KwList.Add('УПАКОВАН');      // PACKED
+  KwList.Add('ПРОЦЕДУРА');     // PROCEDURE
+  KwList.Add('ПРОГРАММА');     // PROGRAM
+  KwList.Add('СВОЙСТВО');      // PROPERTY
+  KwList.Add('ВОЗБУДИТЬ');     // RAISE
+  KwList.Add('ЗАПИСЬ');        // RECORD
+  KwList.Add('ПОВТОРЯТЬ');     // REPEAT
+  KwList.Add('ТРЕБУЕТ');       // REQUIRES
+  KwList.Add('РЕСУРССТРОКА');  // RESOURCESTRING
+  KwList.Add('АРИФСДВИГ');     // SAR
+  KwList.Add('СЕБЯ');          // SELF
+  KwList.Add('МНОЖЕСТВО');     // SET
+  KwList.Add('СДВИГВЛЕВО');    // SHL
+  KwList.Add('СДВИГВПРАВО');   // SHR
+  KwList.Add('СПЕЦИАЛИЗИРОВАТЬ'); // SPECIALIZE
+  KwList.Add('ТОГДА');         // THEN
+  KwList.Add('ПОТОКПЕРЕМ');    // THREADVAR
+  KwList.Add('К');             // TO
+  KwList.Add('ИСТИНА');        // TRUE
+  KwList.Add('ПОПЫТАТЬСЯ');    // TRY
+  KwList.Add('ТИП');           // TYPE
+  KwList.Add('МОДУЛЬ');        // UNIT
+  KwList.Add('ДО_ТЕХ_ПОР');    // UNTIL
+  KwList.Add('ИСПОЛЬЗУЕТ');    // USES
+  KwList.Add('ПЕРЕМ');         // VAR
+  KwList.Add('ПОКА');          // WHILE
+  KwList.Add('С');             // WITH
+  KwList.Add('ИСКЛ_ИЛИ');      // XOR
 end;
 
 function BinarySearchKeyword(const AText: string): Boolean;
@@ -180,29 +284,76 @@ begin
   FToken.TextStart := 1
 end;
 
+{ ------------------------------------------------------------------------ }
+{  Peek / PeekAt / Advance — UTF-8 aware                                   }
+{ ------------------------------------------------------------------------ }
+
 function TFpgPascalTokeniser.Peek: Integer;
+var
+  Len: Integer;
 begin
-  if FPos <= Length(FSource) then
-    Result := PosOrd(FSource, FPos)
-  else
-    Result := 0
+  if FPos > Length(FSource) then
+  begin
+    Result := 0;
+    Exit;
+  end;
+  { Use UTF8CodePoint which decodes the full Unicode codepoint from the
+    UTF-8 sequence starting at FPos.  uStrCompat expects 0-based indexing,
+    so pass FPos - 1. }
+  Result := UTF8CodePoint(FSource, FPos - 1);
+  if Result = -1 then
+    { Invalid or truncated UTF-8: fall back to the raw byte value so the
+      tokeniser can still make progress (produce a symbol token etc.). }
+    Result := PosOrd(FSource, FPos);
 end;
 
 function TFpgPascalTokeniser.PeekAt(AOffset: Integer): Integer;
 var
   P: Integer;
+  Len: Integer;
 begin
   P := FPos + AOffset;
-  if (P >= 1) and (P <= Length(FSource)) then
-    Result := PosOrd(FSource, P)
-  else
-    Result := 0
+  if (P < 1) or (P > Length(FSource)) then
+  begin
+    Result := 0;
+    Exit;
+  end;
+  { PeekAt is used exclusively for small lookaheads (1–3 bytes) in contexts
+    where the immediately preceding character was already consumed and we
+    know it was single-byte ASCII (e.g. after '(', '$', '%', '&', '/').
+    We can safely read the raw byte at the offset.
+
+    The one exception is looking ahead from a Cyrillic character — but
+    PeekAt is never called from inside a multi-byte character's span because
+    Advance always moves past all bytes of a character. }
+  Result := PosOrd(FSource, P);
 end;
 
 procedure TFpgPascalTokeniser.Advance;
+var
+  B: Integer;
+  Skip: Integer;
 begin
-  FPos := FPos + 1
+  if FPos > Length(FSource) then
+    Exit;
+  B := PosOrd(FSource, FPos);
+  if B <= 127 then
+    FPos := FPos + 1
+  else
+  begin
+    { Use UTF8CharLen to determine how many bytes this character occupies.
+      For valid UTF-8 this returns 2, 3, or 4; for invalid bytes it returns 0
+      — in that case advance by 1 to avoid getting stuck. }
+    Skip := UTF8CharLen(FSource, FPos - 1);
+    if Skip <= 0 then
+      Skip := 1;
+    FPos := FPos + Skip;
+  end;
 end;
+
+{ ------------------------------------------------------------------------ }
+{  Line handling                                                           }
+{ ------------------------------------------------------------------------ }
 
 procedure TFpgPascalTokeniser.AdvanceLine;
 begin
@@ -210,12 +361,22 @@ begin
   FLineStart := FPos
 end;
 
+{ ------------------------------------------------------------------------ }
+{  Token readers                                                           }
+{ ------------------------------------------------------------------------ }
+
 procedure TFpgPascalTokeniser.ReadWhitespace;
+var
+  C: Integer;
 begin
   FToken.Kind := fptkWhitespace;
-  while (FPos <= Length(FSource)) and
-        ((PosOrd(FSource, FPos) = 32) or (PosOrd(FSource, FPos) = 9)) do
+  while FPos <= Length(FSource) do
+  begin
+    C := Peek();
+    if (C <> 32) and (C <> 9) then
+      Break;
     Advance();
+  end;
   FToken.Len := FPos - FToken.TextStart
 end;
 
@@ -235,11 +396,10 @@ var
 begin
   while FPos <= Length(FSource) do
   begin
-    C := PosOrd(FSource, FPos);
-    if not (((C >= 65) and (C <= 90)) or ((C >= 97) and (C <= 122)) or
-            ((C >= 48) and (C <= 57)) or (C = 95)) then
+    C := Peek();
+    if not (IsUTF8Letter(C) or IsUTF8Digit(C)) then
       Break;
-    Advance()
+    Advance();
   end;
   FToken.Len := FPos - FToken.TextStart;
   if BinarySearchKeyword(UpperCase(TokenText())) then
@@ -258,12 +418,16 @@ begin
   if C = 36 then  { $ hex }
   begin
     Advance();
-    while (FPos <= Length(FSource)) and
-          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
-           ((PosOrd(FSource, FPos) >= 65) and (PosOrd(FSource, FPos) <= 70)) or
-           ((PosOrd(FSource, FPos) >= 97) and (PosOrd(FSource, FPos) <= 102)) or
-           (PosOrd(FSource, FPos) = 95)) do
+    while FPos <= Length(FSource) do
+    begin
+      C := PosOrd(FSource, FPos);
+      if not (((C >= 48) and (C <= 57)) or
+              ((C >= 65) and (C <= 70)) or
+              ((C >= 97) and (C <= 102)) or
+              (C = 95)) then
+        Break;
       Advance();
+    end;
     FToken.Len := FPos - FToken.TextStart;
     Exit
   end;
@@ -271,10 +435,13 @@ begin
   if C = 37 then  { % binary }
   begin
     Advance();
-    while (FPos <= Length(FSource)) and
-          ((PosOrd(FSource, FPos) = 48) or (PosOrd(FSource, FPos) = 49) or
-           (PosOrd(FSource, FPos) = 95)) do
+    while FPos <= Length(FSource) do
+    begin
+      C := PosOrd(FSource, FPos);
+      if not ((C = 48) or (C = 49) or (C = 95)) then
+        Break;
       Advance();
+    end;
     FToken.Len := FPos - FToken.TextStart;
     Exit
   end;
@@ -282,28 +449,37 @@ begin
   if C = 38 then  { & octal }
   begin
     Advance();
-    while (FPos <= Length(FSource)) and
-          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 55)) or
-           (PosOrd(FSource, FPos) = 95)) do
+    while FPos <= Length(FSource) do
+    begin
+      C := PosOrd(FSource, FPos);
+      if not (((C >= 48) and (C <= 55)) or (C = 95)) then
+        Break;
       Advance();
+    end;
     FToken.Len := FPos - FToken.TextStart;
     Exit
   end;
 
   { decimal integer — also allows _ between digits }
-  while (FPos <= Length(FSource)) and
-        (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
-         (PosOrd(FSource, FPos) = 95)) do
+  while FPos <= Length(FSource) do
+  begin
+    C := PosOrd(FSource, FPos);
+    if not (((C >= 48) and (C <= 57)) or (C = 95)) then
+      Break;
     Advance();
+  end;
 
   if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 46) and
      (PeekAt(1) <> 46) then
   begin
     Advance();
-    while (FPos <= Length(FSource)) and
-          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
-           (PosOrd(FSource, FPos) = 95)) do
-      Advance()
+    while FPos <= Length(FSource) do
+    begin
+      C := PosOrd(FSource, FPos);
+      if not (((C >= 48) and (C <= 57)) or (C = 95)) then
+        Break;
+      Advance();
+    end;
   end;
 
   if (FPos <= Length(FSource)) and
@@ -313,10 +489,13 @@ begin
     if (FPos <= Length(FSource)) and
        ((PosOrd(FSource, FPos) = 43) or (PosOrd(FSource, FPos) = 45)) then
       Advance();
-    while (FPos <= Length(FSource)) and
-          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
-           (PosOrd(FSource, FPos) = 95)) do
-      Advance()
+    while FPos <= Length(FSource) do
+    begin
+      C := PosOrd(FSource, FPos);
+      if not (((C >= 48) and (C <= 57)) or (C = 95)) then
+        Break;
+      Advance();
+    end;
   end;
 
   FToken.Len := FPos - FToken.TextStart
@@ -329,7 +508,7 @@ begin
   FToken.Kind := fptkString;
   while True do
   begin
-    C := Peek();
+    C := PosOrd(FSource, FPos);
     if C = 39 then
     begin
       Advance();
@@ -355,17 +534,25 @@ begin
       if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 36) then
       begin
         Advance();
-        while (FPos <= Length(FSource)) and
-              (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
-               ((PosOrd(FSource, FPos) >= 65) and (PosOrd(FSource, FPos) <= 70)) or
-               ((PosOrd(FSource, FPos) >= 97) and (PosOrd(FSource, FPos) <= 102))) do
-          Advance()
+        while FPos <= Length(FSource) do
+        begin
+          C := PosOrd(FSource, FPos);
+          if not (((C >= 48) and (C <= 57)) or
+                  ((C >= 65) and (C <= 70)) or
+                  ((C >= 97) and (C <= 102))) then
+            Break;
+          Advance();
+        end
       end
       else
       begin
-        while (FPos <= Length(FSource)) and
-              ((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) do
-          Advance()
+        while FPos <= Length(FSource) do
+        begin
+          C := PosOrd(FSource, FPos);
+          if not ((C >= 48) and (C <= 57)) then
+            Break;
+          Advance();
+        end
       end
     end
     else if C = 94 then
@@ -523,6 +710,10 @@ begin
   FToken.Len := FPos - FToken.TextStart
 end;
 
+{ ------------------------------------------------------------------------ }
+{  NextToken — main dispatch                                              }
+{ ------------------------------------------------------------------------ }
+
 function TFpgPascalTokeniser.NextToken: TFpgPasToken;
 var
   C, C2: Integer;
@@ -542,7 +733,7 @@ begin
   FToken.Line := FLine;
   FToken.Column := FPos - FLineStart + 1;
 
-  C := PosOrd(FSource, FPos);
+  C := Peek();
 
   if (C = 32) or (C = 9) then
   begin
@@ -558,7 +749,10 @@ begin
     Exit
   end;
 
-  if ((C >= 65) and (C <= 90)) or ((C >= 97) and (C <= 122)) or (C = 95) then
+  { Identifier start: UTF-8 letter (Latin, Cyrillic) or underscore.
+    Note: Peek() already returns full Unicode codepoint, so Cyrillic
+    letters like 'П' ($041F) are correctly recognised. }
+  if IsUTF8Letter(C) then
   begin
     ReadIdentifierOrKeyword();
     Result := FToken;
@@ -572,6 +766,7 @@ begin
     Exit
   end;
 
+  C := PosOrd(FSource, FPos);
   C2 := PeekAt(1);
 
   if (C = 36) and (((C2 >= 48) and (C2 <= 57)) or
