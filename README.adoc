@@ -1,4 +1,3 @@
----
 
 = Компилятор Pascal Blaise
 :icons: font
