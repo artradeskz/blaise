@@ -72,18 +72,6 @@ type
     procedure TestCodegen_NestedProc_IsEmittedBeforeOuter;
     procedure TestCodegen_NestedProc_CapturedVarPassedByPtr;
     procedure TestCodegen_NestedProc_SameNameInTwoOuters_NoAmbiguity;
-    { Same as above but the nested routines are FUNCTIONS called as
-      expressions (Helper(X) inside WriteLn), which exercises
-      AnalyseFuncCallExpr rather than AnalyseProcCall.  The func-call path
-      previously consulted only the global FProcIndex and errored with
-      "Cannot find declaration for function 'Helper'". }
-    procedure TestCodegen_NestedFunc_SameNameInTwoOuters_ResolvesPerScope;
-    { Two sibling METHOD bodies each declaring a same-named nested function.
-      Nested-in-method decls were registered in the global overload index
-      (the registration guard only excluded nested-in-standalone-proc decls),
-      so they collided as "Ambiguous overload".  They must be scoped to their
-      enclosing method body like nested-in-proc decls. }
-    procedure TestCodegen_NestedFunc_InTwoMethods_ResolvesPerScope;
   end;
 
 implementation
@@ -600,10 +588,10 @@ const
           begin
           end;
         begin
-          Inner();
+          Inner;
         end;
         begin
-          Outer();
+          Outer;
         end.
         ''';
 var IR: string;
@@ -631,10 +619,10 @@ const
           end;
         begin
           x := 0;
-          Inner();
+          Inner;
         end;
         begin
-          Outer();
+          Outer;
         end.
         ''';
 var IR: string;
@@ -662,7 +650,7 @@ const
             WriteLn(1);
           end;
         begin
-          Inner();
+          Inner;
         end;
         procedure OuterB;
           procedure Inner;
@@ -670,11 +658,11 @@ const
             WriteLn(2);
           end;
         begin
-          Inner();
+          Inner;
         end;
         begin
-          OuterA();
-          OuterB();
+          OuterA;
+          OuterB;
         end.
         ''';
 var
@@ -683,87 +671,6 @@ begin
   IR := GenIR(Src);
   AssertTrue('OuterA_Inner is emitted', StrPos('$OuterA_Inner', IR) >= 0);
   AssertTrue('OuterB_Inner is emitted', StrPos('$OuterB_Inner', IR) >= 0);
-end;
-
-procedure TProcFuncTests.TestCodegen_NestedFunc_SameNameInTwoOuters_ResolvesPerScope;
-const
-  Src =
-    '''
-        program TwinNestedFunc;
-        procedure OuterA;
-          function Helper(X: Integer): Integer;
-          begin
-            Result := X + 1;
-          end;
-        begin
-          WriteLn(IntToStr(Helper(10)));
-        end;
-        procedure OuterB;
-          function Helper(X: Integer): Integer;
-          begin
-            Result := X + 2;
-          end;
-        begin
-          WriteLn(IntToStr(Helper(20)));
-        end;
-        begin
-          OuterA();
-          OuterB();
-        end.
-        ''';
-var
-  IR: string;
-begin
-  IR := GenIR(Src);
-  { Each sibling nested function is emitted under its own enclosing-routine
-    qualified label — proving they resolved to distinct decls per scope
-    rather than colliding as ambiguous overloads.  (The call sites may be
-    inlined, so assert on the emitted function labels, not on a call.) }
-  AssertTrue('OuterA_Helper is emitted', StrPos('$OuterA_Helper', IR) >= 0);
-  AssertTrue('OuterB_Helper is emitted', StrPos('$OuterB_Helper', IR) >= 0);
-end;
-
-procedure TProcFuncTests.TestCodegen_NestedFunc_InTwoMethods_ResolvesPerScope;
-const
-  Src =
-    '''
-        program TwinNestedMethod;
-        type
-          TFoo = class
-            procedure MethodA;
-            procedure MethodB;
-          end;
-        procedure TFoo.MethodA;
-          function Helper(X: Integer): Integer;
-          begin
-            Result := X + 1;
-          end;
-        begin
-          WriteLn(IntToStr(Helper(10)));
-        end;
-        procedure TFoo.MethodB;
-          function Helper(X: Integer): Integer;
-          begin
-            Result := X + 2;
-          end;
-        begin
-          WriteLn(IntToStr(Helper(20)));
-        end;
-        var F: TFoo;
-        begin
-          F := TFoo.Create;
-          F.MethodA();
-          F.MethodB();
-        end.
-        ''';
-var
-  IR: string;
-begin
-  IR := GenIR(Src);
-  { Compiling at all proves the nested-in-method funcs did not collide as
-    ambiguous overloads; both enclosing methods are emitted. }
-  AssertTrue('TFoo_MethodA is emitted', StrPos('$TFoo_MethodA', IR) >= 0);
-  AssertTrue('TFoo_MethodB is emitted', StrPos('$TFoo_MethodB', IR) >= 0);
 end;
 
 initialization

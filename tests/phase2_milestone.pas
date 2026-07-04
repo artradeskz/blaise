@@ -92,7 +92,7 @@ begin
   Result      := N.FValue;
   Self.FHead  := N.FNext;
   Self.FCount := Self.FCount - 1;
-  N.Free()
+  N.Free
 end;
 
 procedure TLinkedList.Walk;
@@ -120,7 +120,7 @@ begin
   while N <> nil do
   begin
     Next := N.FNext;
-    N.Free();
+    N.Free;
     N := Next
   end;
   Self.FHead  := nil;
@@ -145,7 +145,7 @@ begin
 
     WriteLn('count=', List.Count);          { 4 }
     WriteLn('--- walk ---');
-    List.Walk();                             { 40/tag0, 30/tag1/marked, 20/tag0, 10/tag0 }
+    List.Walk;                               { 40/tag0, 30/tag1/marked, 20/tag0, 10/tag0 }
 
     { Pop two values off the front }
     V := List.Pop();
@@ -155,7 +155,7 @@ begin
 
     WriteLn('count_after_pops=', List.Count);   { 2 }
   finally
-    List.Clear();
-    List.Free()
+    List.Clear;
+    List.Free
   end
 end.

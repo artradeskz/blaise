@@ -36,28 +36,35 @@ if [ ! -x "$STAGE1_BIN" ]; then
 fi
 echo "stage-1: $STAGE1_BIN"
 
-# The RTL is built from source (no archive) and linked alongside the assembled
-# compiler IR — exactly what the compiler driver does via EnsureRTLObjects.
-# Because the whole-program --emit-ir dump INLINES the RTL units the compiler
-# uses (runtime.arc via `uses classes`, etc.), the per-stage link below builds
-# the RTL objects with --exclude-defined-by <program object> so the inlined
-# units are not supplied twice.  Helper: link_stage <prog.s> <out-binary>.
+# The runtime Makefile defaults BLAISE to ../compiler/target/blaise, which may
+# not exist yet — e.g. straight after scripts/rolling-bootstrap.sh, which
+# installs only to releases/ and leaves the live compiler/target/ empty.
+# Drive the runtime build with the stage-1 binary explicitly so fixpoint never
+# depends on a pre-existing compiler/target/blaise. make runs inside runtime/,
+# so BLAISE must be an absolute path.
 ABS_STAGE1=$(readlink -f "$STAGE1_BIN")
-RTL_OBJDIR=/tmp/fp_rtl_obj
 
-link_stage() {
-  # $1 = assembled program .s, $2 = output binary
-  local prog_s="$1" out_bin="$2" prog_o rtl_objs
-  prog_o="${prog_s%.s}.o"
-  gcc -c -o "$prog_o" "$prog_s" 2>/tmp/fp_cc.err || return 3
-  rm -rf "$RTL_OBJDIR"
-  rtl_objs=$(scripts/build-rtl-objects.sh "$ABS_STAGE1" "$RTL_OBJDIR" \
-               --exclude-defined-by "$prog_o") || return 11
-  gcc -o "$out_bin" "$prog_o" $rtl_objs -lm -lpthread 2>/tmp/fp_gcc.err || return 3
-  return 0
+echo "[1/5] rebuild + install runtime (BLAISE=$ABS_STAGE1)"
+( cd runtime && make clean > /tmp/fp_rtl.log 2>&1 \
+             && make BLAISE="$ABS_STAGE1" >> /tmp/fp_rtl.log 2>&1 \
+             && make BLAISE="$ABS_STAGE1" install >> /tmp/fp_rtl.log 2>&1 ) || {
+  if [ -f compiler/target/blaise_rtl.a ]; then
+    echo "      stage-1 too old for runtime; using existing blaise_rtl.a"
+  else
+    echo "RUNTIME_FAIL"; tail -5 /tmp/fp_rtl.log; exit 11;
+  fi
 }
 
-echo "[1/5] (RTL objects are built per-stage during linking)"
+# Resolve the RTL archive for the link steps below.  `make install` copies it
+# to compiler/target/, but fall back to the runtime build dir so the link
+# never fails on a tree where compiler/target/ was not populated.
+if [ -f compiler/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=compiler/target/blaise_rtl.a
+elif [ -f runtime/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=runtime/target/blaise_rtl.a
+else
+  echo "RUNTIME_FAIL: blaise_rtl.a not found after runtime build"; exit 11
+fi
 
 echo "[2/5] stage-1 -> stage-2 IR"
 "$STAGE1_BIN" --source compiler/src/main/pascal/Blaise.pas \
@@ -75,8 +82,8 @@ echo "[3/5] assemble + link stage-2 binary"
 vendor/qbe/qbe -o /tmp/fp_stage2.s /tmp/fp_stage2.ssa 2>/tmp/fp_qbe.err || {
   echo "QBE_FAIL"; cat /tmp/fp_qbe.err; exit 2;
 }
-link_stage /tmp/fp_stage2.s /tmp/fp_blaise2 || {
-  echo "GCC_FAIL"; cat /tmp/fp_gcc.err 2>/dev/null; cat /tmp/fp_cc.err 2>/dev/null; exit 3;
+gcc -o /tmp/fp_blaise2 /tmp/fp_stage2.s "$RTL_ARCHIVE" 2>/tmp/fp_gcc.err || {
+  echo "GCC_FAIL"; cat /tmp/fp_gcc.err; exit 3;
 }
 
 echo "[4/5] stage-2 -> stage-3 IR (5min timeout)"
@@ -111,8 +118,8 @@ echo "[+1] assemble + link stage-3 binary"
 vendor/qbe/qbe -o /tmp/fp_stage3.s /tmp/fp_stage3.ssa 2>/tmp/fp_qbe3.err || {
   echo "QBE3_FAIL"; cat /tmp/fp_qbe3.err; exit 2;
 }
-link_stage /tmp/fp_stage3.s /tmp/fp_blaise3 || {
-  echo "GCC3_FAIL"; cat /tmp/fp_gcc.err 2>/dev/null; cat /tmp/fp_cc.err 2>/dev/null; exit 3;
+gcc -o /tmp/fp_blaise3 /tmp/fp_stage3.s "$RTL_ARCHIVE" 2>/tmp/fp_gcc3.err || {
+  echo "GCC3_FAIL"; cat /tmp/fp_gcc3.err; exit 3;
 }
 
 echo "[+2] stage-3 -> stage-4 IR (5min timeout)"

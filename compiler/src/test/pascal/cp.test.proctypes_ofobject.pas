@@ -20,8 +20,7 @@ interface
 
 uses
   Classes, SysUtils, Process, blaise.testing,
-  uLexer, uParser, uAST, uSymbolTable, uSemantic, blaise.codegen.qbe,
-  cp.test.rtllink;
+  uLexer, uParser, uAST, uSymbolTable, uSemantic, blaise.codegen.qbe;
 
 function ProjectRootOFO: string;
 function RunCmdOFO(const AExe: string; const AArgs: array of string): Integer;
@@ -55,9 +54,6 @@ type
     procedure TestCodegen_MethodPtrField_RecordTotalSizeIncludes16;
 
     procedure TestCodegen_MethodPtrField_DirectCall_LoadsCodeAndData;
-    procedure TestCodegen_MethodPtrVirtualCapture_LoadsFromVTable;
-    procedure TestCodegen_MethodPtrReturn_UsesAggregateABI;
-    procedure TestCodegen_MethodPtrField_ImplicitSelfAssignUsesMemcpy16;
 
     { End-to-end }
     procedure TestE2E_MethodPtr_NoArgs;
@@ -161,7 +157,7 @@ function TProcTypesOfObjectTests.CompileAndRun(const ASrc: string): string;
 var
   IR:                       string;
   Root:                     string;
-  QBE, Scratch:             string;
+  QBE, RTL, Scratch:        string;
   IRFile, AsmFile, BinFile: string;
   Lst:                      TStringList;
   Proc:                     TProcess;
@@ -170,7 +166,8 @@ begin
   Result := '';
   Root   := ProjectRootOFO();
   QBE    := Root + 'vendor/qbe/qbe';
-  if not RTLLinkToolchainAvailable(Root) then
+  RTL    := Root + 'compiler/target/blaise_rtl.a';
+  if not (FileExists(QBE) and FileExists(RTL)) then
   begin
     Result := '<toolchain-missing>';
     Exit;
@@ -196,7 +193,7 @@ begin
     Exit;
   end;
 
-  if LinkProgramWithRTL(Root, AsmFile, BinFile) <> 0 then
+  if RunCmdOFO('cc', ['-o', BinFile, AsmFile, RTL]) <> 0 then
   begin
     Result := '<link-failed>';
     Exit;
@@ -416,7 +413,7 @@ const
         program P;
         type TM = procedure of object;
         var G: TM;
-        begin G() end.
+        begin G end.
         ''';
 var IR: string;
 begin
@@ -451,7 +448,7 @@ const
           M.Code := MethodAddress(F, 'SayHi');
           M.Data := F;
           G := TGreet(M);
-          G();
+          G;
           F.Free()
         end.
         ''';
@@ -512,7 +509,7 @@ const
           M.Code := MethodAddress(C, 'Print');
           M.Data := C;
           G := TPrintMethod(M);
-          G();
+          G;
           C.Free()
         end.
         ''';
@@ -689,119 +686,6 @@ begin
     StrPos('call %', IR) >= 0);
   AssertFalse('IR does not static-dispatch $THolder_Handler',
     StrPos('$THolder_Handler', IR) >= 0);
-end;
-
-procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrVirtualCapture_LoadsFromVTable;
-const
-  Src =
-    '''
-        program P;
-        type
-          TSpeak = procedure of object;
-          TAnimal = class(TObject)
-            procedure Speak; virtual;
-          end;
-          TDog = class(TAnimal)
-            procedure Speak; override;
-          end;
-        procedure TAnimal.Speak;
-        begin WriteLn('animal') end;
-        procedure TDog.Speak;
-        begin WriteLn('dog') end;
-        var A: TAnimal; M: TSpeak;
-        begin
-          A := TDog.Create();
-          M := @A.Speak;
-          M();
-          A.Free()
-        end.
-        ''';
-var IR: string;
-begin
-  IR := GenIR(Src);
-  { Capturing @A.Speak where Speak is virtual must read the Code half from
-    the receiver's vtable, not freeze the statically-resolved declared-type
-    address.  The buggy codegen stored the static label '$TAnimal_Speak'
-    into the (Code, Data) block; the fix loads the slot through the instance
-    vptr, so that static store must be absent. }
-  AssertFalse('virtual capture must not store the static method address',
-    StrPos('storel $TAnimal_Speak', IR) >= 0);
-end;
-
-procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrReturn_UsesAggregateABI;
-const
-  Src =
-    '''
-        program P;
-        type TBinOp = function(X, Y: Integer): Integer of object;
-        type
-          TCalc = class(TObject)
-            function Add(X, Y: Integer): Integer;
-            function GetOp: TBinOp;
-          end;
-        function TCalc.Add(X, Y: Integer): Integer;
-        begin Result := X + Y end;
-        function TCalc.GetOp: TBinOp;
-        begin Result := @Self.Add end;
-        var C: TCalc; Op: TBinOp;
-        begin
-          C := TCalc.Create();
-          Op := C.GetOp();
-          WriteLn(Op(3, 4));
-          C.Free()
-        end.
-        ''';
-var IR: string;
-begin
-  IR := GenIR(Src);
-  { A 'function ... of object' is a 16-byte (Code, Data) aggregate.  The
-    return must go through the two-register/sret record-return ABI, not a
-    scalar 'l' that drops the Data half.  The fix routes it through a
-    synthetic two-pointer record, so the callee's Result slot is 16 bytes
-    and the function is declared with the aggregate return type. }
-  AssertTrue('method-ptr-returning function allocates a 16-byte Result slot',
-    StrPos('%_var_Result =l alloc8 16', IR) >= 0);
-  AssertTrue('method-ptr return is routed through the aggregate return ABI',
-    StrPos('_ffi__BlaiseMethodPtr', IR) >= 0);
-end;
-
-procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrField_ImplicitSelfAssignUsesMemcpy16;
-const
-  Src =
-    '''
-        program P;
-        type
-          TProc = procedure(const S: string) of object;
-          TA = class(TObject)
-            FFn: TProc;
-            procedure DoIt(const S: string);
-            procedure Fire;
-          end;
-        procedure TA.DoIt(const S: string);
-        begin WriteLn(S) end;
-        procedure TA.Fire;
-        begin
-          FFn := @Self.DoIt
-        end;
-        var A: TA;
-        begin
-          A := TA.Create();
-          A.Fire();
-          A.Free()
-        end.
-        ''';
-var IR: string;
-begin
-  IR := GenIR(Src);
-  { Assigning @Self.Method to a bare (implicit-Self) method-pointer field must
-    copy the whole 16-byte (Code, Data) block into the field slot.  The buggy
-    codegen fell through to the scalar-store path and deposited only the 8-byte
-    pointer to the source block, leaving the Data half garbage — a later call
-    then dispatched on a bad Self and crashed. }
-  AssertTrue('implicit-Self method-ptr field assignment emits memcpy',
-    Pos('call $memcpy(', IR) > 0);
-  AssertTrue('memcpy length is 16',
-    Pos(', l 16)', IR) > 0);
 end;
 
 procedure TProcTypesOfObjectTests.TestE2E_MethodPtrField_DirectCall_StmtForm;

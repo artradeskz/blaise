@@ -37,14 +37,13 @@ unit blaise.linker.elf;
   with Phase B alone.
 
   Phase C — TLinker in dynamic mode (SetDynamic(True)) produces a
-  PIE (ET_DYN) executable linked against libc.  It generates GOT/PLT
-  for undefined (libc) symbols, emits .dynamic/.dynsym/.dynstr/.hash
-  sections, resolves R_X86_64_64 as R_X86_64_RELATIVE in .rela.dyn,
-  handles R_X86_64_TPOFF32 for TLS, and merges any .init_array/
-  .fini_array a linked object contributes.  The entry point is _start,
-  which the runtime archive supplies (blaise_start_x86_64.s) and which
-  calls __libc_start_main with main as the program's entry — no system
-  Scrt1.o / crtbegin / crtend / crti / crtn is needed (issue #142). }
+  PIE (ET_DYN) executable linked against libc.  It reads CRT startup
+  objects, generates GOT/PLT for undefined (libc) symbols, emits
+  .dynamic/.dynsym/.dynstr/.hash sections, resolves R_X86_64_64 as
+  R_X86_64_RELATIVE in .rela.dyn, handles R_X86_64_TPOFF32 for TLS,
+  and merges .init_array/.fini_array from CRT objects.  The entry
+  point is _start (from Scrt1.o), which calls __libc_start_main with
+  main as the program's entry. }
 
 interface
 
@@ -83,10 +82,6 @@ type
 
   { Linux x86-64 ELF, non-PIE ET_EXEC.  Caller frees. }
 function LinuxX86_64Target: TLinkTarget;
-
-  { FreeBSD x86-64 ELF.  Same System V AMD64 machine/arch as Linux; differs
-    only in EI_OSABI (9 = FreeBSD).  Caller frees. }
-function FreeBSDX86_64Target: TLinkTarget;
 
 type
   { One output section accumulating contributions from input objects. }
@@ -615,13 +610,6 @@ begin
   { defaults already describe Linux x86-64 }
 end;
 
-function FreeBSDX86_64Target: TLinkTarget;
-begin
-  Result := TLinkTarget.Create();
-  { Identical to Linux x86-64 except the OS/ABI byte in the ELF header. }
-  Result.OSABI := ELFOSABI_FREEBSD;
-end;
-
 { ---- TLinker ----------------------------------------------------------- }
 
 constructor TLinker.Create;
@@ -817,19 +805,12 @@ var
   M: TMergedSection;
   Addr: Int64;
   HdrBytes: Int64;
-  IsAlloc, IsExec, IsWrite, HasTlsSec: Boolean;
+  IsAlloc, IsExec, IsWrite: Boolean;
 begin
-  { Program headers: PT_LOAD x2 (exec run, write run), plus PT_TLS when the
-    program has any TLS section (.tdata/.tbss).  Reserve header space so the
-    first section's file offset (= addr - base) clears the headers; otherwise
-    the first section would overlap and overwrite the PT_TLS phdr.  Phdr = 56. }
-  HasTlsSec := False;
-  for I := 0 to FMerger.Merged.Count - 1 do
-    if (FMerger.Merged.Get(I).Flags and SHF_TLS) <> 0 then HasTlsSec := True;
-  if HasTlsSec then
-    HdrBytes := ELF64_EHDR_SIZE + 3 * 56
-  else
-    HdrBytes := ELF64_EHDR_SIZE + 2 * 56;
+  { Program-header count is known: PT_LOAD x2 (exec run, write run).
+    Reserve header space so the first section's file offset — which
+    equals (addr - base) — clears the headers.  Elf64_Phdr = 56. }
+  HdrBytes := ELF64_EHDR_SIZE + 2 * 56;
 
   { Executable run: header bytes share its first page. }
   Addr := FTarget.BaseAddr + HdrBytes;
@@ -851,16 +832,14 @@ begin
       Self.PlaceSection(M, Addr);
   end;
 
-  { Writable run starts on a fresh page.  TLS sections (.tdata/.tbss, SHF_TLS)
-    are placed separately below and must be skipped here. }
+  { Writable run starts on a fresh page. }
   Addr := LkAlignUp(Addr, FTarget.PageSize);
   for I := 0 to FMerger.Merged.Count - 1 do
   begin
     M := FMerger.Merged.Get(I);
     IsAlloc := (M.Flags and SHF_ALLOC) <> 0;
     IsWrite := (M.Flags and SHF_WRITE) <> 0;
-    if IsAlloc and IsWrite and (M.ShType <> SHT_NOBITS)
-       and ((M.Flags and SHF_TLS) = 0) then
+    if IsAlloc and IsWrite and (M.ShType <> SHT_NOBITS) then
       Self.PlaceSection(M, Addr);
   end;
   for I := 0 to FMerger.Merged.Count - 1 do
@@ -868,42 +847,9 @@ begin
     M := FMerger.Merged.Get(I);
     IsAlloc := (M.Flags and SHF_ALLOC) <> 0;
     IsWrite := (M.Flags and SHF_WRITE) <> 0;
-    if IsAlloc and IsWrite and (M.ShType = SHT_NOBITS)
-       and ((M.Flags and SHF_TLS) = 0) then
+    if IsAlloc and IsWrite and (M.ShType = SHT_NOBITS) then
       Self.PlaceSection(M, Addr);
   end;
-
-  { TLS sections (.tdata then .tbss).  Mirror LayoutDynamic so a static ET_EXEC
-    also gets a correct TLS block + FTlsAddr/FTlsSize for TPOFF relocations and
-    the PT_TLS program header (which the freestanding _start reads to set up the
-    thread pointer). }
-  FTlsAddr := 0;
-  FTlsSize := 0;
-  FTlsAlign := 1;
-  FTlsFileSize := 0;
-  M := FMerger.FindMerged('.tdata');
-  if M <> nil then
-  begin
-    Self.PlaceSection(M, Addr);
-    FTlsAddr := Self.MergedAddr(M);
-    FTlsFileSize := M.Size;
-    FTlsSize := M.Size;
-    if M.Align > FTlsAlign then FTlsAlign := M.Align;
-  end;
-  M := FMerger.FindMerged('.tbss');
-  if M <> nil then
-  begin
-    Self.PlaceSection(M, Addr);
-    if FTlsAddr = 0 then FTlsAddr := Self.MergedAddr(M);
-    FTlsSize := FTlsSize + M.Size;
-    if M.Align > FTlsAlign then FTlsAlign := M.Align;
-  end;
-  { Variant-II TLS: the thread pointer sits at the ALIGNED end of the block, and
-    TPOFF32 is computed as (sym - FTlsAddr - FTlsSize).  The freestanding _start
-    places TP at AlignUp(memsz, align); align FTlsSize to match so both agree even
-    when the raw section sum is not a multiple of FTlsAlign (else every threadvar
-    read is off by the alignment padding). }
-  FTlsSize := LkAlignUp(FTlsSize, FTlsAlign);
 end;
 
 function TLinker.FindSymbol(const AName: string): TLinkSymbol;
@@ -1571,9 +1517,6 @@ begin
     FTlsSize := FTlsSize + M.Size;
     if M.Align > FTlsAlign then FTlsAlign := M.Align;
   end;
-  { TP sits at the aligned end of the TLS block (variant II); align FTlsSize so
-    TPOFF32 (sym - FTlsAddr - FTlsSize) matches the aligned thread pointer. }
-  FTlsSize := LkAlignUp(FTlsSize, FTlsAlign);
 
   { Build .dynamic section.  'libc.so.6' is at offset 1 in .dynstr. }
   FDynamicData := '';
@@ -1669,10 +1612,9 @@ begin
   raise ELinker.Create('undefined reference to `' + Sym.Name + '''');
 end;
 
-{ Patch the merged section bytes for every relocation.  Static mode
-  (Phase B) supports PC-relative and absolute forms (every symbol has a
-  final link-time address in a non-PIE ET_EXEC); dynamic mode (Phase C)
-  additionally handles GOT-relative and emits RELATIVE fixups. }
+{ Patch the merged section bytes for every relocation.  In static
+  mode (Phase B) only PC-relative forms are supported; in dynamic mode
+  (Phase C) absolute, GOT-relative and TLS relocations are handled. }
 procedure TLinker.ApplyRelocations;
 var
   Oi, Ri: Integer;
@@ -1722,52 +1664,28 @@ begin
 
         R_X86_64_64:
           begin
+            if not FDynamic then
+              raise ELinker.Create(Ctx + ': R_X86_64_64 relocation against `'
+                + Sym.Name + ''' needs dynamic linking');
             S := Self.ResolveSymbolAddr(Obj, Rel.SymIndex, Ctx);
             Val := S + Rel.Addend;
             if M.ShType = SHT_NOBITS then
               raise ELinker.Create(Ctx
                 + ': relocation into a NOBITS section');
-            { Patch the absolute 64-bit target address.  In a non-PIE ET_EXEC
-              (static mode) every symbol has a fixed load address, so this value
-              is final and needs no run-time fixup.  In PIE/dynamic mode the
-              image base is unknown until load, so the same slot also gets an
-              R_X86_64_RELATIVE entry in .rela.dyn for the loader to re-add the
-              base. }
             LkPatch64(M.Data, PFileOff, Val);
-            if FDynamic then
-            begin
-              RE := TRelaDynEntry.Create();
-              RE.VAddr := PAddr;
-              RE.Addend := Val;
-              FRelaDyn.Add(RE);
-            end;
+            RE := TRelaDynEntry.Create();
+            RE.VAddr := PAddr;
+            RE.Addend := Val;
+            FRelaDyn.Add(RE);
           end;
 
         R_X86_64_32, R_X86_64_32S:
           begin
+            if not FDynamic then
+              raise ELinker.Create(Ctx
+                + ': absolute 32-bit relocation unsupported in static mode');
             S := Self.ResolveSymbolAddr(Obj, Rel.SymIndex, Ctx);
             Val := S + Rel.Addend;
-            if M.ShType = SHT_NOBITS then
-              raise ELinker.Create(Ctx
-                + ': relocation into a NOBITS section');
-            { Resolvable in BOTH modes: static ET_EXEC links at a fixed base
-              (0x400000) where every mapped address fits in 32 bits, and in
-              PIE mode the patched value is the unslid link-time address
-              (the OPDF reader applies the run-time slide itself; code never
-              uses abs32 in PIE objects).  Range-check like GNU ld does:
-              R_X86_64_32 must fit zero-extended, R_X86_64_32S sign-extended. }
-            if Rel.RelocType = R_X86_64_32 then
-            begin
-              if (Val < 0) or (Val > $FFFFFFFF) then
-                raise ELinker.Create(Ctx
-                  + ': R_X86_64_32 overflow against ' + Sym.Name);
-            end
-            else
-            begin
-              if (Val < -2147483648) or (Val > 2147483647) then
-                raise ELinker.Create(Ctx
-                  + ': R_X86_64_32S overflow against ' + Sym.Name);
-            end;
             LkPatch32(M.Data, PFileOff, Val and $FFFFFFFF);
           end;
 
@@ -1789,12 +1707,10 @@ begin
           end;
 
         R_X86_64_TPOFF32:
-          { Local-Exec TLS: the offset from the thread pointer (which points at
-            the END of the static TLS block) down to this threadvar.  This is the
-            STATIC TLS model — it is resolvable at link time in both static and
-            PIE/dynamic executables (the threadvar's position within the initial
-            TLS block is fixed at link), so it needs no dynamic relocation. }
           begin
+            if not FDynamic then
+              raise ELinker.Create(Ctx
+                + ': TLS relocation needs dynamic linking');
             S := Self.ResolveSymbolAddr(Obj, Rel.SymIndex, Ctx);
             Val := S - FTlsAddr + Rel.Addend - FTlsSize;
             LkPatch32(M.Data, PFileOff, Val and $FFFFFFFF);
@@ -1868,12 +1784,7 @@ begin
   Buf := Buf + LkLE(0, 4);                   { e_flags }
   Buf := Buf + LkLE(ELF64_EHDR_SIZE, 2);     { e_ehsize }
   Buf := Buf + LkLE(56, 2);                  { e_phentsize }
-  { 2 PT_LOAD, plus PT_TLS when the program has threadvars (so the static
-    _start can set up the thread pointer from the PT_TLS init image). }
-  if FTlsSize > 0 then
-    Buf := Buf + LkLE(3, 2)                  { e_phnum }
-  else
-    Buf := Buf + LkLE(2, 2);
+  Buf := Buf + LkLE(2, 2);                   { e_phnum (2 PT_LOAD) }
   Buf := Buf + LkLE(ELF64_SHDR_SIZE, 2);     { e_shentsize }
   Buf := Buf + LkLE(0, 2);                   { e_shnum (patched later) }
   Buf := Buf + LkLE(0, 2);                   { e_shstrndx (patched later) }
@@ -1895,20 +1806,6 @@ begin
   Buf := Buf + LkLE(WriteFileHi - WriteLo, 8);{ p_filesz }
   Buf := Buf + LkLE(WriteMemHi - WriteLo, 8); { p_memsz }
   Buf := Buf + LkLE(PageSz, 8);               { p_align }
-
-  { PT_TLS — the initial TLS image (.tdata file bytes + .tbss zero size).  The
-    static _start reads this segment to build the per-thread block and set %fs.
-    Only emitted when the program has threadvars (e_phnum reflects this). }
-  if FTlsSize > 0 then
-  begin
-    Buf := Buf + LkLE(PT_TLS, 4) + LkLE(PF_R, 4);
-    Buf := Buf + LkLE(Self.FileOffset(FTlsAddr), 8);  { p_offset }
-    Buf := Buf + LkLE(FTlsAddr, 8);           { p_vaddr }
-    Buf := Buf + LkLE(FTlsAddr, 8);           { p_paddr }
-    Buf := Buf + LkLE(FTlsFileSize, 8);       { p_filesz (.tdata) }
-    Buf := Buf + LkLE(FTlsSize, 8);           { p_memsz (.tdata + .tbss) }
-    Buf := Buf + LkLE(FTlsAlign, 8);          { p_align }
-  end;
 
   { Pad headers out to the first section's file offset (the exec run's
     first byte sits at Self.FileOffset(ExecLo)). }

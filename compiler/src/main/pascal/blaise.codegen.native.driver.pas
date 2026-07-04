@@ -69,8 +69,6 @@ type
   private
     function LinkViaInternalLinker(const AObjFile, AOutputFile: string;
       AOpts: TBackendOpts; AExtraObjects: TStringList): string;
-    { EnsureRTLObjects is inherited from TBackendDriver — both the native
-      internal linker and the cc link line build the RTL the same way. }
   end;
 
 implementation
@@ -78,7 +76,6 @@ implementation
 uses
   SysUtils, Classes,
   uToolchain,
-  blaise.codegen.toolkit,
   blaise.assembler.x86_64,
   blaise.elfreader,
   blaise.linker.elf;
@@ -190,91 +187,58 @@ function TNativeBackendDriver.LinkViaInternalLinker(
 var
   Lk: TLinker;
   Obj: TElfObjectFile;
-  Toolkit: TTargetToolkit;
-  LinkTarget: TLinkTarget;
-  RTLObjs: TStringList;
+  TC: TToolchain;
+  Crt1, Crti, Crtn, CrtBeginS, CrtEndS: string;
   I: Integer;
 begin
   Result := '';
+  if not FindCrtObjects(Crt1, Crti, Crtn, CrtBeginS, CrtEndS) then
+    Exit('internal linker: CRT startup objects not found');
 
-  { The internal linker links only Blaise ELF objects (+ the source-built RTL);
-    it has no concept of -l<name> system libraries.  A program that declares an
-    `external 'lib'` dependency therefore cannot be linked this way — fail loudly
-    rather than silently drop the library and emit a binary with unresolved
-    symbols.  Use the external toolchain linker (the default) for such programs. }
-  if (AOpts.LinkLibs <> nil) and (AOpts.LinkLibs.Count > 0) then
-    Exit('internal linker cannot resolve external library ''' +
-      AOpts.LinkLibs.Strings[0] +
-      ''' (from an ''external ''''lib'''''' declaration); use --linker external');
+  TC := ResolveToolchain(AOpts.Target);
 
-  { Build the linker with the resolved target's TLinkTarget so the emitted ELF
-    carries the right EI_OSABI / machine / load base for AOpts.Target — without
-    this the internal linker always produced a Linux-shaped ELF regardless of
-    --target.  The toolkit is the single source of per-target link facts
-    (docs/native-target-architecture.adoc). }
-  Toolkit := ResolveToolkit(AOpts.Target);
-  if Toolkit = nil then
-    Exit('internal linker: no toolkit registered for target ' +
-      TargetName(AOpts.Target));
+  { Every Blaise program links blaise_rtl.a — the program entry emits
+    _SetArgs and the runtime supplies ARC, strings, exceptions, the platform
+    layer, etc.  An empty RTLPath means FindRTLArchive could not locate
+    blaise_rtl.a beside the compiler binary (or via BLAISE_RTL).  Linking
+    anyway is never correct: every RTL symbol becomes an undefined dynamic
+    import that silently links but dies at run time (e.g. `undefined symbol:
+    _SetArgs`).  Fail loudly instead of emitting a broken executable. }
+  if TC.RTLPath = '' then
+    Exit('internal linker: runtime archive blaise_rtl.a not found '
+      + '(looked beside the compiler binary and in $BLAISE_RTL); '
+      + 'cannot link a Blaise program without the RTL');
 
-  { Build the implicit RTL objects from source (cached beside the compiler).
-    Every Blaise program emits calls to RTL symbols (_SetArgs, _BlaiseGetMem,
-    _start, ARC/string/exception helpers, …) as undefined externals; these
-    objects supply them.  Replaces the pre-built blaise_rtl.a — the RTL is now
-    compiled by the compiler itself. }
-  RTLObjs := TStringList.Create();
+  Lk := TLinker.Create();
   try
-    { Native internal linker: Blaise owns the entry point, so include
-      runtime.start (its bare _start).  In --static mode EnsureRTLObjects swaps
-      runtime.start for the freestanding runtime.start.static.<os> and adds the
-      syscall + cstub leaves, so AIncludeStartup is irrelevant there.  Pass the
-      program's prebuilt deps so an RTL unit it compiled itself is not supplied
-      twice. }
-    Result := Self.EnsureRTLObjects(AOpts, True, AExtraObjects, RTLObjs);
-    if Result <> '' then Exit;
-
-    { TLinker.Create(ATarget) borrows the target — we own and free it here. }
-    LinkTarget := Toolkit.MakeLinkTarget();
-    Lk := TLinker.Create(LinkTarget);
     try
-      try
-        { --static: freestanding non-PIE ET_EXEC, no libc/PT_INTERP (the kernel
-          leaf supplies open/read/write/... + _start).  Default: dynamic PIE
-          linked against libc.  A freestanding target (FreeBSD, Strategy B) has
-          no libc to link against, so it is ALWAYS static regardless of the
-          --static flag — the kernel leaf is the only libc it gets. }
-        Lk.SetDynamic(not (AOpts.Static or TargetIsFreestanding(AOpts.Target)));
+      Lk.SetDynamic(True);
+      Lk.AddCrtObject(Crt1);
+      Lk.AddCrtObject(Crti);
+      Lk.AddCrtObject(CrtBeginS);
 
-        Obj := ReadElfObjectFile(AObjFile);
-        Lk.AddOwnedObject(Obj);
+      Obj := ReadElfObjectFile(AObjFile);
+      Lk.AddOwnedObject(Obj);
 
-        if AExtraObjects <> nil then
-          for I := 0 to AExtraObjects.Count - 1 do
-          begin
-            Obj := ReadElfObjectFile(AExtraObjects.Strings[I]);
-            Lk.AddOwnedObject(Obj);
-          end;
-
-        { The RTL objects — including _start (runtime.start) and the implicit
-          runtime symbols — built from source above. }
-        for I := 0 to RTLObjs.Count - 1 do
+      if AExtraObjects <> nil then
+        for I := 0 to AExtraObjects.Count - 1 do
         begin
-          Obj := ReadElfObjectFile(RTLObjs.Strings[I]);
+          Obj := ReadElfObjectFile(AExtraObjects.Strings[I]);
           Lk.AddOwnedObject(Obj);
         end;
 
-        Lk.Link('_start', AOutputFile);
-      except
-        on E: Exception do
-          Result := 'internal linker error [' + Exception(E).ClassName + ']: ' +
-            Exception(E).Message;
-      end;
-    finally
-      Lk.Free();
-      LinkTarget.Free();
+      Lk.AddArchive(TC.RTLPath);
+
+      Lk.AddCrtObject(CrtEndS);
+      Lk.AddCrtObject(Crtn);
+      Lk.Link('_start', AOutputFile);
+    except
+      on E: Exception do
+        Result := 'internal linker error [' + Exception(E).ClassName + ']: ' +
+          Exception(E).Message;
     end;
   finally
-    RTLObjs.Free();
+    Lk.Free();
   end;
 end;
 

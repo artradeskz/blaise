@@ -38,10 +38,6 @@ type
 
     { obj.Field := MakeClass() consumes the call's +1 — no leak per store. }
     procedure TestDebug_ClassFieldFromCall_NoLeak;
-
-    { local := MakeClass() consumes the call's +1 — no leak per assignment.
-      Pins the native class-assignment AddRef elision against the QBE backend. }
-    procedure TestDebug_FuncReturnAssign_NoLeak;
     { Multiple same-named typed handlers share one slot — no over-release. }
     procedure TestDebug_MultiHandlerVar_NoOverRelease;
     { for-in over a TList: GetEnumerator's +1 result must be transferred
@@ -59,20 +55,6 @@ type
       release it after the call or one instance leaks. }
     procedure TestDebug_IntfCallResultArg_NoLeak;
     procedure TestDebug_IntfCallResultArg_NoLeak_Native;
-    { A call/getter result used as a field-access receiver must be released
-      after the field load.  L[I].HitPoints — the TList<T>.Get getter returns
-      +1, the field is read, then the transient base must be released. }
-    procedure TestDebug_ReceiverFieldAccess_NoLeak;
-    { A static array of interfaces (array[0..N] of IFoo): the elements are
-      ARC-managed but the scope-exit cleanup previously skipped tyStaticArray
-      locals entirely, so every stored element leaked on BOTH backends.  The
-      fix releases each element at scope exit. }
-    procedure TestDebug_StaticArrayOfInterface_NoLeak;
-    { A string-returning call/getter used DIRECTLY as a Write/WriteLn argument
-      (WriteLn(GetBar)) returns a fresh +1 string that _SysWriteStr only borrows.
-      EmitWrite previously never released it, leaking one string per call.  The
-      fix releases the owned string transient after the write (both backends). }
-    procedure TestDebug_WriteLnCallArg_NoLeak;
   end;
 
 implementation
@@ -89,7 +71,7 @@ const
   { A clean program: object is created and properly released by ARC at scope exit. }
   SrcNoLeak = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       TBox = class
         Value: Integer;
@@ -110,7 +92,7 @@ const
     use-after-free.  With the fix it is freed exactly once: no leak, no crash. }
   SrcExceptionHandlerVar = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       Exception = class
         FMessage: string;
@@ -126,7 +108,7 @@ const
       end
     end;
     begin
-      DoIt();
+      DoIt;
       WriteLn('done')
     end.
     ''';
@@ -134,7 +116,7 @@ const
   { Constructor with args — must not double-AddRef; object must be clean after scope. }
   SrcConstructorWithArgs = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       TBox = class
         Value: Integer;
@@ -155,7 +137,7 @@ const
   { Deliberately leaked: object assigned to a raw Pointer, bypassing ARC release. }
   SrcOneLeak = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       TBox = class
         Value: Integer;
@@ -175,7 +157,7 @@ const
   { Two distinct classes leaked to verify count and class-name reporting. }
   SrcTwoLeaks = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       TAlpha = class
         X: Integer;
@@ -200,7 +182,7 @@ const
   { Reference cycle: each object holds the other — both leak. }
   SrcCycleLeak = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       TNode = class
         Other: TNode;
@@ -222,7 +204,7 @@ const
     line number where the leaking TBox.Create() call was made. }
   SrcLeakWithSite = '''
     program LeakSite;
-    uses runtime.arc;
+    uses blaise_arc;
     type
       TBox = class
         Value: Integer;
@@ -240,7 +222,7 @@ const
     Extra AddRef prevents scope-exit release from freeing it. }
   SrcStringLeak = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     var
       S: string;
     begin
@@ -253,7 +235,7 @@ const
   { Clean string usage: no leak expected — scope-exit ARC releases properly. }
   SrcStringClean = '''
     program P;
-    uses runtime.arc;
+    uses blaise_arc;
     var
       S: string;
     begin
@@ -315,7 +297,7 @@ const
     allocation site as 'generics.collections:<line>', not '<program>:<line>'. }
   SrcGenericAllocSite = '''
     program LeakGen;
-    uses runtime.arc, generics.collections;
+    uses blaise_arc, generics.collections;
     var
       L: TList<Integer>;
       E: TListEnumerator<Integer>;
@@ -530,35 +512,6 @@ const
     end.
     ''';
 
-  { A function returning a class leaves Result at +1 (the callee's `Result := x`
-    AddRef'd and the epilogue did not release it).  Assigning that call result to
-    a local consumes the transferred reference — the assignment site must NOT
-    AddRef again, or one object leaks per call.  The native backend used to
-    AddRef class assignments unconditionally; this pins the elision. }
-  SrcFuncReturnAssign = '''
-    program P;
-    type
-      TThing = class N: Integer; end;
-    function MakeThing(): TThing;
-    begin
-      Result := TThing.Create();
-      Result.N := 9;
-    end;
-    var
-      T: TThing;
-      I, Sum: Integer;
-    begin
-      Sum := 0;
-      for I := 1 to 100 do
-      begin
-        T := MakeThing();
-        Sum := Sum + T.N;
-        T := nil;
-      end;
-      WriteLn(Sum);
-    end.
-    ''';
-
   SrcMultiHandlerVar = '''
     program P;
     type
@@ -594,24 +547,6 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcClassFieldFromCall, Output, ExitCode, True));
   AssertEquals('exit 0 (native)', 0, ExitCode);
   AssertEquals('stdout (native)', '7' + LE, Output);
-  AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
-end;
-
-procedure TE2ELeakCheckTests.TestDebug_FuncReturnAssign_NoLeak;
-var
-  Output: string;
-  ExitCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
-  AssertTrue('compile+run (qbe)',
-    CompileAndRunWithRTLDebugOn(beQBE, SrcFuncReturnAssign, Output, ExitCode, True));
-  AssertEquals('exit 0 (qbe)', 0, ExitCode);
-  AssertEquals('stdout (qbe)', '900' + LE, Output);
-  AssertTrue('no leak report (qbe)', Pos('leak', Output) < 0);
-  AssertTrue('compile+run (native)',
-    CompileAndRunWithRTLDebugOn(beNative, SrcFuncReturnAssign, Output, ExitCode, True));
-  AssertEquals('exit 0 (native)', 0, ExitCode);
-  AssertEquals('stdout (native)', '900' + LE, Output);
   AssertTrue('no leak report (native)', Pos('leak', Output) < 0);
 end;
 
@@ -690,153 +625,6 @@ begin
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '42' + LE, Output);
   AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
-end;
-
-const
-  { Call result used as a field-access receiver — the getter's +1 must be
-    released after the field read, otherwise one object leaks per access.
-    Uses TList<T>[I].HitPoints which is the most common trigger. }
-  SrcReceiverFieldAccess = '''
-    program P;
-    type
-      TCreature = class
-        HitPoints: Integer;
-      end;
-    function MakeCreature(): TCreature;
-    begin
-      Result := TCreature.Create();
-      Result.HitPoints := 42;
-    end;
-    var
-      X: Integer;
-    begin
-      X := MakeCreature().HitPoints;
-      WriteLn(X);
-    end.
-    ''';
-
-  { Static array of interfaces: three IGreet elements stored into a local
-    array[0..2].  Scope-exit cleanup must release each element.  Prints the
-    three greetings, then exits with no leak report. }
-  SrcStaticArrayOfInterface = '''
-    program P;
-    type
-      IGreet = interface
-        function Name(): string;
-      end;
-      TGreet = class(IGreet)
-        FName: string;
-        function Name(): string;
-      end;
-    function TGreet.Name(): string;
-    begin
-      Result := Self.FName;
-    end;
-    procedure MakeInto(var G: IGreet; const N: string);
-    var
-      T: TGreet;
-    begin
-      T := TGreet.Create();
-      T.FName := N;
-      G := T;
-    end;
-    procedure Run();
-    var
-      Arr: array[0..2] of IGreet;
-      I: Integer;
-    begin
-      MakeInto(Arr[0], 'a');
-      MakeInto(Arr[1], 'b');
-      MakeInto(Arr[2], 'c');
-      for I := 0 to 2 do
-        Write(Arr[I].Name());
-      WriteLn('');
-    end;
-    begin
-      Run();
-    end.
-    ''';
-
-  { A string-returning getter used directly as a WriteLn argument.  The getter
-    returns a fresh +1 string (Copy result); WriteLn only borrows it, so the
-    caller must release it after the write.  Three calls => three leaks before
-    the fix. }
-  SrcWriteLnCallArg = '''
-    program P;
-    type
-      TFoo = class
-      private
-        function GetBar: String;
-      public
-        property Bar: String read GetBar;
-      end;
-    function TFoo.GetBar: String;
-    begin
-      Result := Copy('abcd', 1, 3);
-    end;
-    var
-      X: TFoo;
-    begin
-      X := TFoo.Create;
-      WriteLn(X.Bar);
-      WriteLn(X.Bar);
-      WriteLn(X.Bar);
-      X := nil;
-    end.
-    ''';
-
-procedure TE2ELeakCheckTests.TestDebug_ReceiverFieldAccess_NoLeak;
-var
-  Output: string;
-  ExitCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
-  AssertTrue('compile+run (qbe)',
-    CompileAndRunWithRTLDebugOn(beQBE, SrcReceiverFieldAccess, Output, ExitCode, True));
-  AssertEquals('exit 0 (qbe)', 0, ExitCode);
-  AssertEquals('stdout (qbe)', '42' + LE, Output);
-  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
-  AssertTrue('compile+run (native)',
-    CompileAndRunWithRTLDebugOn(beNative, SrcReceiverFieldAccess, Output, ExitCode, True));
-  AssertEquals('exit 0 (native)', 0, ExitCode);
-  AssertEquals('stdout (native)', '42' + LE, Output);
-  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
-end;
-
-procedure TE2ELeakCheckTests.TestDebug_StaticArrayOfInterface_NoLeak;
-var
-  Output: string;
-  ExitCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
-  AssertTrue('compile+run (qbe)',
-    CompileAndRunWithRTLDebugOn(beQBE, SrcStaticArrayOfInterface, Output, ExitCode, True));
-  AssertEquals('exit 0 (qbe)', 0, ExitCode);
-  AssertEquals('stdout (qbe)', 'abc' + LE, Output);
-  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
-  AssertTrue('compile+run (native)',
-    CompileAndRunWithRTLDebugOn(beNative, SrcStaticArrayOfInterface, Output, ExitCode, True));
-  AssertEquals('exit 0 (native)', 0, ExitCode);
-  AssertEquals('stdout (native)', 'abc' + LE, Output);
-  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
-end;
-
-procedure TE2ELeakCheckTests.TestDebug_WriteLnCallArg_NoLeak;
-var
-  Output: string;
-  ExitCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
-  AssertTrue('compile+run (qbe)',
-    CompileAndRunWithRTLDebugOn(beQBE, SrcWriteLnCallArg, Output, ExitCode, True));
-  AssertEquals('exit 0 (qbe)', 0, ExitCode);
-  AssertEquals('stdout (qbe)', 'bcd' + LE + 'bcd' + LE + 'bcd' + LE, Output);
-  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
-  AssertTrue('compile+run (native)',
-    CompileAndRunWithRTLDebugOn(beNative, SrcWriteLnCallArg, Output, ExitCode, True));
-  AssertEquals('exit 0 (native)', 0, ExitCode);
-  AssertEquals('stdout (native)', 'bcd' + LE + 'bcd' + LE + 'bcd' + LE, Output);
-  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
 end;
 
 initialization

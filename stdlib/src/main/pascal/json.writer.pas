@@ -20,10 +20,10 @@
          W.WriteBool('stable', True);
 
     2. Array elements - value only, no name (the '...Value' forms):
-         W.BeginArray();
+         W.BeginArray;
            W.WriteStringValue('a');
            W.WriteIntValue(1);
-         W.EndArray();
+         W.EndArray;
 
     3. Structure / escape hatch - when an object member's value is itself a
        nested object or array, write the key, then open the container:
@@ -162,7 +162,7 @@ end;
 destructor TJSONWriter.Destroy;
 begin
   FSB.Free();
-  inherited Destroy();
+  inherited Destroy;
 end;
 
 procedure TJSONWriter.NewlineIndent(ALevel: Integer);

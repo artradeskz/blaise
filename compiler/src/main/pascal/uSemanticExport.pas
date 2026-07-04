@@ -230,16 +230,6 @@ begin
   Result.ResolvedQbeName := ASrc.ResolvedQbeName;
   Result.IsVirtual    := ASrc.IsVirtual;
   Result.IsOverride   := ASrc.IsOverride;
-  { Carry static-ness so a cross-unit TypeName.StaticMethod() call resolves —
-    VTableSlot alone cannot distinguish a static method from a final
-    non-virtual instance method (both are -1). }
-  Result.IsStatic     := ASrc.IsStatic;
-  { Carry the `overload` directive so a cross-unit overload set whose members
-    are split across an imported class and its ancestor is not truncated by
-    ResolveMethodOverload's hiding walk (which stops at a non-overload). }
-  Result.IsOverload   := ASrc.IsOverload;
-  { Carry visibility so cross-unit member access enforces private/protected. }
-  Result.Visibility   := ASrc.Visibility;
   Result.ReturnType   := ResolveTypeRef(ASrc.ReturnTypeName, AIface, ADeps);
 
   for I := 0 to ASrc.Params.Count - 1 do
@@ -481,13 +471,6 @@ begin
   if AUnit.ImplUsedUnits <> nil then
     for I := 0 to AUnit.ImplUsedUnits.Count - 1 do
       AIface.ImplUsedUnits.Add(AUnit.ImplUsedUnits.Strings[I]);
-  { Link libraries — hoisted from every 'external ''lib''' decl (interface or
-    implementation), deduped.  Carries the unit's link dependencies into the
-    .bif even when the importing routine is implementation-private. }
-  if AUnit.LinkLibs <> nil then
-    for I := 0 to AUnit.LinkLibs.Count - 1 do
-      if AIface.LinkLibs.IndexOf(TLinkLibDecl(AUnit.LinkLibs.Items[I]).LibName) < 0 then
-        AIface.LinkLibs.Add(TLinkLibDecl(AUnit.LinkLibs.Items[I]).LibName);
   AIface.HasInitialization :=
     (AUnit.InitStmts <> nil) and (AUnit.InitStmts.Count > 0);
 end;

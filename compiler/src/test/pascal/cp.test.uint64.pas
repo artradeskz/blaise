@@ -46,7 +46,6 @@ type
     procedure TestCodegen_UInt64_Mod_UsesUrem;
     procedure TestCodegen_WriteLn_UInt64_CallsSysWriteUInt64;
     procedure TestCodegen_IntToStr_UInt64_CallsUInt64ToStr;
-    procedure TestCodegen_Int64LargeLiteralCast_UsesLType;
   end;
 
   [Threaded]
@@ -60,12 +59,6 @@ type
     procedure TestRun_UInt64_Arithmetic;
     procedure TestRun_UInt64_UnsignedCompare;
     procedure TestRun_Int64_MinValue;
-    { Regression: a const declared with the value-cast form
-      cMax = Int64(922337203685477580) must lower the large literal with the
-      'l' (64-bit) type — through const folding, arithmetic, and argument
-      positions.  The QBE backend once emitted a 'w'-typed operand here and
-      QBE rejected the IR ("invalid type for first operand ... in arg"). }
-    procedure TestRun_Int64_LargeLiteralCast;
   end;
 
 implementation
@@ -341,26 +334,6 @@ begin
   AssertTrue('UInt64 mod uses urem', Pos('urem', IR) > 0);
 end;
 
-procedure TUInt64Tests.TestCodegen_Int64LargeLiteralCast_UsesLType;
-var
-  IR: string;
-begin
-  IR := GenIR(
-    '''
-        program P;
-        var N: Int64;
-        begin
-          N := Int64(922337203685477580)
-        end.
-        ''');
-  { The large literal must carry the 'l' (64-bit) type.  A 'w copy' of a
-    >32-bit literal is the bug QBE rejected with "invalid type ... in arg". }
-  AssertTrue('large Int64 literal lowered as l',
-    Pos('=l copy 922337203685477580', IR) > 0);
-  AssertFalse('large Int64 literal not lowered as w',
-    Pos('=w copy 922337203685477580', IR) <> -1);
-end;
-
 procedure TUInt64Tests.TestCodegen_WriteLn_UInt64_CallsSysWriteUInt64;
 var
   IR: string;
@@ -474,22 +447,6 @@ const
     end.
     ''';
 
-  SrcInt64LargeLiteralCast =
-    '''
-    program P;
-    const
-      cMax = Int64(922337203685477580);
-    procedure Show(V: Int64);
-    begin WriteLn(V) end;
-    var N: Int64;
-    begin
-      Show(cMax);
-      N := cMax div 10;
-      Show(N);
-      WriteLn(Int64(922337203685477580))
-    end.
-    ''';
-
 procedure TUInt64E2ETests.TestRun_UInt64_RoundTrip;
 var Output: string; RCode: Integer;
 begin
@@ -546,15 +503,6 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Low(Int64) prints in full',
     '-9223372036854775808' + LE, Output);
-end;
-
-procedure TUInt64E2ETests.TestRun_Int64_LargeLiteralCast;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(SrcInt64LargeLiteralCast,
-    '922337203685477580' + LE +
-    '92233720368547758' + LE +
-    '922337203685477580' + LE, 0);
 end;
 
 initialization

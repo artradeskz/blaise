@@ -63,8 +63,6 @@ type
     procedure EmitLocalVars(ABlock: TBlock; AScopeID: Integer);
     procedure EmitFunctionScope_Main(AScopeID, ADeclIdx: Integer);
     procedure EmitUnitDirectory;
-    procedure EmitRuntimeHelper(AKind: Integer; const ASymbol: string);
-    procedure EmitRuntimeHelpers;
     procedure EmitPointer(AType: TPointerTypeDesc);
     procedure EmitArray(AType: TTypeDesc);
     procedure EmitSet(AType: TSetTypeDesc);
@@ -74,7 +72,6 @@ type
     procedure EmitConstantsFromList(AList: TObjectList);
     procedure EmitTypesFromBlock(ABlock: TBlock);
     procedure EmitGlobalVarsFromList(AList: TObjectList);
-    procedure EmitStaticVarsFromBlock(ABlock: TBlock);
     procedure EmitAllTypes;
     procedure EmitGlobalVars;
     procedure EmitFunctionScopes;
@@ -132,16 +129,9 @@ const
   REC_SET       = 18;
   REC_UNITDIR   = 19;
   REC_CONSTANT  = 20;
-  REC_RUNTIMEHELPER = 25;
-
-  { TRuntimeHelperKind ordinals (mirror opdf_types.TRuntimeHelperKind) }
-  RHK_STRING_RELEASE   = 0;
-  RHK_DYNARRAY_RELEASE = 1;
 
   SK_INTEGER = 0;
   SK_BOOLEAN = 1;
-  { SK_CHAR = 2; SK_WIDECHAR = 3; — reserved by the OPDF spec, not emitted yet }
-  SK_FLOAT   = 4;  { Single, Double — pdr renders via TFloatEvaluator }
 
   LOC_RBP = 1;
   LOC_RBP_INDIRECT = 3;  { frame slot holds the value's address }
@@ -195,44 +185,6 @@ begin
   FTotRecIdx          := -1;
   FUnitDirRecCountIdx := -1;
   FDone               := False;
-end;
-
-{ Escape a raw string value for a GNU-as / internal-assembler `.ascii "..."`
-  literal.  A string CONSTANT's value is arbitrary user text — it may contain a
-  double-quote, backslash, `#`, or control characters, any of which would break
-  the surrounding `.ascii "<val>"  # Value` line (an unescaped `"` closes the
-  literal early, leaving `..."  # Value` as a garbage mnemonic).  We emit the
-  C-style escapes both assemblers understand.  The OPDF ValueLen field is the
-  RAW byte count (Length before escaping), which `.ascii` with these escapes
-  reproduces exactly, so escaping does not change the emitted byte length. }
-function EscapeAsciiStr(const S: string): string;
-var
-  I, B: Integer;
-begin
-  Result := '';
-  for I := 0 to Length(S) - 1 do
-  begin
-    B := OrdAt(S, I) and $FF;
-    case B of
-      Ord('\'): Result := Result + '\\';
-      Ord('"'): Result := Result + '\"';
-      10:       Result := Result + '\n';
-      13:       Result := Result + '\r';
-      9:        Result := Result + '\t';
-    else
-      { Printable ASCII passes through; anything else (including '#', which is a
-        comment start OUTSIDE a quoted literal but harmless inside one, and any
-        non-printable byte) is emitted as a 3-digit octal escape so the line
-        stays a single well-formed token. }
-      if (B >= 32) and (B < 127) then
-        Result := Result + Chr(B)
-      else
-        Result := Result + '\' +
-          Chr(Ord('0') + ((B shr 6) and 7)) +
-          Chr(Ord('0') + ((B shr 3) and 7)) +
-          Chr(Ord('0') + (B and 7));
-    end;
-  end;
 end;
 
 function TOPDFEmitter.ActiveSymTable: TSymbolTable;
@@ -409,8 +361,7 @@ begin
   if HasBeenEmitted(CName) then Exit;
   case AType.Kind of
     tyInteger, tyInt64, tyUInt32, tyUInt64,
-    tySmallInt, tyWord, tyByte, tyBoolean,
-    tyDouble, tySingle:
+    tySmallInt, tyWord, tyByte, tyBoolean:
       EmitPrimitive(AType);
     tyString:
       EmitUtf8Str();
@@ -448,10 +399,6 @@ begin
     tyBoolean:         begin SubKind := SK_BOOLEAN; IsSigned := 0; end;
     tyInt64, tyInteger, tySmallInt:
                        begin SubKind := SK_INTEGER;  IsSigned := 1; end;
-    tyDouble, tySingle:
-                       { Single (4B) / Double (8B) — pdr keys off SubKind=skFloat
-                         and reads the IEEE 754 value by SizeInBytes. }
-                       begin SubKind := SK_FLOAT;    IsSigned := 1; end;
   else
     SubKind := SK_INTEGER; IsSigned := 0;
   end;
@@ -704,28 +651,6 @@ begin
     L('    .quad 0  # HighPC (last function)');
   L('    .word ' + IntToStr(ADeclIdx) + '  # DeclIndex');
   EmitStrField(FuncName);
-end;
-
-procedure TOPDFEmitter.EmitRuntimeHelper(AKind: Integer; const ASymbol: string);
-begin
-  { recRuntimeHelper: 1-byte kind + 8-byte linker-resolved RTL entry-point
-    address.  Lets the debugger inject a call to the RTL release routine for a
-    +1 transient an injected property getter returns — see uDebugOPDF rationale
-    and opdf-specification.adoc (recRuntimeHelper = 25). }
-  L('');
-  L('    # recRuntimeHelper: ' + ASymbol);
-  EmitRecHdr(REC_RUNTIMEHELPER, 9);
-  L('    .byte ' + IntToStr(AKind) + '  # Kind');
-  L('    .quad ' + ASymbol + '  # Address (linker-resolved)');
-end;
-
-procedure TOPDFEmitter.EmitRuntimeHelpers;
-begin
-  { Emitted once per binary (program object only).  The RTL release routines
-    are global symbols the linker resolves; the addresses land in the same
-    image as the OPDF section, so the ASLR slide applies uniformly. }
-  EmitRuntimeHelper(RHK_STRING_RELEASE,   '_StringRelease');
-  EmitRuntimeHelper(RHK_DYNARRAY_RELEASE, '_DynArrayRelease');
 end;
 
 procedure TOPDFEmitter.EmitParameters(AMethod: TMethodDecl);
@@ -1050,7 +975,6 @@ var
   ReadType, WriteType: Integer;
   RecSize: Integer;
   RF: TFieldInfo;
-  ReadMethSym, WriteMethSym: string;
 begin
   if AClass.Properties.Count = 0 then Exit;
   ClassTypeID := GetOrAllocTypeID(AClass.Name);
@@ -1078,23 +1002,8 @@ begin
     else
       WriteType := PAT_NONE;
 
-    { Method-backed accessors carry the getter/setter SYMBOL name so the
-      debugger can resolve it via FindFunctionByName (which matches against the
-      recFunctionScope name = the mangled symbol) and inject the call.  The
-      symbol is the same one written as ReadAddr/WriteAddr below. }
-    if ReadType = PAT_METHOD then
-      ReadMethSym := MangledClassSym(AClass.Name) + '_' + PI.ReadMethod
-    else
-      ReadMethSym := '';
-    if WriteType = PAT_METHOD then
-      WriteMethSym := MangledClassSym(AClass.Name) + '_' + PI.WriteMethod
-    else
-      WriteMethSym := '';
-
-    { Fixed-size payload (30 bytes) + the three variable-length strings.
-      4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+
-      8(WriteAddr)+2(ReadMethodNameLen)+2(WriteMethodNameLen)+2(NameLen). }
-    RecSize := 32 + Length(ReadMethSym) + Length(WriteMethSym) + Length(PI.Name);
+    RecSize := 28 + Length(PI.Name);
+    { 4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+8(WriteAddr)+2(NameLen) }
 
     L('');
     L('    # recProperty: ' + PI.Name);
@@ -1132,14 +1041,7 @@ begin
     else
       L('    .quad 0  # WriteAddr (none)');
 
-    { The reader (TDefProperty) expects all three length words FIRST, then the
-      three strings in order: ReadMethodName, WriteMethodName, Name. }
-    L('    .word ' + IntToStr(Length(ReadMethSym)) + '  # ReadMethodNameLen');
-    L('    .word ' + IntToStr(Length(WriteMethSym)) + '  # WriteMethodNameLen');
-    L('    .word ' + IntToStr(Length(PI.Name)) + '  # NameLen');
-    EmitNameData(ReadMethSym);
-    EmitNameData(WriteMethSym);
-    EmitNameData(PI.Name);
+    EmitStrField(PI.Name);
   end;
 end;
 
@@ -1182,7 +1084,7 @@ begin
       L('    .word ' + IntToStr(Length(C.StrVal)) + '  # ValueLen');
       EmitNameLen(C.Name);
       if Length(C.StrVal) > 0 then
-        L('    .ascii "' + EscapeAsciiStr(C.StrVal) + '"  # Value');
+        L('    .ascii "' + C.StrVal + '"  # Value');
       EmitNameData(C.Name);
     end
     else
@@ -1310,58 +1212,15 @@ begin
   end;
 end;
 
-{ Static (class-level) variables are shared global pointer/value slots, not
-  instance fields, so they are not in any block's var-decl list and EmitFields
-  (instance fields only) skips them.  Emit one recGlobalVar per IsClassVar field
-  under its mangled ClassVarEmitName so a debugger can print TFoo.FInstance. }
-procedure TOPDFEmitter.EmitStaticVarsFromBlock(ABlock: TBlock);
-var
-  I, K, N: Integer;
-  TD:      TTypeDecl;
-  Flds:    TObjectList;
-  FDecl:   TFieldDecl;
-  Nm:      string;
-begin
-  if ABlock = nil then Exit;
-  for I := 0 to ABlock.TypeDecls.Count - 1 do
-  begin
-    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
-    Flds := nil;
-    if TD.Def is TClassTypeDef then
-      Flds := TClassTypeDef(TD.Def).Fields
-    else if TD.Def is TRecordTypeDef then
-      Flds := TRecordTypeDef(TD.Def).Fields;
-    if Flds = nil then Continue;
-    for K := 0 to Flds.Count - 1 do
-    begin
-      FDecl := TFieldDecl(Flds.Items[K]);
-      if not FDecl.IsClassVar then Continue;
-      for N := 0 to FDecl.Names.Count - 1 do
-      begin
-        if (FDecl.ClassVarEmitName <> '') and (FDecl.Names.Count = 1) then
-          Nm := FDecl.ClassVarEmitName
-        else
-          Continue;  { multi-name static vars carry no per-name emit label yet }
-        EmitGlobalVar(Nm, FDecl.ResolvedType);
-      end;
-    end;
-  end;
-end;
-
 procedure TOPDFEmitter.EmitGlobalVars;
 begin
   if FUnit <> nil then
   begin
     EmitGlobalVarsFromList(FUnit.IntfBlock.Decls);
     EmitGlobalVarsFromList(FUnit.ImplBlock.Decls);
-    EmitStaticVarsFromBlock(FUnit.IntfBlock);
-    EmitStaticVarsFromBlock(FUnit.ImplBlock);
   end
   else if FProgram <> nil then
-  begin
     EmitGlobalVarsFromList(FProgram.Block.Decls);
-    EmitStaticVarsFromBlock(FProgram.Block);
-  end;
 end;
 
 procedure TOPDFEmitter.SetFacts(AFacts: TDbgFacts);
@@ -1718,10 +1577,6 @@ begin
   EmitAllTypes();
   EmitGlobalVars();
   EmitConstants();
-  { recRuntimeHelper records are emitted ONLY by the program object (one set
-    per binary) — the RTL release routines are global symbols, not per-unit. }
-  if FProgram <> nil then
-    EmitRuntimeHelpers();
   EmitFunctionScopes();
   PatchTotalRecords();
   PatchUnitDirRecordCount();

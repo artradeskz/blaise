@@ -38,10 +38,6 @@ type
     { Default array property: List[i] subscript for read and write. }
     procedure TestRun_TList_DefaultProperty_ReadWrite;
     procedure TestRun_TList_DefaultProperty_Polymorphic;
-
-    { Clear and Free release managed elements (ARC cascade): a class element's
-      destructor must run when the list is cleared or freed. }
-    procedure TestRun_TList_FreeAndClear_ReleasesElements;
   end;
 
 implementation
@@ -276,43 +272,6 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcTListDefaultPoly, Output, RCode, False));
   AssertEquals('exit code (native)', 0, RCode);
   AssertEquals('List[i].Area (native)', '25' + #10, Output);
-end;
-
-const
-  SrcTListFreeClear = '''
-    program P;
-    uses generics.collections;
-    type
-      TC = class
-        N: Integer;
-        constructor Create(AN: Integer);
-        destructor Destroy; override;
-      end;
-    constructor TC.Create(AN: Integer);
-    begin N := AN end;
-    destructor TC.Destroy;
-    begin WriteLn('d', N) end;
-    var
-      L: TList<TC>;
-    begin
-      L := TList<TC>.Create();
-      L.Add(TC.Create(1));
-      L.Add(TC.Create(2));
-      L.Clear();
-      WriteLn('cleared');
-      L.Add(TC.Create(3));
-      L.Free();
-      WriteLn('done')
-    end.
-    ''';
-
-procedure TE2ETListTests.TestRun_TList_FreeAndClear_ReleasesElements;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { Clear releases elements 1 and 2; the final Free releases element 3 — each
-    destructor fires, proving the managed-element release cascade. }
-  AssertRTLRunsOnAll(SrcTListFreeClear,
-    'd1' + #10 + 'd2' + #10 + 'cleared' + #10 + 'd3' + #10 + 'done' + #10, 0);
 end;
 
 initialization

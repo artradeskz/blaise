@@ -27,7 +27,7 @@
   threadvar, giving each thread its own exception chain.
 }
 
-unit runtime.exc;
+unit blaise_exc;
 
 interface
 
@@ -112,7 +112,7 @@ var
   ExcSlot: PPointer;
 begin
   if g_exc_top = nil then
-    _libc_abort();
+    _libc_abort;
   g_current_exception := Obj;
   ExcSlot := g_exc_top + OFS_EXCEPTION;
   ExcSlot^ := Obj;
@@ -245,7 +245,7 @@ begin
   _libc_write(2, Msg, Int64(Len));
   NL := 10;
   _libc_write(2, @NL, 1);
-  _libc_abort();
+  _libc_abort;
 end;
 
 procedure _Raise_InvalidCast;

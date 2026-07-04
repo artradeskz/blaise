@@ -48,15 +48,6 @@ type
       (issue #130 bug3). }
     procedure TestRun_InheritedInterface_DescendantToVar;
     procedure TestRun_InheritedInterface_OverrideAndInheritedMethod;
-    procedure TestRun_InheritedInterface_NonVirtualMethod;
-    { An itab-dispatched method returning a RECORD.  Two ABI shapes:
-      a memory-class record (has a managed field -> sret) and a register-class
-      record (all-scalar, returned in registers).  Both must work when the
-      result is ASSIGNED and when DISCARDED in statement position — the
-      discarded statement and the assignment used to mis-handle the
-      record-return ABI and corrupt memory (bug #5). }
-    procedure TestRun_InterfaceMethod_ReturnsSretRecord;
-    procedure TestRun_InterfaceMethod_ReturnsRegisterRecord;
   end;
 
 implementation
@@ -372,117 +363,15 @@ const
     begin WriteLn(g.Greet(), ' / ', g.Who()) end;
     var per: TPerson; lou: TLoud; vl: TVeryLoud;
     begin
-      per := TPerson.Create; Use(per); per.Free();
-      lou := TLoud.Create;   Use(lou); lou.Free();
-      vl := TVeryLoud.Create; Use(vl); vl.Free()
+      per := TPerson.Create; Use(per); per.Free;
+      lou := TLoud.Create;   Use(lou); lou.Free;
+      vl := TVeryLoud.Create; Use(vl); vl.Free
     end.
     ''';
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src,
     'hi / person' + LE + 'HI / person' + LE + 'HI!!! / person' + LE, 0);
-end;
-
-procedure TE2EInterfaceTests.TestRun_InheritedInterface_NonVirtualMethod;
-const
-  { Regression (issue #130 bug3): a NON-virtual interface method inherited by a
-    descendant.  A non-virtual method gets no vtable slot, so the itab method ref
-    cannot be resolved via the vtable; the descendant's itab used to name
-    $TDerived_Hello (which does not exist) instead of the declaring ancestor's
-    $TBase_Hello, causing an "undefined symbol"/link error.  The earlier
-    inherited-interface tests only exercised VIRTUAL methods, which DO have
-    vtable slots, so this path went uncovered.  Both backends must now link+run. }
-  Src = '''
-    program P;
-    type
-      IBase = interface procedure Hello; end;
-      TBase = class(IBase) procedure Hello; end;
-      TDerived = class(TBase) end;
-    procedure TBase.Hello; begin WriteLn('hello') end;
-    procedure Use(g: IBase); begin g.Hello() end;
-    var d: TDerived; i: IBase;
-    begin
-      d := TDerived.Create;
-      i := d;        // assignment to interface
-      i.Hello();
-      Use(d);        // parameter passing
-      d.Free()
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, 'hello' + LE + 'hello' + LE, 0);
-end;
-
-procedure TE2EInterfaceTests.TestRun_InterfaceMethod_ReturnsSretRecord;
-const
-  { TRect has a managed (string) field, so ClassifyRecordReturn => sret. }
-  Src = '''
-    program P;
-    type
-      TRect = record Name: string; N: Integer; end;
-      IShape = interface
-        function MakeRect(AN: Integer): TRect;
-      end;
-      TShape = class(IShape)
-        function MakeRect(AN: Integer): TRect;
-      end;
-    function TShape.MakeRect(AN: Integer): TRect;
-    begin
-      Result.Name := 'r';
-      Result.N := AN;
-      WriteLn('callee ', AN)
-    end;
-    var
-      M: IShape;
-      R: TRect;
-    begin
-      M := TShape.Create();
-      R := M.MakeRect(5);       { assigned sret record return }
-      WriteLn('assigned ', R.N);
-      M.MakeRect(7)             { discarded sret record return }
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src,
-    'callee 5' + LE + 'assigned 5' + LE + 'callee 7' + LE, 0);
-end;
-
-procedure TE2EInterfaceTests.TestRun_InterfaceMethod_ReturnsRegisterRecord;
-const
-  { TPt is all-scalar, so ClassifyRecordReturn => a register-class return
-    (no sret buffer); the itab dispatch must capture the register result. }
-  Src = '''
-    program P;
-    type
-      TPt = record X, Y: Integer; end;
-      IShape = interface
-        function MakePt(AN: Integer): TPt;
-      end;
-      TShape = class(IShape)
-        function MakePt(AN: Integer): TPt;
-      end;
-    function TShape.MakePt(AN: Integer): TPt;
-    begin
-      Result.X := AN;
-      Result.Y := AN * 2;
-      WriteLn('callee ', AN)
-    end;
-    var
-      M: IShape;
-      R: TPt;
-    begin
-      M := TShape.Create();
-      R := M.MakePt(5);         { assigned register-class record return }
-      WriteLn('assigned ', R.X, ' ', R.Y);
-      M.MakePt(9)               { discarded register-class record return }
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src,
-    'callee 5' + LE + 'assigned 5 10' + LE + 'callee 9' + LE, 0);
 end;
 
 initialization

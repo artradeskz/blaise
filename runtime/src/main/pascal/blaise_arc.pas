@@ -31,7 +31,7 @@
   destruction -- no TOCTOU race.
 }
 
-unit runtime.arc;
+unit blaise_arc;
 
 interface
 
@@ -60,15 +60,7 @@ procedure _AbstractMethodError;
 procedure _LeakTrackerEnable;
 procedure _LeakTrackerRegister(UserPtr: Pointer; ClassName: Pointer;
   UnitName: Pointer; Line: Int64);
-{ Register an at-exit handler.  Uses __cxa_atexit, NOT atexit: glibc's bare
-  `atexit` lives only in the static libc_nonshared.a (it is not a dynamic export
-  of libc.so.6), so a link that does not pull that archive — as the native
-  backend's internal and external linkers do not — leaves `atexit` unresolved at
-  load time.  __cxa_atexit is a genuine dynamic libc export and resolves on
-  every link path.  Its third argument is the DSO handle; nil registers the
-  handler against the main program.  The handler is passed one (ignored) arg. }
-function _libc_cxa_atexit(Fn, Arg, DsoHandle: Pointer): Integer;
-  external name '__cxa_atexit';
+procedure _libc_atexit(Fn: Pointer); external name 'atexit';
 
 implementation
 
@@ -119,7 +111,7 @@ begin
   _libc_write(STDERR_FD, Msg, Int64(Len));
   NL := 10;
   _libc_write(STDERR_FD, @NL, 1);
-  _libc_abort();
+  _libc_abort;
 end;
 
 procedure _AbstractMethodError;
@@ -374,7 +366,7 @@ begin
   GLTTable := PChar(_BlaiseGetMem(TableSize));
   if GLTTable = nil then begin GLTEnabled := False; Exit end;
   _libc_memset(GLTTable, 0, Int64(TableSize));
-  _libc_cxa_atexit(Pointer(@_LeakTrackerReport), nil, nil);
+  _libc_atexit(Pointer(@_LeakTrackerReport));
 end;
 
 { ------------------------------------------------------------------ }

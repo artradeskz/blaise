@@ -23,7 +23,6 @@ type
     function AnalyseSrc(const ASrc: string): TProgram;
     function GenIR(const ASrc: string): string;
     procedure AnalyseExpectError(const ASrc: string);
-    procedure AnalyseExpectErrorMsg(const ASrc, AExpectedSubstr: string);
   published
     { Parser }
     procedure TestParse_ClassOf_AsAlias;
@@ -57,11 +56,6 @@ type
     procedure TestSemantic_MetaclassVar_Create_Accepted;
     procedure TestCodegen_MetaclassVar_Create_IndirectCtor;
     procedure TestCodegen_MetaclassVar_Create_NoCtor_NoIndirectCall;
-
-    { Bare 'C.Create' (no parens) on a metaclass variable must give the
-      mandatory-parentheses diagnostic, not the misleading
-      'is not a record or class' error. }
-    procedure TestSemantic_MetaclassVar_BareCreate_RequiresParens;
   end;
 
 implementation
@@ -116,20 +110,6 @@ begin
     Fail('Expected ESemanticError');
   except
     on E: ESemanticError do ;
-  end;
-end;
-
-procedure TClassOfTests.AnalyseExpectErrorMsg(const ASrc, AExpectedSubstr: string);
-var Prog: TProgram;
-begin
-  try
-    Prog := AnalyseSrc(ASrc);
-    Prog.Free();
-    Fail('Expected ESemanticError');
-  except
-    on E: ESemanticError do
-      AssertTrue('error message contains "' + AExpectedSubstr + '" (got: ' +
-        E.Message + ')', Pos(AExpectedSubstr, E.Message) >= 0);
   end;
 end;
 
@@ -566,24 +546,6 @@ begin
     Pos('call $_ClassCreate(', IR) > 0);
   AssertTrue('no ctor call when class declares no Create',
     Pos('TFoo_Create', IR) < 0);
-end;
-
-procedure TClassOfTests.TestSemantic_MetaclassVar_BareCreate_RequiresParens;
-const Src = '''
-    program P;
-    type
-      TFoo = class(TObject)
-        constructor Create;
-      end;
-    constructor TFoo.Create; begin end;
-    var C: class of TFoo; F: TFoo;
-    begin
-      C := TFoo;
-      F := C.Create
-    end.
-    ''';
-begin
-  AnalyseExpectErrorMsg(Src, 'requires () for a call');
 end;
 
 initialization

@@ -33,7 +33,7 @@ unit Classes;
 interface
 
 uses
-  runtime.arc, runtime.thread, StrUtils;
+  blaise_arc, blaise_thread, StrUtils;
 
 type
   TDuplicates = (dupAccept, dupIgnore, dupError);

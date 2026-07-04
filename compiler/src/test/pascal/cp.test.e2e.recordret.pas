@@ -97,14 +97,6 @@ type
     procedure TestRun_ChainedRecvManyArgs;
     procedure TestRun_ChainedRecvDoubleChain;
     procedure TestRun_ChainedRecvManagedRecord_TDecimalLike;
-    { Regression: a record-returning method assigned back into the SAME variable
-      that is its receiver (M := M.Method(...)).  The sret destination buffer
-      would alias Self, so the callee wrote Result (== Self) while still reading
-      Self — clobbering it mid-flight.  Fix routes the call through a fresh temp
-      and moves the result into the destination only after the call returns.
-      Both backends; managed (string) and scalar fields both checked. }
-    procedure TestRun_SelfAssignRecordMethod_ManagedField;
-    procedure TestRun_SelfAssignRecordMethod_ScalarFields;
     { Regression: a record-returning method that takes an INTERFACE parameter.
       An interface is a fat pointer (obj + itab) occupying TWO integer-register
       slots, but the native sret/record call paths popped one register per
@@ -124,36 +116,6 @@ type
       already fixed; this covers the free-function path.  Both backends. }
     procedure TestRun_InterfaceArg_FreeFunc_SretReturn;
     procedure TestRun_InterfaceArg_FreeFunc_IntThenInterface;
-    { Regression: an override that returns a record with a managed (string)
-      field by value, sourced from `inherited`.  The inherited call path
-      dropped the hidden sret pointer and passed Self into the sret slot, so
-      the base wrote its managed field over the Self object and _StringRelease
-      ran on garbage → heap corruption / segfault.  Both backends.  Covers the
-      assignment form (Result := inherited M()) and the implicit-Result
-      statement form (inherited M;). }
-    procedure TestRun_InheritedRecordReturn_ManagedField;
-    procedure TestRun_InheritedRecordReturn_StatementForm;
-    { Regression: reading the OFFSET-0 field of an sret function's own Result
-      mid-body (read-modify) after assigning Result from a record-returning
-      call.  The native offset-0 field-read shortcut loaded the Result slot
-      directly — but for an sret function that slot holds a POINTER to the
-      record, so the buffer pointer was read as the field value (garbage).
-      Offset>0 fields were fine (they always deref). Both backends.  (The fix
-      lives in the inline-asm commit; this test, from Andrew's parallel fix,
-      locks it in.) }
-    procedure TestRun_SretResult_ReadModifyOffsetZeroField;
-    { Regression: calling a record-returning METHOD as a statement (result
-      discarded) with no assignment target.  The SysV sret ABI puts the sret
-      pointer in %rdi and Self in %rsi, but without a buffer the callee wrote
-      the record through Self, corrupting the object.  Both backends. }
-    procedure TestRun_DiscardedRecordReturn_ManagedField;
-    { Same for a small record with only scalar fields (register-returned,
-      not sret) — the return value goes to %rax and is harmlessly discarded,
-      but we must verify codegen doesn't crash. }
-    procedure TestRun_DiscardedRecordReturn_ScalarOnly;
-    { Discarded record-returning call via an expression receiver
-      (Obj.RecordMethod();).  Tests the ObjExpr path. }
-    procedure TestRun_DiscardedRecordReturn_ObjExprReceiver;
   end;
 
 implementation
@@ -671,7 +633,7 @@ const
       K := TMaker.Create;
       R := K.Make(0.25);
       WriteLn(R.X);
-      K.Free()
+      K.Free
     end.
     ''';
 begin
@@ -817,60 +779,6 @@ begin
   AssertRunsOnAll(Src, '15' + LE + '25' + LE, 0);
 end;
 
-procedure TE2ERecordReturnTests.TestRun_SelfAssignRecordMethod_ManagedField;
-const
-  { Managed (string) field record method assigned back into its own receiver.
-    The non-aliasing case (C := A.Up(B)) and the receiver staying intact after
-    the self-assign are both checked as regression guards. }
-  Src = '''
-    program P;
-    type
-      TR = record
-        S: string;
-        function Up(const X: TR): TR;
-      end;
-    function TR.Up(const X: TR): TR;
-    begin Result.S := Self.S + X.S end;
-    var A, B, C: TR;
-    begin
-      A.S := 'a'; B.S := 'b';
-      A := A.Up(B);
-      WriteLn(A.S);
-      C := A.Up(B);
-      WriteLn(C.S);
-      WriteLn(A.S)
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, 'ab' + LE + 'abb' + LE + 'ab' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_SelfAssignRecordMethod_ScalarFields;
-const
-  { Two-integer record (register-return class) self-assigned through its own
-    receiver. }
-  Src = '''
-    program P;
-    type
-      TR = record
-        A, B: Integer;
-        function Add(const X: TR): TR;
-      end;
-    function TR.Add(const X: TR): TR;
-    begin Result.A := Self.A + X.A; Result.B := Self.B + X.B end;
-    var R, Q: TR;
-    begin
-      R.A := 1; R.B := 10; Q.A := 2; Q.B := 20;
-      R := R.Add(Q);
-      WriteLn(R.A, ' ', R.B)
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, '3 30' + LE, 0);
-end;
-
 { ------------------------------------------------------------------ }
 { Record-returning method with an interface (fat-pointer) parameter   }
 { ------------------------------------------------------------------ }
@@ -1011,212 +919,6 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, '12' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_InheritedRecordReturn_ManagedField;
-const
-  Src = '''
-    program P;
-    type
-      TTok = record Kind: Integer; Value: string; Line: Integer; end;
-      TBase = class
-        function Next(N: Integer): TTok; virtual;
-      end;
-      TDeriv = class(TBase)
-        function Next(N: Integer): TTok; override;
-      end;
-    function TBase.Next(N: Integer): TTok;
-    begin
-      Result.Kind := N;
-      Result.Value := 'hello-world';
-      Result.Line := 99
-    end;
-    function TDeriv.Next(N: Integer): TTok;
-    begin
-      Result := inherited Next(N)
-    end;
-    var D: TDeriv; T: TTok;
-    begin
-      D := TDeriv.Create();
-      T := D.Next(7);
-      WriteLn(T.Kind);
-      WriteLn(T.Value);
-      WriteLn(T.Line);
-      D.Free()
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, '7' + LE + 'hello-world' + LE + '99' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_InheritedRecordReturn_StatementForm;
-const
-  Src = '''
-    program P;
-    type
-      TTok = record Kind: Integer; Value: string; end;
-      TBase = class
-        function Make(N: Integer): TTok; virtual;
-      end;
-      TDeriv = class(TBase)
-        function Make(N: Integer): TTok; override;
-      end;
-    function TBase.Make(N: Integer): TTok;
-    begin
-      Result.Kind := N + 100;
-      Result.Value := 'base'
-    end;
-    function TDeriv.Make(N: Integer): TTok;
-    begin
-      inherited Make(N)
-    end;
-    var D: TDeriv; T: TTok;
-    begin
-      D := TDeriv.Create();
-      T := D.Make(5);
-      WriteLn(T.Kind);
-      WriteLn(T.Value);
-      D.Free()
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { `inherited Make(N);` with no explicit assignment sets the override's
-    Result through the sret pointer. }
-  AssertRunsOnAll(Src, '105' + LE + 'base' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_SretResult_ReadModifyOffsetZeroField;
-const
-  Src = '''
-    program P;
-    type TR = record A: Integer; S: string; B: Integer; end;
-    function Raw(N: Integer): TR;
-    begin
-      Result.A := N;
-      Result.S := 'hi';
-      Result.B := 20
-    end;
-    function Make(N: Integer): TR;
-    begin
-      Result := Raw(N);
-      Result.A := Result.A + 1
-    end;
-    var R: TR;
-    begin
-      R := Make(10);
-      WriteLn(R.A, ' ', R.S, ' ', R.B)
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { The string field forces a genuine sret return (24 bytes); reading
-    Result.A (offset 0) mid-body must deref the Result pointer. }
-  AssertRunsOnAll(Src, '11 hi 20' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_DiscardedRecordReturn_ManagedField;
-const
-  Src = '''
-    program P;
-    type
-      TToken = record
-        Kind: Integer;
-        Value: string;
-      end;
-      TLexer = class
-        FName: string;
-        function Next(): TToken;
-        function GetName(): string;
-      end;
-    function TLexer.Next(): TToken;
-    begin
-      Result.Kind := 42;
-      Result.Value := 'hello'
-    end;
-    function TLexer.GetName(): string;
-    begin
-      Result := FName
-    end;
-    var L: TLexer;
-    begin
-      L := TLexer.Create();
-      L.FName := 'mylex';
-      L.Next();
-      WriteLn(L.GetName());
-      L.Free()
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, 'mylex' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_DiscardedRecordReturn_ScalarOnly;
-const
-  Src = '''
-    program P;
-    type
-      TPoint = record X, Y: Integer; end;
-      TObj = class
-        function Pos(): TPoint;
-      end;
-    function TObj.Pos(): TPoint;
-    begin
-      Result.X := 10;
-      Result.Y := 20
-    end;
-    var O: TObj;
-    begin
-      O := TObj.Create();
-      O.Pos();
-      WriteLn('ok');
-      O.Free()
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, 'ok' + LE, 0);
-end;
-
-procedure TE2ERecordReturnTests.TestRun_DiscardedRecordReturn_ObjExprReceiver;
-const
-  Src = '''
-    program P;
-    type
-      TRec = record N: Integer; S: string; end;
-      TFactory = class
-        FTag: string;
-        function Make(): TRec;
-        function GetTag(): string;
-      end;
-      THolder = class
-        F: TFactory;
-      end;
-    function TFactory.Make(): TRec;
-    begin
-      Result.N := 7;
-      Result.S := 'test'
-    end;
-    function TFactory.GetTag(): string;
-    begin
-      Result := FTag
-    end;
-    var H: THolder;
-    begin
-      H := THolder.Create();
-      H.F := TFactory.Create();
-      H.F.FTag := 'mytag';
-      H.F.Make();
-      WriteLn(H.F.GetTag());
-      H.F.Free();
-      H.Free()
-    end.
-    ''';
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(Src, 'mytag' + LE, 0);
 end;
 
 initialization

@@ -26,7 +26,6 @@ type
     procedure TestRun_Collections_Valgrind;
     procedure TestRun_TwoDictInstancesInUnit_BothLink;
     procedure TestRun_IntfFreeFunc_GenericReturn_Compiles;
-    procedure TestRun_DefaultProp_StringList_And_ObjectList;
   end;
 
 implementation
@@ -363,45 +362,6 @@ begin
     CompileAndRunWithUnit('freefunc', UnitSrc, DrvSrc, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('list count', '2' + #10, Output);
-end;
-
-{ Regression (GitHub #138): the real classes.TStringList and contnrs.TObjectList
-  must both carry a `default` indexed property so SL[i] / OL[i] work as sugar
-  for SL.Strings[i] / OL.Items[i].  TStringList already had it; TObjectList did
-  not.  The chained form TStringList(OL[0])[1] — a typecast whose operand is
-  itself a default-property subscript, indexed again by a default property —
-  crashed the compiler (unbounded re-analysis of the rewritten subscript node);
-  AnalyseStringSubscriptExpr now guards against re-analysis via ResolvedType. }
-procedure TE2ECollections2Tests.TestRun_DefaultProp_StringList_And_ObjectList;
-const
-  Src = '''
-    program P;
-    uses classes, contnrs;
-    var SL: TStringList; OL: TObjectList; i: Integer;
-    begin
-      SL := TStringList.Create;
-      SL.Add('alpha');
-      SL.Add('beta');
-      for i := 0 to SL.Count - 1 do
-        WriteLn(SL[i]);            // default property read
-      SL[0] := 'ALPHA';           // default property write
-      WriteLn(SL[0]);
-      OL := TObjectList.Create(False);
-      OL.Add(SL);
-      WriteLn(TStringList(OL[0])[1]);   // chained: cast(OL default) then default
-      SL.Free();
-      OL.Free()
-    end.
-    ''';
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { CompileAndRunWithRTL runs on BOTH backends and asserts parity, and puts the
-    RTL + stdlib (classes, contnrs) on the unit search path. }
-  AssertTrue('compile+run', CompileAndRunWithRTL(Src, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('default-property output',
-    'alpha' + #10 + 'beta' + #10 + 'ALPHA' + #10 + 'beta' + #10, Output);
 end;
 
 initialization

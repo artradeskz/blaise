@@ -260,90 +260,17 @@ begin
   ART.SetVTableSlotAt(ASig.VTableSlot, ASig.Name, ImplName);
 end;
 
-{ Register the shared globals for a `static var` (class variable) imported
-  from a .bif.  Mirrors uSemantic.AnalyseTypeDecls (the IsClassVar branch):
-  a static var is NOT an instance field, so it must not advance the type
-  layout — instead it becomes one shared global reachable both bare (inside
-  the type's own methods) and qualified ('TFoo.Name' from anywhere).
-
-  CRITICAL: ClassVarEmitName is the mangled label computed at the DEFINING
-  unit's export time and serialised verbatim.  The importer must use the
-  DECODED value, never recompute it — the importing unit's own prefix
-  differs, so re-deriving would produce a label that does not match the data
-  slot the exporting unit emitted. }
-procedure RegisterImportedClassVar(const ATypeName, AFieldName,
-                                   AEmitName: string;
-                                   AFieldType: TTypeDesc;
-                                   ATable: TSymbolTable);
-var
-  Sym: TSymbol;
-begin
-  { Bare name — usable unqualified inside the type's own methods. }
-  Sym := TSymbol.Create(AFieldName, skVariable, AFieldType);
-  Sym.IsGlobal       := True;
-  Sym.IsClassVar     := True;
-  Sym.GlobalEmitName := AEmitName;
-  if not ATable.Define(Sym) then Sym.Free();
-  { Qualified name — usable as TFoo.Name from anywhere. }
-  Sym := TSymbol.Create(ATypeName + '.' + AFieldName, skVariable, AFieldType);
-  Sym.IsGlobal       := True;
-  Sym.IsClassVar     := True;
-  Sym.GlobalEmitName := AEmitName;
-  if not ATable.Define(Sym) then Sym.Free();
-end;
-
-{ Register class/record-level `static const` declarations imported from a
-  .bif.  Mirrors the within-unit registration in uSemantic.AnalyseTypeDecls:
-  each const is reachable both bare and qualified ('TFoo.Tag').  Array consts
-  are out of scope here (the within-unit path supports them, but no cached
-  consumer needs them yet); only scalar int/string consts are imported. }
-procedure RegisterImportedTypeConsts(const ATypeName: string;
-                                     AConstDecls: TObjectList;
-                                     ATable: TSymbolTable);
-var
-  J:   Integer;
-  CD:  TConstDecl;
-  Par: TTypeDesc;
-  Sym: TSymbol;
-begin
-  if AConstDecls = nil then Exit;
-  for J := 0 to AConstDecls.Count - 1 do
-  begin
-    CD := TConstDecl(AConstDecls.Items[J]);
-    if CD.IsArrayConst then Continue;  { array static consts not yet imported }
-    if CD.IsString then
-      Par := ATable.FindType('string')
-    else
-      Par := ATable.FindType('Integer');
-    { Unqualified name — usable inside the type's own methods without prefix. }
-    Sym := TSymbol.Create(CD.Name, skConstant, Par);
-    Sym.ConstValue  := CD.IntVal;
-    Sym.ConstString := CD.StrVal;
-    if not ATable.Define(Sym) then Sym.Free();
-    { Qualified name — usable as TFoo.Tag from anywhere. }
-    Sym := TSymbol.Create(ATypeName + '.' + CD.Name, skConstant, Par);
-    Sym.ConstValue  := CD.IntVal;
-    Sym.ConstString := CD.StrVal;
-    if not ATable.Define(Sym) then Sym.Free();
-  end;
-end;
-
 function ResolveParentClassByName(const AParentName: string;
                                   ATable: TSymbolTable): TRecordTypeDesc;
 var
-  TD: TTypeDesc;
+  Sym: TSymbol;
 begin
   Result := nil;
   if AParentName = '' then Exit;
-  { Use FindType, not a bare Lookup: a cross-unit parent is serialised in the
-    .bif with its unit qualifier (e.g. `testing.TTestCase`), and FindType
-    strips the qualifier and resolves the tail through the uses chain.  A bare
-    Lookup of the qualified name returns nil, leaving the parent unlinked — the
-    warm-cache "Undeclared procedure 'Ignore'" bug (inherited method on a
-    grandparent in another cached unit could not be reached). }
-  TD := ATable.FindType(AParentName);
-  if TD is TRecordTypeDesc then
-    Result := TRecordTypeDesc(TD);
+  Sym := ATable.Lookup(AParentName);
+  if (Sym = nil) or (Sym.Kind <> skType) then Exit;
+  if Sym.TypeDesc is TRecordTypeDesc then
+    Result := TRecordTypeDesc(Sym.TypeDesc);
 end;
 
 { Build the comma-separated '1'/'0' var-flag string AddMethod expects.
@@ -529,10 +456,6 @@ begin
     begin
       FldInfo := TFieldInfo(ParentRT.Fields.Items[I]);
       RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
-      { Inherited field keeps the ancestor's visibility + declaring origin. }
-      RT.FindField(FldInfo.Name).Visibility    := FldInfo.Visibility;
-      RT.FindField(FldInfo.Name).DeclaringUnit := FldInfo.DeclaringUnit;
-      RT.FindField(FldInfo.Name).DeclaringType := FldInfo.DeclaringType;
     end;
   end;
 
@@ -545,25 +468,8 @@ begin
       raise EImportError.CreateFmt(
         'Class %s field type %s unresolved',
         [AEntry.Name, FldDecl.TypeName]);
-    if FldDecl.IsClassVar then
-      { `static var`: a shared global, NOT an instance field — do not AddField
-        (that would advance the layout).  Register the global under the
-        DECODED emit label.  Multi-name static-var decls are not produced by
-        the parser (ClassVarEmitName is only set for single-name decls), so
-        the single decoded label applies to FldDecl.Names[0]. }
-      RegisterImportedClassVar(AEntry.Name, FldDecl.Names.Strings[0],
-        FldDecl.ClassVarEmitName, FldType, ATable)
-    else
-      for J := 0 to FldDecl.Names.Count - 1 do
-      begin
-        RT.AddField(FldDecl.Names.Strings[J], FldType);
-        { An imported field's privacy boundary is its own declaring unit, not
-          the importing unit — carry both so cross-unit private/protected is
-          enforced exactly as in the declaring unit. }
-        RT.FindField(FldDecl.Names.Strings[J]).Visibility    := FldDecl.Visibility;
-        RT.FindField(FldDecl.Names.Strings[J]).DeclaringUnit := AUnitName;
-        RT.FindField(FldDecl.Names.Strings[J]).DeclaringType := AEntry.Name;
-      end;
+    for J := 0 to FldDecl.Names.Count - 1 do
+      RT.AddField(FldDecl.Names.Strings[J], FldType);
   end;
 
   { Methods: walk TRoutineSig list; for virtual/override, register
@@ -639,18 +545,8 @@ begin
       if (FldSym <> nil) and (FldSym.Kind = skType) then
         PropInfo.IndexTypeDesc := FldSym.TypeDesc;
     end;
-    { Static-property facts — TypeName.Prop reads/writes dispatch with no
-      implicit Self.  Mirrors the within-unit pass (PropInfo.IsStatic). }
-    PropInfo.IsDefault := PropDecl.IsDefault;
-    PropInfo.IsStatic  := PropDecl.IsStatic;
-    PropInfo.Visibility    := PropDecl.Visibility;
-    PropInfo.DeclaringUnit := AUnitName;
-    PropInfo.DeclaringType := AEntry.Name;
     RT.AddProperty(PropInfo);
   end;
-
-  { Class-level `static const` declarations — reachable bare and qualified. }
-  RegisterImportedTypeConsts(AEntry.Name, ClassDef.ConstDecls, ATable);
 
   { Class attributes.  uSemanticExport currently copies the raw
     attribute names ('Threaded', not 'ThreadedAttribute') — but
@@ -708,22 +604,9 @@ begin
       raise EImportError.CreateFmt(
         'Record %s field type %s unresolved',
         [AEntry.Name, FldDecl.TypeName]);
-    if FldDecl.IsClassVar then
-      { record-level `static var`: shared global, not an instance field. }
-      RegisterImportedClassVar(AEntry.Name, FldDecl.Names.Strings[0],
-        FldDecl.ClassVarEmitName, FldType, ATable)
-    else
-      for J := 0 to FldDecl.Names.Count - 1 do
-      begin
-        RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
-        RecDesc.FindField(FldDecl.Names.Strings[J]).Visibility    := FldDecl.Visibility;
-        RecDesc.FindField(FldDecl.Names.Strings[J]).DeclaringUnit := AUnitName;
-        RecDesc.FindField(FldDecl.Names.Strings[J]).DeclaringType := AEntry.Name;
-      end;
+    for J := 0 to FldDecl.Names.Count - 1 do
+      RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
   end;
-
-  { record-level `static const` declarations — reachable bare and qualified. }
-  RegisterImportedTypeConsts(AEntry.Name, RecDef.ConstDecls, ATable);
 end;
 
 procedure RegisterProcType(AEntry: TTypeEntry; ATable: TSymbolTable;
@@ -896,13 +779,7 @@ begin
     Sym.ConstString := Entry.Decl.StrVal;
     Sym.OwningUnit  := AIface.Name;
     if not ATable.Define(Sym) then
-    begin
-      { EXPERIMENT (last-wins): on a duplicate name, detach the slot the
-        table already holds (kept alive via the per-unit cache for
-        qualified access) and store this later unit's symbol instead. }
-      ATable.ExtractLocal(Entry.Decl.Name);
-      ATable.Define(Sym);
-    end;
+      Sym.Free();  { duplicate — silently skip }
   end;
 end;
 
@@ -928,14 +805,7 @@ begin
     Sym.IsThreadVar := Entry.IsThreadVar;
     Sym.OwningUnit  := AIface.Name;
     if not ATable.Define(Sym) then
-    begin
-      { Cross-unit collision (last-wins): detach the slot the table already
-        holds — kept alive via the per-unit cache (RegisterUnitIface) for
-        qualified access — and store this later unit's symbol instead.
-        Mirrors RegisterConsts and the source-path DefineGlobalLastWins. }
-      ATable.ExtractLocal(Entry.Name);
-      ATable.Define(Sym);
-    end;
+      Sym.Free();
   end;
 end;
 
@@ -991,15 +861,6 @@ begin
   Result.VTableSlot := ASig.VTableSlot;
   Result.IsVirtual  := ASig.IsVirtual;
   Result.IsOverride := ASig.IsOverride;
-  { Carry static-ness so the semantic pass's TypeName.StaticMethod() resolution
-    (which checks MDecl.IsStatic) succeeds for a method imported from a .bif. }
-  Result.IsStatic   := ASig.IsStatic;
-  { Carry the `overload` directive so ResolveMethodOverload's hiding walk treats
-    an imported overload as overloadable — otherwise an overload set split
-    across an imported class and its ancestor is truncated to the derived level. }
-  Result.IsOverload := ASig.IsOverload;
-  { Carry visibility so cross-unit private/protected method access is enforced. }
-  Result.Visibility := ASig.Visibility;
   for J := 0 to ASig.Params.Count - 1 do
   begin
     Param := TMethodParam(ASig.Params.Items[J]);

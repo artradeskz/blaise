@@ -27,13 +27,7 @@ type
     procedure TestOPDF_Primitive_Integer;
     procedure TestOPDF_Primitive_Boolean;
     procedure TestOPDF_Primitive_Int64;
-    procedure TestOPDF_Primitive_Double_SubKindFloat;
-    procedure TestOPDF_Primitive_Single_SubKindFloat;
     procedure TestOPDF_AnsiStr_Record;
-    { A string constant whose value contains a double-quote, newline or
-      backslash must be C-escaped in the recConstant `.ascii` line, else the
-      literal closes early and the assembler sees a garbage mnemonic. }
-    procedure TestOPDF_StringConst_SpecialChars_Escaped;
     procedure TestOPDF_GlobalVar_QuadLabel;
     procedure TestOPDF_GlobalVar_RecType;
     procedure TestOPDF_Enum_RecType;
@@ -67,7 +61,6 @@ type
     procedure TestOPDF_Set_RecType;
     procedure TestOPDF_Set_SizeInBytes;
     procedure TestOPDF_Property_RecType;
-    procedure TestOPDF_Property_MethodBacked_LayoutIntact;
     procedure TestOPDF_Interface_RecType;
     procedure TestOPDF_Constant_OrdRecord;
     procedure TestOPDF_Constant_OrdValue;
@@ -76,11 +69,6 @@ type
     procedure TestOPDF_Constant_Real;
     procedure TestOPDF_UnitDir_Present;
     procedure TestOPDF_UnitDir_UnitCount;
-    { recRuntimeHelper — RTL release routines the debugger injects to free a
-      +1 transient an injected property getter returns. }
-    procedure TestOPDF_RuntimeHelper_StringRelease;
-    procedure TestOPDF_RuntimeHelper_DynArrayRelease;
-    procedure TestOPDF_RuntimeHelper_KindOrdinals;
   end;
 
 implementation
@@ -181,44 +169,6 @@ begin
   AssertTrue('recPrimitive Int64 present', Contains(IR, '# recPrimitive: Int64'));
 end;
 
-procedure TOPDFTests.TestOPDF_Primitive_Double_SubKindFloat;
-{ Regression: float types emitted NO recPrimitive at all, so a Double/Single
-  variable referenced a TypeID with no type record and pdr could not print it
-  (locals/print/gl all failed for floats).  A Double must now emit a recPrimitive
-  with SubKind=SK_FLOAT(4) and SizeInBytes=8 so pdr's TFloatEvaluator
-  (Category=tcFloat, keyed off SubKind in [skFloat, skCurrency]) renders it. }
-var
-  IR: string;
-  P:  Integer;
-begin
-  IR := GenOPDF('program P; var D: Double; begin D := 1.5 end.');
-  AssertTrue('recPrimitive Double comment', Contains(IR, '# recPrimitive: Double'));
-  AssertTrue('Double name emitted', Contains(IR, '.ascii "Double"'));
-  P := Pos('# recPrimitive: Double', IR);
-  AssertTrue('Double recPrimitive present', P >= 0);
-  { SubKind must be SK_FLOAT (4) and size 8, in the Double record's payload. }
-  AssertTrue('Double SubKind = 4 (skFloat)',
-    Pos('.byte 4  # SubKind', Copy(IR, P, 220)) >= 0);
-  AssertTrue('Double SizeInBytes = 8',
-    Pos('.byte 8  # SizeInBytes', Copy(IR, P, 220)) >= 0);
-end;
-
-procedure TOPDFTests.TestOPDF_Primitive_Single_SubKindFloat;
-{ Single is the 4-byte float counterpart; same recPrimitive shape, size 4. }
-var
-  IR: string;
-  P:  Integer;
-begin
-  IR := GenOPDF('program P; var S: Single; begin S := 1.5 end.');
-  AssertTrue('recPrimitive Single comment', Contains(IR, '# recPrimitive: Single'));
-  P := Pos('# recPrimitive: Single', IR);
-  AssertTrue('Single recPrimitive present', P >= 0);
-  AssertTrue('Single SubKind = 4 (skFloat)',
-    Pos('.byte 4  # SubKind', Copy(IR, P, 220)) >= 0);
-  AssertTrue('Single SizeInBytes = 4',
-    Pos('.byte 4  # SizeInBytes', Copy(IR, P, 220)) >= 0);
-end;
-
 procedure TOPDFTests.TestOPDF_AnsiStr_Record;
 var
   IR: string;
@@ -226,41 +176,6 @@ begin
   IR := GenOPDF('program P; begin end.');
   AssertTrue('recUtf8Str present', Contains(IR, '# recUtf8Str'));
   AssertTrue('Utf8String name emitted', Contains(IR, '.ascii "Utf8String"'));
-end;
-
-procedure TOPDFTests.TestOPDF_StringConst_SpecialChars_Escaped;
-var
-  IR: string;
-begin
-  { A string const whose value is a single double-quote must be emitted as
-    `.ascii "\""`, NOT `.ascii """` (which closes the literal after the first
-    quote and leaves `"  # Value` as a stray token). }
-  IR := GenOPDF(
-    '''
-        program P;
-        const Q = '"';
-        begin end.
-        ''');
-  AssertTrue('quote value is escaped', Contains(IR, '.ascii "\""  # Value'));
-  AssertFalse('no unescaped triple-quote', Contains(IR, '.ascii """  # Value'));
-
-  { A newline in the value must become \n, not a literal line break. }
-  IR := GenOPDF(
-    '''
-        program P;
-        const NL = 'a'#10'b';
-        begin end.
-        ''');
-  AssertTrue('newline escaped as \n', Contains(IR, '.ascii "a\nb"  # Value'));
-
-  { A backslash must be doubled. }
-  IR := GenOPDF(
-    '''
-        program P;
-        const BS = 'a\b';
-        begin end.
-        ''');
-  AssertTrue('backslash doubled', Contains(IR, '.ascii "a\\b"  # Value'));
 end;
 
 procedure TOPDFTests.TestOPDF_GlobalVar_QuadLabel;
@@ -691,47 +606,6 @@ begin
   AssertTrue('recProperty comment', Contains(IR, '# recProperty: Val'));
 end;
 
-procedure TOPDFTests.TestOPDF_Property_MethodBacked_LayoutIntact;
-{ Regression for the recProperty corruption (bugs.txt, opdebugger #10/#13 era):
-  a method-backed property must emit a COMPLETE, correctly-sized recProperty so
-  the reader (which reads SizeOf(TDefProperty)=32 fixed bytes then the three
-  length-prefixed strings) does not overshoot into the next record.  The fixed
-  payload is 32 bytes (4 ClassTypeID + 4 PropTypeID + 1 ReadType + 1 WriteType +
-  8 ReadAddr + 8 WriteAddr + 2+2+2 length words); RecSize = 32 + len(getterSym) +
-  len(setterSym) + len(name).  For TGadget.Val read GetVal write SetVal:
-  getterSym = "TGadget_GetVal" (14), setterSym = "TGadget_SetVal" (14),
-  name = "Val" (3) -> RecSize = 32 + 14 + 14 + 3 = 63. }
-var
-  IR: string;
-begin
-  IR := GenOPDF(
-    '''
-        program P;
-        type TGadget = class
-          FVal: Integer;
-          function GetVal: Integer;
-          procedure SetVal(AValue: Integer);
-          property Val: Integer read GetVal write SetVal;
-        end;
-        function TGadget.GetVal: Integer;
-        begin Result := FVal; end;
-        procedure TGadget.SetVal(AValue: Integer);
-        begin FVal := AValue; end;
-        begin end.
-        ''');
-  AssertTrue('recProperty comment', Contains(IR, '# recProperty: Val'));
-  { RecSize must match the fixed payload (32) + the three string lengths. }
-  AssertTrue('recProperty RecSize is 63', Contains(IR, '.int  63  # RecSize'));
-  { The getter/setter symbol names and the property name must be present as the
-    three trailing strings (the fields the corruption garbled). }
-  AssertTrue('getter method symbol string', Contains(IR, '.ascii "TGadget_GetVal"'));
-  AssertTrue('setter method symbol string', Contains(IR, '.ascii "TGadget_SetVal"'));
-  { The length words must match the actual symbol lengths. }
-  AssertTrue('ReadMethodNameLen = 14', Contains(IR, '.word 14  # ReadMethodNameLen'));
-  AssertTrue('WriteMethodNameLen = 14', Contains(IR, '.word 14  # WriteMethodNameLen'));
-  AssertTrue('NameLen = 3', Contains(IR, '.word 3  # NameLen'));
-end;
-
 procedure TOPDFTests.TestOPDF_Interface_RecType;
 var
   IR: string;
@@ -834,38 +708,6 @@ var
 begin
   IR := GenOPDF('program P; begin end.');
   AssertTrue('unit count is 1', Contains(IR, '.int  1  # UnitCount'));
-end;
-
-procedure TOPDFTests.TestOPDF_RuntimeHelper_StringRelease;
-var
-  IR: string;
-begin
-  IR := GenOPDF('program P; begin end.');
-  AssertTrue('recRuntimeHelper comment for _StringRelease',
-    Contains(IR, '# recRuntimeHelper: _StringRelease'));
-  AssertTrue('_StringRelease address quad (linker-resolved)',
-    Contains(IR, '.quad _StringRelease  # Address (linker-resolved)'));
-end;
-
-procedure TOPDFTests.TestOPDF_RuntimeHelper_DynArrayRelease;
-var
-  IR: string;
-begin
-  IR := GenOPDF('program P; begin end.');
-  AssertTrue('recRuntimeHelper comment for _DynArrayRelease',
-    Contains(IR, '# recRuntimeHelper: _DynArrayRelease'));
-  AssertTrue('_DynArrayRelease address quad (linker-resolved)',
-    Contains(IR, '.quad _DynArrayRelease  # Address (linker-resolved)'));
-end;
-
-procedure TOPDFTests.TestOPDF_RuntimeHelper_KindOrdinals;
-var
-  IR: string;
-begin
-  { Kind ordinals must match opdf_types.TRuntimeHelperKind: string=0, dynarray=1 }
-  IR := GenOPDF('program P; begin end.');
-  AssertTrue('rhkStringRelease kind byte = 0', Contains(IR, '.byte 0  # Kind'));
-  AssertTrue('rhkDynArrayRelease kind byte = 1', Contains(IR, '.byte 1  # Kind'));
 end;
 
 procedure TOPDFTests.TestOPDF_MethodScope_Emitted;

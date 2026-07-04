@@ -33,8 +33,8 @@
 #   guard is built to catch.
 #
 # Requires: a current native-built compiler at compiler/target/blaise (run
-# `pasbuild compile -m blaise-compiler` first).  The RTL is source-built by
-# the driver, so no blaise_rtl.a is needed.
+# `pasbuild compile -m blaise-compiler` first) and compiler/target/blaise_rtl.a
+# beside it.
 
 set -e
 
@@ -50,13 +50,16 @@ if [ ! -x "$STAGE1" ]; then
   exit 10
 fi
 
-# No RTL archive needed: the driver source-builds the RTL (EnsureRTLObjects).
-if [ ! -f compiler/src/main/pascal/runtime.arc.pas ]; then
-  echo "RTL source not found under compiler/src/main/pascal" >&2
+if [ ! -f compiler/target/blaise_rtl.a ]; then
+  echo "blaise_rtl.a not found beside the compiler — build the runtime first" >&2
+  echo "  (cd runtime && make install) then pasbuild compile -m blaise-compiler" >&2
   exit 11
 fi
+# FindRTL looks for blaise_rtl.a beside the compiler binary; it already is for
+# compiler/target/blaise, but copy defensively in case the tree is partial.
+cp compiler/target/blaise_rtl.a "$(dirname "$STAGE1")/blaise_rtl.a" 2>/dev/null || true
 
-UNIT_PATHS="--unit-path compiler/src/main/pascal --unit-path stdlib/src/main/pascal"
+UNIT_PATHS="--unit-path compiler/src/main/pascal --unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
 
 # All temp state in one mktemp dir so cleanup is a single rm.
 WORK="$(mktemp -d)"
@@ -146,9 +149,10 @@ echo "[4/4] behavioural check — both stage-2 binaries compile + run hello-worl
 HELLO="$WORK/hello.pas"
 printf 'program hello;\nbegin\n  WriteLn(%s);\nend.\n' "'Hello'" > "$HELLO"
 
-# No RTL archive needed: the driver source-builds the RTL.  The RTL source is
-# resolved from compiler/src/main/pascal, passed on the unit path below.
-RT_UNIT_PATHS="--unit-path compiler/src/main/pascal --unit-path stdlib/src/main/pascal"
+# FindRTL looks for blaise_rtl.a beside whichever binary is invoked.
+cp compiler/target/blaise_rtl.a "$WORK/blaise_rtl.a"
+
+RT_UNIT_PATHS="--unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
 
 check_binary() {
   local label="$1"

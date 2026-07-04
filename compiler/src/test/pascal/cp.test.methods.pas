@@ -376,7 +376,7 @@ begin
         var F: TFoo;
         begin
           F := TFoo.Create();
-          F.NoSuchMethod()
+          F.NoSuchMethod
         end.
         ''');
 end;

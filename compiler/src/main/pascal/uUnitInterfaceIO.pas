@@ -49,55 +49,11 @@ unit uUnitInterfaceIO;
 interface
 
 uses
-  Classes, SysUtils, streams, strutils, uAST, uUnitInterface, uStrCompat;
+  Classes, SysUtils, streams, strutils, uAST, uUnitInterface;
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 8;  { v8 (this cycle): named integer subranges now round-trip.
-                          A `type TIdx = lo..hi;` alias carries IsSubrange + the
-                          lo..hi bounds so `array[TIdx] of T` folds to
-                          `array[lo..hi] of T` across separate compilation.  The
-                          'alias' TYPE entry grew three trailing fields
-                          (IsSubrange bool + SubrangeLow + SubrangeHigh, each an
-                          lpstr) after TypeName, so v7 readers must reject these
-                          .bif and recompile.
-                        v7: external-library link dependencies now
-                          round-trip.  TUnitInterface.LinkLibs is serialised in
-                          the META block (one EncodeStringList after
-                          ImplUsedUnits, before HasInitialization) so a unit's
-                          `external 'lib' name '...'` declarations propagate the
-                          libraries to link.  The META layout grew, so v6 readers
-                          must reject these .bif and recompile.
-                        v6: the `overload` directive now round-trips.
-                          TRoutineSig.IsOverload added to EncodeMethodSig/
-                          ReadMethodSig (one extra byte after IsStatic) and
-                          TMethodDecl.IsOverload added to EncodeMethodDecl/
-                          ReadMethodDecl (after IsOverride; this is the
-                          interface- and generic-template-method path).  Without
-                          it a cross-unit overload set split across an imported
-                          class and its ancestor is truncated by the importer's
-                          hiding walk.  Both method layouts grew, so v5 readers
-                          must reject these .bif and recompile.
-                        v5: member Visibility (private/protected/
-                          strict) now serialised — field, method, and property
-                          payloads each carry one extra byte for the visibility
-                          ordinal, so v4 readers must reject these .bif and
-                          recompile.
-                        v4: TRoutineSig.IsStatic added to
-                          EncodeMethodSig/ReadMethodSig so a cross-unit
-                          TypeName.StaticMethod() call resolves through the
-                          cached .bif (VTableSlot alone cannot distinguish a
-                          static method from a final non-virtual instance
-                          method — both are -1).  The method-sig layout grew,
-                          so v3 readers must reject these .bif and recompile.
-                        v3: `static` (class-level) member facts now
-                          serialised — TFieldDecl.IsClassVar + ClassVarEmitName in
-                          EncodeFieldList/ReadFieldList, TPropertyDecl.IsStatic in
-                          EncodePropertyList/ReadPropertyList, and record/class
-                          static-const declarations (ConstDecls) in the record/class
-                          payloads.  The layout grew, so v2 readers must reject these
-                          .bif and recompile.
-                        v1: shipped through release v0.11.x (last public commit
+  IFACE_VERSION = 2;  { v1: shipped through release v0.11.x (last public commit
                             d56bdbf).
                         v2 (release v0.12.0): a batch of META/record additions
                           made this cycle, all gated by this single bump since
@@ -310,41 +266,7 @@ begin
       Result := Result +
                 EncodeLpstr(F.Names.Strings[J]) +
                 EncodeLpstr(F.TypeName) +
-                EncodeBool(F.IsWeak) +
-                { `static var` (class variable) facts: IsClassVar marks the field
-                  as a shared global rather than an instance slot; ClassVarEmitName
-                  is the defining unit's mangled global label (set by uSemantic).
-                  An importer cannot re-derive that label — its own unit prefix
-                  differs — so the label is carried verbatim.  Both default to
-                  False/'' for ordinary instance fields. }
-                EncodeBool(F.IsClassVar) +
-                EncodeLpstr(F.ClassVarEmitName) +
-                { member visibility ordinal (private/protected/strict) }
-                EncodeLpstr(IntToStr(Ord(F.Visibility)));
-  end;
-end;
-
-{ Record/class-level `static const` declarations.  These are scalar
-  constants folded by the semantic pass; we serialise the same five-
-  field scalar shape the unit-level CONST block uses (Name, TypeName,
-  IntVal, StrVal, IsString/IsFloat flags).  Non-scalar const forms
-  (array consts, unfolded expression tokens) are not carried here —
-  static const members are scalar in the current language surface. }
-function EncodeConstDeclList(AConsts: TObjectList): string;
-var
-  I: Integer;
-  C: TConstDecl;
-begin
-  Result := EncodeCount(AConsts.Count);
-  for I := 0 to AConsts.Count - 1 do
-  begin
-    C := TConstDecl(AConsts.Items[I]);
-    Result := Result +
-              EncodeLpstr(C.Name) +
-              EncodeLpstr(C.TypeName) +
-              EncodeInt64(C.IntVal) +
-              EncodeLpstr(C.StrVal) +
-              EncodeFlags(C.IsString, C.IsFloat);
+                EncodeBool(F.IsWeak);
   end;
 end;
 
@@ -364,14 +286,6 @@ begin
     EncodeBool (AR.IsOverride) +
     EncodeLpstr(AR.ResolvedQbeName) +
     EncodeLpstr(IntToStr(AR.VTableSlot)) +
-    { static-method flag — distinct from VTableSlot (both static and final
-      non-virtual instance methods carry slot -1). }
-    EncodeBool (AR.IsStatic) +
-    { `overload` directive — must round-trip so a split overload set is not
-      truncated by the importer's hiding walk. }
-    EncodeBool (AR.IsOverload) +
-    { member visibility ordinal }
-    EncodeLpstr(IntToStr(Ord(AR.Visibility))) +
     EncodeCount(AR.Params.Count);
   for J := 0 to AR.Params.Count - 1 do
   begin
@@ -399,9 +313,7 @@ var
 begin
   Def := TRecordTypeDef(AEntry.Def);
   Result := EncodeBool(Def.IsPacked) +
-            EncodeFieldList(Def.Fields) +
-            { record-level `static const` declarations. }
-            EncodeConstDeclList(Def.ConstDecls);
+            EncodeFieldList(Def.Fields);
 end;
 
 function EncodePropertyList(AList: TObjectList): string;
@@ -420,12 +332,7 @@ begin
               EncodeLpstr(P.WriteName) +
               EncodeLpstr(P.IndexParamName) +
               EncodeLpstr(P.IndexTypeName) +
-              EncodeBool(P.IsDefault) +
-              { `static property` — accessors take no implicit Self.  An importer
-                needs this to dispatch reads/writes without a receiver. }
-              EncodeBool(P.IsStatic) +
-              { member visibility ordinal }
-              EncodeLpstr(IntToStr(Ord(P.Visibility)));
+              EncodeBool(P.IsDefault);
   end;
 end;
 
@@ -441,9 +348,7 @@ begin
     EncodeStringList(AEntry.Implements) +
     EncodeFieldList(Def.Fields) +
     EncodeMethodList(AEntry.Methods) +
-    EncodePropertyList(Def.Properties) +
-    { class-level `static const` declarations. }
-    EncodeConstDeclList(Def.ConstDecls);
+    EncodePropertyList(Def.Properties);
 end;
 
 { Encode a TMethodDecl (AST) using the same per-method payload shape
@@ -465,9 +370,6 @@ begin
                                          resolved cross-unit refs }
     EncodeBool (AM.IsVirtual) +
     EncodeBool (AM.IsOverride) +
-    EncodeBool (AM.IsOverload) +      { `overload` directive — generic-template
-                                         and interface methods share this path
-                                         and may be overloaded }
     EncodeCount(AM.Params.Count);
   for J := 0 to AM.Params.Count - 1 do
   begin
@@ -640,10 +542,7 @@ begin
       else if Kind = 'alias' then
         SB.AppendLine(EncodeLpstr('alias') +
                EncodeLpstr(E.Name) +
-               EncodeLpstr(TTypeAliasDef(E.Def).TypeName) +
-               EncodeBool(TTypeAliasDef(E.Def).IsSubrange) +
-               EncodeLpstr(IntToStr(TTypeAliasDef(E.Def).SubrangeLow)) +
-               EncodeLpstr(IntToStr(TTypeAliasDef(E.Def).SubrangeHigh)))
+               EncodeLpstr(TTypeAliasDef(E.Def).TypeName))
       else if Kind = 'record' then
         SB.AppendLine(EncodeLpstr('record') +
                EncodeLpstr(E.Name) +
@@ -753,7 +652,6 @@ begin
            EncodeInt64(AIface.SourceModTime) +
            EncodeStringList(AIface.UsedUnits) +
            EncodeStringList(AIface.ImplUsedUnits) +
-           EncodeStringList(AIface.LinkLibs) +
            EncodeBool(AIface.HasInitialization));
     SB.AppendLine('END');
     Result := SB.ToString();
@@ -813,8 +711,7 @@ begin
     Result := EncodeLpstr('nillit')
   else if AE is TIdentExpr then
     Result := EncodeLpstr('id') +
-              EncodeLpstr(TIdentExpr(AE).Name) +
-              EncodeLpstr(TIdentExpr(AE).QualifierUnit)
+              EncodeLpstr(TIdentExpr(AE).Name)
   else if AE is TBinaryExpr then
     Result := EncodeLpstr('bin') +
               EncodeLpstr(IntToStr(Ord(TBinaryExpr(AE).Op))) +
@@ -831,7 +728,6 @@ begin
     Result := EncodeLpstr('mcall') +
               EncodeLpstr(TMethodCallExpr(AE).ObjectName) +
               EncodeLpstr(TMethodCallExpr(AE).Name) +
-              EncodeLpstr(TMethodCallExpr(AE).QualifierUnit) +
               EncodeExpr(TMethodCallExpr(AE).ObjExpr) +
               EncodeExprList(TMethodCallExpr(AE).Args)
   else if AE is TIndirectFuncCallExpr then
@@ -842,7 +738,6 @@ begin
     Result := EncodeLpstr('field') +
               EncodeLpstr(TFieldAccessExpr(AE).RecordName) +
               EncodeLpstr(TFieldAccessExpr(AE).FieldName) +
-              EncodeLpstr(TFieldAccessExpr(AE).QualifierUnit) +
               EncodeExpr(TFieldAccessExpr(AE).Base) +
               EncodeExpr(TFieldAccessExpr(AE).PropIndexExpr)
   else if AE is TDerefExpr then
@@ -1008,9 +903,6 @@ begin
     Result := EncodeLpstr('inh') +
               EncodeLpstr(TInheritedCallStmt(AStmt).Name) +
               EncodeExprList(TInheritedCallStmt(AStmt).Args)
-  else if AStmt is TAsmStmt then
-    Result := EncodeLpstr('asm') +
-              EncodeLpstr(TAsmStmt(AStmt).Code)
   else
     raise EIfaceFormatError.Create(
       'EncodeStmt: unhandled statement node ' + AStmt.ClassName);
@@ -1212,28 +1104,19 @@ end;
   uSemanticImport.ResolveRef. }
 procedure DecodeQualRef(const ASrc: string; var AUnit, AType: string);
 var
-  I, LastDot: Integer;
+  Dot: Integer;
 begin
-  { Blaise Pos and Copy are 0-based.  Split at the LAST '.', not the first:
-    the unit qualifier may itself be dotted (e.g. 'blaise.testing'), while a
-    type name never contains a dot.  Splitting at the first dot mangled a
-    qualified type from a dotted unit — 'blaise.testing.TTestCase' decoded to
-    unit='blaise', type='testing.TTestCase', so the bare type name was lost
-    and a cached parent class could not be relinked (warm --unit-cache
-    inherited-method resolution failure). }
-  LastDot := -1;
-  for I := 0 to Length(ASrc) - 1 do
-    if StrAt(ASrc, I) = Ord('.') then
-      LastDot := I;
-  if LastDot < 0 then
+  { Blaise Pos and Copy are 0-based. }
+  Dot := Pos('.', ASrc);
+  if Dot < 0 then
   begin
     AUnit := '';
     AType := ASrc;
   end
   else
   begin
-    AUnit := Copy(ASrc, 0, LastDot);
-    AType := Copy(ASrc, LastDot + 1, Length(ASrc) - LastDot - 1);
+    AUnit := Copy(ASrc, 0, Dot);
+    AType := Copy(ASrc, Dot + 1, Length(ASrc) - Dot - 1);
   end;
 end;
 
@@ -1508,7 +1391,6 @@ begin
   begin
     IE := TIdentExpr.Create();
     IE.Name := ReadLpstrAt(AText, APos);
-    IE.QualifierUnit := ReadLpstrAt(AText, APos);
     Result := IE;
   end
   else if Kind = 'bin' then
@@ -1535,10 +1417,9 @@ begin
   else if Kind = 'mcall' then
   begin
     MCE := TMethodCallExpr.Create();
-    MCE.ObjectName    := ReadLpstrAt(AText, APos);
-    MCE.Name          := ReadLpstrAt(AText, APos);
-    MCE.QualifierUnit := ReadLpstrAt(AText, APos);
-    MCE.ObjExpr       := ReadExpr(AText, APos);
+    MCE.ObjectName := ReadLpstrAt(AText, APos);
+    MCE.Name       := ReadLpstrAt(AText, APos);
+    MCE.ObjExpr    := ReadExpr(AText, APos);
     ReadExprList(AText, APos, MCE.Args);
     Result := MCE;
   end
@@ -1554,7 +1435,6 @@ begin
     FA := TFieldAccessExpr.Create();
     FA.RecordName    := ReadLpstrAt(AText, APos);
     FA.FieldName     := ReadLpstrAt(AText, APos);
-    FA.QualifierUnit := ReadLpstrAt(AText, APos);
     FA.Base          := ReadExpr(AText, APos);
     FA.PropIndexExpr := ReadExpr(AText, APos);
     Result := FA;
@@ -1646,7 +1526,6 @@ var
   PCn:  TProcCall;
   MCSn: TMethodCallStmt;
   ICSn: TInheritedCallStmt;
-  ASMn: TAsmStmt;
   C, I: Integer;
   Body: TASTStmt;
 begin
@@ -1814,12 +1693,6 @@ begin
     ReadExprList(AText, APos, ICSn.Args);
     Result := ICSn;
   end
-  else if Kind = 'asm' then
-  begin
-    ASMn := TAsmStmt.Create();
-    ASMn.Code := ReadLpstrAt(AText, APos);
-    Result := ASMn;
-  end
   else
     raise EIfaceFormatError.Create(
       'ReadStmt: unknown statement kind ''' + Kind + '''');
@@ -1877,14 +1750,11 @@ end;
 procedure ReadFieldList(const AText: string; var APos: Integer;
                         ATarget: TObjectList);
 var
-  C, I:        Integer;
-  FldName:     string;
-  FldType:     string;
-  IsWeak:      Boolean;
-  IsClassVar:  Boolean;
-  ClassVarEmit: string;
-  Vis:         Integer;
-  F:           TFieldDecl;
+  C, I:    Integer;
+  FldName: string;
+  FldType: string;
+  IsWeak:  Boolean;
+  F:       TFieldDecl;
 begin
   C := DecodeCount(AText, APos);
   for I := 1 to C do
@@ -1892,44 +1762,11 @@ begin
     FldName := ReadLpstrAt(AText, APos);
     FldType := ReadLpstrAt(AText, APos);
     IsWeak  := DecodeBool(AText, APos);
-    { Order must mirror EncodeFieldList: IsClassVar then ClassVarEmitName
-      then the visibility ordinal. }
-    IsClassVar   := DecodeBool(AText, APos);
-    ClassVarEmit := ReadLpstrAt(AText, APos);
-    Vis          := StrToInt(ReadLpstrAt(AText, APos));
     F := TFieldDecl.Create();
     F.Names.Add(FldName);
     F.TypeName := FldType;
     F.IsWeak   := IsWeak;
-    F.IsClassVar      := IsClassVar;
-    F.ClassVarEmitName := ClassVarEmit;
-    F.Visibility := TMemberVisibility(Vis);
     ATarget.Add(F);
-  end;
-end;
-
-{ Inverse of EncodeConstDeclList — rebuild record/class `static const`
-  decls.  Mirrors the writer's five-field scalar shape exactly. }
-procedure ReadConstDeclList(const AText: string; var APos: Integer;
-                            ATarget: TObjectList);
-var
-  C, I:     Integer;
-  CD:       TConstDecl;
-  IsString: Boolean;
-  IsFloat:  Boolean;
-begin
-  C := DecodeCount(AText, APos);
-  for I := 1 to C do
-  begin
-    CD := TConstDecl.Create();
-    CD.Name     := ReadLpstrAt(AText, APos);
-    CD.TypeName := ReadLpstrAt(AText, APos);
-    CD.IntVal   := ReadInt64At(AText, APos);
-    CD.StrVal   := ReadLpstrAt(AText, APos);
-    ReadFlagsAt(AText, APos, IsString, IsFloat);
-    CD.IsString := IsString;
-    CD.IsFloat  := IsFloat;
-    ATarget.Add(CD);
   end;
 end;
 
@@ -1954,11 +1791,6 @@ begin
   Result.IsOverride  := DecodeBool(AText, APos);
   Result.ResolvedQbeName := ReadLpstrAt(AText, APos);
   Result.VTableSlot  := StrToInt(ReadLpstrAt(AText, APos));
-  { Order must mirror EncodeMethodSig: IsStatic follows VTableSlot, then
-    IsOverload, then the visibility ordinal. }
-  Result.IsStatic    := DecodeBool(AText, APos);
-  Result.IsOverload  := DecodeBool(AText, APos);
-  Result.Visibility  := TMemberVisibility(StrToInt(ReadLpstrAt(AText, APos)));
   Pc := DecodeCount(AText, APos);
   for J := 1 to Pc do
   begin
@@ -1989,7 +1821,6 @@ begin
   Def := TRecordTypeDef.Create();
   Def.IsPacked := DecodeBool(AText, APos);
   ReadFieldList(AText, APos, Def.Fields);
-  ReadConstDeclList(AText, APos, Def.ConstDecls);
   AEntry.Def := Def;
 end;
 
@@ -2012,7 +1843,6 @@ begin
   ReadFieldList(AText, APos, Def.Fields);
   ReadMethodList(AText, APos, AEntry.Methods);
   ReadPropertyList(AText, APos, Def.Properties);
-  ReadConstDeclList(AText, APos, Def.ConstDecls);
   AEntry.IsClass := True;
   AEntry.Def     := Def;
 end;
@@ -2031,7 +1861,6 @@ begin
   if not HasReturn then Result.ReturnTypeName := '';
   Result.IsVirtual      := DecodeBool(AText, APos);
   Result.IsOverride     := DecodeBool(AText, APos);
-  Result.IsOverload     := DecodeBool(AText, APos);
   Pc := DecodeCount(AText, APos);
   for J := 1 to Pc do
   begin
@@ -2071,10 +1900,6 @@ begin
     P.IndexParamName := ReadLpstrAt(AText, APos);
     P.IndexTypeName  := ReadLpstrAt(AText, APos);
     P.IsDefault      := DecodeBool(AText, APos);
-    { Order must mirror EncodePropertyList: IsStatic follows IsDefault, then
-      the visibility ordinal. }
-    P.IsStatic       := DecodeBool(AText, APos);
-    P.Visibility     := TMemberVisibility(StrToInt(ReadLpstrAt(AText, APos)));
     ATarget.Add(P);
   end;
 end;
@@ -2145,9 +1970,6 @@ begin
   C := DecodeCount(AText, APos);
   for I := 1 to C do
     AIface.ImplUsedUnits.Add(ReadLpstrAt(AText, APos));
-  C := DecodeCount(AText, APos);
-  for I := 1 to C do
-    AIface.LinkLibs.Add(ReadLpstrAt(AText, APos));
   AIface.HasInitialization := ReadLpstrAt(AText, APos) = '1';
   if ReadTag(AText, APos) <> 'END' then
     raise EIfaceFormatError.Create('META block: missing END marker');
@@ -2329,9 +2151,6 @@ begin
       Payload := ReadLpstrAt(AText, APos);
       AliasDef := TTypeAliasDef.Create();
       AliasDef.TypeName := Payload;
-      AliasDef.IsSubrange := ReadLpstrAt(AText, APos) = '1';
-      AliasDef.SubrangeLow := ReadInt64At(AText, APos);
-      AliasDef.SubrangeHigh := ReadInt64At(AText, APos);
       Entry.Def := AliasDef;
     end
     else if Kind = 'record' then

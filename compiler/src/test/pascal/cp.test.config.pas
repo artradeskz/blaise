@@ -28,11 +28,6 @@ type
     procedure TestParseRelativePath_ResolvedAgainstBaseDir;
     procedure TestParseAbsolutePath_NotModified;
     procedure TestParseUnknownKey_IgnoredSilently;
-    procedure TestParseRtlSrc_Absolute_SetsValue;
-    procedure TestParseRtlSrc_Relative_ResolvedAgainstBaseDir;
-    procedure TestParseRtlSrc_Absent_LeavesSeedUnchanged;
-    procedure TestParseTildePath_ExpandsToHome;
-    procedure TestParseRtlSrcTilde_ExpandsToHome;
     procedure TestFindConfigFile_NextToBinary;
   end;
 
@@ -186,11 +181,11 @@ begin
   Lines := TStringList.Create();
   Paths := TStringList.Create();
   try
-    Lines.Add('unit-path=../../compiler/src/main/pascal');
+    Lines.Add('unit-path=../../runtime/src/main/pascal');
     ParseConfigLines(Lines, '/data/devel/new-pascal-compiler/compiler/target/', Paths);
     AssertEquals('one path', 1, Paths.Count);
     AssertEquals('resolved',
-      '/data/devel/new-pascal-compiler/compiler/target/../../compiler/src/main/pascal',
+      '/data/devel/new-pascal-compiler/compiler/target/../../runtime/src/main/pascal',
       Paths.Strings[0]);
   finally
     Lines.Free();
@@ -226,110 +221,6 @@ begin
     Lines.Add('unit-path=/opt/blaise/runtime');
     ParseConfigLines(Lines, '/base', Paths);
     AssertEquals('one path only', 1, Paths.Count);
-  finally
-    Lines.Free();
-    Paths.Free();
-  end;
-end;
-
-procedure TConfigTests.TestParseRtlSrc_Absolute_SetsValue;
-var
-  Lines, Paths: TStringList;
-  Rtl: string;
-begin
-  Lines := TStringList.Create();
-  Paths := TStringList.Create();
-  try
-    Rtl := '';
-    Lines.Add('rtl-src=/opt/blaise/rtl');
-    ParseConfigLines(Lines, '/base', Paths, Rtl);
-    AssertEquals('rtl-src set', '/opt/blaise/rtl', Rtl);
-    AssertEquals('rtl-src is not a unit-path', 0, Paths.Count);
-  finally
-    Lines.Free();
-    Paths.Free();
-  end;
-end;
-
-procedure TConfigTests.TestParseRtlSrc_Relative_ResolvedAgainstBaseDir;
-var
-  Lines, Paths: TStringList;
-  Rtl: string;
-begin
-  Lines := TStringList.Create();
-  Paths := TStringList.Create();
-  try
-    Rtl := '';
-    Lines.Add('rtl-src=src/main/pascal');
-    ParseConfigLines(Lines, '/base/', Paths, Rtl);
-    AssertEquals('relative rtl-src resolved against base dir',
-      '/base/src/main/pascal', Rtl);
-  finally
-    Lines.Free();
-    Paths.Free();
-  end;
-end;
-
-procedure TConfigTests.TestParseRtlSrc_Absent_LeavesSeedUnchanged;
-var
-  Lines, Paths: TStringList;
-  Rtl: string;
-begin
-  Lines := TStringList.Create();
-  Paths := TStringList.Create();
-  try
-    { Seed a value (as the driver does with a CLI --rtl-src); a config with no
-      rtl-src line must leave it untouched. }
-    Rtl := '/cli/override';
-    Lines.Add('unit-path=/opt/blaise/runtime');
-    ParseConfigLines(Lines, '/base', Paths, Rtl);
-    AssertEquals('seed unchanged when config has no rtl-src',
-      '/cli/override', Rtl);
-  finally
-    Lines.Free();
-    Paths.Free();
-  end;
-end;
-
-procedure TConfigTests.TestParseTildePath_ExpandsToHome;
-var
-  Lines, Paths: TStringList;
-  Home: string;
-begin
-  Home := GetEnvironmentVariable('HOME');
-  if Home = '' then begin Ignore('no $HOME'); Exit end;
-  Lines := TStringList.Create();
-  Paths := TStringList.Create();
-  try
-    { A '~/...' unit-path expands to $HOME/..., NOT resolved against the base. }
-    Lines.Add('unit-path=~/devel/blaise/runtime');
-    ParseConfigLines(Lines, '/some/base', Paths);
-    AssertEquals('one path', 1, Paths.Count);
-    AssertEquals('~ expanded to $HOME',
-      IncludeTrailingPathDelimiter(Home) + 'devel/blaise/runtime',
-      Paths.Strings[0]);
-  finally
-    Lines.Free();
-    Paths.Free();
-  end;
-end;
-
-procedure TConfigTests.TestParseRtlSrcTilde_ExpandsToHome;
-var
-  Lines, Paths: TStringList;
-  Rtl, Home: string;
-begin
-  Home := GetEnvironmentVariable('HOME');
-  if Home = '' then begin Ignore('no $HOME'); Exit end;
-  Lines := TStringList.Create();
-  Paths := TStringList.Create();
-  try
-    Rtl := '';
-    Lines.Add('rtl-src=~/devel/blaise/compiler/src/main/pascal');
-    ParseConfigLines(Lines, '/some/base', Paths, Rtl);
-    AssertEquals('~ in rtl-src expanded to $HOME',
-      IncludeTrailingPathDelimiter(Home) + 'devel/blaise/compiler/src/main/pascal',
-      Rtl);
   finally
     Lines.Free();
     Paths.Free();

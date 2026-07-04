@@ -26,11 +26,6 @@ type
     { Basic external call — strlen via external name }
     procedure TestRun_ExternalName_Strlen;
 
-    { Library-qualified external — external 'c' name 'strlen': the bare library
-      name is parsed and recorded (propagated via the unit's LinkLibs) while the
-      symbol resolves as usual. }
-    procedure TestRun_ExternalLibName_Strlen;
-
     { Narrow-int return masking: strlen returns size_t (64-bit) but declared
       as Byte/Word/SmallInt — upper bits must be masked/sign-extended. }
     procedure TestRun_ExternalByteReturn_MaskedCorrectly;
@@ -67,18 +62,6 @@ procedure TE2EExternalTests.TestRun_ExternalName_Strlen;
 const Src = '''
     program T;
     function c_strlen(S: PChar): Integer; external name 'strlen';
-    begin
-      WriteLn(c_strlen(PChar('hello')))
-    end.
-    ''';
-begin
-  AssertRunsOnAll(Src, '5' + Chr(10), 0);
-end;
-
-procedure TE2EExternalTests.TestRun_ExternalLibName_Strlen;
-const Src = '''
-    program T;
-    function c_strlen(S: PChar): Integer; external 'c' name 'strlen';
     begin
       WriteLn(c_strlen(PChar('hello')))
     end.

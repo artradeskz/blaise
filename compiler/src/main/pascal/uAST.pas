@@ -94,10 +94,6 @@ type
     pmJumboSetValue       { by-value jumbo (>64) set param: by-ref aggregate ABI }
   );
 
-  { TMemberVisibility is declared in uSymbolTable (so the symbol-table
-    descriptors can carry it without a circular unit dependency); uAST re-uses
-    that type for the parser-level AST member decls. }
-
   TIdentExpr = class(TASTExpr)
   public
     Name:              string;
@@ -117,31 +113,12 @@ type
     ConstArraySymbol:  string;      { set by uSemantic — non-empty when this ident resolves
                                       to an array const; the mangled QBE data-label codegen
                                       must reference instead of $Name. }
-    QualifierUnit:     string;      { set by the parser — non-empty when written as a
-                                      unit-qualified reference 'Unit.Symbol'.  uSemantic
-                                      resolves the name against this specific unit's
-                                      exports (per-unit cache) instead of the uses chain,
-                                      so a same-named const in another unit can't shadow it. }
-    ResolvedOwnerUnit: string;      { set by uSemantic — for a module-scope global var,
-                                      the owning unit of the symbol actually resolved (the
-                                      uses-chain last-wins winner for a bare ref, or the
-                                      named unit for a qualified ref).  Codegen mangles the
-                                      global's storage symbol with this owner so two used
-                                      units exporting the same var name reference distinct
-                                      slots.  Not serialised — recomputed at analysis time;
-                                      empty falls back to the bare-name resolution. }
   end;
 
   TFieldAccessExpr = class(TASTExpr)
   public
     RecordName:        string;         { used when Base = nil (leaf access) }
     FieldName:         string;
-    QualifierUnit:     string;         { set by the parser — non-empty when the
-                                         base type was written unit-qualified, e.g.
-                                         'Unit.TEnum.Member' or 'Unit.TFoo.StaticVar'.
-                                         uSemantic resolves RecordName against this
-                                         specific unit's exports (directed lookup)
-                                         instead of the flat last-wins winner. }
     Base:              TASTExpr;       { owned — when non-nil, chained access (e.g. A.B.C) }
     FieldInfo:         TFieldInfo;    { set by uSemantic — nil for constructor calls }
     IsConstant:        Boolean;       { set by uSemantic — TypeName.ConstName resolves to a class constant }
@@ -168,15 +145,6 @@ type
     PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property read (e.g. List.Items[i]) }
     IsCharAccess:  Boolean;   { set by uSemantic — PropIndexExpr indexes a string field: S.Field[N] }
     IsArrayAccess: Boolean;   { set by uSemantic — PropIndexExpr subscripts an array field: R.Arr[I] }
-    IsClassVarRead:   Boolean; { set by uSemantic — TypeName.StaticVar read; lower as a global load of ClassVarEmitName }
-    ClassVarEmitName: string;  { mangled global label for an IsClassVarRead access }
-    IsStaticPropGet:  Boolean; { set by uSemantic — TypeName.StaticProp read; ResolvedMethod is the static getter }
-    BackingFieldRedirect: Boolean; { set by uSemantic — FieldName was rewritten from a
-                                     property name to its (possibly private) backing
-                                     field; visibility was already enforced on the
-                                     property, so re-analysis of this node must NOT
-                                     re-check the backing field's visibility.  Transient
-                                     analysis flag — not serialised. }
     destructor Destroy; override;
   end;
 
@@ -261,10 +229,6 @@ type
                                    _WeakAssign in place of the strong
                                    addref/release pattern. }
     ImplicitSelfField: TObject;  { TFieldInfo — non-nil when LHS is bare field (implicit Self) }
-    ResolvedOwnerUnit: string;   { set by uSemantic — owning unit of a module-scope global
-                                   var target; codegen mangles the store address with it so
-                                   same-named cross-unit globals write distinct slots.  See
-                                   the matching field on TIdentExpr. }
     destructor Destroy; override;
   end;
 
@@ -281,14 +245,6 @@ type
     Stmts: TObjectList;  { owned TASTStmt }
     constructor Create;
     destructor Destroy; override;
-  end;
-
-  { An inline-assembler block: the verbatim text of one `asm` ... `end` body.
-    The front end never interprets Code — it is GNU/AT&T assembly handed to the
-    backend's assembler verbatim (see docs/inline-asm-design.adoc). }
-  TAsmStmt = class(TASTStmt)
-  public
-    Code: string;   { verbatim assembly text between asm and end }
   end;
 
   TWhileStmt = class(TASTStmt)
@@ -451,16 +407,6 @@ type
                               FieldName has been rewritten to the SETTER method;
                               codegen dispatches it through the itab with Expr
                               as the single argument }
-    IsClassVarWrite: Boolean; { set by uSemantic — qualified STATIC (class-level)
-                              variable write 'TFoo.StaticVar := V'.  The target is
-                              the single shared global emitted under
-                              ClassVarEmitName; codegen lowers it exactly like a
-                              bare global store (delegates to EmitAssignment),
-                              ignoring RecordName/FieldName. }
-    [Unretained] ClassVarLhsType: TTypeDesc;  { set with IsClassVarWrite — the
-                              static var's type, for the delegated store. }
-    ClassVarEmitName: string; { set with IsClassVarWrite — the mangled data-label
-                              of the static var's storage slot. }
     destructor Destroy; override;
   end;
 
@@ -512,10 +458,6 @@ type
     IsIndirectCall:       Boolean; { set by uSemantic — Name is a procedural-typed variable }
     IndirectCallIsGlobal: Boolean; { set by uSemantic — when IsIndirectCall, variable is global }
     [Unretained] ResolvedProcType:     TObject; { TProceduralTypeDesc — not owned; valid when IsIndirectCall }
-    IsProcFieldCall:      Boolean; { set by uSemantic — unqualified Name is a
-                                     procedural-typed field of the current class
-                                     (implicit Self.Field), called as a statement }
-    [Unretained] ProcFieldInfo: TFieldInfo; { not owned — the procedural field, when IsProcFieldCall }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -539,10 +481,6 @@ type
     IsBuiltinHasClassAttr: Boolean; { set by uSemantic — HasClassAttribute builtin }
     HasClassAttrClass:     string;  { class name for arg 1 (class being queried) }
     HasClassAttrAttr:      string;  { attribute class name for arg 2 }
-    IsProcFieldCall:       Boolean; { set by uSemantic — unqualified Name is a
-                                      procedural-typed field of the current class
-                                      (implicit Self.Field), used as an expression }
-    [Unretained] ProcFieldInfo: TFieldInfo; { not owned — the procedural field, when IsProcFieldCall }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -600,9 +538,6 @@ type
     IsBuiltinToString:  Boolean;     { set by uSemantic — built-in TObject.ToString virtual dispatch }
     IsConstructorCall:  Boolean;     { set by uSemantic — metaclass-var Create in stmt position }
     IsMetaclassDispatch: Boolean;    { set by uSemantic — receiver is a metaclass var }
-    IsStaticCall:       Boolean;     { set by uSemantic — TypeName.StaticMethod(): a static
-                                       (class-level) call with NO Self.  Codegen lowers it as a
-                                       plain call to the mangled method symbol, no receiver. }
     IsProcFieldCall:    Boolean;     { set by uSemantic — Name is a procedural-typed field of
                                        the receiver, invoked directly (F.Handler;).  Codegen
                                        loads the (Code, Data) pair from the field slot and
@@ -751,14 +686,6 @@ type
   TTypeAliasDef = class(TASTTypeDef)
   public
     TypeName: string;
-    { When the RHS was a named integer subrange (type TIdx = lo..hi;) the alias
-      target is the narrowest fitting standard integer type (in TypeName), but
-      the original lo..hi bounds are retained here as compile-time metadata so
-      the array-index resolver can fold array[TIdx] -> array[lo..hi].  The value
-      still behaves as its underlying int (unchecked); only the bounds are kept. }
-    IsSubrange: Boolean;
-    SubrangeLow: Int64;
-    SubrangeHigh: Int64;
   end;
 
   { Set type definition: type TOptions = set of TEnum; }
@@ -789,29 +716,14 @@ type
     Attributes:   TStringList;  { owned — see TVarDecl.Attributes. }
     IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved. }
     IsUnretained: Boolean;      { set by uSemantic when [Unretained] is resolved. }
-    IsClassVar:   Boolean;      { set by uParser — declared `static var` (a.k.a.
-                                  class variable): one shared storage slot for the
-                                  whole type, not a per-instance field.  Lowered to
-                                  a global slot by uSemantic; never gets an instance
-                                  offset. }
-    ClassVarEmitName: string;   { set by uSemantic for an IsClassVar field — the
-                                  mangled global data-label (CurrentUnitPrefix +
-                                  Class + '_' + Name).  Single source of truth so
-                                  BOTH backends emit the slot under the exact label
-                                  the read/write sites use, without re-deriving the
-                                  unit prefix. }
-    Visibility:   TMemberVisibility; { set by uParser from the enclosing visibility
-                                       section; default mvPublic.  Enforced by
-                                       uSemantic's member-access checks. }
     constructor Create;
     destructor Destroy; override;
   end;
 
   TRecordTypeDef = class(TASTTypeDef)
   public
-    Fields:     TObjectList;  { owned TFieldDecl }
-    Methods:    TObjectList;  { owned TMethodDecl }
-    ConstDecls: TObjectList;  { owned TConstDecl — record-level constants (static const) }
+    Fields:   TObjectList;  { owned TFieldDecl }
+    Methods:  TObjectList;  { owned TMethodDecl }
     IsPacked: Boolean;      { True iff declared `packed record` — disables
                               field alignment padding and tail padding;
                               ARC-managed fields (string/class/intf) still
@@ -894,16 +806,7 @@ type
                                        consumed by codegen for cross-unit references. }
     IsExternal:         Boolean;     { declared with 'external' directive — no body }
     ExternalName:       string;      { C symbol name from 'external name ''c_foo'''; empty = use Pascal name }
-    ExternalLib:        string;      { library from 'external ''c'' name ''malloc'''; bare name, link layer expands per platform. Also recorded unit-level in LinkLibs. }
-    NoStackFrame:       Boolean;     { declared 'nostackframe' — body is an asm
-                                       block that owns the whole frame; codegen
-                                       emits no compiler prologue/epilogue }
     IsRecordMethod:     Boolean;     { set by uSemantic — owner type is a record (not a class) }
-    IsStatic:           Boolean;     { set by uParser — declared `static` (class method):
-                                       no implicit Self; type-associated dispatch.
-                                       Distinct from VTableSlot's "static dispatch"
-                                       (= non-virtual); a static method also never
-                                       receives a Self pointer. }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     TypeParams:         TStringList; { non-nil = generic function template; owns param names }
     TypeParamConstraints: TStringList; { parallel to TypeParams; '' = unconstrained,
@@ -925,12 +828,6 @@ type
     CallingConv: string;  { set by uParser — 'cdecl'/'stdcall'/'register'/'pascal'/
                             'safecall' directive (lowercased); '' = default }
     OwningUnit: string;   { set by uSemantic / uSemanticImport — unit that declares this routine }
-    IsImplOnly: Boolean;  { set by uSemantic — standalone routine declared only in a unit's
-                            implementation section (no interface forward).  Such routines are
-                            PRIVATE to the unit; overload resolution must not treat another
-                            unit's same-named impl-only routine as a competing candidate. }
-    Visibility: TMemberVisibility; { set by uParser from the enclosing visibility section
-                                     when this is a class/record method; default mvPublic. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -939,18 +836,12 @@ type
   public
     ObjectName:        string;
     Name:              string;     { method name }
-    QualifierUnit:     string;     { set by the parser — unit of a qualified
-                                     receiver type 'Unit.Type.Method(...)', so a
-                                     constructor on a cross-unit same-named type
-                                     resolves against that specific unit. }
     Args:              TObjectList; { owned TASTExpr }
     ObjExpr:           TASTExpr;   { owned — receiver expression when ObjectName = '' }
     [Unretained] ResolvedClassType:  TTypeDesc;   { not owned; set by uSemantic }
     [Unretained] ResolvedMethod:     TObject;     { TMethodDecl — not owned }
     IsConstructorCall:  Boolean;    { set by uSemantic — TypeName.Create(args) }
     IsMetaclassDispatch: Boolean;  { set by uSemantic — receiver is a metaclass var }
-    IsStaticCall:       Boolean;    { set by uSemantic — TypeName.StaticMethod(): static
-                                      (class-level) call with NO Self; plain call to mangled name }
     IsGlobal:           Boolean;    { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;    { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:    Boolean;  { set by uSemantic — built-in TObject.ToString virtual dispatch }
@@ -972,10 +863,6 @@ type
     IndexParamName: string;  { '' = non-indexed property }
     IndexTypeName: string;  { type name of the index parameter; '' when non-indexed }
     IsDefault:      Boolean; { declared with the `default` directive (Obj[I] sugar) }
-    IsStatic:       Boolean; { set by uParser — declared `static`: sugar over a
-                               static getter/setter; no implicit Self. }
-    Visibility:     TMemberVisibility; { set by uParser from the enclosing visibility
-                                         section; default mvPublic. }
   end;
 
   TClassTypeDef = class(TASTTypeDef)
@@ -987,8 +874,6 @@ type
     Methods:         TObjectList;  { owned TMethodDecl }
     Properties:      TObjectList;  { owned TPropertyDecl }
     Attributes:      TStringList;  { owned — class-level custom attribute names e.g. 'Threaded' }
-    IsForward:       Boolean;      { True for a forward decl 'TFoo = class;' (no ancestor,
-                                     no body) — completed by the full decl later in scope }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1049,7 +934,6 @@ type
     ParentName: string;
     Methods:    TObjectList;  { owned TMethodDecl — forward signatures only }
     Properties: TObjectList;  { owned TPropertyDecl — accessors are interface methods }
-    IsForward:  Boolean;      { True for a forward decl 'IFoo = interface;' — completed later in scope }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1100,26 +984,7 @@ type
   public
     Name: string;
     Def:  TASTTypeDef;  { owned }
-    [Unretained] ResolvedDesc: TObject;  { TTypeDesc — set by uSemantic to the
-                                           descriptor created for THIS decl.  Lets
-                                           codegen emit a unit's own type even when
-                                           a same-named type from another used unit
-                                           won the flat-table slot (FindType by name
-                                           would return the other unit's desc). }
     destructor Destroy; override;
-  end;
-
-  { A library this compilation unit must be linked against — collected by the
-    parser from every 'external ''lib''' declaration (interface OR
-    implementation).  Hoisted to the unit level so an implementation-private
-    import still records its link dependency: the private routine stays out of
-    the .bif, but the library it needs is serialised via
-    TUnitInterface.LinkLibs and propagates to any program that uses the unit.
-    LibName is the bare name ('c', 'kernel32') — the link layer expands it per
-    platform (-l<name> on ELF, <name>.dll on PE). }
-  TLinkLibDecl = class(TASTNode)
-  public
-    LibName: string;
   end;
 
   { ------------------------------------------------------------------ }
@@ -1137,7 +1002,6 @@ type
     GenericMethodInstances: TObjectList;    { owned TGenericMethodInstance — populated by uSemantic }
     GenericIntfInstances:   TObjectList;    { owned TGenericInterfaceInstance — populated by uSemantic }
     GenericRecordInstances: TObjectList;    { owned TGenericRecordInstance — populated by uSemantic }
-    LinkLibs:               TObjectList;    { owned TLinkLibDecl — libraries to link, collected by the parser }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1161,7 +1025,6 @@ type
     GenericMethodInstances: TObjectList;
     GenericIntfInstances:   TObjectList;
     GenericRecordInstances: TObjectList;
-    LinkLibs:               TObjectList; { owned TLinkLibDecl — libraries to link, collected by the parser }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1571,9 +1434,8 @@ end;
 constructor TRecordTypeDef.Create;
 begin
   inherited Create();
-  Fields     := TObjectList.Create(True);
-  Methods    := TObjectList.Create(True);
-  ConstDecls := TObjectList.Create(True);
+  Fields  := TObjectList.Create(True);
+  Methods := TObjectList.Create(True);
 end;
 
 destructor TRecordTypeDef.Destroy;
@@ -1868,7 +1730,6 @@ begin
   GenericMethodInstances := TObjectList.Create(True);
   GenericIntfInstances   := TObjectList.Create(True);
   GenericRecordInstances := TObjectList.Create(True);
-  LinkLibs               := TObjectList.Create(True);
 end;
 
 destructor TConstDecl.Destroy;
@@ -1899,7 +1760,6 @@ begin
   GenericMethodInstances := TObjectList.Create(True);
   GenericIntfInstances   := TObjectList.Create(True);
   GenericRecordInstances := TObjectList.Create(True);
-  LinkLibs               := TObjectList.Create(True);
 end;
 
 destructor TUnit.Destroy;
@@ -2355,19 +2215,6 @@ begin
     Result.Names.Add(ASrc.Names.Strings[I]);
   for I := 0 to ASrc.Attributes.Count - 1 do
     Result.Attributes.Add(ASrc.Attributes.Strings[I]);
-  { Carry the resolved semantic flags through the export clone.  Without
-    these, the .bif encoder sees defaults: a [Weak]/[Unretained] field
-    round-trips as a plain owning field, and a `static var` loses both its
-    class-var marker and its mangled emit label — so a cross-unit consumer
-    cannot register the shared global. }
-  Result.IsWeak          := ASrc.IsWeak;
-  Result.IsUnretained    := ASrc.IsUnretained;
-  Result.IsClassVar      := ASrc.IsClassVar;
-  Result.ClassVarEmitName := ASrc.ClassVarEmitName;
-  { Visibility must survive the export clone or a cross-unit consumer would see
-    every imported field as public and enforcement would silently disappear at
-    the unit boundary. }
-  Result.Visibility      := ASrc.Visibility;
 end;
 
 function ClonePropertyDecl(ASrc: TPropertyDecl): TPropertyDecl;
@@ -2379,11 +2226,6 @@ begin
   Result.WriteName      := ASrc.WriteName;
   Result.IndexParamName := ASrc.IndexParamName;
   Result.IndexTypeName  := ASrc.IndexTypeName;
-  { IsDefault round-trips the `default` directive; IsStatic marks a static
-    property whose accessors take no Self.  Both were silently dropped. }
-  Result.IsDefault      := ASrc.IsDefault;
-  Result.IsStatic       := ASrc.IsStatic;
-  Result.Visibility     := ASrc.Visibility;
 end;
 
 function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl;
@@ -2496,14 +2338,8 @@ begin
   Result.IsPublished    := ASrc.IsPublished;
   Result.IsExternal     := ASrc.IsExternal;
   Result.ExternalName   := ASrc.ExternalName;
-  Result.ExternalLib    := ASrc.ExternalLib;
   Result.CallingConv    := ASrc.CallingConv;
   Result.IsRecordMethod := ASrc.IsRecordMethod;
-  { Static (class-level) methods take no implicit Self.  Dropping this in the
-    export clone made every cross-unit static method look like a normal
-    instance method, so TypeName.StaticMethod() resolution failed. }
-  Result.IsStatic       := ASrc.IsStatic;
-  Result.Visibility     := ASrc.Visibility;
   for I := 0 to ASrc.Params.Count - 1 do
     Result.Params.Add(CloneMethodParam(TMethodParam(ASrc.Params.Items[I])));
   if ASrc.TypeParams <> nil then
@@ -2550,9 +2386,6 @@ begin
   begin
     TA := TTypeAliasDef.Create();
     TA.TypeName := TTypeAliasDef(ASrc).TypeName;
-    TA.IsSubrange := TTypeAliasDef(ASrc).IsSubrange;
-    TA.SubrangeLow := TTypeAliasDef(ASrc).SubrangeLow;
-    TA.SubrangeHigh := TTypeAliasDef(ASrc).SubrangeHigh;
     Result := TA;
   end
   else if ASrc is TSetTypeDef then
@@ -2615,7 +2448,6 @@ begin
   if ASrc = nil then begin Result := nil; Exit; end;
   Result := TClassTypeDef.Create();
   Result.ParentName := ASrc.ParentName;
-  Result.IsForward  := ASrc.IsForward;
   for I := 0 to ASrc.ImplementsNames.Count - 1 do
     Result.ImplementsNames.Add(ASrc.ImplementsNames.Strings[I]);
   for I := 0 to ASrc.ConstDecls.Count - 1 do
@@ -2656,7 +2488,6 @@ begin
   if ASrc = nil then begin Result := nil; Exit; end;
   Result := TInterfaceTypeDef.Create();
   Result.ParentName := ASrc.ParentName;
-  Result.IsForward  := ASrc.IsForward;
   for I := 0 to ASrc.Methods.Count - 1 do
     Result.Methods.Add(CloneMethodDecl(TMethodDecl(ASrc.Methods.Items[I])));
   for I := 0 to ASrc.Properties.Count - 1 do

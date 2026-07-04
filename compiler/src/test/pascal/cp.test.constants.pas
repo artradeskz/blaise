@@ -480,7 +480,7 @@ begin
           x := Threshold
         end;
         begin
-          DoWork()
+          DoWork
         end.
         '''
   );

@@ -115,12 +115,7 @@ type
     tkDot,
     tkDotDot,        { .. — array bounds separator and case range }
     tkCaret,         { ^ — pointer dereference / pointer type prefix }
-    tkAt,            { @ — address-of operator }
-    tkAsmBlock       { whole 'asm' ... 'end' block; Value holds the verbatim
-                       assembly text (the front end never tokenises it).
-                       Appended at the enum's END so adding it shifts no
-                       existing ordinal (set-of-TTokenKind literals elsewhere
-                       depend on stable ordinals). }
+    tkAt             { @ — address-of operator }
   );
 
   TToken = record
@@ -136,7 +131,6 @@ type
     FFilename: string;
     FDefines:  TStringList;   { conditional-compilation symbols, case-insensitive }
     function MapKeyword(const AUpper: string): TTokenKind;
-    function CodepointToUtf8(ACodepoint: Integer): string;
     function UnescapeString(const ARaw: string): string;
     function ProcessTextBlock(const ARaw: string): string;
     function DirectiveName(const AText: string): string;
@@ -147,7 +141,6 @@ type
     procedure SeedPredefines;
     procedure SkipToElseOrEndif;
     procedure SkipToEndif;
-    function ReadAsmBody: string;
   public
     constructor Create(const ASource: string; const AFilename: string = '');
     destructor Destroy; override;
@@ -155,8 +148,6 @@ type
     { Define a conditional-compilation symbol before lexing (e.g. from the
       -d command-line flag).  Case-insensitive. }
     procedure AddDefine(const ASym: string);
-    { Drop the host OS predefines so a cross-target's OS symbol replaces them. }
-    procedure ClearOSDefines;
     function Next: TToken;
   end;
 
@@ -193,29 +184,15 @@ end;
 
 { Seed the always-on predefined conditional symbols.  BLAISE identifies this
   compiler (the headline use case: cross-compiler IFDEF BLAISE / ELSE / ENDIF);
-  the CPU/OS symbols mirror the FPC family so portable source compiles unchanged.
-  The OS symbols follow the HOST this compiler was built for, via compile-time
-  conditional compilation, so a FreeBSD-built blaise seeds FREEBSD (matching
-  HostTarget), which is what makes it default to producing FreeBSD binaries.
-  A cross-target does not re-seed these; source that switches on the target OS
-  is rare and the RTL selects per-target units structurally (BuildRTLUnitList),
-  not via conditional compilation. }
+  the CPU/OS symbols mirror the FPC family so portable source compiles
+  unchanged.  Targets beyond Linux/x86-64 will extend this set. }
 procedure TLexer.SeedPredefines;
 begin
   Self.DefineSymbol('BLAISE');
   Self.DefineSymbol('CPUX86_64');
   Self.DefineSymbol('CPUAMD64');   { FPC's alias for the same target }
-{$IFDEF FREEBSD}
-  Self.DefineSymbol('FREEBSD');
-  Self.DefineSymbol('UNIX');
-{$ELSE}
-  {$IFDEF WINDOWS}
-  Self.DefineSymbol('WINDOWS');
-  {$ELSE}
   Self.DefineSymbol('LINUX');
   Self.DefineSymbol('UNIX');
-  {$ENDIF}
-{$ENDIF}
 end;
 
 function TLexer.IsDefined(const ASym: string): Boolean;
@@ -238,17 +215,6 @@ begin
     FDefines.Delete(Idx);
 end;
 
-{ Remove all OS predefines seeded for the host, so a cross --target's OS symbol
-  can take their place (the driver calls this before applying target defines). }
-procedure TLexer.ClearOSDefines;
-begin
-  Self.UndefSymbol('LINUX');
-  Self.UndefSymbol('FREEBSD');
-  Self.UndefSymbol('WINDOWS');
-  Self.UndefSymbol('DARWIN');
-  Self.UndefSymbol('UNIX');
-end;
-
 procedure TLexer.AddDefine(const ASym: string);
 begin
   Self.DefineSymbol(UpperCase(ASym));
@@ -263,7 +229,6 @@ begin
   else if AUpper = 'THREADVAR' then Result := tkThreadVar
   else if AUpper = 'BEGIN'   then Result := tkBegin
   else if AUpper = 'END'     then Result := tkEnd
-  else if AUpper = 'ASM'     then Result := tkAsmBlock
   else if AUpper = 'TYPE'    then Result := tkType
   else if AUpper = 'RECORD'  then Result := tkRecord
   else if AUpper = 'PACKED'  then Result := tkPacked
@@ -380,50 +345,14 @@ begin
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;
 
-function TLexer.CodepointToUtf8(ACodepoint: Integer): string;
-{ Encode a Unicode scalar value as its UTF-8 byte sequence.  A `#nnnn` / `#$hhhh`
-  literal denotes a codepoint (NOT a raw byte), so the string it contributes is
-  that codepoint's UTF-8 encoding: #65 -> 'A' (1 byte), #$20AC -> 3 bytes,
-  #$1F600 -> 4 bytes.  Rejects values outside 0..U+10FFFF and the surrogate
-  range U+D800..U+DFFF, which are not valid scalar values. }
-var
-  N: Integer;
-begin
-  N := ACodepoint;
-  if (N < 0) or (N > $10FFFF) or ((N >= $D800) and (N <= $DFFF)) then
-    raise Exception.Create(Format(
-      'Invalid Unicode codepoint in character literal: %d (must be 0..$10FFFF, '
-      + 'excluding surrogates $D800..$DFFF)', [N]));
-  if N <= $7F then
-    Result := Chr(N)
-  else if N <= $7FF then
-    Result := Chr($C0 or (N shr 6))
-           + Chr($80 or (N and $3F))
-  else if N <= $FFFF then
-    Result := Chr($E0 or (N shr 12))
-           + Chr($80 or ((N shr 6) and $3F))
-           + Chr($80 or (N and $3F))
-  else
-    Result := Chr($F0 or (N shr 18))
-           + Chr($80 or ((N shr 12) and $3F))
-           + Chr($80 or ((N shr 6) and $3F))
-           + Chr($80 or (N and $3F));
-end;
-
 function TLexer.UnescapeString(const ARaw: string): string;
 { ARaw is the full source span. Handles: 'text' with '' → ' escaping,
-<<<<<<< HEAD
-  #nnnn / #$hhhh Unicode-codepoint literals (decimal or hex, UTF-8 encoded),
-  and concatenated runs like 'abc'#13#10'def'. Uses OrdAt (0-based) so the body
-  parses under both FPC and the self-hosted Blaise compiler. }
-=======
   #nn numeric char literals (decimal), and concatenated runs like
   'abc'#13#10'def'. Uses OrdAt (0-based) so the body parses under both
   FPC and the self-hosted Blaise compiler.
 
   UTF-8 note: Cyrillic characters inside quoted strings are preserved
   as-is since string content is opaque to the tokeniser. }
->>>>>>> version-0.12.0
 var
   I, Len, N, C: Integer;
 begin
@@ -459,34 +388,18 @@ begin
         end;
       end;
     end
-    else if C = 35 then  { '#' — a Unicode codepoint, decimal #nnnn or hex #$hhhh }
+    else if C = 35 then  { '#' }
     begin
       I := I + 1;
       N := 0;
-      if (I < Len) and (OrdAt(ARaw, I) = 36) then  { '$' -> hexadecimal }
+      while I < Len do
       begin
+        C := OrdAt(ARaw, I);
+        if (C < 48) or (C > 57) then Break;
+        N := N * 10 + (C - 48);
         I := I + 1;
-        while I < Len do
-        begin
-          C := OrdAt(ARaw, I);
-          if (C >= 48) and (C <= 57) then        N := N * 16 + (C - 48)
-          else if (C >= 65) and (C <= 70) then   N := N * 16 + (C - 55)  { A-F }
-          else if (C >= 97) and (C <= 102) then  N := N * 16 + (C - 87)  { a-f }
-          else Break;
-          I := I + 1;
-        end;
-      end
-      else
-      begin
-        while I < Len do
-        begin
-          C := OrdAt(ARaw, I);
-          if (C < 48) or (C > 57) then Break;
-          N := N * 10 + (C - 48);
-          I := I + 1;
-        end;
       end;
-      Result := Result + CodepointToUtf8(N);
+      Result := Result + Chr(N);
     end
     else
       I := I + 1;
@@ -686,42 +599,6 @@ begin
   end;
 end;
 
-{ Called immediately after the 'asm' keyword token was produced (FTok.Token is
-  that keyword).  Drives the tokeniser forward to the matching 'end' keyword and
-  returns the verbatim source text between the two — assembly is not Pascal, so
-  nothing in the block is re-interpreted.  Only a standalone 'end' KEYWORD token
-  terminates the block (an 'end' inside an asm '#' line comment is a comment
-  token, never a keyword, so it is ignored).  The terminating 'end' token is
-  consumed; normal tokenising resumes after it. }
-function TLexer.ReadAsmBody: string;
-var
-  raw:        TFpgPasToken;
-  BlockStart: Integer;   { 1-based source index of the first char after 'asm' }
-  EndStart:   Integer;   { 1-based source index of the terminating 'end' }
-begin
-  { FTok.Token is the 'asm' keyword; the body begins right after it. }
-  BlockStart := FTok.Token.TextStart + FTok.Token.Len;
-  EndStart := -1;
-  while True do
-  begin
-    raw := FTok.NextToken();
-    if raw.Kind = fptkEOF then
-    begin
-      { Unterminated block: capture to end of source. }
-      EndStart := Length(FTok.Source) + 1;
-      Break;
-    end;
-    if (raw.Kind = fptkKeyword) and (FTok.TokenTextUpper() = 'END') then
-    begin
-      EndStart := FTok.Token.TextStart;
-      Break;
-    end;
-  end;
-  { Slice [BlockStart, EndStart) — Copy is 0-based, so subtract 1 from the
-    1-based start; length is EndStart - BlockStart. }
-  Result := Copy(FTok.Source, BlockStart - 1, EndStart - BlockStart);
-end;
-
 function TLexer.Next: TToken;
 var
   raw:  TFpgPasToken;
@@ -781,14 +658,7 @@ begin
       begin
         text := FTok.TokenTextUpper();
         Result.Kind  := MapKeyword(text);
-        if Result.Kind = tkAsmBlock then
-          { Capture the whole 'asm' ... 'end' block as verbatim text — its
-            content is GNU/AT&T assembly, not Pascal, so it must not be
-            tokenised.  ReadAsmBody drives the tokeniser to the matching
-            'end' and slices the raw source. }
-          Result.Value := Self.ReadAsmBody()
-        else
-          Result.Value := FTok.TokenText();
+        Result.Value := FTok.TokenText();
       end;
 
     fptkIdentifier:
@@ -955,7 +825,6 @@ begin
     tkOut:            Result := 'out';
     tkConstructor:    Result := 'constructor';
     tkDestructor:     Result := 'destructor';
-    tkAsmBlock:       Result := 'asm block';
     tkIdent:          Result := 'identifier';
     tkPlus:           Result := '+';
     tkMinus:          Result := '-';

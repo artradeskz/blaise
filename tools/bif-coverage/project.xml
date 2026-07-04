@@ -11,8 +11,6 @@
     <unitPaths>
       <path>src/main/pascal</path>
       <path>../../compiler/src/main/pascal</path>
-      <!-- SysUtils and other stdlib units the analyser uses. -->
-      <path>../../stdlib/src/main/pascal</path>
     </unitPaths>
   </build>
 </project>

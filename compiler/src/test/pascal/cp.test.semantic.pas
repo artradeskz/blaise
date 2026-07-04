@@ -36,7 +36,7 @@ type
     procedure TestVarDecl_DuplicatesInterfaceType_RaisesError;
     procedure TestVarDecl_ShadowsBuiltinType_RaisesError;
     procedure TestVarDecl_ShadowsOuterScopeType_RaisesError;
-    procedure TestVarDecl_SharesEnumMemberName_OK;
+    procedure TestVarDecl_ShadowsEnumMember_RaisesError;
     { Const then var with same name in same block is a duplicate }
     procedure TestVarDecl_DuplicatesConst_RaisesError;
     { Const redeclared with same name in same block is a duplicate }
@@ -239,16 +239,13 @@ begin
     'begin Q(); end.');
 end;
 
-procedure TSemanticTests.TestVarDecl_SharesEnumMemberName_OK;
-var
-  Prog: TProgram;
+procedure TSemanticTests.TestVarDecl_ShadowsEnumMember_RaisesError;
 begin
-  { A variable may share a name with an enum member.  Enum members are not
-    bare global symbols, so there is no collision: the variable wins by normal
-    scoping and the member stays reachable through its type (TC.C).  Here 'c'
-    shares the name of member 'C' (names are case-insensitive). }
-  Prog := Analyse('program P; type TC = (A, B, C); var c: TC; begin end.');
-  Prog.Free();
+  { A var may not shadow a visible enum member — shadowing silently retargets
+    the member in a set literal to the variable, miscompiling the bitmask.
+    Blaise rejects it, in the same spirit as the type-name-shadow rule. }
+  AnalyseExpectError(
+    'program P; type TC = (A, B, C); var c: TC; begin end.');
 end;
 
 procedure TSemanticTests.TestVarDecl_DuplicatesConst_RaisesError;
@@ -476,7 +473,7 @@ end;
 
 procedure TSemanticTests.TestProcCall_WriteLn_NoArgs_OK;
 begin
-  Analyse('program P; begin WriteLn() end.').Free();
+  Analyse('program P; begin WriteLn end.').Free();
 end;
 
 procedure TSemanticTests.TestProcCall_WriteLn_StringArg_OK;
@@ -523,7 +520,7 @@ end;
 
 procedure TSemanticTests.TestProcCall_UndeclaredProc_RaisesError;
 begin
-  AnalyseExpectError('program P; begin NoSuchProc() end.');
+  AnalyseExpectError('program P; begin NoSuchProc end.');
 end;
 
 { ------------------------------------------------------------------ }

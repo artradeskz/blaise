@@ -23,7 +23,6 @@ type
     function AnalyseSrc(const ASrc: string): TProgram;
     function GenIR(const ASrc: string): string;
     procedure AnalyseExpectError(const ASrc: string);
-    procedure ParseExpectErrorMsg(const ASrc, AExpectedSubstr: string);
   published
     { ------------------------------------------------------------------ }
     { nil literal                                                          }
@@ -70,11 +69,6 @@ type
     procedure TestSemantic_Inherited_WithArgs_OK;
     procedure TestCodegen_Inherited_NoArgs_CallsParentMethod;
     procedure TestCodegen_Inherited_WithArgs_ForwardsArgs;
-
-    { Mandatory parentheses: a bare 'inherited Method' (no parens) is a
-      call and must carry (), in both statement and expression position. }
-    procedure TestParse_Inherited_BareStmt_RequiresParens;
-    procedure TestParse_Inherited_BareExpr_RequiresParens;
 
     { ------------------------------------------------------------------ }
     { TObject.InheritsFrom                                                 }
@@ -142,20 +136,6 @@ begin
     Fail('Expected ESemanticError');
   except
     on E: ESemanticError do ;
-  end;
-end;
-
-procedure TInheritTests.ParseExpectErrorMsg(const ASrc, AExpectedSubstr: string);
-var Prog: TProgram;
-begin
-  try
-    Prog := ParseSrc(ASrc);
-    Prog.Free();
-    Fail('Expected EParseError');
-  except
-    on E: EParseError do
-      AssertTrue('error message contains "' + AExpectedSubstr + '" (got: ' +
-        E.Message + ')', Pos(AExpectedSubstr, E.Message) >= 0);
   end;
 end;
 
@@ -477,7 +457,7 @@ begin
         var C: TChild;
         begin
           C := TChild.Create();
-          C.NoSuchMethod()
+          C.NoSuchMethod
         end.
         ''');
 end;
@@ -602,55 +582,6 @@ var IR: string;
 begin
   IR := GenIR(SrcInheritedWithArgs);
   AssertTrue('call $TBase_SetX in IR', Pos('call $TBase_SetX', IR) > 0);
-end;
-
-procedure TInheritTests.TestParse_Inherited_BareStmt_RequiresParens;
-const Src = '''
-    program P;
-    type
-      TBase = class
-        procedure Init;
-      end;
-      TChild = class(TBase)
-        procedure Init;
-      end;
-    procedure TBase.Init;
-    begin
-    end;
-    procedure TChild.Init;
-    begin
-      inherited Init
-    end;
-    begin
-    end.
-    ''';
-begin
-  ParseExpectErrorMsg(Src, 'requires () for a call');
-end;
-
-procedure TInheritTests.TestParse_Inherited_BareExpr_RequiresParens;
-const Src = '''
-    program P;
-    type
-      TBase = class
-        function Value: Integer;
-      end;
-      TChild = class(TBase)
-        function Value: Integer;
-      end;
-    function TBase.Value: Integer;
-    begin
-      Result := 1
-    end;
-    function TChild.Value: Integer;
-    begin
-      Result := inherited Value + 1
-    end;
-    begin
-    end.
-    ''';
-begin
-  ParseExpectErrorMsg(Src, 'requires () for a call');
 end;
 
 { ------------------------------------------------------------------ }

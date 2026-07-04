@@ -56,7 +56,7 @@ var
   Dest: ^Integer;
 begin
   if Self.FCount = Self.FCapacity then
-    Self.Grow();
+    Self.Grow;
   Dest        := Self.FData + Self.FCount * SizeOf(Integer);
   Dest^       := Value;
   Self.FCount := Self.FCount + 1
@@ -147,7 +147,7 @@ begin
   else
   begin
     if Self.FCount = Self.FCapacity then
-      Self.Grow();
+      Self.Grow;
     KPtr  := Self.FKeys   + Self.FCount * SizeOf(string);
     VPtr  := Self.FValues + Self.FCount * SizeOf(Integer);
     KPtr^ := Key;
@@ -251,7 +251,7 @@ begin
   WriteLn('count_after_delete=', List.Count);    { 4 }
   WriteLn('list[1]_after_delete=', List.Get(1)); { 30 }
 
-  List.Free();
+  List.Free;
 
   { --- TDictionary<string,Integer> --- }
   Dict := TStrIntDict.Create;
@@ -277,5 +277,5 @@ begin
   Found := Dict.ContainsKey('alpha');
   WriteLn('has_alpha_after_remove=', Found);   { 0 }
 
-  Dict.Free()
+  Dict.Free
 end.

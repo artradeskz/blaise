@@ -26,9 +26,6 @@ type
     procedure TestParse_ExternalProc_IsExternal;
     procedure TestParse_ExternalProc_ExternalNameEmpty;
     procedure TestParse_ExternalProcNamed_ExternalName;
-    { Parser — library-qualified external records ExternalLib and hoists
-      the bare library name into the program's LinkLibs set. }
-    procedure TestParse_ExternalLibName_RecordsLibAndLinkLib;
     { Parser — standalone function }
     procedure TestParse_ExternalFunc_IsExternal;
     procedure TestParse_ExternalFuncNamed_ExternalName;
@@ -197,36 +194,6 @@ begin
     Decl := TMethodDecl(Prog.Block.ProcDecls.Items[0]);
     AssertTrue('IsExternal should be True', Decl.IsExternal);
     AssertEquals('ExternalName should be c_foo', 'c_foo', Decl.ExternalName);
-  finally
-    Prog.Free();
-  end;
-end;
-
-procedure TExternalTests.TestParse_ExternalLibName_RecordsLibAndLinkLib;
-var
-  Prog: TProgram;
-  Decl: TMethodDecl;
-  Lib:  TLinkLibDecl;
-begin
-  Prog := ParseSrc(
-    '''
-        program Test;
-        function c_strlen(S: PChar): Integer; external 'c' name 'strlen';
-        begin
-        end.
-        '''
-  );
-  try
-    Decl := TMethodDecl(Prog.Block.ProcDecls.Items[0]);
-    AssertTrue('IsExternal should be True', Decl.IsExternal);
-    AssertEquals('ExternalName should be strlen', 'strlen', Decl.ExternalName);
-    AssertEquals('ExternalLib should be c', 'c', Decl.ExternalLib);
-
-    { The bare library name is hoisted into the program's LinkLibs set so
-      the link layer can expand it to -l<name>. }
-    AssertEquals('one link lib collected', 1, Prog.LinkLibs.Count);
-    Lib := TLinkLibDecl(Prog.LinkLibs.Items[0]);
-    AssertEquals('link lib name', 'c', Lib.LibName);
   finally
     Prog.Free();
   end;

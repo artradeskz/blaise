@@ -302,10 +302,9 @@ end;
 
 procedure TList<T>.Delete(AIndex: Integer);
 var
-  Src:   ^T;
-  Dst:   ^T;
-  I:     Integer;
-  Empty: T;
+  Src: ^T;
+  Dst: ^T;
+  I:   Integer;
 begin
   I := AIndex;
   while I < Self.FCount - 1 do
@@ -315,47 +314,16 @@ begin
     Dst^ := Src^;
     I    := I + 1
   end;
-  Self.FCount := Self.FCount - 1;
-  { The shift leaves the (now unused) tail slot holding a duplicate of the last
-    element; clear it so its managed ref is released, not leaked. }
-  Dst  := Self.FData + Self.FCount * SizeOf(T);
-  Dst^ := Empty
+  Self.FCount := Self.FCount - 1
 end;
 
 procedure TList<T>.Clear;
-var
-  I:     Integer;
-  Slot:  ^T;
-  Empty: T;
 begin
-  { Release each managed element before dropping the count (see Destroy). }
-  I := 0;
-  while I < Self.FCount do
-  begin
-    Slot  := Self.FData + I * SizeOf(T);
-    Slot^ := Empty;
-    I     := I + 1
-  end;
   Self.FCount := 0
 end;
 
 procedure TList<T>.Destroy;
-var
-  I:     Integer;
-  Slot:  ^T;
-  Empty: T;
 begin
-  { Release each managed element so freeing the list cascades to its items
-    (Blaise is reference-counted): storing a zero-initialised T through the
-    slot runs the compiler's ARC discipline — the old element is released; for
-    a plain (non-managed) T the store is a harmless zero write. }
-  I := 0;
-  while I < Self.FCount do
-  begin
-    Slot  := Self.FData + I * SizeOf(T);
-    Slot^ := Empty;
-    I     := I + 1
-  end;
   FreeMem(Self.FData);
   Self.FData     := nil;
   Self.FCount    := 0;

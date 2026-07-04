@@ -254,7 +254,7 @@ const
           end
         end;
         begin
-          Run()
+          Run
         end.
         ''';
 

@@ -85,7 +85,7 @@ const
     program Prg;
     var a: array of string; i: Integer;
     begin SetLength(a, 3); a[0] := 'x'; a[1] := 'y'; a[2] := 'z';
-      for i := 0 to 2 do Write(a[i]); WriteLn() end.
+      for i := 0 to 2 do Write(a[i]); WriteLn end.
     ''';
 
   SrcRefSem = '''
@@ -125,7 +125,7 @@ const
       SetLength(m, 2); SetLength(m[0], 2); SetLength(m[1], 2);
       m[0][0] := 1; m[0][1] := 2; m[1][0] := 3; m[1][1] := 4;
       for i := 0 to 1 do for j := 0 to 1 do Write(m[i][j]);
-      WriteLn()
+      WriteLn
     end.
     ''';
 
@@ -137,7 +137,7 @@ const
       m[0][0] := 'a'; m[0][1] := 'b'; m[1][0] := 'c'; m[1][1] := 'd';
       m[0][1] := 'B';
       for i := 0 to 1 do for j := 0 to 1 do Write(m[i][j]);
-      WriteLn()
+      WriteLn
     end.
     ''';
 
@@ -154,7 +154,7 @@ const
         c[i][j][k] := i*4 + j*2 + k;
       for i := 0 to 1 do for j := 0 to 1 do for k := 0 to 1 do
         Write(c[i][j][k]);
-      WriteLn()
+      WriteLn
     end.
     ''';
 
@@ -212,7 +212,7 @@ const
       SetLength(G, Length(H));
       for I := 0 to High(G) do G[I] := 9;
       for I := 0 to High(G) do Write(G[I]);
-      WriteLn()
+      WriteLn
     end.
     ''';
 
@@ -226,7 +226,7 @@ const
       SetLength(A, Length(B));
       for I := 0 to High(A) do A[I] := 8;
       for I := 0 to High(A) do Write(A[I]);
-      WriteLn()
+      WriteLn
     end.
     ''';
 
@@ -241,7 +241,7 @@ const
       SetLength(A, Pick());
       for I := 0 to High(A) do A[I] := 6;
       for I := 0 to High(A) do Write(A[I]);
-      WriteLn()
+      WriteLn
     end.
     ''';
 

@@ -135,14 +135,14 @@ var
 
 constructor TASTClass.Create;
 begin
-  inherited Create();
+  inherited Create;
   Fields     := TList<String>.Create;
   FieldLines := TList<Integer>.Create;
 end;
 
 constructor TIOBlock.Create;
 begin
-  inherited Create();
+  inherited Create;
 end;
 
 function IsIdentStart(C: Integer): Boolean;
@@ -357,7 +357,7 @@ begin
     Tok := ReadIdent(Stripped, P);
     if Tok = '' then
     begin
-      Result.Clear();
+      Result.Clear;
       Exit;
     end;
     Result.Add(Tok);
@@ -372,7 +372,7 @@ begin
   (* Must be followed by `:` then a type, then a `;` somewhere. *)
   if (P >= Len) or (StrAt(Stripped, P) <> Ord(':')) then
   begin
-    Result.Clear();
+    Result.Clear;
     Exit;
   end;
 end;
@@ -515,7 +515,7 @@ begin
     Allow.Add(GIfaceTypes[I]);
   ScanClassFile(GIfaceFile, GIfaceNames, GIfaceObjs, Allow);
 
-  Allow.Clear();
+  Allow.Clear;
   Allow.Add('TMethodParam');
   ScanClassFile(GAstFile, GIfaceNames, GIfaceObjs, Allow);
 end;

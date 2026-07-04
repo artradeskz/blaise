@@ -61,26 +61,6 @@ function TargetName(const ATarget: TTargetDesc): string;
 { True when the native backend can actually generate code for this target. }
 function TargetHasNativeBackend(const ATarget: TTargetDesc): Boolean;
 
-{ True when the target is FREESTANDING — reached via direct syscalls with no
-  libc, so it is always linked as a static ET_EXEC with a self-supplied _start
-  and no PT_INTERP / libc NEEDED (Strategy B, see
-  docs/freebsd-x86_64-backend-design.adoc).  FreeBSD is freestanding; Linux
-  links dynamic libc by default.  Drives both the RTL unit-list selection
-  (the kernel leaf is always pulled in) and the internal linker's static mode. }
-function TargetIsFreestanding(const ATarget: TTargetDesc): Boolean;
-
-{ Lower-case OS token used in the OS-specific RTL unit names, e.g.
-  'linux' / 'freebsd' in rtl.platform.layout.<os>, runtime.syscall.<os>.
-  The single source of truth for the OS suffix, shared by the driver's RTL
-  unit-list selection and the codegen backends' platform-layout-init call. }
-function TargetOSName(const ATarget: TTargetDesc): string;
-
-{ Assembler symbol of the target's platform-layout unit initialiser
-  (rtl.platform.layout.<os>_init).  The compiler emits a direct call to this
-  from main so the compile-time --target's layout assigns GPlatformLayout first,
-  regardless of the program's import graph. }
-function PlatformLayoutInitSym(const ATarget: TTargetDesc): string;
-
 { Platform constants derived from the target OS. }
 function TargetLineEnding(const ATarget: TTargetDesc): string;
 function TargetDirectorySeparator(const ATarget: TTargetDesc): string;
@@ -107,22 +87,14 @@ end;
 
 function HostTarget: TTargetDesc;
 begin
-  { The host OS is a COMPILE-TIME property of this binary: a blaise built with
-    `--target freebsd-x86_64` runs on FreeBSD, so its HostTarget must report
-    FreeBSD.  The OS conditional symbols are target-driven (injected by the
-    driver from the resolved --target; see Blaise.pas and uLexer.SeedPredefines),
-    the IFDEF FREEBSD below is true exactly when THIS compiler was built for
-    FreeBSD.  This is what lets a FreeBSD-hosted blaise default (no --target) to
-    producing FreeBSD binaries — the basis of self-hosting on FreeBSD. }
-{$IFDEF FREEBSD}
-  MakeTarget(osFreeBSD, cpuX86_64, Result);
-{$ELSE}
-  {$IFDEF WINDOWS}
-  MakeTarget(osWindows, cpuX86_64, Result);
-  {$ELSE}
-  MakeTarget(osLinux, cpuX86_64, Result);
-  {$ENDIF}
-{$ENDIF}
+  { A '.exe' suffix on our own path means we are running on Windows (incl.
+    under wine).  Unix hosts carry no extension; we can't cheaply tell
+    linux/macos/freebsd apart here, and only the Windows distinction matters
+    for tool extensions today, so default the unix case to linux. }
+  if LowerCase(ExtractFileExt(ParamStr(0))) = '.exe' then
+    MakeTarget(osWindows, cpuX86_64, Result)
+  else
+    MakeTarget(osLinux, cpuX86_64, Result);
 end;
 
 function PtrSize(const ATarget: TTargetDesc): Integer;
@@ -183,31 +155,6 @@ function TargetHasNativeBackend(const ATarget: TTargetDesc): Boolean;
 begin
   { Only x86_64-linux is implemented so far. }
   Result := (ATarget.OS = osLinux) and (ATarget.CPU = cpuX86_64);
-end;
-
-function TargetIsFreestanding(const ATarget: TTargetDesc): Boolean;
-begin
-  { FreeBSD uses Strategy B — direct syscalls, no libc — so it is always a
-    static, freestanding ET_EXEC.  Other OSes link dynamic libc by default. }
-  Result := (ATarget.OS = osFreeBSD);
-end;
-
-function TargetOSName(const ATarget: TTargetDesc): string;
-begin
-  case ATarget.OS of
-    osFreeBSD: Result := 'freebsd';
-    osWindows: Result := 'windows';
-    osMacOS:   Result := 'macos';
-  else
-    Result := 'linux';
-  end;
-end;
-
-function PlatformLayoutInitSym(const ATarget: TTargetDesc): string;
-begin
-  { NativeMangle/QBE mangling of an rtl.* unit keeps the dotted name verbatim
-    and appends '_init'; the layout unit is rtl.platform.layout.<os>. }
-  Result := 'rtl.platform.layout.' + TargetOSName(ATarget) + '_init';
 end;
 
 function TargetLineEnding(const ATarget: TTargetDesc): string;

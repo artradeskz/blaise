@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project>
   <name>blaise</name>
-  <version>0.13.0-SNAPSHOT</version>
+  <version>0.12.0</version>
   <author>Graeme Geldenhuys</author>
   <license>Apache-2.0 WITH Swift-exception</license>
 
@@ -15,7 +15,7 @@
     <module>compiler</module>
     <module>tools/migration-analyser</module>
     <module>tools/kanban</module>
-    <module>tools/bif-coverage</module>
+    <module activeByDefault="false">tools/bif-coverage</module>
   </modules>
 
   <profiles>

@@ -175,7 +175,7 @@ const
           WriteLn(N)
         end;
         begin
-          Greet();
+          Greet;
           Greet(42)
         end.
         ''';

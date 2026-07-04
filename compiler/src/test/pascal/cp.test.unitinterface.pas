@@ -230,13 +230,8 @@ type
     procedure TestWrite_StartsWithMagicAndVersion;
     { Unit name round-trips. }
     procedure TestRoundTrip_UnitNamePreserved;
-    { External-library link deps (LinkLibs) round-trip via the META block. }
-    procedure TestRoundTrip_LinkLibsPreserved;
     { Int const round-trips. }
     procedure TestRoundTrip_IntConstPreserved;
-    { Named integer subrange alias round-trips its IsSubrange + lo..hi bounds,
-      so array[OtherUnit.TSub] still folds across separate compilation. }
-    procedure TestRoundTrip_NamedSubrangeAlias_BoundsPreserved;
     { String const round-trips, even with newlines + colons in the value. }
     procedure TestRoundTrip_StringConstWithAwkwardChars;
     { Empty interface round-trips (zero consts). }
@@ -250,8 +245,6 @@ type
     procedure TestRoundTrip_ViaFile;
     procedure TestRoundTrip_Record;
     procedure TestRoundTrip_Class_WithVirtualMethod;
-    procedure TestRoundTrip_Class_WithOverloadedMethods;
-    procedure TestRoundTrip_Interface_WithOverloadedMethods;
     procedure TestRoundTrip_Interface;
     procedure TestRoundTrip_Interface_WithProperty;
     procedure TestRoundTrip_ProceduralType;
@@ -270,16 +263,6 @@ type
       preserves statements/expressions through write+read. }
     procedure TestDiskPath_GenericRoutine_BodyPreserved;
     procedure TestRoundTrip_InlineBody_Preserved;
-    { Static (class-level) member facts must survive export-clone → encode →
-      decode.  The export clone previously dropped TFieldDecl.IsClassVar /
-      ClassVarEmitName, TMethodDecl.IsStatic and TPropertyDecl.IsStatic, so
-      they encoded as defaults. }
-    procedure TestRoundTrip_StaticMembers_Preserved;
-    { Pre-existing clone bug uncovered alongside the static-members work: a
-      [Weak] field and a `default` property round-tripped as plain owning /
-      non-default because CloneFieldDecl / ClonePropertyDecl dropped IsWeak
-      and IsDefault before encoding. }
-    procedure TestRoundTrip_WeakField_And_DefaultProperty_Preserved;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -2566,7 +2549,7 @@ begin
   try
     Parser := TParser.Create(Lex);
     try
-      Result := Parser.Parse();  { public entry; ParseProgram is a private internal }
+      Result := Parser.ParseProgram();
     finally
       Parser.Free();
     end;
@@ -2698,13 +2681,9 @@ begin
   Iface := TUnitInterface.Create('U');
   try
     Buf := WriteUnitInterface(Iface);
-    { Blaise Pos is 0-based; match-at-start returns 0.  Version is 8 since
-      named integer subranges (IsSubrange + lo..hi bounds on the 'alias' TYPE
-      entry) were added (on top of v7's LinkLibs, v6's `overload` directive,
-      v5's member Visibility, v4's TRoutineSig.IsStatic, and v3's static-member
-      facts). }
+    { Blaise Pos is 0-based; match-at-start returns 0. }
     AssertTrue('starts with magic',
-      Pos('BLAISE-IFACE 8', Buf) = 0);
+      Pos('BLAISE-IFACE 2', Buf) = 0);
   finally
     Iface.Free();
   end;
@@ -2721,29 +2700,6 @@ begin
     Dst := ReadUnitInterface(Buf);
     try
       AssertEquals('unit name', 'MyUnit', Dst.Name);
-    finally
-      Dst.Free();
-    end;
-  finally
-    Src.Free();
-  end;
-end;
-
-procedure TIfaceIOTests.TestRoundTrip_LinkLibsPreserved;
-var
-  Src, Dst: TUnitInterface;
-  Buf:      string;
-begin
-  Src := TUnitInterface.Create('MyUnit');
-  try
-    Src.LinkLibs.Add('c');
-    Src.LinkLibs.Add('m');
-    Buf := WriteUnitInterface(Src);
-    Dst := ReadUnitInterface(Buf);
-    try
-      AssertEquals('link-lib count', 2, Dst.LinkLibs.Count);
-      AssertEquals('first lib',  'c', Dst.LinkLibs.Strings[0]);
-      AssertEquals('second lib', 'm', Dst.LinkLibs.Strings[1]);
     finally
       Dst.Free();
     end;
@@ -2773,40 +2729,6 @@ begin
     end;
   finally
     Src.Free();
-  end;
-end;
-
-procedure TIfaceIOTests.TestRoundTrip_NamedSubrangeAlias_BoundsPreserved;
-const
-  SRC =
-    'unit TestU;'                            + #10 +
-    'interface'                              + #10 +
-    'type TIdx = 2..4;'                      + #10 +
-    'implementation'                         + #10 +
-    'end.'                                   + #10;
-var
-  SrcIface, Dst: TUnitInterface;
-  E:        TTypeEntry;
-  AD:       TTypeAliasDef;
-  Buf:      string;
-begin
-  SrcIface := ParseAndExport(SRC);
-  try
-    Buf := WriteUnitInterface(SrcIface);
-    Dst := ReadUnitInterface(Buf);
-    try
-      E := Dst.FindType('TIdx');
-      AssertTrue('TIdx present', E <> nil);
-      AssertTrue('is alias def', E.Def is TTypeAliasDef);
-      AD := TTypeAliasDef(E.Def);
-      AssertEquals('IsSubrange',   True, AD.IsSubrange);
-      AssertEquals('SubrangeLow',  Int64(2), AD.SubrangeLow);
-      AssertEquals('SubrangeHigh', Int64(4), AD.SubrangeHigh);
-    finally
-      Dst.Free();
-    end;
-  finally
-    SrcIface.Free();
   end;
 end;
 
@@ -3021,98 +2943,6 @@ begin
       AssertTrue('IsVirtual', M.IsVirtual);
       AssertEquals('ResolvedQbeName', 'U_TFoo_Speak', M.ResolvedQbeName);
       AssertTrue('VTableSlot assigned', M.VTableSlot >= 0);
-    finally
-      Round.Free();
-    end;
-  finally
-    Iface.Free();
-  end;
-end;
-
-procedure TIfaceIOTests.TestRoundTrip_Class_WithOverloadedMethods;
-{ Regression (bugs.txt: imported methods lose IsOverload).  A class with an
-  overloaded method set must round-trip the `overload` directive through the
-  .bif: ResolveMethodOverload's hiding walk stops at the first NON-overload
-  candidate, so a method imported with IsOverload=False would wrongly truncate
-  an overload set that is split across an imported class and its ancestor. }
-const
-  SRC =
-    'unit U;' + #10 +
-    'interface' + #10 +
-    'type TFoo = class' + #10 +
-    '  procedure Add(A: Integer); overload;' + #10 +
-    '  procedure Add(A: string); overload;' + #10 +
-    'end;' + #10 +
-    'implementation' + #10 +
-    'procedure TFoo.Add(A: Integer); begin end;' + #10 +
-    'procedure TFoo.Add(A: string); begin end;' + #10 +
-    'end.' + #10;
-var
-  Iface, Round: TUnitInterface;
-  Buf:          string;
-  E:            TTypeEntry;
-  M:            TRoutineSig;
-  I:            Integer;
-begin
-  Iface := ParseAnalyseAndExport(SRC);
-  try
-    Buf   := WriteUnitInterface(Iface);
-    Round := ReadUnitInterface(Buf);
-    try
-      E := Round.FindType('TFoo');
-      AssertTrue('TFoo present', E <> nil);
-      AssertEquals('2 methods', 2, E.Methods.Count);
-      { Every Add overload must carry IsOverload across the .bif boundary. }
-      for I := 0 to E.Methods.Count - 1 do
-      begin
-        M := TRoutineSig(E.Methods.Items[I]);
-        AssertEquals('overload method name', 'Add', M.Name);
-        AssertTrue('IsOverload preserved for ' + M.ResolvedQbeName, M.IsOverload);
-      end;
-    finally
-      Round.Free();
-    end;
-  finally
-    Iface.Free();
-  end;
-end;
-
-procedure TIfaceIOTests.TestRoundTrip_Interface_WithOverloadedMethods;
-{ Interface methods serialise via EncodeMethodDecl/ReadMethodDecl (the AST
-  TMethodDecl path, distinct from the class TRoutineSig path).  That path also
-  dropped IsOverload, so an overloaded interface method imported from a .bif
-  would lose its `overload` directive. }
-const
-  SRC =
-    'unit U;' + #10 +
-    'interface' + #10 +
-    'type IShape = interface' + #10 +
-    '  procedure Draw(X: Integer); overload;' + #10 +
-    '  procedure Draw(X: string); overload;' + #10 +
-    'end;' + #10 +
-    'implementation end.' + #10;
-var
-  Iface, Round: TUnitInterface;
-  Buf:          string;
-  E:            TTypeEntry;
-  M:            TMethodDecl;
-  I:            Integer;
-begin
-  Iface := ParseAnalyseAndExport(SRC);
-  try
-    Buf   := WriteUnitInterface(Iface);
-    Round := ReadUnitInterface(Buf);
-    try
-      E := Round.FindType('IShape');
-      AssertTrue('IShape present', E <> nil);
-      AssertTrue('is interface', E.Def is TInterfaceTypeDef);
-      AssertEquals('2 methods', 2, TInterfaceTypeDef(E.Def).Methods.Count);
-      for I := 0 to TInterfaceTypeDef(E.Def).Methods.Count - 1 do
-      begin
-        M := TMethodDecl(TInterfaceTypeDef(E.Def).Methods.Items[I]);
-        AssertEquals('overload method name', 'Draw', M.Name);
-        AssertTrue('IsOverload preserved', M.IsOverload);
-      end;
     finally
       Round.Free();
     end;
@@ -3560,121 +3390,6 @@ begin
       AssertTrue('Square inline body present', IB <> nil);
       AssertTrue('block carried', IB.Block <> nil);
       AssertTrue('has at least one stmt', IB.Block.Stmts.Count >= 1);
-    finally
-      Round.Free();
-    end;
-  finally
-    Iface.Free();
-  end;
-end;
-
-procedure TIfaceIOTests.TestRoundTrip_StaticMembers_Preserved;
-const
-  SRC =
-    'unit U;' + #10 +
-    'interface' + #10 +
-    'type TReg = class' + #10 +
-    '  private static var' + #10 +
-    '    FCount: Integer;' + #10 +
-    '  public' + #10 +
-    '    static function Next: Integer;' + #10 +
-    '    static property Counter: Integer read Next;' + #10 +
-    '  public static const' + #10 +
-    '    Tag = 7;' + #10 +
-    'end;' + #10 +
-    'implementation' + #10 +
-    'static function TReg.Next: Integer; begin Result := FCount end;' + #10 +
-    'end.' + #10;
-var
-  Iface, Round: TUnitInterface;
-  Buf:          string;
-  E:            TTypeEntry;
-  Def:          TClassTypeDef;
-  Fld:          TFieldDecl;
-  M:            TRoutineSig;
-  Prop:         TPropertyDecl;
-begin
-  Iface := ParseAnalyseAndExport(SRC);
-  try
-    Buf   := WriteUnitInterface(Iface);
-    Round := ReadUnitInterface(Buf);
-    try
-      E := Round.FindType('TReg');
-      AssertTrue('TReg present', E <> nil);
-      Def := TClassTypeDef(E.Def);
-
-      { static var FCount: IsClassVar set, mangled emit label round-tripped. }
-      AssertEquals('1 field decl', 1, Def.Fields.Count);
-      Fld := TFieldDecl(Def.Fields.Items[0]);
-      AssertEquals('field name', 'FCount', Fld.Names.Strings[0]);
-      AssertTrue('FCount IsClassVar', Fld.IsClassVar);
-      AssertEquals('FCount emit label', 'U_TReg_FCount', Fld.ClassVarEmitName);
-
-      { static method Next: IsStatic carried on the routine sig. }
-      AssertEquals('1 method', 1, E.Methods.Count);
-      M := TRoutineSig(E.Methods.Items[0]);
-      AssertEquals('method name', 'Next', M.Name);
-      AssertTrue('Next IsStatic', M.IsStatic);
-
-      { static property Counter: IsStatic carried on the property decl. }
-      AssertEquals('1 property', 1, Def.Properties.Count);
-      Prop := TPropertyDecl(Def.Properties.Items[0]);
-      AssertEquals('prop name', 'Counter', Prop.Name);
-      AssertTrue('Counter IsStatic', Prop.IsStatic);
-
-      { static const Tag: carried in the class ConstDecls list. }
-      AssertEquals('1 const decl', 1, Def.ConstDecls.Count);
-      AssertEquals('const name', 'Tag',
-        TConstDecl(Def.ConstDecls.Items[0]).Name);
-      AssertEquals('const value', 7,
-        TConstDecl(Def.ConstDecls.Items[0]).IntVal);
-    finally
-      Round.Free();
-    end;
-  finally
-    Iface.Free();
-  end;
-end;
-
-procedure TIfaceIOTests.TestRoundTrip_WeakField_And_DefaultProperty_Preserved;
-const
-  SRC =
-    'unit U;' + #10 +
-    'interface' + #10 +
-    'type TNode = class' + #10 +
-    '    [Weak] FNext: TNode;' + #10 +
-    '    function Get(I: Integer): Integer;' + #10 +
-    '    property Items[I: Integer]: Integer read Get; default;' + #10 +
-    'end;' + #10 +
-    'implementation' + #10 +
-    'function TNode.Get(I: Integer): Integer; begin Result := I end;' + #10 +
-    'end.' + #10;
-var
-  Iface, Round: TUnitInterface;
-  Buf:          string;
-  E:            TTypeEntry;
-  Def:          TClassTypeDef;
-  Fld:          TFieldDecl;
-  Prop:         TPropertyDecl;
-begin
-  Iface := ParseAnalyseAndExport(SRC);
-  try
-    Buf   := WriteUnitInterface(Iface);
-    Round := ReadUnitInterface(Buf);
-    try
-      E := Round.FindType('TNode');
-      AssertTrue('TNode present', E <> nil);
-      Def := TClassTypeDef(E.Def);
-
-      AssertEquals('1 field decl', 1, Def.Fields.Count);
-      Fld := TFieldDecl(Def.Fields.Items[0]);
-      AssertEquals('field name', 'FNext', Fld.Names.Strings[0]);
-      AssertTrue('FNext IsWeak survives clone+round-trip', Fld.IsWeak);
-
-      AssertEquals('1 property', 1, Def.Properties.Count);
-      Prop := TPropertyDecl(Def.Properties.Items[0]);
-      AssertEquals('prop name', 'Items', Prop.Name);
-      AssertTrue('Items IsDefault survives clone+round-trip', Prop.IsDefault);
     finally
       Round.Free();
     end;

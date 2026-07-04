@@ -79,7 +79,7 @@ var
 begin
   inherited SetUp();
   ExeDir := ExtractFilePath(ParamStr(0));
-  FRTLUnitPath := ExpandFileName(ExeDir + '../../compiler/src/main/pascal');
+  FRTLUnitPath := ExpandFileName(ExeDir + '../../runtime/src/main/pascal');
   FStdlibUnitPath := ExpandFileName(ExeDir + '../../stdlib/src/main/pascal');
 end;
 

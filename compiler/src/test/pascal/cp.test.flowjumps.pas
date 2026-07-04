@@ -171,7 +171,7 @@ const
           Exit(5)
         end;
         begin
-          DoIt()
+          DoIt
         end.
         ''';
 

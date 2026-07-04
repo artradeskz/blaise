@@ -18,7 +18,7 @@ unit cp.test.linker;
 interface
 
 uses
-  classes, SysUtils, process, blaise.testing, Generics.Collections,
+  SysUtils, process, blaise.testing, Generics.Collections,
   blaise.elfreader, blaise.linker.elf, blaise.assembler.x86_64;
 
 type
@@ -58,8 +58,7 @@ type
     procedure TestSym_SynthesisedSymbolsDefined;
     { Static relocations }
     procedure TestReloc_PC32CrossObjectCall;
-    procedure TestReloc_Quad64_ResolvesToAbsoluteAddr;
-    procedure TestReloc_Abs32_ResolvesInStaticMode;
+    procedure TestReloc_Quad64_Raises;
     { Executable structure }
     procedure TestExe_ElfHeaderIsExec;
     procedure TestExe_EntryPointMatchesSymbol;
@@ -75,34 +74,6 @@ type
     procedure SetUp; override;
   published
     procedure TestRun_SyscallHelloWorld;
-    { Linking with the FreeBSD target stamps EI_OSABI = 9 (ELFOSABI_FREEBSD)
-      in the ELF header and keeps the static ET_EXEC / _start shape.  The
-      FreeBSD binary cannot execute on the Linux test host (different syscall
-      numbers), so this asserts the emitted header shape only — the structural
-      check the cross-compile lane relies on. }
-    procedure TestLink_FreeBSDTarget_StampsOSABI;
-    { Step 3: linking the freestanding FreeBSD _start with the FreeBSD target
-      yields a static ET_EXEC whose entry point is _start and which has no
-      PT_INTERP — the Strategy-B shape a cross-compiled FreeBSD binary needs.
-      Asserts header shape only (it cannot run on the Linux host). }
-    procedure TestLink_FreeBSDStart_StaticExecShape;
-    { Step 4a: a fixture that mirrors the runtime.syscall.freebsd file/process
-      leaves (open/read/write/mmap/stat) links under the FreeBSD target with the
-      bare POSIX symbols DEFINED, and the linked .text carries the FreeBSD
-      ino64 syscall NUMBERS (open=5, write=4, mmap=477, fstatat=552) plus the
-      CF-error-translation idiom (jae + negq).  Standalone — no FreeBSD
-      emulation, header/byte shape only. }
-    procedure TestLink_FreeBSDSyscallLeaf_SymbolsAndNumbers;
-    { Step 4b: the FreeBSD leaf additions — getrandom uses the FreeBSD number
-      (563, not Linux's 318) and the mremap stub is a plain function that returns
-      MAP_FAILED (-1) so runtime.mem takes its alloc-copy-free grow fallback (no
-      in-place remap syscall on FreeBSD).  Standalone byte/symbol shape. }
-    procedure TestLink_FreeBSDSyscallLeaf_GetrandomAndMremapStub;
-    { Step 4c: the FreeBSD threads/TLS leaf — thr_new (455), _umtx_op (454) and
-      thr_exit (431) link under the FreeBSD target with their FreeBSD syscall
-      numbers present in the linked .text, and NOT Linux's clone (56) / futex
-      (202).  Standalone byte/symbol shape. }
-    procedure TestLink_FreeBSDThreadLeaf_SyscallNumbers;
   end;
 
   TDynLinkerTests = class(TTestCase)
@@ -147,12 +118,6 @@ type
     procedure TestRun_ExceptionHandling;
     procedure TestRun_ClassAndVirtual;
     procedure TestLink_MissingRTL_FailsLoudly;
-    { Step 6: a full compiler-CLI cross-compile with --target freebsd-x86_64
-      selects the FreeBSD RTL adapter set (BuildRTLUnitList) and emits a static,
-      freestanding FreeBSD ET_EXEC — EI_OSABI = 9, no PT_INTERP, entry _start —
-      with no external tools.  The binary cannot run on the Linux host, so this
-      asserts the emitted ELF shape only. }
-    procedure TestCompile_FreeBSDTarget_EmitsStaticFreeBSDExe;
   end;
 
 implementation
@@ -359,92 +324,30 @@ end;
 
 procedure TElfReaderTests.TestArchive_ParsesRTL;
 var
-  Root, ObjDir, ArPath, ScriptOut: string;
-  Compiler: string;
+  RTLPath: string;
   Members: TList<TArchiveMember>;
-  ObjList: TStringList;
-  Proc: TProcess;
-  Chunk: string;
   I: Integer;
   M: TArchiveMember;
   Obj: TElfObjectFile;
-  SawLongName: Boolean;
+  SawSetjmp: Boolean;
 begin
-  { The shipped blaise_rtl.a is gone (RTL-unification Stage 3).  To still
-    exercise the archive parser — including the GNU long-name (//) table on the
-    >15-char member rtl.platform.layout.linux.o — build the RTL objects from
-    source and bundle them into a THROWAWAY .a with `ar` just for this test.
-    `ar` is a test-time dependency only; the product/bootstrap no longer use it. }
-  Root     := ProjectRoot();
-  Compiler := Root + 'compiler/target/blaise';
-  if (not FileExists(Compiler))
-     or (not FileExists(Root + 'compiler/src/main/pascal/runtime.arc.pas')) then
+  RTLPath := ProjectRoot() + 'compiler/target/blaise_rtl.a';
+  if not FileExists(RTLPath) then
   begin
     Ignore('<toolchain-missing>');
     Exit;
   end;
-  ObjDir := Root + 'compiler/target/test-archive-rtl';
-  ScriptOut := '';
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := Root + 'scripts/build-rtl-objects.sh';
-    Proc.Parameters.Add(Compiler);
-    Proc.Parameters.Add(ObjDir);
-    Proc.Parameters.Add('--with-startup');
-    Proc.Execute();
-    repeat
-      Chunk := Proc.ReadOutput();
-      ScriptOut := ScriptOut + Chunk
-    until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit();
-    if Proc.ExitCode <> 0 then
-    begin
-      Ignore('<toolchain-missing>');
-      Exit;
-    end;
-  finally
-    Proc.Free();
-  end;
-
-  { Bundle the built objects into a temp archive with ar.  Split the script's
-    stdout (one object path per line) via TStringList. }
-  ArPath := IncludeTrailingPathDelimiter(ObjDir) + 'rtl_test.a';
-  DeleteFile(ArPath);
-  ObjList := TStringList.Create();
-  Proc := TProcess.Create(nil);
-  try
-    ObjList.Text := ScriptOut;
-    Proc.Executable := 'ar';
-    Proc.Parameters.Add('rcs');
-    Proc.Parameters.Add(ArPath);
-    for I := 0 to ObjList.Count - 1 do
-      if Trim(ObjList.Strings[I]) <> '' then
-        Proc.Parameters.Add(Trim(ObjList.Strings[I]));
-    Proc.Execute();
-    Proc.WaitOnExit();
-    if (Proc.ExitCode <> 0) or (not FileExists(ArPath)) then
-    begin
-      Ignore('<toolchain-missing>');
-      Exit;
-    end;
-  finally
-    Proc.Free();
-    ObjList.Free();
-  end;
-
   Members := TList<TArchiveMember>.Create();
   try
-    ReadArchiveFile(ArPath, Members);
+    ReadArchiveFile(RTLPath, Members);
     AssertTrue('expected several RTL members, got '
       + IntToStr(Members.Count), Members.Count >= 5);
-    { A member whose name exceeds 15 chars exercises the GNU long-name (//)
-      table.  rtl.platform.layout.linux.o is the longest current RTL member. }
-    SawLongName := False;
+    SawSetjmp := False;
     for I := 0 to Members.Count - 1 do
     begin
       M := Members.Get(I);
-      if M.Name = 'rtl.platform.layout.linux.o' then
-        SawLongName := True;
+      if M.Name = 'blaise_setjmp_x86_64.o' then
+        SawSetjmp := True;
       { Every member must parse as a valid x86-64 relocatable object
         with at least its NULL section + one real section. }
       Obj := ParseElfObject(M.Data, M.Name);
@@ -455,8 +358,8 @@ begin
         Obj.Free();
       end;
     end;
-    AssertTrue('long-named member rtl.platform.layout.linux.o not found '
-      + '(GNU long-name table mishandled?)', SawLongName);
+    AssertTrue('long-named member blaise_setjmp_x86_64.o not found '
+      + '(GNU long-name table mishandled?)', SawSetjmp);
   finally
     for I := 0 to Members.Count - 1 do
       Members.Get(I).Free();
@@ -815,73 +718,29 @@ begin
   end;
 end;
 
-procedure TLinkerTests.TestReloc_Quad64_ResolvesToAbsoluteAddr;
+procedure TLinkerTests.TestReloc_Quad64_Raises;
 var
   Lk: TLinker;
   Bytes: string;
+  Raised: Boolean;
 begin
-  { An absolute 64-bit pointer to a symbol (`.quad target`, R_X86_64_64) is
-    resolvable at link time in a non-PIE ET_EXEC: every symbol has a fixed load
-    address.  The static linker must patch the slot with target's absolute
-    address (no dynamic relocation) — this is what makes a freestanding static
-    --static link possible (docs/linux-syscall-migration.adoc). }
-  Lk := LinkObjs(
-    ['.data' + LineEnding + 'ptr:' + LineEnding + '.quad target' + LineEnding +
-     '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
-     LineEnding + 'ret' + LineEnding +
-     '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
-    '_start', Bytes);
+  { An absolute 64-bit pointer to a symbol needs dynamic linking under
+    a real PIE; Phase B rejects R_X86_64_64 explicitly. }
+  Raised := False;
+  Lk := nil;
   try
-    { The link must succeed and produce a valid ET_EXEC. }
-    AssertTrue('static R_X86_64_64 link produced no output', Length(Bytes) >= 64);
-    AssertEquals('e_type ET_EXEC', 2,
-      (Ord(Bytes[16]) and $FF) or ((Ord(Bytes[17]) and $FF) shl 8));
-  finally
-    Lk.Free();
+    Lk := LinkObjs(
+      ['.data' + LineEnding + 'ptr:' + LineEnding + '.quad target' + LineEnding +
+       '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
+       LineEnding + 'ret' + LineEnding +
+       '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+      '_start', Bytes);
+  except
+    on E: ELinker do
+      Raised := True;
   end;
-end;
-
-procedure TLinkerTests.TestReloc_Abs32_ResolvesInStaticMode;
-var
-  Lk: TLinker;
-  Bytes: string;
-  Addr, Got: Int64;
-  I, Slot: Integer;
-begin
-  { An absolute 32-bit data reference (.long target, R_X86_64_32) is
-    resolvable at link time in a non-PIE ET_EXEC: the image is linked at a
-    fixed base (0x400000) and every mapped address fits in 32 bits.  The
-    OPDF emitter uses exactly this form (.long label) inside the .opdf
-    section, so a static FreeBSD link with debug info must accept it.
-    A marker word (0xDEADBEEF as decimal) precedes the slot so the test can
-    locate the patched bytes in the flat image. }
-  Lk := LinkObjs(
-    ['.data' + LineEnding +
-     'marker:' + LineEnding + '.long 3735928559' + LineEnding +
-     'ptr32:' + LineEnding + '.long target' + LineEnding +
-     '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
-     LineEnding + 'ret' + LineEnding +
-     '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
-    '_start', Bytes);
-  try
-    Addr := Lk.AddrOfSymbol('target');
-    AssertTrue('target resolved above base', Addr > $400000);
-    { Find the marker; the patched abs32 slot follows it. }
-    Slot := -1;
-    for I := 0 to Length(Bytes) - 9 do
-      if (OrdAt(Bytes, I) = $EF) and (OrdAt(Bytes, I + 1) = $BE) and
-         (OrdAt(Bytes, I + 2) = $AD) and (OrdAt(Bytes, I + 3) = $DE) then
-      begin
-        Slot := I + 4;
-        Break;
-      end;
-    AssertTrue('marker found in image', Slot >= 0);
-    Got := OrdAt(Bytes, Slot) or (OrdAt(Bytes, Slot + 1) shl 8) or
-           (OrdAt(Bytes, Slot + 2) shl 16) or (OrdAt(Bytes, Slot + 3) shl 24);
-    AssertEquals('abs32 slot patched with target address', Addr, Got);
-  finally
-    Lk.Free();
-  end;
+  Lk.Free();
+  AssertTrue('R_X86_64_64 must raise ELinker in Phase B', Raised);
 end;
 
 procedure TLinkerTests.TestExe_ElfHeaderIsExec;
@@ -1051,354 +910,6 @@ begin
   AssertEquals('exit code from internally-linked binary', 7, Rc);
   AssertEquals('stdout from internally-linked binary',
     'Hello, linker!' + Chr(10), Output);
-end;
-
-procedure TLinkerE2ETests.TestLink_FreeBSDTarget_StampsOSABI;
-const
-  FixtureAsm =
-    '.text' + LineEnding +
-    '.globl _start' + LineEnding +
-    '_start:' + LineEnding +
-    '  movq $1, %rax' + LineEnding +
-    '  movq $1, %rdi' + LineEnding +
-    '  movq $60, %rax' + LineEnding +
-    '  movq $0, %rdi' + LineEnding +
-    '  .byte 15' + LineEnding + '  .byte 5' + LineEnding;
-var
-  Lk: TLinker;
-  Obj: TElfObjectFile;
-  BinPath, Bytes: string;
-begin
-  BinPath := FScratch + '/freebsd_osabi';
-  { Build the linker with the FreeBSD link target (OSABI = 9). }
-  Lk := TLinker.Create(FreeBSDX86_64Target());
-  try
-    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fb.o');
-    Lk.AddOwnedObject(Obj);
-    Lk.Link('_start', BinPath);
-  finally
-    Lk.Free();
-  end;
-
-  AssertTrue('linked FreeBSD binary missing', FileExists(BinPath));
-  Bytes := ReadFile(BinPath);
-  AssertTrue('output too small to be an ELF', Length(Bytes) >= 8);
-  { ELF magic 0x7F 'E' 'L' 'F' at [0..3]; EI_OSABI is byte [7]. }
-  AssertEquals('ELF magic byte 0', $7F, OrdAt(Bytes, 0));
-  AssertEquals('EI_CLASS = ELFCLASS64', 2, OrdAt(Bytes, 4));
-  AssertEquals('EI_OSABI = ELFOSABI_FREEBSD (9)', 9, OrdAt(Bytes, 7));
-end;
-
-procedure TLinkerE2ETests.TestLink_FreeBSDStart_StaticExecShape;
-const
-  { A self-contained FreeBSD _start: capture the stack, then exit(0) via
-    SYS_exit = 1.  Mirrors runtime.start.static.freebsd's entry shape without
-    pulling in main/_SetArgs, so it links with no undefined symbols. }
-  FixtureAsm =
-    '.text' + LineEnding +
-    '.globl _start' + LineEnding +
-    '_start:' + LineEnding +
-    '  endbr64' + LineEnding +
-    '  xorl %ebp, %ebp' + LineEnding +
-    '  movq %rsp, %rdi' + LineEnding +
-    '  xorl %edi, %edi' + LineEnding +
-    '  movq $1, %rax' + LineEnding +       { SYS_exit }
-    '  syscall' + LineEnding +
-    '  hlt' + LineEnding;
-var
-  Lk: TLinker;
-  Obj: TElfObjectFile;
-  Bytes: string;
-  Entry, StartAddr: Int64;
-  PhOff, PhEntSz, PhCount, J, PType: Integer;
-  FoundInterp: Boolean;
-begin
-  { LinkToBytes returns the binary in memory — ReadFile would truncate at the
-    first NUL, which an ELF header hits at byte 8. }
-  Lk := TLinker.Create(FreeBSDX86_64Target());
-  try
-    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbstart.o');
-    Lk.AddOwnedObject(Obj);
-    Bytes := Lk.LinkToBytes('_start');
-    StartAddr := Lk.AddrOfSymbol('_start');
-  finally
-    Lk.Free();
-  end;
-
-  AssertTrue('output too small to be an ELF', Length(Bytes) >= 64);
-
-  { e_type at offset 16 must be ET_EXEC (2) — a static, non-PIE executable. }
-  AssertEquals('e_type ET_EXEC', 2, OrdAt(Bytes, 16) or (OrdAt(Bytes, 17) shl 8));
-  { EI_OSABI byte 7 = ELFOSABI_FREEBSD. }
-  AssertEquals('EI_OSABI FreeBSD', 9, OrdAt(Bytes, 7));
-
-  { e_entry (offset 24, 8 bytes LE) must equal the address of _start. }
-  Entry := Int64(OrdAt(Bytes, 24)) or (Int64(OrdAt(Bytes, 25)) shl 8) or
-           (Int64(OrdAt(Bytes, 26)) shl 16) or (Int64(OrdAt(Bytes, 27)) shl 24) or
-           (Int64(OrdAt(Bytes, 28)) shl 32) or (Int64(OrdAt(Bytes, 29)) shl 40) or
-           (Int64(OrdAt(Bytes, 30)) shl 48) or (Int64(OrdAt(Bytes, 31)) shl 56);
-  AssertEquals('entry point is _start', StartAddr, Entry);
-
-  { No PT_INTERP (type 3) among the program headers — a freestanding binary has
-    no dynamic loader. }
-  PhOff := OrdAt(Bytes, 32) or (OrdAt(Bytes, 33) shl 8) or
-           (OrdAt(Bytes, 34) shl 16) or (OrdAt(Bytes, 35) shl 24);
-  PhEntSz := OrdAt(Bytes, 54) or (OrdAt(Bytes, 55) shl 8);
-  PhCount := OrdAt(Bytes, 56) or (OrdAt(Bytes, 57) shl 8);
-  FoundInterp := False;
-  for J := 0 to PhCount - 1 do
-  begin
-    PType := OrdAt(Bytes, PhOff + J * PhEntSz) or
-             (OrdAt(Bytes, PhOff + J * PhEntSz + 1) shl 8) or
-             (OrdAt(Bytes, PhOff + J * PhEntSz + 2) shl 16) or
-             (OrdAt(Bytes, PhOff + J * PhEntSz + 3) shl 24);
-    if PType = 3 then FoundInterp := True;
-  end;
-  AssertTrue('static ET_EXEC must have no PT_INTERP', not FoundInterp);
-end;
-
-procedure TLinkerE2ETests.TestLink_FreeBSDSyscallLeaf_SymbolsAndNumbers;
-const
-  { Mirrors the runtime.syscall.freebsd leaf bodies byte-for-byte (a handful of
-    representative leaves): each is `movq $N, %rax; syscall; jae ok; negq %rax;
-    ok: ret`, with mmap's `movq %rcx, %r10` and stat lowered to
-    fstatat(AT_FDCWD, path, buf, 0).  Names are the bare POSIX symbols posix
-    imports.  A leading _start keeps the linker's entry resolvable. }
-  FixtureAsm =
-    '.text' + LineEnding +
-    '.globl _start' + LineEnding +
-    '_start:' + LineEnding +
-    '  callq open' + LineEnding +
-    '  callq read' + LineEnding +
-    '  callq write' + LineEnding +
-    '  callq mmap' + LineEnding +
-    '  callq stat' + LineEnding +
-    '  xorl %edi, %edi' + LineEnding +
-    '  movq $1, %rax' + LineEnding +        { SYS_exit }
-    '  syscall' + LineEnding +
-    '  hlt' + LineEnding +
-    '.globl open' + LineEnding +
-    'open:' + LineEnding +
-    '  movq $5, %rax' + LineEnding +        { SYS_open }
-    '  syscall' + LineEnding +
-    '  jae .Lok_open' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_open:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl read' + LineEnding +
-    'read:' + LineEnding +
-    '  movq $3, %rax' + LineEnding +        { SYS_read }
-    '  syscall' + LineEnding +
-    '  jae .Lok_read' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_read:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl write' + LineEnding +
-    'write:' + LineEnding +
-    '  movq $4, %rax' + LineEnding +        { SYS_write }
-    '  syscall' + LineEnding +
-    '  jae .Lok_write' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_write:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl mmap' + LineEnding +
-    'mmap:' + LineEnding +
-    '  movq %rcx, %r10' + LineEnding +
-    '  movq $477, %rax' + LineEnding +      { SYS_mmap (ino64) }
-    '  syscall' + LineEnding +
-    '  jae .Lok_mmap' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_mmap:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl stat' + LineEnding +
-    'stat:' + LineEnding +
-    '  movq %rsi, %rdx' + LineEnding +
-    '  movq %rdi, %rsi' + LineEnding +
-    '  movq $-100, %rdi' + LineEnding +     { AT_FDCWD }
-    '  xorq %r10, %r10' + LineEnding +
-    '  movq $552, %rax' + LineEnding +      { SYS_fstatat (ino64) }
-    '  syscall' + LineEnding +
-    '  jae .Lok_stat' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_stat:' + LineEnding +
-    '  ret' + LineEnding;
-  { Encoded `movq $imm32, %rax` = 48 C7 C0 <imm32-LE>.  These byte strings must
-    appear in the linked .text if the correct syscall number was emitted. }
-  function MovRaxImm(AImm: Integer): string;
-  begin
-    Result := Chr($48) + Chr($C7) + Chr($C0) +
-              Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
-              Chr((AImm shr 16) and $FF) + Chr((AImm shr 24) and $FF);
-  end;
-var
-  Lk: TLinker;
-  Obj: TElfObjectFile;
-  Bytes: string;
-begin
-  Lk := TLinker.Create(FreeBSDX86_64Target());
-  try
-    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbsys.o');
-    Lk.AddOwnedObject(Obj);
-    Bytes := Lk.LinkToBytes('_start');
-
-    { 1. The bare POSIX leaf symbols must be DEFINED (non-zero address). }
-    AssertTrue('open defined',  Lk.AddrOfSymbol('open') > 0);
-    AssertTrue('read defined',  Lk.AddrOfSymbol('read') > 0);
-    AssertTrue('write defined', Lk.AddrOfSymbol('write') > 0);
-    AssertTrue('mmap defined',  Lk.AddrOfSymbol('mmap') > 0);
-    AssertTrue('stat defined',  Lk.AddrOfSymbol('stat') > 0);
-  finally
-    Lk.Free();
-  end;
-
-  { 2. FreeBSD ino64 syscall NUMBERS present in the linked .text as the
-    `movq $N, %rax` encoding — NOT Linux's numbers. }
-  AssertTrue('SYS_open=5 movq imm present',   Pos(MovRaxImm(5), Bytes) >= 0);
-  AssertTrue('SYS_read=3 movq imm present',   Pos(MovRaxImm(3), Bytes) >= 0);
-  AssertTrue('SYS_write=4 movq imm present',  Pos(MovRaxImm(4), Bytes) >= 0);
-  AssertTrue('SYS_mmap=477 movq imm present', Pos(MovRaxImm(477), Bytes) >= 0);
-  AssertTrue('SYS_fstatat=552 movq imm present (stat via fstatat)',
-    Pos(MovRaxImm(552), Bytes) >= 0);
-
-  { 3. The CF-error-translation idiom: negq %rax (48 F7 D8) must appear.  This
-    is the FreeBSD-specific errno translation the Linux leaf does not emit. }
-  AssertTrue('negq %rax (CF translation) present',
-    Pos(Chr($48) + Chr($F7) + Chr($D8), Bytes) >= 0);
-  { mmap's arg4 shuffle: movq %rcx, %r10 (49 89 CA). }
-  AssertTrue('movq %rcx,%r10 (mmap arg4) present',
-    Pos(Chr($49) + Chr($89) + Chr($CA), Bytes) >= 0);
-end;
-
-procedure TLinkerE2ETests.TestLink_FreeBSDSyscallLeaf_GetrandomAndMremapStub;
-const
-  { getrandom is a raw syscall with the FreeBSD number 563 (Linux's is 318).
-    mremap has no FreeBSD syscall, so the leaf's stub just returns MAP_FAILED
-    (-1) — a mov of -1 into %rax then ret; runtime.mem's realloc path treats
-    that as "grow the slow way".  A leading _start keeps the entry resolvable. }
-  FixtureAsm =
-    '.text' + LineEnding +
-    '.globl _start' + LineEnding +
-    '_start:' + LineEnding +
-    '  callq getrandom' + LineEnding +
-    '  callq mremap' + LineEnding +
-    '  xorl %edi, %edi' + LineEnding +
-    '  movq $1, %rax' + LineEnding +        { SYS_exit }
-    '  syscall' + LineEnding +
-    '  hlt' + LineEnding +
-    '.globl getrandom' + LineEnding +
-    'getrandom:' + LineEnding +
-    '  movq $563, %rax' + LineEnding +      { SYS_getrandom (FreeBSD) }
-    '  syscall' + LineEnding +
-    '  jae .Lok_gr' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_gr:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl mremap' + LineEnding +
-    'mremap:' + LineEnding +
-    '  movq $-1, %rax' + LineEnding +       { MAP_FAILED — no FreeBSD mremap }
-    '  ret' + LineEnding;
-  function MovRaxImm(AImm: Integer): string;
-  begin
-    Result := Chr($48) + Chr($C7) + Chr($C0) +
-              Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
-              Chr((AImm shr 16) and $FF) + Chr((AImm shr 24) and $FF);
-  end;
-var
-  Lk: TLinker;
-  Obj: TElfObjectFile;
-  Bytes: string;
-begin
-  Lk := TLinker.Create(FreeBSDX86_64Target());
-  try
-    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbsys2.o');
-    Lk.AddOwnedObject(Obj);
-    Bytes := Lk.LinkToBytes('_start');
-    AssertTrue('getrandom defined', Lk.AddrOfSymbol('getrandom') > 0);
-    AssertTrue('mremap defined',    Lk.AddrOfSymbol('mremap') > 0);
-  finally
-    Lk.Free();
-  end;
-  { getrandom uses the FreeBSD number 563 — NOT Linux's 318. }
-  AssertTrue('SYS_getrandom=563 movq imm present', Pos(MovRaxImm(563), Bytes) >= 0);
-  AssertTrue('Linux SYS_getrandom=318 NOT present', Pos(MovRaxImm(318), Bytes) < 0);
-  { mremap stub loads -1 (movq $-1,%rax = 48 C7 C0 FF FF FF FF). }
-  AssertTrue('mremap stub returns -1 (MAP_FAILED)', Pos(MovRaxImm(-1), Bytes) >= 0);
-end;
-
-procedure TLinkerE2ETests.TestLink_FreeBSDThreadLeaf_SyscallNumbers;
-const
-  { Mirrors the runtime.syscall.freebsd threads/TLS leaf bodies: thr_new (455),
-    _umtx_op (454, with its arg4 %rcx->%r10 shuffle) and thr_exit (431).  These
-    are the FreeBSD analogues of Linux's clone (56) / futex (202) / exit (60);
-    the numbers MUST be FreeBSD's, not Linux's.  A leading _start keeps the
-    linker's entry resolvable. }
-  FixtureAsm =
-    '.text' + LineEnding +
-    '.globl _start' + LineEnding +
-    '_start:' + LineEnding +
-    '  callq thr_new' + LineEnding +
-    '  callq _umtx_op' + LineEnding +
-    '  callq thr_exit' + LineEnding +
-    '  xorl %edi, %edi' + LineEnding +
-    '  movq $1, %rax' + LineEnding +        { SYS_exit }
-    '  syscall' + LineEnding +
-    '  hlt' + LineEnding +
-    '.globl thr_new' + LineEnding +
-    'thr_new:' + LineEnding +
-    '  movq $455, %rax' + LineEnding +      { SYS_thr_new }
-    '  syscall' + LineEnding +
-    '  jae .Lok_thr_new' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_thr_new:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl _umtx_op' + LineEnding +
-    '_umtx_op:' + LineEnding +
-    '  movq %rcx, %r10' + LineEnding +
-    '  movq $454, %rax' + LineEnding +      { SYS__umtx_op }
-    '  syscall' + LineEnding +
-    '  jae .Lok_umtx' + LineEnding +
-    '  negq %rax' + LineEnding +
-    '.Lok_umtx:' + LineEnding +
-    '  ret' + LineEnding +
-    '.globl thr_exit' + LineEnding +
-    'thr_exit:' + LineEnding +
-    '  movq $431, %rax' + LineEnding +      { SYS_thr_exit }
-    '  syscall' + LineEnding +
-    '  ret' + LineEnding;
-  { Encoded `movq $imm32, %rax` = 48 C7 C0 <imm32-LE>. }
-  function MovRaxImm(AImm: Integer): string;
-  begin
-    Result := Chr($48) + Chr($C7) + Chr($C0) +
-              Chr(AImm and $FF) + Chr((AImm shr 8) and $FF) +
-              Chr((AImm shr 16) and $FF) + Chr((AImm shr 24) and $FF);
-  end;
-var
-  Lk: TLinker;
-  Obj: TElfObjectFile;
-  Bytes: string;
-begin
-  Lk := TLinker.Create(FreeBSDX86_64Target());
-  try
-    Obj := ParseElfObject(AssembleToBytes(FixtureAsm), 'fbthr.o');
-    Lk.AddOwnedObject(Obj);
-    Bytes := Lk.LinkToBytes('_start');
-    { The bare thread-primitive symbols must be DEFINED (non-zero address). }
-    AssertTrue('thr_new defined',  Lk.AddrOfSymbol('thr_new') > 0);
-    AssertTrue('_umtx_op defined', Lk.AddrOfSymbol('_umtx_op') > 0);
-    AssertTrue('thr_exit defined', Lk.AddrOfSymbol('thr_exit') > 0);
-  finally
-    Lk.Free();
-  end;
-  { FreeBSD thread syscall NUMBERS present in the linked .text. }
-  AssertTrue('SYS_thr_new=455 movq imm present',  Pos(MovRaxImm(455), Bytes) >= 0);
-  AssertTrue('SYS__umtx_op=454 movq imm present', Pos(MovRaxImm(454), Bytes) >= 0);
-  AssertTrue('SYS_thr_exit=431 movq imm present', Pos(MovRaxImm(431), Bytes) >= 0);
-  { NOT Linux's clone (56) / futex (202) — those numbers must be absent. }
-  AssertTrue('Linux SYS_clone=56 NOT present',  Pos(MovRaxImm(56), Bytes) < 0);
-  AssertTrue('Linux SYS_futex=202 NOT present', Pos(MovRaxImm(202), Bytes) < 0);
-  { _umtx_op's arg4 shuffle: movq %rcx, %r10 (49 89 CA). }
-  AssertTrue('movq %rcx,%r10 (_umtx_op arg4) present',
-    Pos(Chr($49) + Chr($89) + Chr($CA), Bytes) >= 0);
 end;
 
 { ---- TDynLinkerTests ---- }
@@ -1675,7 +1186,7 @@ procedure TInternalLinkerE2ETests.SetUp;
 begin
   inherited SetUp();
   FCompiler := ProjectRoot() + 'compiler/target/blaise';
-  FRTLPath := ProjectRoot() + 'compiler/src/main/pascal';
+  FRTLPath := ProjectRoot() + 'runtime/src/main/pascal';
   FStdlibPath := ProjectRoot() + 'stdlib/src/main/pascal';
   FScratch := ProjectRoot() + 'compiler/target/intlink_scratch/';
   ForceDirectories(FScratch);
@@ -1684,15 +1195,13 @@ end;
 
 function TInternalLinkerE2ETests.CompilerAvailable: Boolean;
 begin
-  { The compiler source-builds the RTL itself (no blaise_rtl.a); only the binary
-    and the RTL source need to be present. }
   Result := FileExists(FCompiler) and
-            FileExists(FRTLPath + '/runtime.arc.pas');
+            FileExists(ProjectRoot() + 'compiler/target/blaise_rtl.a');
   if (not Result) and (not GIntLinkSkipNoted) then
   begin
     GIntLinkSkipNoted := True;
     WriteLn(StdErr, 'note: TInternalLinkerE2ETests skipped — compiler binary "',
-            FCompiler, '" or RTL source not found');
+            FCompiler, '" not found');
   end;
 end;
 
@@ -1906,7 +1415,17 @@ begin
   FCounter := FCounter + 1;
   IsoDir := FScratch + 'no_rtl_' + IntToStr(FCounter) + '/';
   ForceDirectories(IsoDir);
-  IsoCompiler := FCompiler;
+  IsoCompiler := IsoDir + 'blaise';
+  { Symlink the real compiler into the isolated dir — argv[0]'s dirname is the
+    isolated dir, which has NO blaise_rtl.a beside it, so FindRTLArchive
+    returns ''.  (A symlink avoids copying the multi-MB binary and the
+    byte-exactness pitfalls of a string round-trip.) }
+  if FileExists(IsoCompiler) then DeleteFile(IsoCompiler);
+  if _test_symlink(PChar(FCompiler), PChar(IsoCompiler)) <> 0 then
+  begin
+    Ignore('<symlink-unavailable>');
+    Exit;
+  end;
 
   SrcFile := IsoDir + 'prog.pas';
   OutFile := IsoDir + 'prog';
@@ -1916,93 +1435,23 @@ begin
     '  WriteLn(6 * 7)' + LineEnding +
     'end.');
 
-  { The RTL is now compiled from SOURCE by the compiler at link time (no prebuilt
-    blaise_rtl.a).  Point --rtl-src at a nonexistent directory so the RTL source
-    is unreachable: the driver must fail loudly rather than emit a broken binary. }
+  { BLAISE_RTL is normally unset in the test environment; the isolated dir has
+    no blaise_rtl.a, so FindRTLArchive returns '' and the guard must fire. }
   Rc := Self.RunProc(IsoCompiler, [
-    '--source', SrcFile,
-    '--unit-path', FStdlibPath,
-    '--output', OutFile,
-    '--backend', 'native',
-    '--assembler', 'internal',
-    '--linker', 'internal',
-    '--rtl-src', IsoDir + 'no_such_rtl_src'
-  ], CompOut);
-
-  AssertTrue('compiler must FAIL when the RTL source is unreachable (got rc=0)',
-    Rc <> 0);
-  AssertTrue('error must name the missing RTL source: ' + CompOut,
-    Pos('RTL source', CompOut) >= 0);
-  AssertFalse('no output binary should be produced on RTL-missing failure',
-    FileExists(OutFile));
-end;
-
-procedure TInternalLinkerE2ETests.TestCompile_FreeBSDTarget_EmitsStaticFreeBSDExe;
-var
-  SrcFile, OutFile, CompOut, Bytes: string;
-  Rc, PhOff, PhEntSz, PhCount, J, PType: Integer;
-  FoundInterp: Boolean;
-begin
-  if not Self.CompilerAvailable() then
-  begin
-    Ignore('<toolchain-missing>');
-    Exit;
-  end;
-
-  FCounter := FCounter + 1;
-  SrcFile := FScratch + 'test_fbsd_' + IntToStr(FCounter) + '.pas';
-  OutFile := FScratch + 'test_fbsd_' + IntToStr(FCounter);
-  WriteFile(SrcFile,
-    'program test_fbsd;' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(''Hello'')' + LineEnding +
-    'end.');
-
-  { Full compiler-CLI cross-compile.  --target freebsd-x86_64 must select the
-    FreeBSD RTL adapter set and drive the static, freestanding link with no
-    external tools (internal assembler + linker). }
-  Rc := Self.RunProc(FCompiler, [
     '--source', SrcFile,
     '--unit-path', FRTLPath,
     '--unit-path', FStdlibPath,
     '--output', OutFile,
     '--backend', 'native',
     '--assembler', 'internal',
-    '--linker', 'internal',
-    '--target', 'freebsd-x86_64'
+    '--linker', 'internal'
   ], CompOut);
-  if Rc <> 0 then
-    Fail('--target freebsd-x86_64 compile failed (rc=' + IntToStr(Rc) + '): ' +
-         CompOut);
-  AssertTrue('FreeBSD binary was produced', FileExists(OutFile));
 
-  { The FreeBSD binary cannot run on the Linux host — assert its ELF shape.
-    ReadWholeFile is NUL-safe (unlike the RTL ReadFile, which stops at the
-    first NUL — an ELF header hits one at byte 8). }
-  Bytes := ReadWholeFile(OutFile);
-  AssertTrue('output too small to be an ELF', Length(Bytes) >= 64);
-
-  { EI_OSABI byte 7 = ELFOSABI_FREEBSD (9). }
-  AssertEquals('EI_OSABI FreeBSD', 9, OrdAt(Bytes, 7));
-  { e_type at offset 16 = ET_EXEC (2) — static, non-PIE. }
-  AssertEquals('e_type ET_EXEC', 2, OrdAt(Bytes, 16) or (OrdAt(Bytes, 17) shl 8));
-
-  { No PT_INTERP (program-header type 3): a freestanding binary has no dynamic
-    loader. }
-  PhOff := OrdAt(Bytes, 32) or (OrdAt(Bytes, 33) shl 8) or
-           (OrdAt(Bytes, 34) shl 16) or (OrdAt(Bytes, 35) shl 24);
-  PhEntSz := OrdAt(Bytes, 54) or (OrdAt(Bytes, 55) shl 8);
-  PhCount := OrdAt(Bytes, 56) or (OrdAt(Bytes, 57) shl 8);
-  FoundInterp := False;
-  for J := 0 to PhCount - 1 do
-  begin
-    PType := OrdAt(Bytes, PhOff + J * PhEntSz) or
-             (OrdAt(Bytes, PhOff + J * PhEntSz + 1) shl 8) or
-             (OrdAt(Bytes, PhOff + J * PhEntSz + 2) shl 16) or
-             (OrdAt(Bytes, PhOff + J * PhEntSz + 3) shl 24);
-    if PType = 3 then FoundInterp := True;
-  end;
-  AssertFalse('freestanding FreeBSD exe must have no PT_INTERP', FoundInterp);
+  AssertTrue('compiler must FAIL when RTL is unreachable (got rc=0)', Rc <> 0);
+  AssertTrue('error must name the missing RTL archive: ' + CompOut,
+    Pos('blaise_rtl.a', CompOut) >= 0);
+  AssertFalse('no output binary should be produced on RTL-missing failure',
+    FileExists(OutFile));
 end;
 
 initialization

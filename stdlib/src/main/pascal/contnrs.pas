@@ -16,7 +16,7 @@ unit Contnrs;
 interface
 
 uses
-  runtime.arc;  { for _ClassRelease }
+  blaise_arc;  { for _ClassRelease }
 
 type
   { ------------------------------------------------------------------ }
@@ -53,7 +53,7 @@ type
     procedure   Clear;
     function    GetEnumerator: TObjectListEnumerator;
     property Count: Integer read FCount;
-    property Items[Index: Integer]: Pointer read Get write Put; default;
+    property Items[Index: Integer]: Pointer read Get write Put;
   end;
 
 implementation

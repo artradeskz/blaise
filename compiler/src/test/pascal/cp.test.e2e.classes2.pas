@@ -159,17 +159,6 @@ type
     { ClassCreate builtin still works (backwards compat) and now dispatches
       the ctor body via vtable too. }
     procedure TestRun_ClassCreate_StillWorks;
-    { Forward class declaration with a managed (string) field: the forward
-      stub must complete into the same type so the full class — including its
-      ARC field — compiles and runs correctly. }
-    procedure TestRun_ForwardClass_MutualRefRuns;
-
-    { Implicit Int64/Integer→float conversion when the assignment target is a
-      class FIELD (both Self.Field and bare implicit-Self forms), for Double
-      and Single fields.  Regression: QBE deposited the raw integer bits into
-      the float slot; native stored a Double into a Single slot (movss of a
-      double) without narrowing. }
-    procedure TestRun_IntToFloatField_Converts;
     procedure TestRun_SelfIndexedRecordFieldAssign;
   end;
 
@@ -209,35 +198,6 @@ const
           C.Inc(); C.Inc(); C.Inc();
           N := D.Double(C.Value);
           WriteLn(N)
-        end.
-        ''';
-
-  { Forward-declared TNode referenced by TEdge before its full definition,
-    then completed with a managed (string) field and a back-reference. }
-  SrcForwardClass =
-    '''
-        program Prg;
-        type
-          TNode = class;
-          TEdge = class
-            Target: TNode;
-          end;
-          TNode = class
-            Name: string;
-            Link: TEdge;
-          end;
-        var
-          N: TNode;
-          E: TEdge;
-        begin
-          N := TNode.Create();
-          N.Name := 'hello';
-          E := TEdge.Create();
-          E.Target := N;
-          N.Link := E;
-          WriteLn(E.Target.Name);
-          N.Free();
-          E.Free()
         end.
         ''';
 
@@ -2324,57 +2284,6 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDirect, '42' + LE + '99' + LE, 0);
   AssertRunsOnAll(Src, '1' + LE, 0);
-end;
-
-procedure TE2EClasses2Tests.TestRun_ForwardClass_MutualRefRuns;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcForwardClass, Output, RCode));
-  AssertEquals('forward-declared TNode field read back', 'hello', Trim(Output));
-end;
-
-const
-  SrcIntToFloatField =
-    '''
-        program Prg;
-        type
-          TFoo = class
-            FD: Double;
-            FS: Single;
-            procedure SetD(AValue: Int64);
-            begin Self.FD := AValue end;     { Int64 -> Double, Self.Field }
-            procedure SetDBare(AValue: Int64);
-            begin FD := AValue end;          { Int64 -> Double, implicit Self }
-            procedure SetS(AValue: Integer);
-            begin Self.FS := AValue end;     { Integer -> Single, Self.Field }
-            procedure SetSBare(AValue: Integer);
-            begin FS := AValue end;          { Integer -> Single, implicit Self }
-          end;
-        var F: TFoo;
-        begin
-          F := TFoo.Create();
-          F.SetD(7);
-          WriteLn(Format('%g', [F.FD]));
-          F.SetDBare(42);
-          WriteLn(Format('%g', [F.FD]));
-          F.SetS(5);
-          WriteLn(Format('%g', [F.FS]));
-          F.SetSBare(9);
-          WriteLn(Format('%g', [F.FS]))
-        end.
-        ''';
-
-procedure TE2EClasses2Tests.TestRun_IntToFloatField_Converts;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { All four forms convert the integer to the field's float width — including
-    Integer->Single, where the native backend had stored a Double into the
-    4-byte Single slot. }
-  AssertTrue('compile+run', CompileAndRun(SrcIntToFloatField, Output, RCode));
-  AssertEquals('Int64/Integer→float field stores convert',
-    '7' + LE + '42' + LE + '5' + LE + '9', Trim(Output));
 end;
 
 initialization

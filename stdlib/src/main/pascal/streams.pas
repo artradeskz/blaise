@@ -372,17 +372,13 @@ function _FdSeek(Fd: Integer; Offset: Int64; Origin: Integer): Int64;
 function _FdSize(Fd: Integer): Int64; external name '_FdSize';
 procedure _FdClose(Fd: Integer); external name '_FdClose';
 
-{ Raw memory helpers used by the memory streams.  memcpy is the C name (libc, or
-  runtime.cstub under --static).  malloc/free/realloc bind to the RTL's own
-  mmap-backed allocator (_BlaiseGetMem/_BlaiseFreeMem/_BlaiseReallocMem) rather
-  than libc, so the memory streams carry no libc dependency and link into a
-  --static (libc-free) build. }
+{ Raw memory helpers used by the memory streams.  These are libc functions
+  exposed by name; the Blaise codegen passes the arguments through unchanged. }
 function memcpy(Dst, Src: Pointer; Count: Integer): Pointer;
   external name 'memcpy';
-function malloc(Count: Integer): Pointer; external name '_BlaiseGetMem';
-procedure free(P: Pointer); external name '_BlaiseFreeMem';
-function realloc(P: Pointer; Count: Integer): Pointer;
-  external name '_BlaiseReallocMem';
+function malloc(Count: Integer): Pointer; external name 'malloc';
+procedure free(P: Pointer); external name 'free';
+function realloc(P: Pointer; Count: Integer): Pointer; external name 'realloc';
 
 { CopyStream — transfer all readable bytes from Src to Dst.
 

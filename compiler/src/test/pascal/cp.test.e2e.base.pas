@@ -34,6 +34,7 @@ type
   TE2ETestCase = class(TTestCase)
   private
     FQBE:         string;
+    FRTL:         string;
     FRTLUnitPath: string;
     FStdlibUnitPath: string;
     FScratch:     string;
@@ -42,13 +43,6 @@ type
     function  RunProc(const AExe: string; const AArgs: array of string;
                       out AStdout: string): Integer;
     function  RunProcNoArgs(const AExe: string; out AStdout: string): Integer;
-    { Link an assembled program (AAsmFile) into ABinFile against the RTL.  The
-      RTL is built from source by scripts/build-rtl-objects.sh (no blaise_rtl.a
-      archive); --exclude-defined-by drops the RTL objects the whole-program
-      assembly already inlines, so the loose objects do not double-define.
-      Returns the cc exit code; AStdout carries any tool output. }
-    function  LinkWithRTL(const AAsmFile, ABinFile: string;
-                          out AStdout: string): Integer;
   protected
     function  ToolchainAvailable(): Boolean;
     function  ValgrindAvailable(): Boolean;
@@ -107,10 +101,6 @@ type
     procedure AssertRunsOnOne(ABackend: TBackend; const AName, ASrc,
                             AExpectedOut: string; AExpectedCode: Integer);
     function  RunUnderValgrind(const ASrc: string; out ALog: string): Boolean;
-    { Native-backend twin of RunUnderValgrind: compile ASrc with the NATIVE
-      codegen, link, and run under valgrind.  Needed to detect native-only
-      use-after-free/leak bugs that the QBE-only RunUnderValgrind cannot see. }
-    function  RunUnderValgrindNative(const ASrc: string; out ALog: string): Boolean;
     function  CompileAndRunWithRTL(const ASrc: string;
                                    out AStdout: string;
                                    out AExitCode: Integer): Boolean; overload;
@@ -146,15 +136,6 @@ type
     function  CompileAndRunWithUnitNative(const AUnitName, AUnitSrc, ASrc: string;
                                    out AStdout: string;
                                    out AExitCode: Integer): Boolean;
-    { Two-written-units compile+run (QBE).  Writes both units to the scratch
-      dir (filename derived from each `unit <name>;` header) so the program's
-      `uses` clause resolves them, then lowers + links + runs.  Needed for
-      cross-unit tests (two units exporting the same name: last-wins shadowing,
-      unit-qualified disambiguation).  Kept at 5 params (Self+5 = 6 register
-      slots) so the stage-1 native ABI does not overflow. }
-    function  CompileAndRunWithUnits(const AUnit1Src, AUnit2Src, ASrc: string;
-                                     out AStdout: string;
-                                     out AExitCode: Integer): Boolean;
   end;
 
 implementation
@@ -188,11 +169,7 @@ end;
 
 function TE2ETestCase.ToolchainAvailable(): Boolean;
 begin
-  { Need the QBE assembler, the compiler binary (build-rtl-objects.sh drives it
-    to source-build the RTL), and the RTL source.  No blaise_rtl.a archive. }
-  Result := FileExists(FQBE)
-        and FileExists(ProjectRoot() + 'compiler/target/blaise')
-        and FileExists(ProjectRoot() + 'compiler/src/main/pascal/runtime.arc.pas')
+  Result := FileExists(FQBE) and FileExists(FRTL)
 end;
 
 function TE2ETestCase.ValgrindAvailable(): Boolean;
@@ -209,9 +186,10 @@ begin
   FQBE := GetEnvironmentVariable('BLAISE_QBE');
   if FQBE = '' then
     FQBE := ProjectRoot() + 'vendor/qbe/qbe';
-  { RTL units (runtime.*, rtl.platform.*) now live in the compiler's own source
-    tree after the RTL-unification move; the old runtime/src/main/pascal is empty. }
-  FRTLUnitPath := ProjectRoot() + 'compiler/src/main/pascal';
+  FRTL := GetEnvironmentVariable('BLAISE_RTL');
+  if FRTL = '' then
+    FRTL := ProjectRoot() + 'runtime/target/blaise_rtl.a';
+  FRTLUnitPath := ProjectRoot() + 'runtime/src/main/pascal';
   FStdlibUnitPath := ProjectRoot() + 'stdlib/src/main/pascal'
 end;
 
@@ -246,62 +224,6 @@ begin
   finally
     Proc.Free()
   end
-end;
-
-function TE2ETestCase.LinkWithRTL(const AAsmFile, ABinFile: string;
-                                 out AStdout: string): Integer;
-var
-  ProgObj, ObjDir, Compiler, ScriptOut: string;
-  Objs: TStringList;
-  Proc: TProcess;
-  I: Integer;
-begin
-  { 1. Assemble the program to an object so build-rtl-objects.sh can see which
-       RTL symbols it already defines (it inlines the RTL units it uses). }
-  ProgObj := AAsmFile + '.o';
-  Result := RunProc('cc', ['-c', '-o', ProgObj, AAsmFile], AStdout);
-  if Result <> 0 then Exit;
-
-  { 2. Build the RTL objects from source, excluding the units the program
-       already inlined.  Compiler binary is the freshly-built compiler/target. }
-  Compiler := ProjectRoot() + 'compiler/target/blaise';
-  ObjDir   := IncludeTrailingPathDelimiter(FScratch) + 'rtlobj';
-  Result := RunProc(ProjectRoot() + 'scripts/build-rtl-objects.sh',
-                    [Compiler, ObjDir, '--exclude-defined-by', ProgObj],
-                    ScriptOut);
-  if Result <> 0 then
-  begin
-    AStdout := 'build-rtl-objects failed: ' + ScriptOut;
-    Exit;
-  end;
-
-  { 3. Link: cc -o Bin ProgObj <rtl objects> -lm -lpthread.  Build the TProcess
-       directly so the object list (variable length) can be appended. }
-  Objs := TStringList.Create();
-  Proc := TProcess.Create(nil);
-  try
-    Objs.Text := ScriptOut;
-    Proc.Executable := 'cc';
-    Proc.Parameters.Add('-o');
-    Proc.Parameters.Add(ABinFile);
-    Proc.Parameters.Add(ProgObj);
-    for I := 0 to Objs.Count - 1 do
-      if Trim(Objs.Strings[I]) <> '' then
-        Proc.Parameters.Add(Trim(Objs.Strings[I]));
-    Proc.Parameters.Add('-lm');
-    Proc.Parameters.Add('-lpthread');
-    Proc.Execute();
-    AStdout := '';
-    repeat
-      ScriptOut := Proc.ReadOutput();
-      AStdout := AStdout + ScriptOut
-    until (ScriptOut = '') and not Proc.Running;
-    Proc.WaitOnExit();
-    Result := Proc.ExitCode;
-  finally
-    Proc.Free();
-    Objs.Free();
-  end;
 end;
 
 function TE2ETestCase.RunProcNoArgs(const AExe: string;
@@ -392,7 +314,7 @@ begin
     Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
     if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
   end;
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
+  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True
@@ -504,7 +426,7 @@ begin
   WriteFile(IRFile, IR);
   Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
   if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
+  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProc(BinFile, AExtraArgs, AStdout);
   Result := True
@@ -548,58 +470,11 @@ begin
   WriteFile(IRFile, IR);
   Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
   if Rc <> 0 then Exit;
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
+  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
   if Rc <> 0 then Exit;
 
   Rc := RunProc('valgrind',
     ['--error-exitcode=99', '--leak-check=full', '--quiet', BinFile], ALog);
-  Result := Rc = 0
-end;
-
-function TE2ETestCase.RunUnderValgrindNative(const ASrc: string; out ALog: string): Boolean;
-var
-  Lexer:    TLexer;
-  Parser:   TParser;
-  Prog:     TProgram;
-  Semantic: TSemanticAnalyser;
-  NCG:      TCodeGenNative;
-  CG:       ICodeGen;
-  Asm_:     string;
-  AsmFile:  string;
-  BinFile:  string;
-  ToolOut:  string;
-  Rc:       Integer;
-begin
-  Result := False;
-  ALog   := '';
-  Inc(FCounter);
-  AsmFile := FScratch + '/vgn' + IntToStr(FCounter) + '.s';
-  BinFile := FScratch + '/vgn' + IntToStr(FCounter);
-
-  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil; CG := nil;
-  try
-    Lexer    := TLexer.Create(ASrc);
-    Parser   := TParser.Create(Lexer);
-    Prog     := Parser.Parse();
-    Semantic := TSemanticAnalyser.Create();
-    Semantic.Analyse(Prog);
-    NCG      := TCodeGenNative.Create();
-    NCG.SetTarget(HostTarget());
-    CG       := NCG;            { ARC-managed; released at scope exit }
-    CG.Generate(Prog);
-    Asm_     := CG.GetOutput()
-  finally
-    Semantic.Free(); Prog.Free(); Parser.Free(); Lexer.Free()
-  end;
-
-  WriteFile(AsmFile, Asm_);
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
-  if Rc <> 0 then begin ALog := 'cc failed: ' + ToolOut; Exit end;
-
-  { --error-exitcode=99: any invalid read/write (the use-after-free) makes
-    valgrind exit non-zero even when the program does not itself crash. }
-  Rc := RunProc('valgrind',
-    ['--error-exitcode=99', '--leak-check=no', '--quiet', BinFile], ALog);
   Result := Rc = 0
 end;
 
@@ -787,7 +662,7 @@ begin
     Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
     if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
   end;
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
+  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True
@@ -887,94 +762,7 @@ begin
     Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
     if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
   end;
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
-  if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  AExitCode := RunProcNoArgs(BinFile, AStdout);
-  Result := True
-end;
-
-{ Extract the unit name from a 'unit <name>;' header so the source can be
-  written to the matching <name>.pas the unit loader expects.  Strings are
-  byte-indexed (S[i] returns a Byte); Pos is 0-based and returns -1 when the
-  substring is absent. }
-function UnitNameOf(const ASrc: string): string;
-var
-  P, Q: Integer;
-begin
-  P := Pos('unit ', ASrc);
-  if P < 0 then begin Result := ''; Exit; end;
-  P := P + 5;                  { skip past 'unit ' }
-  Q := P;
-  while (Q < Length(ASrc)) and (ASrc[Q] <> Ord(';')) and (ASrc[Q] <> Ord(' '))
-        and (ASrc[Q] <> 10) and (ASrc[Q] <> 13) do
-    Q := Q + 1;
-  Result := Copy(ASrc, P, Q - P);
-end;
-
-function TE2ETestCase.CompileAndRunWithUnits(const AUnit1Src, AUnit2Src,
-                                             ASrc: string;
-                                             out AStdout: string;
-                                             out AExitCode: Integer): Boolean;
-var
-  Lexer:       TLexer;
-  Parser:      TParser;
-  Prog:        TProgram;
-  Semantic:    TSemanticAnalyser;
-  QCG:         TCodeGenQBE;
-  CG:          ICodeGen;
-  Loader:      TUnitLoader;
-  Units:       TObjectList;
-  SearchPaths: TStringList;
-  Emitted:     string;
-  IRFile, AsmFile, BinFile, ToolOut: string;
-  Rc, I:       Integer;
-begin
-  Result := False;
-  Inc(FCounter);
-  IRFile   := FScratch + '/t' + IntToStr(FCounter) + '.ssa';
-  AsmFile  := FScratch + '/t' + IntToStr(FCounter) + '.s';
-  BinFile  := FScratch + '/t' + IntToStr(FCounter);
-
-  { Write both user units to the scratch dir so the loader resolves them.
-    Filenames are derived from each unit's own `unit <name>;` header. }
-  WriteFile(FScratch + '/' + UnitNameOf(AUnit1Src) + '.pas', AUnit1Src);
-  WriteFile(FScratch + '/' + UnitNameOf(AUnit2Src) + '.pas', AUnit2Src);
-
-  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil;
-  QCG := nil; CG := nil;
-  Loader := nil; Units := nil; SearchPaths := nil;
-  try
-    Lexer    := TLexer.Create(ASrc);
-    Parser   := TParser.Create(Lexer);
-    Prog     := Parser.Parse();
-    Semantic := TSemanticAnalyser.Create();
-    SearchPaths := TStringList.Create();
-    SearchPaths.Add(FScratch);
-    SearchPaths.Add(FRTLUnitPath);
-    SearchPaths.Add(FStdlibUnitPath);
-    Loader := TUnitLoader.Create(SearchPaths);
-    Units  := Loader.LoadAll(Prog.UsedUnits);
-    for I := 0 to Units.Count - 1 do
-      Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
-    Semantic.Analyse(Prog);
-    QCG := TCodeGenQBE.Create();
-    CG  := QCG;
-    CG.SetSymbolTable(Prog.SymbolTable);
-    for I := 0 to Units.Count - 1 do
-      CG.AppendUnit(TUnit(Units.Items[I]));
-    CG.AppendProgram(Prog);
-    Emitted := CG.GetOutput()
-  finally
-    QCG.Free();
-    Semantic.Free();
-    Units.Free(); Loader.Free(); SearchPaths.Free();
-    Prog.Free(); Parser.Free(); Lexer.Free()
-  end;
-
-  WriteFile(IRFile, Emitted);
-  Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
-  if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  Rc := LinkWithRTL(AsmFile, BinFile, ToolOut);
+  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True

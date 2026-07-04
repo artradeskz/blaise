@@ -7,8 +7,7 @@
     <mainSource>Blaise.pas</mainSource>
     <executableName>blaise</executableName>
     <unitPaths>
-      <!-- RTL units (runtime.*) now live in this module's own source dir;
-           only stdlib remains a separate unit-path. -->
+      <path>../runtime/src/main/pascal</path>
       <path>../stdlib/src/main/pascal</path>
     </unitPaths>
   </build>
@@ -16,6 +15,7 @@
   <test>
     <testSource>TestRunner.pas</testSource>
     <unitPaths>
+      <path>../runtime/src/main/pascal</path>
       <path>../stdlib/src/main/pascal</path>
     </unitPaths>
   </test>

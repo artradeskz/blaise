@@ -130,12 +130,6 @@ type
     procedure TestCodegen_IntfDispatch_RecordArg_PassesAggregate;
     procedure TestCodegen_IntfDispatch_OutString_PassesSlotAddr;
     procedure TestCodegen_DiscardedIntfReturnStmt_GetsSretAndRelease;
-
-    { ------------------------------------------------------------------ }
-    { Forward interface declarations  (IFoo = interface;)                 }
-    { ------------------------------------------------------------------ }
-    procedure TestSemantic_ForwardInterface_CompletedByFullDecl;
-    procedure TestSemantic_ForwardInterface_Unresolved_RaisesError;
   end;
 
 implementation
@@ -525,7 +519,7 @@ const
         end;
         procedure Tmi.use;
         begin
-          im.print();
+          im.print;
         end;
         var
           im: Tmi;
@@ -1778,50 +1772,6 @@ begin
     CallPos > 0);
   AssertTrue('returned obj released after the discarded call',
     Pos('call $_ClassRelease', Copy(IR, CallPos, MaxInt)) > 0);
-end;
-
-{ ------------------------------------------------------------------ }
-{ Forward interface declarations                                      }
-{ ------------------------------------------------------------------ }
-
-procedure TInterfaceTests.TestSemantic_ForwardInterface_CompletedByFullDecl;
-var
-  Prog: TProgram;
-begin
-  { `IFoo = interface;` forward stub completed later in the same scope. }
-  Prog := AnalyseSrc(
-    '''
-        program P;
-        type
-          IFoo = interface;
-          IBar = interface
-            function GetFoo: IFoo;
-          end;
-          IFoo = interface
-            function GetBar: IBar;
-          end;
-        begin
-        end.
-        ''');
-  try
-    AssertTrue('forward interface completed by full decl analyses OK',
-      Prog <> nil);
-  finally
-    Prog.Free();
-  end;
-end;
-
-procedure TInterfaceTests.TestSemantic_ForwardInterface_Unresolved_RaisesError;
-begin
-  { A forward interface never completed in the scope is an error. }
-  AnalyseExpectError(
-    '''
-        program P;
-        type
-          IFoo = interface;
-        begin
-        end.
-        ''');
 end;
 
 initialization

@@ -35,6 +35,7 @@ type
     FCompiler: string;
     FRTLPath: string;
     FStdlibPath: string;
+    FRTL: string;
     FScratch: string;
     FCounter: Integer;
     function ProjectRoot: string;
@@ -75,22 +76,11 @@ type
     procedure TestEmitAsm_WithExplicitQbeBackend_Rejected;
     procedure TestEmitIr_WithoutBackend_StillWorks;
     procedure TestEmitIr_WithExplicitQbeBackend_StillWorks;
-    { ---- external 'lib' propagates a -l<name> to the real link command ---- }
-    { A program declaring `external 'lib'` for a NON-EXISTENT library must fail
-      the link with the linker's "cannot find -l<lib>" — which only happens if
-      the driver actually emitted -l<lib>.  The e2e harness can't test this (it
-      links with a hardcoded `cc ... -lm -lpthread` and never calls
-      LinkViaToolchain), so this drives the real compiler binary end to end. }
-    procedure TestExternalLib_MissingLib_FailsLink_QBE;
-    procedure TestExternalLib_MissingLib_FailsLink_Native;
     { ---- div/mod by zero raises a catchable EDivByZero (needs stdlib) ---- }
     procedure TestDivByZeroCaught_QBE;
     procedure TestDivByZeroCaught_Native;
     procedure TestModByZeroCaught_QBE;
     procedure TestModByZeroCaught_Native;
-    { ---- a bare --output (no directory part) must not anchor per-unit
-           .o/.bif artefacts at the filesystem root ---- }
-    procedure TestBareOutput_UnitArtefacts_NotWrittenToRoot;
   end;
 
 implementation
@@ -100,17 +90,6 @@ implementation
   instead of silently reporting green with ~12 ignored tests. }
 var
   GCLISkipNoted: Boolean = False;
-
-{ Validity-probe cache for the fallback compiler.  The fallback path
-  (/tmp/fp_blaise2) is a transient fixpoint artifact that is frequently STALE —
-  built by an earlier, possibly-broken compiler.  Running the contract tests
-  against a stale binary produces a cascade of cryptic failures (e.g. SIGILL
-  from a since-fixed mis-encoding) that look like regressions but are not.
-  We probe the binary once (compile+run a trivial program) and, if it does not
-  behave, skip the suite with an actionable message instead of failing.
-  0 = not probed, 1 = good, 2 = bad. }
-var
-  GCLIProbeState: Integer = 0;
 
 { ---- helpers ---- }
 
@@ -149,49 +128,24 @@ begin
     FCompiler := '/tmp/fp_blaise3';
   if not FileExists(FCompiler) then
     FCompiler := '/tmp/fp_blaise2';
-  FRTLPath := ProjectRoot() + 'compiler/src/main/pascal';
+  FRTLPath := ProjectRoot() + 'runtime/src/main/pascal';
   FStdlibPath := ProjectRoot() + 'stdlib/src/main/pascal';
+  FRTL := ProjectRoot() + 'compiler/target/blaise_rtl.a';
   FScratch := ProjectRoot() + 'compiler/target/cli_scratch/';
   ForceDirectories(FScratch);
   FCounter := 0;
 end;
 
 function TCLIContractTests.CompilerAvailable: Boolean;
-var
-  Out_: string;
-  EC: Integer;
 begin
-  { The compiler binary source-builds the RTL itself (no blaise_rtl.a); only
-    the binary and the RTL source need to be present. }
-  Result := FileExists(FCompiler)
-        and FileExists(FRTLPath + '/runtime.arc.pas');
+  Result := FileExists(FCompiler) and FileExists(FRTL);
   if (not Result) and (not GCLISkipNoted) then
   begin
     GCLISkipNoted := True;
     WriteLn(StdErr, 'note: TCLIContractTests skipped — compiler binary "',
-            FCompiler, '" or RTL source not found ',
+            FCompiler, '" or RTL "', FRTL, '" not found ',
             '(set BLAISE_QBE_COMPILER to a QBE-backend blaise binary to run them)');
-    Exit;
   end;
-  if not Result then Exit;
-
-  { Validity probe: a stale fallback binary would otherwise turn into a cascade
-    of cryptic failures.  Probe once; on a bad probe, treat as unavailable. }
-  if GCLIProbeState = 0 then
-  begin
-    if CompileRunFull('program p; begin WriteLn(42); end.', 'native', Out_, EC)
-       and (EC = 0) and (Pos('42', Out_) >= 0) then
-      GCLIProbeState := 1
-    else
-    begin
-      GCLIProbeState := 2;
-      WriteLn(StdErr, 'note: TCLIContractTests skipped — compiler binary "',
-              FCompiler, '" is stale/broken (probe program did not run); ',
-              'rebuild it or set BLAISE_QBE_COMPILER to a current QBE-backend ',
-              'blaise binary.');
-    end;
-  end;
-  Result := GCLIProbeState = 1;
 end;
 
 function TCLIContractTests.RunCompiler(const AArgs: array of string;
@@ -565,52 +519,6 @@ const
     '  end' + LineEnding +
     'end.';
 
-const
-  { Declares an external from a library that does not exist.  The function is
-    never called, but the parser collects the library into Prog.LinkLibs at
-    parse time, so the driver must still emit -lnosuchlib_blaise_xyz on the link
-    line — which the system linker then rejects.  If the -l<name> propagation
-    were broken (no flag emitted), the link would SUCCEED. }
-  SrcMissingExternalLib =
-    'program P;' + LineEnding +
-    'function f(X: Integer): Integer;' +
-    ' external ''nosuchlib_blaise_xyz'' name ''nope'';' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(''unreached'')' + LineEnding +
-    'end.';
-
-procedure TCLIContractTests.TestExternalLib_MissingLib_FailsLink_QBE;
-var SrcPath, BinPath, Out_: string; EC: Integer;
-begin
-  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
-  SrcPath := WriteScratchSource(SrcMissingExternalLib);
-  BinPath := FScratch + 'cli_misslib_qbe_' + IntToStr(FCounter);
-  EC := RunCompiler(['--source', SrcPath, '--backend', 'qbe',
-    '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
-    '--output', BinPath], Out_);
-  AssertTrue('link must fail (missing library)', EC <> 0);
-  AssertTrue('linker reports the -l<name> it could not find',
-    Pos('nosuchlib_blaise_xyz', Out_) >= 0);
-end;
-
-procedure TCLIContractTests.TestExternalLib_MissingLib_FailsLink_Native;
-var SrcPath, BinPath, Out_: string; EC: Integer;
-begin
-  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
-  SrcPath := WriteScratchSource(SrcMissingExternalLib);
-  BinPath := FScratch + 'cli_misslib_nat_' + IntToStr(FCounter);
-  { --linker external: the internal linker cannot resolve -l<name> system
-    libraries (it errors out separately); the toolchain linker is what emits
-    and consumes -l<name>. }
-  EC := RunCompiler(['--source', SrcPath, '--backend', 'native',
-    '--linker', 'external',
-    '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
-    '--output', BinPath], Out_);
-  AssertTrue('link must fail (missing library)', EC <> 0);
-  AssertTrue('linker reports the -l<name> it could not find',
-    Pos('nosuchlib_blaise_xyz', Out_) >= 0);
-end;
-
 procedure TCLIContractTests.TestDivByZeroCaught_QBE;
 var Out_: string; EC: Integer;
 begin
@@ -649,58 +557,6 @@ begin
   AssertTrue('compile+run', CompileRunFull(SrcModByZeroCaught, 'native', Out_, EC));
   AssertEquals('exit code 0', 0, EC);
   AssertTrue('mod by zero caught', Pos('mod caught', Out_) >= 0);
-end;
-
-procedure TCLIContractTests.TestBareOutput_UnitArtefacts_NotWrittenToRoot;
-var
-  UnitPath, ProgPath, Out_: string;
-  EC: Integer;
-begin
-  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
-  { Regression: incremental compilation (default) compiles each used unit to
-    its own .o/.bif via a worker.  The worker's output directory was derived
-    from --output via IncludeTrailingPathDelimiter(ExtractFilePath(OutputFile)).
-    For a bare --output filename (no directory part) ExtractFilePath returns ''
-    and IncludeTrailingPathDelimiter('') yields '/', so the worker tried to
-    write '/<unit>.o.bif.tmp' at the filesystem root and failed with
-    'Cannot open file for writing: /<unit>.o.bif.tmp'.  The artefacts must land
-    in the current directory instead. }
-  UnitPath := FScratch + 'clidemo_unit.pas';
-  WriteFile(UnitPath,
-    'unit clidemo_unit;' + LineEnding +
-    'interface' + LineEnding +
-    'function Answer: Integer;' + LineEnding +
-    'implementation' + LineEnding +
-    'function Answer: Integer;' + LineEnding +
-    'begin' + LineEnding +
-    '  Result := 42' + LineEnding +
-    'end;' + LineEnding +
-    'end.');
-  ProgPath := WriteScratchSource(
-    'program cli_bareout;' + LineEnding +
-    'uses clidemo_unit;' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(Answer())' + LineEnding +
-    'end.');
-  { Bare --output name (no '/') is the trigger; the unit is found via the
-    scratch --unit-path. }
-  EC := RunCompiler([
-    '--source', ProgPath,
-    '--unit-path', FScratch,
-    '--unit-path', FRTLPath,
-    '--unit-path', FStdlibPath,
-    '--output', 'cli_bareout_bin'
-  ], Out_);
-  { The bare output name resolves relative to the compiler's CWD (the test
-    runner's working directory): the program binary and the per-unit .o land
-    there.  Remove them so the working tree stays clean. }
-  if FileExists('cli_bareout_bin') then DeleteFile('cli_bareout_bin');
-  if FileExists('clidemo_unit.o') then DeleteFile('clidemo_unit.o');
-  AssertTrue('no root-path worker failure: ' + Out_,
-    Pos('Cannot open file for writing: /', Out_) < 0);
-  AssertTrue('no worker exception: ' + Out_,
-    Pos('Worker exception', Out_) < 0);
-  AssertEquals('bare --output compile exits 0: ' + Out_, 0, EC);
 end;
 
 { ---- Registration ---- }

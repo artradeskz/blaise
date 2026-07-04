@@ -15,22 +15,10 @@ uses
 
 function FindConfigFile: string;
 
-{ Parse blaise.cfg lines.  Recognised keys (KEY=VALUE, '#' comments, blank lines
-  ignored): `unit-path=<dir>` appends to APaths; `rtl-src=<dir>` sets ARtlSrc.
-  A relative VALUE is resolved against ABaseDir (the config file's directory).
-  ARtlSrc is only written when an rtl-src line is present (left unchanged
-  otherwise), so a caller can pre-seed it and let the config override only if
-  set. }
 procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
-  APaths: TStringList; var ARtlSrc: string); overload;
+  APaths: TStringList);
 
-{ Convenience overload for callers that only want unit-paths (ignores rtl-src). }
-procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
-  APaths: TStringList); overload;
-
-{ Load the resolved blaise.cfg: appends unit-path entries to APaths and returns
-  any rtl-src via ARtlSrc (unchanged if the file has none / no file). }
-procedure LoadConfigPaths(APaths: TStringList; var ARtlSrc: string);
+procedure LoadConfigPaths(APaths: TStringList);
 
 implementation
 
@@ -53,38 +41,8 @@ begin
   Result := '';
 end;
 
-{ Resolve a blaise.cfg path value.  An absolute path (leading '/') is used as
-  is; a leading '~' or '~/' expands to $HOME (so a config can name paths under
-  the user's home directory); anything else is relative and resolved against
-  ABaseDir (the config file's own directory). }
-function ResolveCfgPath(const AValue, ABaseDir: string): string;
-var
-  Home: string;
-begin
-  if Length(AValue) = 0 then
-    Exit('');
-  { Home expansion: '~' alone, or a '~/...' prefix. }
-  if (Copy(AValue, 0, 1) = '~') and
-     ((Length(AValue) = 1) or (Copy(AValue, 1, 1) = '/')) then
-  begin
-    Home := GetEnvironmentVariable('HOME');
-    if Home <> '' then
-    begin
-      if Length(AValue) = 1 then
-        Exit(Home);
-      { drop the '~', keep the rest (which starts with '/') }
-      Exit(IncludeTrailingPathDelimiter(Home) + Copy(AValue, 2, Length(AValue)));
-    end;
-    { No $HOME — leave '~' untouched rather than mis-resolving. }
-    Exit(AValue);
-  end;
-  if Copy(AValue, 0, 1) = '/' then
-    Exit(AValue);
-  Result := IncludeTrailingPathDelimiter(ABaseDir) + AValue;
-end;
-
 procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
-  APaths: TStringList; var ARtlSrc: string);
+  APaths: TStringList);
 var
   I:     Integer;
   Line:  string;
@@ -105,24 +63,17 @@ begin
     Key   := Trim(Copy(Line, 0, EqPos));
     Value := Trim(Copy(Line, EqPos + 1, Length(Line)));
     if SameText(Key, 'unit-path') then
-      APaths.Add(ResolveCfgPath(Value, ABaseDir))
-    else if SameText(Key, 'rtl-src') then
-      ARtlSrc := ResolveCfgPath(Value, ABaseDir)
+    begin
+      if (Length(Value) > 0) and (Copy(Value, 0, 1) <> '/') then
+        Value := IncludeTrailingPathDelimiter(ABaseDir) + Value;
+      APaths.Add(Value);
+    end
     else
       ; { silently skip unrecognised keys }
   end;
 end;
 
-procedure ParseConfigLines(ALines: TStringList; const ABaseDir: string;
-  APaths: TStringList);
-var
-  IgnoredRtlSrc: string;
-begin
-  IgnoredRtlSrc := '';
-  ParseConfigLines(ALines, ABaseDir, APaths, IgnoredRtlSrc);
-end;
-
-procedure LoadConfigPaths(APaths: TStringList; var ARtlSrc: string);
+procedure LoadConfigPaths(APaths: TStringList);
 var
   CfgFile: string;
   Lines:   TStringList;
@@ -135,7 +86,7 @@ begin
   try
     Lines.LoadFromFile(CfgFile);
     BaseDir := ExtractFilePath(CfgFile);
-    ParseConfigLines(Lines, BaseDir, APaths, ARtlSrc);
+    ParseConfigLines(Lines, BaseDir, APaths);
   finally
     Lines.Free();
   end;

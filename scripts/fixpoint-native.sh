@@ -31,23 +31,14 @@ if [ ! -x "$COMPILER" ]; then
   exit 10
 fi
 
-# RTL is built from source (no archive).  The --emit-asm dump inlines the RTL
-# units the compiler uses, so link with --exclude-defined-by to skip supplying
-# those a second time.
-RTL_OBJDIR=/tmp/fpn_rtl_obj
-ABS_COMPILER=$(readlink -f "$COMPILER")
-
-link_stage() {
-  # $1 = program .s, $2 = output binary
-  local prog_s="$1" out_bin="$2" prog_o rtl_objs
-  prog_o="${prog_s%.s}.o"
-  gcc -c -o "$prog_o" "$prog_s" 2>/tmp/fpn_cc.err || return 2
-  rm -rf "$RTL_OBJDIR"
-  rtl_objs=$(scripts/build-rtl-objects.sh "$ABS_COMPILER" "$RTL_OBJDIR" \
-               --exclude-defined-by "$prog_o") || return 11
-  gcc -o "$out_bin" "$prog_o" $rtl_objs -lm -lpthread 2>/tmp/fpn_gcc.err || return 2
-  return 0
-}
+if [ -f compiler/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=compiler/target/blaise_rtl.a
+elif [ -f runtime/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=runtime/target/blaise_rtl.a
+else
+  echo "blaise_rtl.a not found — build the runtime first" >&2
+  exit 11
+fi
 
 UNIT_ARGS="--unit-path compiler/src/main/pascal --unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
 SRC="--source compiler/src/main/pascal/Blaise.pas"
@@ -62,8 +53,8 @@ fi
 echo "      stage-1 asm: $(wc -l < /tmp/fpn_stage1.s) lines"
 
 echo "[2/6] link stage-1 binary"
-link_stage /tmp/fpn_stage1.s /tmp/fpn_blaise1 || {
-  echo "GCC1_FAIL"; cat /tmp/fpn_gcc.err 2>/dev/null; cat /tmp/fpn_cc.err 2>/dev/null; exit 2;
+gcc -o /tmp/fpn_blaise1 /tmp/fpn_stage1.s "$RTL_ARCHIVE" -lm -lpthread 2>/tmp/fpn_gcc1.err || {
+  echo "GCC1_FAIL"; cat /tmp/fpn_gcc1.err; exit 2;
 }
 
 echo "[3/6] stage-1 -> stage-2 assembly (native, 5min timeout)"
@@ -76,8 +67,8 @@ fi
 echo "      stage-2 asm: $(wc -l < /tmp/fpn_stage2.s) lines"
 
 echo "[4/6] link stage-2 binary"
-link_stage /tmp/fpn_stage2.s /tmp/fpn_blaise2 || {
-  echo "GCC2_FAIL"; cat /tmp/fpn_gcc.err 2>/dev/null; cat /tmp/fpn_cc.err 2>/dev/null; exit 2;
+gcc -o /tmp/fpn_blaise2 /tmp/fpn_stage2.s "$RTL_ARCHIVE" -lm -lpthread 2>/tmp/fpn_gcc2.err || {
+  echo "GCC2_FAIL"; cat /tmp/fpn_gcc2.err; exit 2;
 }
 
 echo "[5/6] stage-2 -> stage-3 assembly (native, 5min timeout)"

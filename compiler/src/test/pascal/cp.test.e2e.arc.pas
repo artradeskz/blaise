@@ -47,14 +47,6 @@ type
       LHS (class) slot type. }
     procedure TestRun_PtrRvalueToClassLocal_PreservesLifetime;
     procedure TestRun_ClassVarAssignNil_Destroys;
-    { A method call whose receiver is a deep field chain rooted in a
-      transient function result — MakeIt().A.B.Method() — must keep the
-      transient alive until the call completes.  The native backend released
-      the transient after the FIRST field hop, and _ClassRelease at refcount 0
-      runs _FieldCleanup, freeing the intermediate objects (A, then B) the rest
-      of the chain still dereferences — a use-after-free that crashed when the
-      chain had two or more hops before the call.  Guards both backends. }
-    procedure TestRun_TransientDeepChainMethodCall_NoUseAfterFree;
   end;
 
 implementation
@@ -517,7 +509,7 @@ const
       Freed := 0;
       L := TObjectList.Create(True);
       L.Add(TThing.Create());
-      Borrow();
+      Borrow;
       WriteLn(Freed);
       L.Free();
       WriteLn(Freed)
@@ -544,7 +536,7 @@ const
     destructor TThing.Destroy;
     begin
       WriteLn('destroyed');
-      inherited Destroy()
+      inherited Destroy
     end;
     var O: TThing;
     begin
@@ -562,70 +554,6 @@ begin
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('O := nil triggers destroy',
     'destroyed' + LE + 'done' + LE, Output);
-end;
-
-const
-  SrcTransientDeepChain = '''
-    program P;
-    type
-      TInner = class
-        Val: Integer;
-        function GetVal: Integer;
-      end;
-      TBlk = class
-        Inner: TInner;
-        constructor Create;
-      end;
-      TProg = class
-        Blk: TBlk;
-        constructor Create;
-      end;
-    function TInner.GetVal: Integer;
-    begin
-      Result := Self.Val
-    end;
-    constructor TBlk.Create;
-    begin
-      Self.Inner := TInner.Create();
-      Self.Inner.Val := 7
-    end;
-    constructor TProg.Create;
-    begin
-      Self.Blk := TBlk.Create()
-    end;
-    function MakeProg: TProg;
-    begin
-      Result := TProg.Create()
-    end;
-    var
-      V, I: Integer;
-    begin
-      { Two field hops (.Blk.Inner) before the method call, on a transient
-        function result that is never explicitly freed.  The loop forces the
-        freed-then-reused arena to surface a use-after-free deterministically. }
-      V := 0;
-      for I := 0 to 50 do
-        V := V + MakeProg().Blk.Inner.GetVal();
-      WriteLn(V)
-    end.
-    ''';
-
-procedure TE2EArcTests.TestRun_TransientDeepChainMethodCall_NoUseAfterFree;
-var Log: string;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  { 51 iterations * 7 = 357.  Both backends must agree on the value. }
-  AssertRunsOnAll(SrcTransientDeepChain, '357' + LE, 0);
-  { The use-after-free is non-deterministic at the stdout level (a freed-then-
-    not-yet-reused read returns the old value), so the value check above can
-    pass even when the bug is present.  valgrind on the NATIVE binary detects
-    the invalid read deterministically — this is the real regression guard. }
-  if not ValgrindAvailable() then begin Ignore('valgrind not installed'); Exit; end;
-  if not RunUnderValgrindNative(SrcTransientDeepChain, Log) then
-  begin
-    if Log = '' then Log := '(valgrind produced no output)';
-    Fail('native valgrind reported an invalid access (use-after-free):' + LE + Log);
-  end;
 end;
 
 initialization

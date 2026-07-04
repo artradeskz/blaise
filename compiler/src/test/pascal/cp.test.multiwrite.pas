@@ -155,7 +155,7 @@ begin
     '''
         program P;
         begin
-          WriteLn()
+          WriteLn
         end.
         ''');
   AssertTrue('empty WriteLn still emits newline',

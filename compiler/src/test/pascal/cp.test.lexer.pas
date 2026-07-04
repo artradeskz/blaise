@@ -44,11 +44,6 @@ type
     procedure TestKeywords_CaseInsensitive;
     procedure TestIdent_NotKeyword_Prefix;
 
-    { Inline assembler blocks — asm ... end captured as one raw-text token }
-    procedure TestAsmBlock_CapturesRawText;
-    procedure TestAsmBlock_EndMentionedInComment_NotTerminator;
-    procedure TestAsmBlock_FollowedByDecl_StopsAtEnd;
-
     { Identifiers }
     procedure TestIdent_Simple;
     procedure TestIdent_WithUnderscore;
@@ -82,11 +77,6 @@ type
     procedure TestStringLit_Simple;
     procedure TestStringLit_Empty;
     procedure TestStringLit_EmbeddedQuote;
-    { #nnnn / #$hhhh Unicode codepoint -> UTF-8 string literals }
-    procedure TestCodepoint_DecimalAscii;
-    procedure TestCodepoint_HexBmp_ThreeBytes;
-    procedure TestCodepoint_HexAstral_FourBytes;
-    procedure TestCodepoint_MergesWithStringAndEachOther;
 
     { Operators and punctuation }
     procedure TestOp_Plus;
@@ -323,50 +313,6 @@ begin
   AssertEquals('Value', 'beginning', tok.Value);
 end;
 
-{ Inline assembler blocks }
-
-procedure TLexerTests.TestAsmBlock_CapturesRawText;
-var
-  tok: TToken;
-begin
-  { An asm ... end block is returned as ONE tkAsmBlock token whose Value is
-    the verbatim text between (exclusive) the asm keyword and the end keyword. }
-  SetLexer('asm' + #10 + '  movl %eax, %ebx' + #10 + '  ret' + #10 + 'end');
-  tok := FLexer.Next();
-  AssertEquals('Kind', Ord(tkAsmBlock), Ord(tok.Kind));
-  AssertTrue('has movl', Pos('movl %eax, %ebx', tok.Value) >= 0);
-  AssertTrue('has ret', Pos('ret', tok.Value) >= 0);
-  AssertTrue('no trailing end keyword captured', Pos('end', tok.Value) < 0);
-end;
-
-procedure TLexerTests.TestAsmBlock_EndMentionedInComment_NotTerminator;
-var
-  tok: TToken;
-begin
-  { 'end' appearing inside a # line comment must NOT terminate the block —
-    only a standalone end keyword does. }
-  SetLexer('asm' + #10 + '  ret  # this ends the block' + #10 + 'end');
-  tok := FLexer.Next();
-  AssertEquals('Kind', Ord(tkAsmBlock), Ord(tok.Kind));
-  AssertTrue('comment text preserved', Pos('this ends the block', tok.Value) >= 0);
-  AssertTrue('has ret', Pos('ret', tok.Value) >= 0);
-end;
-
-procedure TLexerTests.TestAsmBlock_FollowedByDecl_StopsAtEnd;
-var
-  tok: TToken;
-begin
-  { After the block's end, normal tokenising resumes — the trailing ';' and the
-    next token are produced as usual. }
-  SetLexer('asm' + #10 + '  ret' + #10 + 'end; begin');
-  tok := FLexer.Next();
-  AssertEquals('asm block', Ord(tkAsmBlock), Ord(tok.Kind));
-  tok := FLexer.Next();
-  AssertEquals('semicolon after end', Ord(tkSemicolon), Ord(tok.Kind));
-  tok := FLexer.Next();
-  AssertEquals('begin resumes', Ord(tkBegin), Ord(tok.Kind));
-end;
-
 { Identifiers }
 
 procedure TLexerTests.TestIdent_Simple;
@@ -452,47 +398,6 @@ begin
   tok := FLexer.Next();
   AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
   AssertEquals('Value', 'it''s', tok.Value);
-end;
-
-{ #nnnn / #$hhhh Unicode codepoint -> UTF-8 string literals }
-
-procedure TLexerTests.TestCodepoint_DecimalAscii;
-var tok: TToken;
-begin
-  SetLexer('#65');
-  tok := FLexer.Next();
-  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
-  AssertEquals('Value', 'A', tok.Value);   { codepoint 65 -> 1 byte $41 }
-end;
-
-procedure TLexerTests.TestCodepoint_HexBmp_ThreeBytes;
-var tok: TToken;
-begin
-  SetLexer('#$20AC');   { EURO SIGN -> UTF-8 E2 82 AC }
-  tok := FLexer.Next();
-  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
-  AssertEquals('len', 3, Length(tok.Value));
-  AssertEquals('Value', Chr($E2) + Chr($82) + Chr($AC), tok.Value);
-end;
-
-procedure TLexerTests.TestCodepoint_HexAstral_FourBytes;
-var tok: TToken;
-begin
-  SetLexer('#$1F600');  { GRINNING FACE -> UTF-8 F0 9F 98 80 }
-  tok := FLexer.Next();
-  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
-  AssertEquals('len', 4, Length(tok.Value));
-  AssertEquals('Value', Chr($F0) + Chr($9F) + Chr($98) + Chr($80), tok.Value);
-end;
-
-procedure TLexerTests.TestCodepoint_MergesWithStringAndEachOther;
-var tok: TToken;
-begin
-  { Adjacent # and '...' literals merge into one compile-time string. }
-  SetLexer('#72#73''!''');   { 'H' 'I' '!' }
-  tok := FLexer.Next();
-  AssertEquals('Kind', Ord(tkStringLit), Ord(tok.Kind));
-  AssertEquals('Value', 'HI!', tok.Value);
 end;
 
 { Operators and punctuation }

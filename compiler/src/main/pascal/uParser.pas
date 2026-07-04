@@ -50,31 +50,7 @@ type
     FCurrent:    TToken;
     FLookahead:  TToken;  { one-token lookahead }
     FLookahead2: TToken;  { two-token lookahead for generic disambiguation }
-    FAhead:      array of TToken;  { tokens beyond FLookahead2 (FIFO), filled on
-                                     demand by PeekTok for unbounded lookahead }
-    FUsedUnits:  TStringList; { unit names from every 'uses' clause, plus implicit
-                                'System'.  Consulted purely as a syntactic name list
-                                to recognise 'UnitName.Symbol' — no symbol lookup. }
-    FLinkLibs:   TObjectList; { non-owning ref to the current TUnit/TProgram.LinkLibs;
-                                external 'lib' decls append a TLinkLibDecl here as they
-                                are parsed (any section). nil outside a unit/program. }
 
-    { Record a 'link library X' dependency on the unit/program being parsed. }
-    procedure AddLinkLib(const ALibName: string; ALine, ACol: Integer);
-    function  IsUsedUnit(const AName: string): Boolean;
-    function  IsUnitPrefix(const AName: string): Boolean;
-    { Unbounded lookahead, exposed as scalar accessors (0 = FCurrent).  A
-      TToken-returning peek is deliberately avoided — TToken carries a managed
-      string, and returning it by value would create transient managed records
-      in the hot matcher path. }
-    procedure EnsureAhead(N: Integer);
-    function  PeekKindAt(N: Integer): TTokenKind;
-    function  PeekValueAt(N: Integer): string;
-    function  PeekLineAt(N: Integer): Integer;
-    function  PeekColAt(N: Integer): Integer;
-    function  TryCollapseUnitQualifier(var AName: string;
-                                       var ALine, ACol: Integer;
-                                       out AUnit: string): Boolean;
     procedure Advance;
     function  PeekKind(): TTokenKind;
     function  PeekKind2(): TTokenKind;  { two tokens ahead }
@@ -83,7 +59,7 @@ type
     function  CheckUnitNamePart: Boolean;
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
     function  SubrangeAhead: Boolean; { current token starts an integer-literal subrange: IntLit.. or -IntLit.. }
-    function  ParseIntegerSubrangeBaseType(out ALo, AHi: Int64): string; { parse lo..hi, return narrowest fitting standard integer type and the bounds }
+    function  ParseIntegerSubrangeBaseType: string; { parse lo..hi, return narrowest fitting standard integer type }
     function  ReadConstBoundText: string;  { read an array bound: literal, ident, or expr }
     function  ParseAnonEnumName: string;  { parse '(a,b,c)' → encoded member-list string }
 
@@ -91,7 +67,6 @@ type
     procedure ParseUsesList(AList: TStringList);
     procedure ParseUses(AProg: TProgram);
     function  ParseBlock: TBlock;
-    function  ParseAsmBody: TBlock;
     procedure ParseTypeSection(ABlock: TBlock);
     procedure ParseTypeDecl(ABlock: TBlock);
     procedure ParseConstBlock(AList: TObjectList);
@@ -146,7 +121,6 @@ type
     procedure ParseMethodCallArgList(ACall: TMethodCallStmt);
   public
     constructor Create(ALexer: TLexer);
-    destructor Destroy; override;
     function Parse: TProgram;
     function ParseUnit: TUnit;
     { True iff the primed first token is `unit` — caller forks to
@@ -160,37 +134,16 @@ constructor TParser.Create(ALexer: TLexer);
 begin
   inherited Create();
   FLexer      := ALexer;
-  FUsedUnits  := TStringList.Create();
-  { 'System' is implicitly used by every compilation unit. }
-  FUsedUnits.Add('System');
   FCurrent    := FLexer.Next();
   FLookahead  := FLexer.Next();
   FLookahead2 := FLexer.Next();
 end;
 
-destructor TParser.Destroy;
-begin
-  FUsedUnits.Free();
-  inherited Destroy();
-end;
-
 procedure TParser.Advance;
-var
-  I: Integer;
 begin
   FCurrent    := FLookahead;
   FLookahead  := FLookahead2;
-  { Drain the on-demand lookahead buffer first (tokens PeekTok pre-read), so
-    consumption order is preserved; fall back to the lexer when it is empty. }
-  if Length(FAhead) > 0 then
-  begin
-    FLookahead2 := FAhead[0];
-    for I := 1 to High(FAhead) do
-      FAhead[I - 1] := FAhead[I];
-    SetLength(FAhead, Length(FAhead) - 1);
-  end
-  else
-    FLookahead2 := FLexer.Next();
+  FLookahead2 := FLexer.Next();
 end;
 
 function TParser.PeekKind(): TTokenKind;
@@ -201,180 +154,6 @@ end;
 function TParser.PeekKind2(): TTokenKind;
 begin
   Result := FLookahead2.Kind;
-end;
-
-{ Ensure the on-demand lookahead buffer holds enough tokens that conceptual
-  index N (>= 3) maps to FAhead[N - 3].  Tokens are pulled from the lexer and
-  held (FIFO) until consumed by Advance.  Lets the unit-qualifier matcher
-  inspect a whole dotted chain of any depth before consuming any of it. }
-procedure TParser.EnsureAhead(N: Integer);
-var
-  T: TToken;
-begin
-  while Length(FAhead) < (N - 2) do
-  begin
-    T := FLexer.Next();
-    SetLength(FAhead, Length(FAhead) + 1);
-    FAhead[High(FAhead)] := T;
-  end;
-end;
-
-{ Kind of the token N positions ahead of FCurrent (0=FCurrent, 1=FLookahead,
-  2=FLookahead2, 3+ from FAhead). }
-function TParser.PeekKindAt(N: Integer): TTokenKind;
-begin
-  case N of
-    0: Exit(FCurrent.Kind);
-    1: Exit(FLookahead.Kind);
-    2: Exit(FLookahead2.Kind);
-  end;
-  EnsureAhead(N);
-  Result := FAhead[N - 3].Kind;
-end;
-
-{ Value text of the token N positions ahead. }
-function TParser.PeekValueAt(N: Integer): string;
-begin
-  case N of
-    0: Exit(FCurrent.Value);
-    1: Exit(FLookahead.Value);
-    2: Exit(FLookahead2.Value);
-  end;
-  EnsureAhead(N);
-  Result := FAhead[N - 3].Value;
-end;
-
-function TParser.PeekLineAt(N: Integer): Integer;
-begin
-  case N of
-    0: Exit(FCurrent.Line);
-    1: Exit(FLookahead.Line);
-    2: Exit(FLookahead2.Line);
-  end;
-  EnsureAhead(N);
-  Result := FAhead[N - 3].Line;
-end;
-
-function TParser.PeekColAt(N: Integer): Integer;
-begin
-  case N of
-    0: Exit(FCurrent.Col);
-    1: Exit(FLookahead.Col);
-    2: Exit(FLookahead2.Col);
-  end;
-  EnsureAhead(N);
-  Result := FAhead[N - 3].Col;
-end;
-
-{ Case-insensitive membership test against the parsed 'uses' names. }
-{ Append a 'link library ALibName' dependency to the unit/program being parsed.
-  Duplicates are tolerated — the exporter dedupes when building the .bif set. }
-procedure TParser.AddLinkLib(const ALibName: string; ALine, ACol: Integer);
-var
-  LL: TLinkLibDecl;
-begin
-  if (FLinkLibs = nil) or (ALibName = '') then Exit;
-  LL := TLinkLibDecl.Create();
-  LL.LibName := ALibName;
-  LL.Line := ALine;
-  LL.Col  := ACol;
-  FLinkLibs.Add(LL);
-end;
-
-function TParser.IsUsedUnit(const AName: string): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to FUsedUnits.Count - 1 do
-    if SameText(FUsedUnits.Strings[I], AName) then
-      Exit(True);
-  Result := False;
-end;
-
-{ True iff AName is a used unit OR a dotted prefix of one (some used unit equals
-  AName or begins with 'AName.').  Lets the matcher stop extending a candidate
-  the moment it can no longer complete any unit name. }
-function TParser.IsUnitPrefix(const AName: string): Boolean;
-var
-  I: Integer;
-  U: string;
-begin
-  for I := 0 to FUsedUnits.Count - 1 do
-  begin
-    U := FUsedUnits.Strings[I];
-    if SameText(U, AName) then Exit(True);
-    { U begins with 'AName.' — StrHead is 0-based (Blaise strings are 0-indexed). }
-    if (Length(U) > Length(AName) + 1) and
-       SameText(StrHead(U, Length(AName) + 1), AName + '.') then Exit(True);
-  end;
-  Result := False;
-end;
-
-{ Recognise a unit-qualified reference 'Unit.Symbol' where Unit is the LONGEST
-  dotted prefix (starting at AName) that exactly names a used unit and is
-  followed by a trailing '.Symbol'.  The 'uses' name list bounds how far to
-  scan, so any unit-name depth works (System.SysUtils.Foo, A.B.C.D.Sym, ...).
-
-  Cursor on entry: AName has just been consumed, so FCurrent is the '.' before
-  the first extra component.  Component idents after AName therefore sit at peek
-  indices 1, 3, 5, ... with the separating dots at 0, 2, 4, ...
-
-  On a match the unit name and its trailing dot are consumed, AName/ALine/ACol
-  become the bare Symbol (cursor left just past it), and the caller proceeds as
-  if it had read an unqualified reference.  On no match NOTHING is consumed, so
-  a same-prefixed record/field chain (My.Pkg := x) is left intact — the required
-  trailing '.Symbol' is what distinguishes the two. }
-function TParser.TryCollapseUnitQualifier(var AName: string;
-  var ALine, ACol: Integer; out AUnit: string): Boolean;
-var
-  Cand, BestUnit: string;
-  Comps, BestComps, J, DotIdx, IdentIdx: Integer;
-begin
-  Result := False;
-  AUnit  := '';
-  BestUnit := '';
-  Cand := AName;
-  Comps := 0;
-  if IsUsedUnit(Cand) then
-  begin
-    BestComps := 0;
-    BestUnit  := Cand;
-  end
-  else
-    BestComps := -1;
-  { Greedily absorb '.ident' components while the candidate stays a viable unit
-    prefix; remember the longest position that is an exact used-unit match. }
-  J := 1;
-  while True do
-  begin
-    DotIdx   := 2 * (J - 1);
-    IdentIdx := 2 * J - 1;
-    if (PeekKindAt(DotIdx) <> tkDot) or (PeekKindAt(IdentIdx) <> tkIdent) then
-      Break;
-    if not IsUnitPrefix(Cand + '.' + PeekValueAt(IdentIdx)) then
-      Break;
-    Cand := Cand + '.' + PeekValueAt(IdentIdx);
-    Comps := J;
-    if IsUsedUnit(Cand) then
-    begin
-      BestComps := Comps;
-      BestUnit  := Cand;
-    end;
-    Inc(J);
-  end;
-  if BestComps < 0 then Exit;  { AName does not lead to a used unit }
-  { A trailing '.Symbol' must follow the matched unit, else this is a bare unit
-    reference or a same-prefixed value chain — leave it for the normal parser. }
-  DotIdx   := 2 * BestComps;
-  IdentIdx := 2 * BestComps + 1;
-  if (PeekKindAt(DotIdx) <> tkDot) or (PeekKindAt(IdentIdx) <> tkIdent) then
-    Exit;
-  AName := PeekValueAt(IdentIdx);
-  ALine := PeekLineAt(IdentIdx);
-  ACol  := PeekColAt(IdentIdx);
-  AUnit := BestUnit;
-  for J := 1 to IdentIdx + 1 do Advance();  { consume unit name, dot, symbol }
-  Result := True;
 end;
 
 function TParser.ReadConstBoundText: string;
@@ -656,7 +435,7 @@ begin
     Result := False;
 end;
 
-function TParser.ParseIntegerSubrangeBaseType(out ALo, AHi: Int64): string;
+function TParser.ParseIntegerSubrangeBaseType: string;
 var
   Lo, Hi: Int64;
   Neg: Boolean;
@@ -689,8 +468,6 @@ begin
     raise EParseError.Create(Format(
       'Subrange %d..%d is descending at line %d col %d in %s',
       [Lo, Hi, FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-  ALo := Lo;
-  AHi := Hi;
   { Pick the narrowest standard type covering [Lo, Hi]. }
   if Lo >= 0 then
   begin
@@ -789,7 +566,6 @@ end;
 function TParser.ParseProgram: TProgram;
 begin
   Result := TProgram.Create();
-  FLinkLibs := Result.LinkLibs;   { collect external 'lib' deps into the program }
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
@@ -841,7 +617,6 @@ begin
     Advance();
   end;
   AList.Add(UName);
-  FUsedUnits.Add(UName);
   while Check(tkComma) do
   begin
     Advance();
@@ -860,7 +635,6 @@ begin
       Advance();
     end;
     AList.Add(UName);
-    FUsedUnits.Add(UName);
   end;
   Expect(tkSemicolon);
 end;
@@ -881,9 +655,7 @@ begin
       as required when concatenating multiple Pascal units into one file. }
     while Check(tkType) or Check(tkVar) or Check(tkThreadVar) or
           Check(tkProcedure) or Check(tkFunction) or Check(tkConst) or
-          Check(tkConstructor) or Check(tkDestructor) or
-          (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-           (PeekKind() in [tkFunction, tkProcedure])) do
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkType) then
         ParseTypeSection(Result)
@@ -911,11 +683,7 @@ end;
 procedure TParser.ParseTypeSection(ABlock: TBlock);
 begin
   Expect(tkType);
-  while (Check(tkIdent) or Check(tkLBracket)) and
-        { Stop the type section at a leading `static function/procedure` — that
-          is an out-of-line static-method implementation, not a type decl. }
-        not (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-             (PeekKind() in [tkFunction, tkProcedure])) do
+  while Check(tkIdent) or Check(tkLBracket) do
     ParseTypeDecl(ABlock);
 end;
 
@@ -931,8 +699,6 @@ var
   IsGeneric:        Boolean;
   Constraint:       string;
   ClassAttrs:       TStringList;
-  SubLo:            Int64;
-  SubHi:            Int64;
 begin
   ClassAttrs := TStringList.Create();
   try
@@ -1103,10 +869,7 @@ begin
           record/array layout correct (TByte is byte-sized) while the value
           behaves as an ordinary integer. }
         AD := TTypeAliasDef.Create();
-        AD.TypeName := Self.ParseIntegerSubrangeBaseType(SubLo, SubHi);
-        AD.IsSubrange := True;
-        AD.SubrangeLow := SubLo;
-        AD.SubrangeHigh := SubHi;
+        AD.TypeName := Self.ParseIntegerSubrangeBaseType();
         TD.Def := AD;
       end
       else if Check(tkArray) or Check(tkCaret) or Check(tkIdent) then
@@ -1345,21 +1108,6 @@ begin
   Expect(tkConst);
   while Check(tkIdent) do
   begin
-    { Stop at a class/record section keyword: a const section inside a class or
-      record body is terminated by the next visibility/`static` section or by a
-      `property` member.  A genuine const decl is always `IDENT (':' | '=')`, so
-      if the current identifier is a section keyword and is NOT immediately
-      followed by `:` or `=`, it begins the next section, not another const.
-      (Top-level const blocks never hit this: they are followed by `var`/`type`/
-      `begin`, which are not tkIdent.) }
-    if (SameText(FCurrent.Value, 'private')   or
-        SameText(FCurrent.Value, 'protected') or
-        SameText(FCurrent.Value, 'public')    or
-        SameText(FCurrent.Value, 'published') or
-        SameText(FCurrent.Value, 'static')    or
-        SameText(FCurrent.Value, 'property')) and
-       not (PeekKind() in [tkColon, tkEquals]) then
-      Break;
     CD      := TConstDecl.Create();
     CD.Line := FCurrent.Line;
     CD.Col  := FCurrent.Col;
@@ -1966,112 +1714,25 @@ end;
 
 function TParser.ParseRecordDef: TRecordTypeDef;
 var
-  MethDecl:         TMethodDecl;
-  CurrStatic:       Boolean;   { current section's static (class-level) association }
-  CurrVisibility:   TMemberVisibility; { current section's visibility }
-  LocalStatic:      Boolean;
-  FieldCountBefore: Integer;
-  FieldIdx:         Integer;
+  MethDecl: TMethodDecl;
 begin
   Result := TRecordTypeDef.Create();
-  CurrStatic     := False;
-  CurrVisibility := mvPublic;
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkRecord);
     repeat
-      { Bare `static var` / `static const` SECTION keyword.  `static` is a soft
-        keyword: a section qualifier only when followed by `var`/`const`; a
-        field literally named `Static` (`Static: Integer;`) falls through. }
-      if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-         (PeekKind() in [tkVar, tkConst]) then
+      if Check(tkIdent) or Check(tkLBracket) then
+        ParseFieldDecl(Result.Fields)
+      else if Check(tkFunction) then
       begin
-        CurrStatic := True;
-        Advance();  { the following var/const section belongs to this static section }
-      end
-      { Optional `strict` soft keyword before private/protected (record fields). }
-      else if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
-              (PeekKind() = tkIdent) and
-              (SameText(PeekValueAt(1), 'private') or
-               SameText(PeekValueAt(1), 'protected')) then
-      begin
-        Advance();  { consume `strict` }
-        if SameText(FCurrent.Value, 'private') then
-          CurrVisibility := mvStrictPrivate
-        else
-          CurrVisibility := mvStrictProtected;
-        CurrStatic := False;
-        Advance();  { consume private/protected }
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-           (PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure]) then
-        begin
-          CurrStatic := True;
-          Advance();
-        end;
-      end
-      else if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
-              (PeekKind() = tkIdent) and
-              (SameText(PeekValueAt(1), 'public') or
-               SameText(PeekValueAt(1), 'published')) then
-        raise EParseError.Create(Format(
-          'Only ''private'' or ''protected'' may be ''strict'' at line %d col %d in %s',
-          [FCurrent.Line, FCurrent.Col, FLexer.Filename]))
-      { Visibility section keywords, with an optional trailing `static`.
-        A new visibility section resets static. }
-      else if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
-                                  SameText(FCurrent.Value, 'public') or
-                                  SameText(FCurrent.Value, 'protected')) then
-      begin
-        if SameText(FCurrent.Value, 'private') then
-          CurrVisibility := mvPrivate
-        else if SameText(FCurrent.Value, 'protected') then
-          CurrVisibility := mvProtected
-        else
-          CurrVisibility := mvPublic;
-        CurrStatic := False;
-        Advance();
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-           (PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure]) then
-        begin
-          CurrStatic := True;
-          Advance();
-        end;
-      end
-      else if Check(tkConst) then
-        ParseConstBlock(Result.ConstDecls)
-      else if Check(tkVar) then
-        Advance()  { optional `var` keyword before field declarations }
-      { Method declarations — before the field branch so a leading `static`
-        prefix is not mistaken for a field name. }
-      else if Check(tkFunction) or Check(tkProcedure) or
-              (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-               (PeekKind() in [tkFunction, tkProcedure])) then
-      begin
-        LocalStatic := CurrStatic;
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') then
-        begin
-          LocalStatic := True;
-          Advance();
-        end;
-        if Check(tkFunction) then
-          MethDecl := ParseMethodDecl(True)
-        else
-          MethDecl := ParseMethodDecl(False);
-        MethDecl.IsStatic := LocalStatic;
-        MethDecl.Visibility := CurrVisibility;
+        MethDecl := ParseMethodDecl(True);
         Result.Methods.Add(MethDecl);
       end
-      else if Check(tkIdent) or Check(tkLBracket) then
+      else if Check(tkProcedure) then
       begin
-        FieldCountBefore := Result.Fields.Count;
-        ParseFieldDecl(Result.Fields);
-        for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
-        begin
-          if CurrStatic then
-            TFieldDecl(Result.Fields.Items[FieldIdx]).IsClassVar := True;
-          TFieldDecl(Result.Fields.Items[FieldIdx]).Visibility := CurrVisibility;
-        end;
+        MethDecl := ParseMethodDecl(False);
+        Result.Methods.Add(MethDecl);
       end
       else
         Break;
@@ -2116,42 +1777,24 @@ end;
 
 function TParser.ParseClassDef: TClassTypeDef;
 var
-  CurrPublished:    Boolean;
-  CurrVisibility:   TMemberVisibility; { current section's visibility }
-  CurrStatic:       Boolean;   { current section's static (class-level) association }
-  LocalStatic:      Boolean;   { effective static for the member being parsed }
-  MethDecl:         TMethodDecl;
-  PropDecl:         TPropertyDecl;
-  FieldCountBefore: Integer;
-  FieldIdx:         Integer;
+  CurrPublished: Boolean;
+  MethDecl:      TMethodDecl;
 begin
   Result := TClassTypeDef.Create();
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkClass);
-    { Forward class declaration: the keyword `class` immediately followed by
-      `;` (no ancestor clause, no body).  `class(TBase);` and `class end;` are
-      complete empty classes, not forwards.  The full declaration later in the
-      same type scope completes it (see uSemantic.AnalyseTypeDecls). }
-    if Check(tkSemicolon) then
-    begin
-      Result.IsForward := True;
-      Exit;
-    end;
     if Check(tkLParen) then
     begin
       Advance();
-      { First name may be a plain class name, a unit-qualified ancestor
-        (Unit.TParent), or a generic interface name like IFoo<T>.  ParseTypeName
-        already absorbs the unit qualifier and (nested) generic arguments, so a
-        qualified ancestor disambiguates a same-named type via the resolver. }
-      Result.ParentName := ParseTypeName();
+      { First name may be a plain class name or a generic interface name like IFoo<T> }
+      Result.ParentName := ParseGenericName();
       { Additional names after a comma are implemented interface names }
       while Check(tkComma) do
       begin
         Advance();
-        Result.ImplementsNames.Add(ParseTypeName());
+        Result.ImplementsNames.Add(ParseGenericName());
       end;
       Expect(tkRParen);
     end;
@@ -2161,155 +1804,35 @@ begin
       (private/public/protected/published) update CurrPublished, which
       is then attached to each method decl so codegen can emit a
       published-method table entry. }
-    CurrPublished  := False;
-    CurrVisibility := mvPublic;
-    CurrStatic     := False;
+    CurrPublished := False;
     repeat
-      { Optional `strict` soft keyword preceding `private`/`protected`.  `strict`
-        is not a real token — recognise it only at section start, immediately
-        before `private` or `protected`, so an ordinary identifier named `strict`
-        elsewhere is unaffected.  `strict public`, `strict published` and bare
-        `strict` are errors. }
-      if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
-         (PeekKind() = tkIdent) and
-         (SameText(PeekValueAt(1), 'private') or
-          SameText(PeekValueAt(1), 'protected')) then
-      begin
-        Advance();  { consume `strict`; the following private/protected sets visibility }
-        if SameText(FCurrent.Value, 'private') then
-          CurrVisibility := mvStrictPrivate
-        else
-          CurrVisibility := mvStrictProtected;
-        CurrPublished := False;
-        CurrStatic    := False;
-        Advance();  { consume the private/protected keyword }
-        { Optional trailing `static` section qualifier — `strict private static var`. }
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-           ((PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure,
-                            tkConstructor, tkDestructor]) or
-            ((PeekKind() = tkIdent) and SameText(PeekValueAt(1), 'property'))) then
-        begin
-          CurrStatic := True;
-          Advance();
-        end;
-      end
-      { `strict` not followed by private/protected is an error inside a class body. }
-      else if Check(tkIdent) and SameText(FCurrent.Value, 'strict') and
-              (PeekKind() = tkIdent) and
-              (SameText(PeekValueAt(1), 'public') or
-               SameText(PeekValueAt(1), 'published')) then
-        raise EParseError.Create(Format(
-          'Only ''private'' or ''protected'' may be ''strict'' at line %d col %d in %s',
-          [FCurrent.Line, FCurrent.Col, FLexer.Filename]))
-      { Visibility section keyword (private/public/protected/published),
-        optionally followed by a `static` qualifier.  A visibility keyword
-        resets the static section (you must re-state `static` after it). }
-      else if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
+      if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
                               SameText(FCurrent.Value, 'public') or
                               SameText(FCurrent.Value, 'protected') or
                               SameText(FCurrent.Value, 'published')) then
       begin
         CurrPublished := SameText(FCurrent.Value, 'published');
-        if SameText(FCurrent.Value, 'private') then
-          CurrVisibility := mvPrivate
-        else if SameText(FCurrent.Value, 'protected') then
-          CurrVisibility := mvProtected
-        else if SameText(FCurrent.Value, 'published') then
-          CurrVisibility := mvPublished
-        else
-          CurrVisibility := mvPublic;
-        CurrStatic    := False;  { a new visibility section is non-static unless
-                                   `static` follows }
         Advance();  { consume the visibility modifier }
-        { Optional trailing `static` section qualifier.  `static` is a soft
-          keyword: treat it as a qualifier only when it introduces a static
-          member (followed by var/const/method/property), NOT when it is a
-          field literally named `Static` (`private Static: Boolean;`). }
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-           ((PeekKind() in [tkVar, tkConst, tkFunction, tkProcedure,
-                            tkConstructor, tkDestructor]) or
-            ((PeekKind() = tkIdent) and SameText(PeekValueAt(1), 'property'))) then
-        begin
-          CurrStatic := True;
-          Advance();
-        end;
-      end
-      { Bare `static` SECTION keyword — `static var` / `static const` only.
-        `static` is a soft keyword: it acts as a section qualifier only when
-        immediately followed by `var` or `const`.  Followed by anything else
-        (e.g. `Static: Boolean;` — a field literally named Static, or `Static,`)
-        it is an ordinary field identifier and falls through to the field
-        branch.  The `static function/procedure/property` PREFIX forms are
-        handled in the method/property branches below. }
-      else if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-              (PeekKind() in [tkVar, tkConst]) then
-      begin
-        CurrStatic := True;
-        Advance();  { consume `static`; the following `var`/`const` section is
-                     part of this static section }
       end
       else if Check(tkConst) then
         ParseConstBlock(Result.ConstDecls)
       else if Check(tkVar) then
         Advance()  { optional 'var' keyword before field declarations — consume and continue }
-      else if (Check(tkIdent) and SameText(FCurrent.Value, 'property')) or
-              (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-               (PeekKind() = tkIdent) and SameText(PeekValueAt(1), 'property')) then
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
+        Result.Properties.Add(ParsePropertyDecl())
+      else if Check(tkIdent) or Check(tkLBracket) then
+        ParseFieldDecl(Result.Fields)
+      else if Check(tkFunction) then
       begin
-        LocalStatic := CurrStatic;
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') then
-        begin
-          LocalStatic := True;
-          Advance();  { consume per-member `static` prefix }
-        end;
-        PropDecl := ParsePropertyDecl();
-        PropDecl.IsStatic := LocalStatic;
-        PropDecl.Visibility := CurrVisibility;
-        Result.Properties.Add(PropDecl);
-      end
-      { Method declarations — checked BEFORE the generic field branch so that a
-        leading `static` prefix on a method is not mistaken for a field name. }
-      else if Check(tkFunction) or Check(tkProcedure) or
-              Check(tkConstructor) or Check(tkDestructor) or
-              (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-               (PeekKind() in [tkFunction, tkProcedure, tkConstructor, tkDestructor])) then
-      begin
-        LocalStatic := CurrStatic;
-        if Check(tkIdent) and SameText(FCurrent.Value, 'static') then
-        begin
-          LocalStatic := True;
-          Advance();  { consume per-member `static` prefix }
-        end;
-        if Check(tkConstructor) or Check(tkDestructor) then
-        begin
-          if LocalStatic then
-            raise EParseError.Create(Format(
-              'A constructor or destructor cannot be declared static at line %d col %d in %s'
-              + ' — Blaise has no type-initialiser (class constructor); use the unit'
-              + ' initialization/finalization sections',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-          MethDecl := ParseMethodDecl(False);
-        end
-        else if Check(tkFunction) then
-          MethDecl := ParseMethodDecl(True)
-        else
-          MethDecl := ParseMethodDecl(False);
+        MethDecl := ParseMethodDecl(True);
         MethDecl.IsPublished := CurrPublished;
-        MethDecl.IsStatic    := LocalStatic;
-        MethDecl.Visibility  := CurrVisibility;
         Result.Methods.Add(MethDecl);
       end
-      else if Check(tkIdent) or Check(tkLBracket) then
+      else if Check(tkProcedure) or Check(tkConstructor) or Check(tkDestructor) then
       begin
-        FieldCountBefore := Result.Fields.Count;
-        ParseFieldDecl(Result.Fields);
-        { Stamp class-var flag and visibility on every field this decl produced. }
-        for FieldIdx := FieldCountBefore to Result.Fields.Count - 1 do
-        begin
-          if CurrStatic then
-            TFieldDecl(Result.Fields.Items[FieldIdx]).IsClassVar := True;
-          TFieldDecl(Result.Fields.Items[FieldIdx]).Visibility := CurrVisibility;
-        end;
+        MethDecl := ParseMethodDecl(False);
+        MethDecl.IsPublished := CurrPublished;
+        Result.Methods.Add(MethDecl);
       end
       else
         Break;
@@ -2334,13 +1857,6 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkIntf);
-    { Forward interface declaration `IFoo = interface;` — no parent, no body,
-      completed later in the same type scope. }
-    if Check(tkSemicolon) then
-    begin
-      Result.IsForward := True;
-      Exit;
-    end;
     if Check(tkLParen) then
     begin
       Advance();
@@ -2549,15 +2065,6 @@ begin
       begin
         Result.IsExternal := True;
         Advance();
-        { optional: a library name string — external 'c' name 'malloc'.
-          Records a unit-level link dependency (works for implementation
-          imports too, so the private routine's library still propagates). }
-        if Check(tkStringLit) then
-        begin
-          Result.ExternalLib := FCurrent.Value;
-          AddLinkLib(FCurrent.Value, FCurrent.Line, FCurrent.Col);
-          Advance();
-        end;
         { optional: name 'c_symbol' }
         if Check(tkIdent) and SameText(FCurrent.Value, 'name') then
         begin
@@ -2588,9 +2095,9 @@ begin
                SameText(FCurrent.Value, 'pascal')      or
                SameText(FCurrent.Value, 'safecall')    or
                SameText(FCurrent.Value, 'reintroduce') or
+               SameText(FCurrent.Value, 'static')      or
                SameText(FCurrent.Value, 'final')       or
                SameText(FCurrent.Value, 'assembler')   or
-               SameText(FCurrent.Value, 'nostackframe') or
                SameText(FCurrent.Value, 'forward')     or
                SameText(FCurrent.Value, 'deprecated')  or
                SameText(FCurrent.Value, 'platform')    or
@@ -2598,8 +2105,6 @@ begin
       begin
         if SameText(FCurrent.Value, 'inline') then
           Result.IsInline := True
-        else if SameText(FCurrent.Value, 'nostackframe') then
-          Result.NoStackFrame := True
         else if SameText(FCurrent.Value, 'forward') then
           IsForward := True
         else if SameText(FCurrent.Value, 'cdecl')    or
@@ -2624,16 +2129,7 @@ begin
       proc.  Without this guard the forward decl swallowed the real
       implementation (and everything up to the program's 'end.') as its body
       (issue #130 bug2). }
-    if (not Result.IsExternal) and (not IsForward) and Check(tkAsmBlock) then
-    begin
-      { Inline-assembler body: the lexer already captured the whole asm ... end
-        block as one tkAsmBlock token whose Value is the verbatim text.  Wrap it
-        in a TBlock holding a single TAsmStmt; semantic treats it as opaque and
-        codegen emits the text verbatim. }
-      Result.Body := Self.ParseAsmBody();
-      Expect(tkSemicolon);
-    end
-    else if (not Result.IsExternal) and (not IsForward) and
+    if (not Result.IsExternal) and (not IsForward) and
        (Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst) or
         (ACanHaveNestedProcs and (Check(tkProcedure) or Check(tkFunction)))) then
     begin
@@ -2644,21 +2140,6 @@ begin
     Result.Free();
     raise;
   end;
-end;
-
-{ Build a TBlock whose sole statement is the TAsmStmt for the current
-  tkAsmBlock token, then consume that token. }
-function TParser.ParseAsmBody: TBlock;
-var
-  Stmt: TAsmStmt;
-begin
-  Result := TBlock.Create();
-  Stmt := TAsmStmt.Create();
-  Stmt.Line := FCurrent.Line;
-  Stmt.Col  := FCurrent.Col;
-  Stmt.Code := FCurrent.Value;
-  Result.Stmts.Add(Stmt);
-  Advance();   { consume the tkAsmBlock token }
 end;
 
 procedure TParser.ParseParamList(AParams: TObjectList);
@@ -2768,24 +2249,11 @@ end;
 
 procedure TParser.ParseStandaloneDecl(ABlock: TBlock);
 var
-  IsFunc:   Boolean;
-  IsStat:   Boolean;
-  MD:       TMethodDecl;
+  IsFunc: Boolean;
+  MD:     TMethodDecl;
 begin
-  { Leading `static` on an out-of-line implementation: `static function T.M ...`.
-    Consume it and record the static-ness on the parsed decl, where it is later
-    reconciled against the in-class declaration. }
-  IsStat := False;
-  if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-     (PeekKind() in [tkFunction, tkProcedure]) then
-  begin
-    IsStat := True;
-    Advance();
-  end;
   IsFunc := Check(tkFunction);
   MD     := ParseMethodDecl(IsFunc, True);  { True = may have nested proc/func decls }
-  if IsStat then
-    MD.IsStatic := True;
   ABlock.ProcDecls.Add(MD);
 end;
 
@@ -3021,7 +2489,6 @@ end;
 function TParser.ParseStmt: TASTStmt;
 var
   Name:        string;
-  QualUnit:    string;  { matched unit from a 'Unit.Symbol' target; unused here }
   Line, Col:   Integer;
   Call:        TProcCall;
   Assign:      TAssignment;
@@ -3175,13 +2642,6 @@ begin
   Line := FCurrent.Line;
   Col  := FCurrent.Col;
   Advance();
-
-  { Unit-qualified statement target 'Unit.Symbol' (Unit may be dotted to any
-    depth).  Collapse to the bare symbol so the rest of the statement parser
-    treats it as an unqualified procedure call or assignment target resolved
-    through the uses chain.  No-op (consumes nothing) for a same-prefixed
-    record/field chain — see TryCollapseUnitQualifier. }
-  TryCollapseUnitQualifier(Name, Line, Col, QualUnit);
 
   if Check(tkLBracket) then
   begin
@@ -3721,20 +3181,6 @@ begin
           if not Check(tkRParen) then
             ParseMethodCallArgList(MCall);
           Expect(tkRParen);
-        end
-        else if not Check(tkDot) then
-        begin
-          { Bare 'Obj.Method' with no '(' and no further '.' chain — a
-            parameterless method call written without its mandatory parentheses.
-            (A following '.' is a post-call/field chain handled just below; a
-            terminating bare reference is the error case.)  Every call carries ()
-            even with no arguments — see language-rationale.adoc, "Mandatory
-            parentheses on zero-argument calls". }
-          MCall.Free();
-          MCall := nil;
-          raise EParseError.Create(Format(
-            'Bare reference to ''%s.%s'' requires () for a call at line %d col %d in %s',
-            [Name, SecondIdent, Line, Col, FLexer.Filename]));
         end;
         { Post-method chain: Name.Method(args).Field := value or .Method2(args) }
         if Check(tkDot) then
@@ -3909,13 +3355,11 @@ begin
       FCallNode.Free();
       Exit(Call);
     end;
-    { Bare identifier in statement position with no '(' — a parameterless
-      procedure/function call written without its mandatory parentheses.
-      Every call carries () even with no arguments (see language-rationale.adoc,
-      "Mandatory parentheses on zero-argument calls"). }
-    raise EParseError.Create(Format(
-      'Bare reference to ''%s'' requires () for a call at line %d col %d in %s',
-      [Name, Line, Col, FLexer.Filename]));
+    Call      := TProcCall.Create();
+    Call.Line := Line;
+    Call.Col  := Col;
+    Call.Name := Name;
+    Result := Call;
   end;
 end;
 
@@ -4266,24 +3710,20 @@ begin
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance();
-    { Mandatory parentheses: 'inherited Method' is a call and must carry ()
-      even with no arguments (see language-rationale.adoc, "Mandatory
-      parentheses on zero-argument calls"). }
-    if not Check(tkLParen) then
-      raise EParseError.Create(Format(
-        'Bare reference to ''%s'' requires () for a call at line %d col %d in %s',
-        [Result.Name, FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-    Advance();
-    if not Check(tkRParen) then
+    if Check(tkLParen) then
     begin
-      Result.Args.Add(ParseExpr());
-      while Check(tkComma) do
+      Advance();
+      if not Check(tkRParen) then
       begin
-        Advance();
         Result.Args.Add(ParseExpr());
+        while Check(tkComma) do
+        begin
+          Advance();
+          Result.Args.Add(ParseExpr());
+        end;
       end;
+      Expect(tkRParen);
     end;
-    Expect(tkRParen);
   except
     Result.Free();
     raise;
@@ -4525,14 +3965,6 @@ begin
       begin
         Result.IsExternal := True;
         Advance();
-        { optional library name — external 'c' name 'malloc' (records a
-          unit-level link dependency). }
-        if Check(tkStringLit) then
-        begin
-          Result.ExternalLib := FCurrent.Value;
-          AddLinkLib(FCurrent.Value, FCurrent.Line, FCurrent.Col);
-          Advance();
-        end;
         if Check(tkIdent) and SameText(FCurrent.Value, 'name') then
         begin
           Advance();
@@ -4585,7 +4017,6 @@ var
   InitStmt: TASTStmt;
 begin
   Result := TUnit.Create();
-  FLinkLibs := Result.LinkLibs;   { collect external 'lib' deps into the unit }
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
@@ -4633,18 +4064,9 @@ begin
       ParseUsesList(Result.ImplUsedUnits);  { implementation-only deps — loaded but not re-exported }
     while Check(tkProcedure) or Check(tkFunction) or
           Check(tkConstructor) or Check(tkDestructor) or
-          Check(tkVar) or Check(tkThreadVar) or Check(tkConst) or Check(tkType) or
-          (Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-           (PeekKind() in [tkFunction, tkProcedure])) do
+          Check(tkVar) or Check(tkThreadVar) or Check(tkConst) or Check(tkType) do
     begin
-      if Check(tkIdent) and SameText(FCurrent.Value, 'static') and
-         (PeekKind() in [tkFunction, tkProcedure]) then
-        { Out-of-line static-method body in the implementation section:
-          `static function T.M ...`.  Mirror the program-level standalone path
-          (ParseStandaloneDecl) — consume `static`, parse the routine, mark it
-          IsStatic so it reconciles against the in-class static declaration. }
-        ParseStandaloneDecl(Result.ImplBlock)
-      else if Check(tkFunction) then
+      if Check(tkFunction) then
         Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True, True))
       else if Check(tkVar) or Check(tkThreadVar) then
         ParseVarBlock(Result.ImplBlock)
@@ -4876,7 +4298,6 @@ var
   Inner:      TASTExpr;
   Name:       string;
   SecondName: string;
-  QualUnit:   string;
   Line, Col:  Integer;
   ZeroNode:   TIntLiteral;
   NegNode:    TBinaryExpr;
@@ -4902,24 +4323,20 @@ begin
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         InhNode.Name := FCurrent.Value;
         Advance();
-        { Mandatory parentheses: 'inherited Method' is a call and must carry
-          () even with no arguments (see language-rationale.adoc, "Mandatory
-          parentheses on zero-argument calls"). }
-        if not Check(tkLParen) then
-          raise EParseError.Create(Format(
-            'Bare reference to ''%s'' requires () for a call at line %d col %d in %s',
-            [InhNode.Name, FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        Advance();
-        if not Check(tkRParen) then
+        if Check(tkLParen) then
         begin
-          InhNode.Args.Add(Self.ParseExpr());
-          while Check(tkComma) do
+          Advance();
+          if not Check(tkRParen) then
           begin
-            Advance();
             InhNode.Args.Add(Self.ParseExpr());
+            while Check(tkComma) do
+            begin
+              Advance();
+              InhNode.Args.Add(Self.ParseExpr());
+            end;
           end;
+          Expect(tkRParen);
         end;
-        Expect(tkRParen);
         Result := InhNode;
       end;
     tkAt:
@@ -4999,15 +4416,6 @@ begin
         Line := FCurrent.Line;
         Col  := FCurrent.Col;
         Advance();
-        { Unit-qualified reference 'Unit.Symbol' (Unit may be dotted to any
-          depth).  Collapse to the bare Symbol and reposition the origin to it,
-          so everything below resolves Symbol through the uses chain as an
-          unqualified reference — a free call when '(' follows, otherwise a
-          plain identifier / indexed / chained / generic access.  No-op for a
-          same-prefixed record/field chain.  QualUnit captures the matched
-          unit so a plain identifier can be resolved against that unit's own
-          exports (see IdNode.QualifierUnit below). }
-        TryCollapseUnitQualifier(Name, Line, Col, QualUnit);
         { Generic constructor: TypeName<Args>.Method  or diamond TypeName<>.Method
           Heuristic: '<' followed by IDENT followed by '>' or ',' is treated as
           generic type args.  '<>' (empty) is the diamond operator — type args
@@ -5100,7 +4508,6 @@ begin
             MCallNode.Col        := Col;
             MCallNode.ObjectName := Name;
             MCallNode.Name       := SecondName;
-            MCallNode.QualifierUnit := QualUnit;
             Advance();
             if not Check(tkRParen) then
             begin
@@ -5122,7 +4529,6 @@ begin
             FldNode.Col        := Col;
             FldNode.RecordName := Name;
             FldNode.FieldName  := SecondName;
-            FldNode.QualifierUnit := QualUnit;
             Result := FldNode;
             { Indexed property read: Ident.Prop[idx] }
             if Check(tkLBracket) then
@@ -5261,7 +4667,6 @@ begin
           IdNode.Line := Line;
           IdNode.Col  := Col;
           IdNode.Name := Name;
-          IdNode.QualifierUnit := QualUnit;
           Result := IdNode;
         end;
         { Postfix dereference: Expr^ and optional Expr^.Field chaining }

@@ -84,12 +84,6 @@ type
     procedure TestCodegen_TypeAlias_ElementSizeInAlloc;
 
     { ------------------------------------------------------------------ }
-    { Named integer subrange as an array index type                       }
-    { ------------------------------------------------------------------ }
-    procedure TestSemantic_NamedSubrange_IndexFoldsToBounds;
-    procedure TestSemantic_NamedSubrange_NonZeroBase_IndexFoldsToBounds;
-
-    { ------------------------------------------------------------------ }
     { Multi-dimensional arrays (comma form desugars to nested arrays)     }
     { ------------------------------------------------------------------ }
     procedure TestParse_MultiDim_CommaDecl_DesugarsToNested;
@@ -619,33 +613,6 @@ const
         end.
         ''';
 
-  { Named integer subrange (0-based) used as the array index type.
-    array[TIdx] of Integer must fold to array[0..2] of Integer. }
-  SrcNamedSubrangeIndex =
-    '''
-        program SA;
-        type
-          TIdx = 0..2;
-          TBuf = array[TIdx] of Integer;
-        var A: TBuf;
-        begin
-          A[0] := 11
-        end.
-        ''';
-
-  { Non-zero-based named integer subrange index: array[2..4]. }
-  SrcNamedSubrangeIndexNonZero =
-    '''
-        program SA;
-        type
-          TIdx = 2..4;
-          TBuf = array[TIdx] of Integer;
-        var A: TBuf;
-        begin
-          A[2] := 11
-        end.
-        ''';
-
 { ------------------------------------------------------------------ }
 { Named array type alias — tests                                       }
 { ------------------------------------------------------------------ }
@@ -747,37 +714,6 @@ begin
   IR := GenIR(SrcTypeAliasBasic);
   // 8 bytes * 1 (Byte) = 8 bytes total; check the number 8 appears in the IR
   AssertTrue('size 8 appears in IR', Pos('8', IR) >= 0);
-end;
-
-procedure TStaticArrayTests.TestSemantic_NamedSubrange_IndexFoldsToBounds;
-var P: TProgram; Sym: TSymbol; SAT: TStaticArrayTypeDesc;
-begin
-  { type TIdx = 0..2; TBuf = array[TIdx] of Integer; must resolve to a static
-    array with bounds 0..2, exactly as if written array[0..2]. }
-  P := AnalyseSrc(SrcNamedSubrangeIndex);
-  try
-    Sym := P.SymbolTable.Lookup('TBuf');
-    AssertTrue('TBuf found', Sym <> nil);
-    AssertEquals('TBuf is static array',
-      Ord(tyStaticArray), Ord(Sym.TypeDesc.Kind));
-    SAT := TStaticArrayTypeDesc(Sym.TypeDesc);
-    AssertEquals('low=0',  0, SAT.LowBound);
-    AssertEquals('high=2', 2, SAT.HighBound);
-  finally P.Free(); end;
-end;
-
-procedure TStaticArrayTests.TestSemantic_NamedSubrange_NonZeroBase_IndexFoldsToBounds;
-var P: TProgram; Sym: TSymbol; SAT: TStaticArrayTypeDesc;
-begin
-  { type TIdx = 2..4; TBuf = array[TIdx] of Integer; folds to array[2..4]. }
-  P := AnalyseSrc(SrcNamedSubrangeIndexNonZero);
-  try
-    Sym := P.SymbolTable.Lookup('TBuf');
-    AssertTrue('TBuf found', Sym <> nil);
-    SAT := TStaticArrayTypeDesc(Sym.TypeDesc);
-    AssertEquals('low=2',  2, SAT.LowBound);
-    AssertEquals('high=4', 4, SAT.HighBound);
-  finally P.Free(); end;
 end;
 
 { ------------------------------------------------------------------ }

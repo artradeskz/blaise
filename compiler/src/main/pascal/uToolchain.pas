@@ -36,13 +36,7 @@ type
   { Variant of a tool, determining the CLI syntax callers emit. }
   TToolKind = (
     tkUnknown,        { resolver couldn't classify }
-    tkGnuAs,          { as -o OUT IN.s — GNU assembler.  Named tkGnuAs (not the
-                        bare tkAs) so it does not collide with uLexer's
-                        TTokenKind.tkAs: a bare `tkAs` here is ambiguous and
-                        bare-member resolution is cross-unit order-fragile,
-                        which could bind it to TTokenKind.tkAs (ordinal 40) —
-                        out of range for this 4-member enum, sending downstream
-                        Kind-indexing off the end into a layout-sensitive crash. }
+    tkAs,             { as -o OUT IN.s — GNU assembler }
     tkCCDriver,       { cc / gcc / clang-as-driver — GNU link line }
     tkQBE             { qbe -o OUT IN.ssa }
   );
@@ -56,6 +50,7 @@ type
     QBE:        TTool;   { QBE backend only }
     Assembler:  TTool;   { native backend: assemble .s -> .o (reserved) }
     Linker:     TTool;   { both backends: link final binary }
+    RTLPath:    string;  { '' if not found }
   end;
 
   { One external tool a backend declares it needs (TBackendDriver.DescribeTools).
@@ -92,14 +87,13 @@ function ResolveToolchain(const ATarget: TTargetDesc): TToolchain;
 function ResolveQBE: TTool;
 function ResolveAssembler: TTool;
 function ResolveLinker(const ATarget: TTargetDesc): TTool;
+function FindRTLArchive(const ATarget: TTargetDesc): string;
 
-{ Directory containing the running compiler binary (ParamStr(0)). }
-function CompilerBinDir: string;
-
-{ RTL source directory (compiler/src/main/pascal), relative to the binary.
-  The driver builds the RTL objects from here when linking; overridable via
-  $BLAISE_RTL_SRC. }
-function RTLSourceDir: string;
+{ Locate the system CRT startup objects needed for dynamic (PIE) linking.
+  Returns True when all five objects are found; on False the paths are empty
+  and the caller should fall back to the external linker. }
+function FindCrtObjects(out ACrt1, ACrti, ACrtn,
+  ACrtBeginS, ACrtEndS: string): Boolean;
 
 { Walks $PATH for the first file named ABaseName that exists.  Returns the
   absolute path on hit, '' on miss.  On Windows hosts also tries '.exe'. }
@@ -313,7 +307,7 @@ end;
 function ResolveAssembler: TTool;
 begin
   Result.Path := ResolveToolPath('BLAISE_AS', 'as', '');
-  Result.Kind := tkGnuAs;
+  Result.Kind := tkAs;
 end;
 
 function ResolveLinker(const ATarget: TTargetDesc): TTool;
@@ -331,40 +325,72 @@ begin
   Result := ExtractFilePath(ParamStr(0));
 end;
 
-function RTLDirHasUnits(const ADir: string): Boolean;
+function FindRTLArchive(const ATarget: TTargetDesc): string;
+var
+  BinDir: string;
 begin
-  Result := (ADir <> '') and
-    FileExists(IncludeTrailingPathDelimiter(ADir) + 'runtime.arc.pas');
+  Result := GetEnvironmentVariable('BLAISE_RTL');
+  if (Result <> '') and FileExists(Result) then Exit;
+  BinDir := CompilerBinDir();
+  Result := IncludeTrailingPathDelimiter(BinDir) + 'blaise_rtl.a';
+  if FileExists(Result) then Exit;
+  Result := '';
 end;
 
-function RTLSourceDir: string;
+{ ------------------------------------------------------------------ }
+{ CRT object discovery                                                 }
+{ ------------------------------------------------------------------ }
+
+function FindCrtObjects(out ACrt1, ACrti, ACrtn,
+  ACrtBeginS, ACrtEndS: string): Boolean;
+const
+  CrtDirs: array[0..2] of string = (
+    '/usr/lib/x86_64-linux-gnu',
+    '/usr/lib64',
+    '/usr/lib'
+  );
+  GccVers: array[0..3] of string = ('14', '13', '12', '11');
+  GccBases: array[0..1] of string = (
+    '/usr/lib/gcc/x86_64-linux-gnu',
+    '/usr/lib/gcc/x86_64-redhat-linux'
+  );
 var
-  Cand: string;
+  CrtDir, GccDir: string;
+  I, J: Integer;
 begin
-  { The RTL units (runtime.*, rtl.platform.*) live in the compiler's own source
-    tree.  Resolve the directory robustly across the ways the compiler is run:
+  ACrt1 := '';
+  ACrti := '';
+  ACrtn := '';
+  ACrtBeginS := '';
+  ACrtEndS := '';
+  Result := False;
 
-      1. binary-relative: <bindir>/../src/main/pascal — the in-tree
-         compiler/target/blaise.
-      2. CWD-relative: compiler/src/main/pascal then src/main/pascal — the
-         binary may be copied elsewhere (e.g. /tmp during a fixpoint) but
-         invoked from the project root by the build.
+  for I := 0 to High(CrtDirs) do
+  begin
+    CrtDir := CrtDirs[I];
+    if FileExists(CrtDir + '/Scrt1.o') then
+    begin
+      ACrt1 := CrtDir + '/Scrt1.o';
+      ACrti := CrtDir + '/crti.o';
+      ACrtn := CrtDir + '/crtn.o';
+      Break;
+    end;
+  end;
+  if ACrt1 = '' then Exit;
 
-    The driver consults $BLAISE_RTL_SRC before calling this, for a fully
-    relocated binary (release) that ships its RTL source elsewhere. }
-  Cand := IncludeTrailingPathDelimiter(CompilerBinDir()) + '../src/main/pascal';
-  if RTLDirHasUnits(ExpandFileName(Cand)) then Exit(ExpandFileName(Cand));
-
-  Cand := 'compiler/src/main/pascal';
-  if RTLDirHasUnits(ExpandFileName(Cand)) then Exit(ExpandFileName(Cand));
-
-  Cand := 'src/main/pascal';
-  if RTLDirHasUnits(ExpandFileName(Cand)) then Exit(ExpandFileName(Cand));
-
-  { Fall back to the binary-relative path so callers get a meaningful "not
-    found" message naming a concrete location. }
-  Result := ExpandFileName(IncludeTrailingPathDelimiter(CompilerBinDir())
-    + '../src/main/pascal');
+  for I := 0 to High(GccBases) do
+    for J := 0 to High(GccVers) do
+    begin
+      GccDir := GccBases[I] + '/' + GccVers[J];
+      if FileExists(GccDir + '/crtbeginS.o') then
+      begin
+        ACrtBeginS := GccDir + '/crtbeginS.o';
+        ACrtEndS := GccDir + '/crtendS.o';
+        Result := FileExists(ACrti) and FileExists(ACrtn)
+                  and FileExists(ACrtEndS);
+        Exit;
+      end;
+    end;
 end;
 
 { ------------------------------------------------------------------ }
@@ -376,6 +402,7 @@ begin
   Result.QBE       := ResolveQBE();
   Result.Assembler := ResolveAssembler();
   Result.Linker    := ResolveLinker(ATarget);
+  Result.RTLPath   := FindRTLArchive(ATarget);
 end;
 
 end.

@@ -123,7 +123,7 @@ begin
          '  for e in s do n := n + 1;' + LE +
          '  WriteLn(n);' + LE +          { 4 }
          '  for e in s do Write(Ord(e), '' '');' + LE +
-         '  WriteLn()' + LE +
+         '  WriteLn' + LE +
          'end.';
   AssertRunsOnAll(Src, '4' + LE + '5 40 70 79 ' + LE, 0);
 end;

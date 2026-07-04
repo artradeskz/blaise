@@ -22,10 +22,12 @@
   Output: elapsed time in milliseconds per workload.  Compare across
   runs to detect regressions or improvements.
 
-  Build (the compiler source-builds and links the RTL — no blaise_rtl.a):
+  Build:
     blaise --source runtime/src/test/pascal/bench_blaise_mem.pas \
-           --unit-path compiler/src/main/pascal \
-           --output /tmp/bench_mem
+           --unit-path runtime/src/main/pascal \
+           --emit-ir > /tmp/bench_mem.ssa
+    vendor/qbe/qbe -o /tmp/bench_mem.s /tmp/bench_mem.ssa
+    gcc -o /tmp/bench_mem /tmp/bench_mem.s compiler/target/blaise_rtl.a
     /tmp/bench_mem
 }
 

@@ -174,7 +174,7 @@ destructor THttpRequest.Destroy;
 begin
   Query.Free();
   RawHeaders.Free();
-  inherited Destroy();
+  inherited Destroy;
 end;
 
 function THttpRequest.QueryParam(const AName: string): string;
@@ -348,7 +348,7 @@ begin
   if FListenFd >= 0 then
     Close(FListenFd);
   FWsClients.Free();
-  inherited Destroy();
+  inherited Destroy;
 end;
 
 function THttpServer.Start: Boolean;

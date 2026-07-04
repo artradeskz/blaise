@@ -72,15 +72,6 @@ type
     procedure TestCodegen_MethodBody_ReadsProgramGlobal;
 
     { ------------------------------------------------------------------ }
-    { Forward class declarations  (TFoo = class;)                          }
-    { ------------------------------------------------------------------ }
-    procedure TestSemantic_ForwardClass_CompletedByFullDecl;
-    procedure TestSemantic_ForwardClass_MutualReference;
-    procedure TestSemantic_ForwardClass_Unresolved_RaisesError;
-    procedure TestSemantic_ForwardClass_DoubleForward_RaisesError;
-    procedure TestCodegen_ForwardClass_SingleVTable;
-
-    { ------------------------------------------------------------------ }
     { Free built-in                                                        }
     { ------------------------------------------------------------------ }
     procedure TestSemantic_Free_OK;
@@ -1187,121 +1178,6 @@ begin
   finally
     Prog.Free();
   end;
-end;
-
-{ ------------------------------------------------------------------ }
-{ Forward class declarations                                          }
-{ ------------------------------------------------------------------ }
-
-procedure TClassTests.TestSemantic_ForwardClass_CompletedByFullDecl;
-var
-  Prog: TProgram;
-begin
-  { A bare `TFoo = class;` forward stub, completed by the full declaration
-    later in the same type section, must not be a duplicate-type error. }
-  Prog := AnalyseSrc(
-    '''
-        program P;
-        type
-          TFoo = class;
-          TFoo = class
-            X: Integer;
-          end;
-        begin
-        end.
-        ''');
-  try
-    AssertTrue('forward class completed by full decl analyses OK', Prog <> nil);
-  finally
-    Prog.Free();
-  end;
-end;
-
-procedure TClassTests.TestSemantic_ForwardClass_MutualReference;
-var
-  Prog: TProgram;
-begin
-  { The point of a forward decl: a class declared between the forward and the
-    full declaration can name the forward-declared type. }
-  Prog := AnalyseSrc(
-    '''
-        program P;
-        type
-          TFoo = class;
-          TBar = class
-            Foo: TFoo;
-          end;
-          TFoo = class
-            Bar: TBar;
-          end;
-        begin
-        end.
-        ''');
-  try
-    AssertTrue('mutual class reference via forward decl analyses OK',
-      Prog <> nil);
-  finally
-    Prog.Free();
-  end;
-end;
-
-procedure TClassTests.TestSemantic_ForwardClass_Unresolved_RaisesError;
-begin
-  { A forward never completed in the scope is an error. }
-  AnalyseExpectError(
-    '''
-        program P;
-        type
-          TFoo = class;
-        begin
-        end.
-        ''');
-end;
-
-procedure TClassTests.TestSemantic_ForwardClass_DoubleForward_RaisesError;
-begin
-  { The same type may be forward-declared only once. }
-  AnalyseExpectError(
-    '''
-        program P;
-        type
-          TFoo = class;
-          TFoo = class;
-          TFoo = class
-            X: Integer;
-          end;
-        begin
-        end.
-        ''');
-end;
-
-procedure TClassTests.TestCodegen_ForwardClass_SingleVTable;
-var
-  IR:    string;
-  Count: Integer;
-  P:     Integer;
-begin
-  { The forward stub is dropped after semantic analysis, so codegen must emit
-    the class's vtable exactly once — a second emission would be a duplicate
-    data symbol and fail to link. }
-  IR := GenIR(
-    '''
-        program P;
-        type
-          TFoo = class;
-          TFoo = class
-            X: Integer;
-          end;
-        begin
-        end.
-        ''');
-  Count := 0;
-  P := 0;
-  repeat
-    P := PosEx('data $vtable_TFoo', IR, P);
-    if P >= 0 then begin Inc(Count); Inc(P) end;
-  until P < 0;
-  AssertEquals('vtable_TFoo emitted exactly once', 1, Count);
 end;
 
 initialization

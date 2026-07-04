@@ -35,10 +35,6 @@ type
     procedure TestRun_TypeAlias_AsParam_Length;
     procedure TestRun_TypeAlias_MultipleVarsShareType;
     procedure TestRun_TypeAlias_GlobalAndLocal;
-    { A named integer subrange (TIdx = 0..2) used as an array index type:
-      array[TIdx] of T resolves to array[0..2] of T (ordinal-indexed). }
-    procedure TestRun_NamedSubrange_AsArrayIndex;
-    procedure TestRun_NamedSubrange_NonZeroBase_AsArrayIndex;
 
     { Range-indexed const array: const X: array[L..H] of T = (...) }
     procedure TestRun_ConstArray_RangeIndexed_Strings;
@@ -202,45 +198,9 @@ const
       G[2] := L[2]
     end;
     begin
-      Fill();
+      Fill;
       WriteLn(G[0]);
       WriteLn(G[2])
-    end.
-    ''';
-
-  { A named integer subrange used as an array index type.  array[TIdx] of T,
-    where TIdx = 0..2, must resolve to array[0..2] of T (ordinal-indexed,
-    like array[TEnum]).  FPC compiles this; Blaise must too. }
-  SrcSubrangeIndex =
-    '''
-    program P;
-    type
-      TIdx = 0..2;
-      TBuf = array[TIdx] of Integer;
-    var A: TBuf;
-    begin
-      A[0] := 11; A[1] := 22; A[2] := 33;
-      WriteLn(A[0]);
-      WriteLn(A[1]);
-      WriteLn(A[2]);
-      WriteLn(Length(A))
-    end.
-    ''';
-
-  { Non-zero-based named subrange index: array[2..4] via a named subrange. }
-  SrcSubrangeIndexNonZero =
-    '''
-    program P;
-    type
-      TIdx = 2..4;
-      TBuf = array[TIdx] of Integer;
-    var A: TBuf;
-    begin
-      A[2] := 100; A[3] := 200; A[4] := 300;
-      WriteLn(A[2]);
-      WriteLn(A[4]);
-      WriteLn(Low(A));
-      WriteLn(High(A))
     end.
     ''';
 
@@ -376,40 +336,6 @@ begin
     Lines.Text := Trim(Output);
     AssertEquals('G[0]=7', '7', Lines.Strings[0]);
     AssertEquals('G[2]=9', '9', Lines.Strings[1]);
-  finally Lines.Free() end
-end;
-
-procedure TE2EStaticArrayTests.TestRun_NamedSubrange_AsArrayIndex;
-var Output: string; RCode: Integer;
-  Lines: TStringList;
-begin
-  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
-  AssertTrue('compile+run', CompileAndRun(SrcSubrangeIndex, Output, RCode));
-  AssertEquals('exit 0', 0, RCode);
-  Lines := TStringList.Create();
-  try
-    Lines.Text := Trim(Output);
-    AssertEquals('A[0]=11', '11', Lines.Strings[0]);
-    AssertEquals('A[1]=22', '22', Lines.Strings[1]);
-    AssertEquals('A[2]=33', '33', Lines.Strings[2]);
-    AssertEquals('Length(A)=3', '3', Lines.Strings[3]);
-  finally Lines.Free() end
-end;
-
-procedure TE2EStaticArrayTests.TestRun_NamedSubrange_NonZeroBase_AsArrayIndex;
-var Output: string; RCode: Integer;
-  Lines: TStringList;
-begin
-  if not ToolchainAvailable() then begin Fail('<toolchain-missing>'); Exit end;
-  AssertTrue('compile+run', CompileAndRun(SrcSubrangeIndexNonZero, Output, RCode));
-  AssertEquals('exit 0', 0, RCode);
-  Lines := TStringList.Create();
-  try
-    Lines.Text := Trim(Output);
-    AssertEquals('A[2]=100', '100', Lines.Strings[0]);
-    AssertEquals('A[4]=300', '300', Lines.Strings[1]);
-    AssertEquals('Low(A)=2',  '2', Lines.Strings[2]);
-    AssertEquals('High(A)=4', '4', Lines.Strings[3]);
   finally Lines.Free() end
 end;
 

@@ -36,18 +36,6 @@ type
     procedure TestErrorMessage_HasLineNumber;
     procedure TestMovqXmmToReg_SseEncoding;
     procedure TestMovqRegToXmm_SseEncoding;
-    procedure TestNegl_F7Slash3;
-    procedure TestLockXaddl_AtomicEncoding;
-    procedure TestUnsuffixedMov_InfersSize;
-    procedure TestJmpIndirectMem_FFSlash4;
-    procedure TestEndbr64AndHlt;
-    procedure TestSyscall_0F05;
-    procedure TestCallPltStripsSuffix;
-    procedure TestSse2_PxorAndPabsb;
-    procedure TestVex_Vpxor2byte;
-    procedure TestVex_Vpabsb3byte;
-    procedure TestVex_VextractI128;
-    procedure TestSibWhitespaceTolerated;
   end;
 
   { ---- ELF writer unit tests ---- }
@@ -83,6 +71,7 @@ type
     FCompiler: string;
     FRTLPath: string;
     FStdlibPath: string;
+    FRTL: string;
     FScratch: string;
     FCounter: Integer;
     function ProjectRoot: string;
@@ -91,9 +80,6 @@ type
       out AStdout: string): Integer;
     function RunProcNoArgs(const AExe: string; out AStdout: string): Integer;
     function CompileAndRun(const ASrc: string;
-      out AStdout: string; out AExitCode: Integer): Boolean;
-    function CompileAndRunArgs(const ASrc: string;
-      const AArgs: array of string;
       out AStdout: string; out AExitCode: Integer): Boolean;
   protected
     procedure SetUp; override;
@@ -111,23 +97,6 @@ type
     procedure TestClassVirtualCall;
     procedure TestFloatArithmetic;
     procedure TestFormatFloatArg;
-    { Self-contained program entry (issue #142): the runtime supplies its own
-      _start (blaise_start_x86_64.s) so the internal linker needs no system
-      Scrt1.o / crtbegin / crtend.  These assert the two things _start owns —
-      argc/argv forwarding and exit-code propagation through __libc_start_main. }
-    procedure TestEntry_ExitCodePropagates;
-    procedure TestEntry_ArgsForwarded;
-    { Inline assembler blocks (asm ... end): a nostackframe asm-body function is
-      assembled verbatim by the internal assembler and called from Pascal. }
-    procedure TestInlineAsm_ReturnsValue;
-    procedure TestInlineAsm_AddsTwoArgs;
-    { --debug-opdf appends the OPDF section to the SAME assembly text the
-      internal assembler consumes.  A string constant whose value contains a
-      double-quote or newline used to break the recConstant `.ascii "<val>"`
-      line (the raw value closed the literal early), aborting the assemble.
-      Escaping the value fixes it; this compiles+runs such a program under
-      --debug-opdf --assembler internal. }
-    procedure TestDebugOPDF_StringConstSpecialChars_AssemblesAndRuns;
   end;
 
 implementation
@@ -137,14 +106,6 @@ implementation
   instead of silently reporting green with ~12 ignored tests. }
 var
   GInternalAsmSkipNoted: Boolean = False;
-
-{ Validity-probe cache for the fallback compiler — see the matching note in
-  cp.test.cli.pas.  The /tmp/fp_blaise2 fallback is a transient fixpoint
-  artifact that is often stale; a stale binary turns these e2e tests into a
-  cascade of cryptic failures.  Probe once and skip (not fail) on a bad probe.
-  0 = not probed, 1 = good, 2 = bad. }
-var
-  GInternalAsmProbeState: Integer = 0;
 
 { ---- TAsmEncodingTests ---- }
 
@@ -172,147 +133,6 @@ begin
   Obj := AssembleToBytes('movq (%rdi), %rax' + LineEnding);
   AssertTrue('48 8B 07 missing',
     ContainsBytes(Obj, Chr($48) + Chr($8B) + Chr($07)));
-end;
-
-procedure TAsmEncodingTests.TestNegl_F7Slash3;
-var
-  Obj: string;
-begin
-  { negl %esi -> f7 de  (F7 /3, reg=esi=6).  Verified vs `cc`. }
-  Obj := AssembleToBytes('negl %esi' + LineEnding);
-  AssertTrue('f7 de missing',
-    ContainsBytes(Obj, Chr($F7) + Chr($DE)));
-end;
-
-procedure TAsmEncodingTests.TestLockXaddl_AtomicEncoding;
-var
-  Obj: string;
-begin
-  { lock xaddl %eax, (%rdi) -> f0 0f c1 07.  The atomic RTL primitive
-    (_AtomicAddInt32).  f0 = lock prefix, 0f c1 = xadd, 07 = ModRM
-    (reg=eax=0, r/m=[rdi]).  Verified vs `cc`. }
-  Obj := AssembleToBytes('lock xaddl %eax, (%rdi)' + LineEnding);
-  AssertTrue('f0 0f c1 07 missing',
-    ContainsBytes(Obj, Chr($F0) + Chr($0F) + Chr($C1) + Chr($07)));
-end;
-
-procedure TAsmEncodingTests.TestUnsuffixedMov_InfersSize;
-var
-  Obj: string;
-begin
-  { Unsuffixed AT&T mnemonics infer size from the register operand.
-    mov %rbx, (%rdi) is 64-bit -> 48 89 1f (same as movq).  Verified vs cc. }
-  Obj := AssembleToBytes('mov %rbx, (%rdi)' + LineEnding);
-  AssertTrue('48 89 1f missing (mov inferred q)',
-    ContainsBytes(Obj, Chr($48) + Chr($89) + Chr($1F)));
-  { xor %eax, %eax is 32-bit -> 31 c0 (no REX.W). }
-  Obj := AssembleToBytes('xor %eax, %eax' + LineEnding);
-  AssertTrue('31 c0 missing (xor inferred l)',
-    ContainsBytes(Obj, Chr($31) + Chr($C0)));
-end;
-
-procedure TAsmEncodingTests.TestJmpIndirectMem_FFSlash4;
-var
-  Obj: string;
-begin
-  { jmp *56(%rdi) -> ff 67 38  (FF /4, memory-indirect).  The longjmp tail. }
-  Obj := AssembleToBytes('jmp *56(%rdi)' + LineEnding);
-  AssertTrue('ff 67 38 missing',
-    ContainsBytes(Obj, Chr($FF) + Chr($67) + Chr($38)));
-end;
-
-procedure TAsmEncodingTests.TestEndbr64AndHlt;
-var
-  Obj: string;
-begin
-  { endbr64 -> f3 0f 1e fa ; hlt -> f4 }
-  Obj := AssembleToBytes('endbr64' + LineEnding);
-  AssertTrue('f3 0f 1e fa missing',
-    ContainsBytes(Obj, Chr($F3) + Chr($0F) + Chr($1E) + Chr($FA)));
-  Obj := AssembleToBytes('hlt' + LineEnding);
-  AssertTrue('f4 missing', ContainsBytes(Obj, Chr($F4)));
-end;
-
-procedure TAsmEncodingTests.TestSyscall_0F05;
-var
-  Obj: string;
-begin
-  { syscall -> 0f 05 (needed for the FreeBSD direct-syscall stubs). }
-  Obj := AssembleToBytes('syscall' + LineEnding);
-  AssertTrue('0f 05 missing', ContainsBytes(Obj, Chr($0F) + Chr($05)));
-end;
-
-procedure TAsmEncodingTests.TestCallPltStripsSuffix;
-var
-  Obj: string;
-begin
-  { call foo@PLT must reference symbol 'foo' (with a PLT32 reloc), NOT a bogus
-    symbol literally named 'foo@PLT' that no loader resolves.  The @PLT suffix
-    is a relocation qualifier, not part of the name.  Regression for the
-    _start migration (call __libc_start_main@PLT). }
-  Obj := AssembleToBytes('call foo@PLT' + LineEnding);
-  AssertTrue('symbol foo missing', ContainsBytes(Obj, 'foo'));
-  AssertTrue('bogus foo@PLT symbol present',
-    not ContainsBytes(Obj, 'foo@PLT'));
-end;
-
-procedure TAsmEncodingTests.TestSse2_PxorAndPabsb;
-var
-  Obj: string;
-begin
-  { pxor %xmm3,%xmm3 -> 66 0f ef db ; pabsb is a 3-byte 0F38 op:
-    pabsb %xmm2,%xmm2 -> 66 0f 38 1c d2.  Verified vs cc. }
-  Obj := AssembleToBytes('pxor %xmm3, %xmm3' + LineEnding);
-  AssertTrue('66 0f ef db missing',
-    ContainsBytes(Obj, Chr($66) + Chr($0F) + Chr($EF) + Chr($DB)));
-  Obj := AssembleToBytes('pabsb %xmm2, %xmm2' + LineEnding);
-  AssertTrue('66 0f 38 1c d2 missing',
-    ContainsBytes(Obj, Chr($66) + Chr($0F) + Chr($38) + Chr($1C) + Chr($D2)));
-end;
-
-procedure TAsmEncodingTests.TestVex_Vpxor2byte;
-var
-  Obj: string;
-begin
-  { vpxor %ymm3,%ymm3,%ymm3 -> c5 e5 ef db (2-byte VEX).  Verified vs cc. }
-  Obj := AssembleToBytes('vpxor %ymm3, %ymm3, %ymm3' + LineEnding);
-  AssertTrue('c5 e5 ef db missing',
-    ContainsBytes(Obj, Chr($C5) + Chr($E5) + Chr($EF) + Chr($DB)));
-end;
-
-procedure TAsmEncodingTests.TestVex_Vpabsb3byte;
-var
-  Obj: string;
-begin
-  { vpabsb %ymm2,%ymm2 -> c4 e2 7d 1c d2 (3-byte VEX, 0F38 map).  Verified vs cc. }
-  Obj := AssembleToBytes('vpabsb %ymm2, %ymm2' + LineEnding);
-  AssertTrue('c4 e2 7d 1c d2 missing',
-    ContainsBytes(Obj, Chr($C4) + Chr($E2) + Chr($7D) + Chr($1C) + Chr($D2)));
-end;
-
-procedure TAsmEncodingTests.TestVex_VextractI128;
-var
-  Obj: string;
-begin
-  { vextracti128 $1,%ymm3,%xmm4 -> c4 e3 7d 39 dc 01 (L=1 despite xmm dst).
-    Verified vs cc. }
-  Obj := AssembleToBytes('vextracti128 $1, %ymm3, %xmm4' + LineEnding);
-  AssertTrue('c4 e3 7d 39 dc 01 missing',
-    ContainsBytes(Obj, Chr($C4) + Chr($E3) + Chr($7D) + Chr($39) + Chr($DC) + Chr($01)));
-end;
-
-procedure TAsmEncodingTests.TestSibWhitespaceTolerated;
-var
-  A, B: string;
-begin
-  { GNU as allows whitespace after the SIB comma: `(%rdi, %rdx)` must encode
-    identically to `(%rdi,%rdx)` (movdqu -> f3 0f 6f 04 17). }
-  A := AssembleToBytes('movdqu (%rdi,%rdx), %xmm0' + LineEnding);
-  B := AssembleToBytes('movdqu (%rdi, %rdx), %xmm0' + LineEnding);
-  AssertTrue('f3 0f 6f 04 17 missing (no space)',
-    ContainsBytes(A, Chr($F3) + Chr($0F) + Chr($6F) + Chr($04) + Chr($17)));
-  AssertTrue('f3 0f 6f 04 17 missing (with space)',
-    ContainsBytes(B, Chr($F3) + Chr($0F) + Chr($6F) + Chr($04) + Chr($17)));
 end;
 
 procedure TAsmEncodingTests.TestQuadSymbol_EmitsReloc;
@@ -756,56 +576,24 @@ begin
     FCompiler := '/tmp/fp_blaise2';
   if not FileExists(FCompiler) then
     FCompiler := '/tmp/fp_blaise3';
-  FRTLPath := ProjectRoot() + 'compiler/src/main/pascal';
+  FRTLPath := ProjectRoot() + 'runtime/src/main/pascal';
   FStdlibPath := ProjectRoot() + 'stdlib/src/main/pascal';
+  FRTL := ProjectRoot() + 'compiler/target/blaise_rtl.a';
   FScratch := ProjectRoot() + 'compiler/target/asm_scratch/';
   ForceDirectories(FScratch);
   FCounter := 0;
 end;
 
 function TInternalAsmE2ETests.CompilerAvailable: Boolean;
-var
-  SrcFile, OutFile, CompOut, RunOut: string;
-  Rc: Integer;
 begin
-  { The compiler binary source-builds the RTL itself (no blaise_rtl.a); only
-    the binary and the RTL source need to be present. }
-  Result := FileExists(FCompiler)
-        and FileExists(FRTLPath + '/runtime.arc.pas');
+  Result := FileExists(FCompiler) and FileExists(FRTL);
   if (not Result) and (not GInternalAsmSkipNoted) then
   begin
     GInternalAsmSkipNoted := True;
     WriteLn(StdErr, 'note: TInternalAsmE2ETests skipped — compiler binary "',
-            FCompiler, '" or RTL source not found ',
+            FCompiler, '" or RTL "', FRTL, '" not found ',
             '(set BLAISE_QBE_COMPILER to a QBE-backend blaise binary to run them)');
-    Exit;
   end;
-  if not Result then Exit;
-
-  { Validity probe: compile+run a trivial program with --assembler internal.
-    A stale fallback binary compiles fine but produces a SIGILL/wrong-output
-    executable; detect that here and skip rather than emit a cryptic cascade. }
-  if GInternalAsmProbeState = 0 then
-  begin
-    SrcFile := FScratch + 'probe.pas';
-    OutFile := FScratch + 'probe';
-    WriteFile(SrcFile, 'program p; begin WriteLn(42); end.');
-    Rc := Self.RunProc(FCompiler, [
-      '--source', SrcFile, '--unit-path', FRTLPath, '--unit-path', FStdlibPath,
-      '--output', OutFile, '--backend', 'native', '--assembler', 'internal'
-    ], CompOut);
-    if (Rc = 0) and (Self.RunProcNoArgs(OutFile, RunOut) = 0)
-       and (Pos('42', RunOut) >= 0) then
-      GInternalAsmProbeState := 1
-    else
-    begin
-      GInternalAsmProbeState := 2;
-      WriteLn(StdErr, 'note: TInternalAsmE2ETests skipped — compiler binary "',
-              FCompiler, '" is stale/broken (probe program did not run); ',
-              'rebuild it or set BLAISE_QBE_COMPILER to a current binary.');
-    end;
-  end;
-  Result := GInternalAsmProbeState = 1;
 end;
 
 function TInternalAsmE2ETests.RunProc(const AExe: string;
@@ -887,39 +675,6 @@ begin
   Result := True;
 end;
 
-{ Like CompileAndRun but runs the produced binary WITH command-line arguments,
-  so argc/argv forwarding through the runtime's own _start is exercised. }
-function TInternalAsmE2ETests.CompileAndRunArgs(const ASrc: string;
-  const AArgs: array of string;
-  out AStdout: string; out AExitCode: Integer): Boolean;
-var
-  SrcFile, OutFile, CompOut: string;
-  Rc: Integer;
-begin
-  Result := False;
-  if not Self.CompilerAvailable() then Exit;
-
-  FCounter := FCounter + 1;
-  SrcFile := FScratch + 'test_asm_' + IntToStr(FCounter) + '.pas';
-  OutFile := FScratch + 'test_asm_' + IntToStr(FCounter);
-
-  WriteFile(SrcFile, ASrc);
-
-  Rc := Self.RunProc(FCompiler, [
-    '--source', SrcFile,
-    '--unit-path', FRTLPath,
-    '--unit-path', FStdlibPath,
-    '--output', OutFile,
-    '--backend', 'native',
-    '--assembler', 'internal'
-  ], CompOut);
-  if Rc <> 0 then
-    Fail('compile failed (rc=' + IntToStr(Rc) + '): ' + CompOut);
-
-  AExitCode := Self.RunProc(OutFile, AArgs, AStdout);
-  Result := True;
-end;
-
 { ---- Test methods ---- }
 
 procedure TInternalAsmE2ETests.TestSimpleAdd;
@@ -971,7 +726,7 @@ begin
     'begin' + LineEnding +
     '  for I := 1 to 5 do' + LineEnding +
     '    Write(I);' + LineEnding +
-    '  WriteLn()' + LineEnding +
+    '  WriteLn' + LineEnding +
     'end.',
     Out_, EC) then
   begin
@@ -1044,7 +799,7 @@ begin
     '    Write(N);' + LineEnding +
     '    N := N + 1' + LineEnding +
     '  end;' + LineEnding +
-    '  WriteLn()' + LineEnding +
+    '  WriteLn' + LineEnding +
     'end.',
     Out_, EC) then
   begin
@@ -1170,7 +925,7 @@ begin
     'begin' + LineEnding +
     '  G := TGreeter.Create;' + LineEnding +
     '  WriteLn(G.Greet());' + LineEnding +
-    '  G.Free()' + LineEnding +
+    '  G.Free' + LineEnding +
     'end.',
     Out_, EC) then
   begin
@@ -1232,156 +987,6 @@ begin
   end;
   AssertEquals(0, EC);
   AssertEquals('1.2500' + LineEnding, Out_);
-end;
-
-procedure TInternalAsmE2ETests.TestEntry_ExitCodePropagates;
-var
-  Out_: string;
-  EC: Integer;
-begin
-  { Halt(N): the runtime's own _start calls __libc_start_main(main, ...) and
-    glibc exits with main's return value.  A broken entry sequence would crash
-    at startup or return the wrong code.  No system Scrt1.o is involved. }
-  if not CompileAndRun(
-    'program test_exit;' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(''before'');' + LineEnding +
-    '  Halt(7)' + LineEnding +
-    'end.',
-    Out_, EC) then
-  begin
-    Ignore('<toolchain-missing>');
-    Exit;
-  end;
-  AssertEquals(7, EC);
-  AssertEquals('before' + LineEnding, Out_);
-end;
-
-procedure TInternalAsmE2ETests.TestEntry_ArgsForwarded;
-var
-  Out_: string;
-  EC: Integer;
-begin
-  { argc/argv reach the program through _start -> __libc_start_main -> main ->
-    _SetArgs.  ParamStr(0) is the program path; the passed args follow. }
-  if not CompileAndRunArgs(
-    'program test_args;' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(ParamCount());' + LineEnding +
-    '  WriteLn(ParamStr(1));' + LineEnding +
-    '  WriteLn(ParamStr(2))' + LineEnding +
-    'end.',
-    ['alpha', 'beta'], Out_, EC) then
-  begin
-    Ignore('<toolchain-missing>');
-    Exit;
-  end;
-  AssertEquals(0, EC);
-  AssertEquals('2' + LineEnding + 'alpha' + LineEnding + 'beta' + LineEnding, Out_);
-end;
-
-procedure TInternalAsmE2ETests.TestInlineAsm_ReturnsValue;
-var
-  Out_: string;
-  EC: Integer;
-begin
-  { A nostackframe asm-body function returns 42 in %eax; the internal assembler
-    assembles the verbatim block, and Pascal calls it normally. }
-  if not CompileAndRun(
-    'program test_asmret;' + LineEnding +
-    'function GetFortyTwo: Integer; assembler; nostackframe;' + LineEnding +
-    'asm' + LineEnding +
-    '    movl $42, %eax' + LineEnding +
-    '    ret' + LineEnding +
-    'end;' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(GetFortyTwo())' + LineEnding +
-    'end.',
-    Out_, EC) then
-  begin
-    Ignore('<toolchain-missing>');
-    Exit;
-  end;
-  AssertEquals(0, EC);
-  AssertEquals('42' + LineEnding, Out_);
-end;
-
-procedure TInternalAsmE2ETests.TestInlineAsm_AddsTwoArgs;
-var
-  Out_: string;
-  EC: Integer;
-begin
-  { Two integer args arrive in %edi/%esi (SysV); the asm body sums them.  Proves
-    a nostackframe asm function reads its parameters from the arg registers. }
-  if not CompileAndRun(
-    'program test_asmadd;' + LineEnding +
-    'function AddTwo(A, B: Integer): Integer; assembler; nostackframe;' + LineEnding +
-    'asm' + LineEnding +
-    '    movl %edi, %eax' + LineEnding +
-    '    addl %esi, %eax' + LineEnding +
-    '    ret' + LineEnding +
-    'end;' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(AddTwo(40, 2))' + LineEnding +
-    'end.',
-    Out_, EC) then
-  begin
-    Ignore('<toolchain-missing>');
-    Exit;
-  end;
-  AssertEquals(0, EC);
-  AssertEquals('42' + LineEnding, Out_);
-end;
-
-procedure TInternalAsmE2ETests.TestDebugOPDF_StringConstSpecialChars_AssemblesAndRuns;
-var
-  SrcFile, OutFile, CompOut, RunOut: string;
-  Rc, EC: Integer;
-  Src: string;
-begin
-  if not Self.CompilerAvailable() then
-  begin
-    Ignore('<toolchain-missing>');
-    Exit;
-  end;
-
-  { A double-quote, a newline and a backslash in string-constant VALUES — each
-    would break the recConstant `.ascii` line if emitted unescaped. }
-  Src :=
-    'program test_opdf_qc;' + LineEnding +
-    'const' + LineEnding +
-    '  Q = ' + '''' + '"' + '''' + ';' + LineEnding +
-    '  NL = ' + '''' + 'a' + '''' + '#10' + '''' + 'b' + '''' + ';' + LineEnding +
-    '  BS = ' + '''' + 'a\b' + '''' + ';' + LineEnding +
-    'begin' + LineEnding +
-    '  WriteLn(Q);' + LineEnding +
-    '  WriteLn(NL);' + LineEnding +
-    '  WriteLn(BS)' + LineEnding +
-    'end.';
-
-  FCounter := FCounter + 1;
-  SrcFile := FScratch + 'test_opdf_' + IntToStr(FCounter) + '.pas';
-  OutFile := FScratch + 'test_opdf_' + IntToStr(FCounter);
-  WriteFile(SrcFile, Src);
-
-  Rc := Self.RunProc(FCompiler, [
-    '--source', SrcFile,
-    '--unit-path', FRTLPath,
-    '--unit-path', FStdlibPath,
-    '--output', OutFile,
-    '--backend', 'native',
-    '--assembler', 'internal',
-    '--debug-opdf'
-  ], CompOut);
-  { The bug manifested as an "Internal assembler error: ... unhandled mnemonic"
-    from the mangled .ascii line — a non-zero compile with that text. }
-  if Rc <> 0 then
-    Fail('compile under --debug-opdf failed (rc=' + IntToStr(Rc) + '): ' + CompOut);
-
-  EC := Self.RunProcNoArgs(OutFile, RunOut);
-  AssertEquals(0, EC);
-  AssertEquals('"' + LineEnding + 'a' + LineEnding + 'b' + LineEnding +
-               'a\b' + LineEnding, RunOut);
 end;
 
 { ---- Registration ---- }

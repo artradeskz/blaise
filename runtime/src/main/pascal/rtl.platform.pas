@@ -96,61 +96,8 @@ type
     procedure ProcessFree(Proc: Pointer); virtual; abstract;
   end;
 
-  { Per-target struct layouts and OS constant values.
-    (docs/native-target-architecture.adoc)
-
-    Two things diverge across POSIX targets and both live here so the platform
-    methods stay layout-agnostic:
-
-    * OS integer constants — the open()/lseek() flag bits, clock id, and
-      waitpid option whose numeric values differ between Linux and FreeBSD.
-
-    * struct stat — its field OFFSETS differ (FreeBSD's stat is a different
-      shape and size than Linux's).  Rather than a shared TStatBuf record that
-      bakes in one layout, the buffer is an opaque byte block sized by
-      StatBufSize, and the three fields the RTL reads are pulled out by
-      StatSize / StatMtime / StatMode at the target's offsets.
-
-    struct tm is intentionally NOT abstracted: the fields the RTL uses
-    (tm_year/mon/mday/hour/min/sec/gmtoff) share an identical layout on Linux
-    and FreeBSD amd64, so TRtlPlatformPosix keeps a shared TTm record.
-
-    The concrete layout is selected at startup alongside GRtlPlatform; nothing
-    here uses conditional compilation. }
-  TPlatformLayout = class
-  public
-    { ---- open() / file flags ---- }
-    function O_RDONLY: Integer; virtual; abstract;
-    function O_WRONLY: Integer; virtual; abstract;
-    function O_RDWR:   Integer; virtual; abstract;
-    function O_CREAT:  Integer; virtual; abstract;
-    function O_TRUNC:  Integer; virtual; abstract;
-    function O_APPEND: Integer; virtual; abstract;
-
-    { ---- stat mode bits ---- }
-    function S_IFMT:  Integer; virtual; abstract;
-    function S_IFDIR: Integer; virtual; abstract;
-
-    { ---- lseek whence ---- }
-    function SEEK_SET: Integer; virtual; abstract;
-    function SEEK_CUR: Integer; virtual; abstract;
-    function SEEK_END: Integer; virtual; abstract;
-
-    { ---- clock_gettime / waitpid ---- }
-    function CLOCK_REALTIME: Integer; virtual; abstract;
-    function WNOHANG:        Integer; virtual; abstract;
-
-    { ---- struct stat: opaque buffer sized for the target, fields pulled at
-      the target's offsets ---- }
-    function StatBufSize: Integer; virtual; abstract;
-    function StatSize(Buf: Pointer):  Int64; virtual; abstract;
-    function StatMtime(Buf: Pointer): Int64; virtual; abstract;
-    function StatMode(Buf: Pointer):  Integer; virtual; abstract;
-  end;
-
 var
   GRtlPlatform: TRtlPlatform;
-  GPlatformLayout: TPlatformLayout;
 
 implementation
 

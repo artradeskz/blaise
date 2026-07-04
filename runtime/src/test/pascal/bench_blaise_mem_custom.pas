@@ -10,7 +10,7 @@
 
 program bench_blaise_mem_custom;
 
-uses runtime.mem;
+uses blaise_mem;
 
 function _TimeNow: Int64; external name '_TimeNow';
 

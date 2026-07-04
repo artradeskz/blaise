@@ -44,7 +44,7 @@
     go to the wrong thread's list).
 }
 
-unit runtime.mem;
+unit blaise_mem;
 
 interface
 

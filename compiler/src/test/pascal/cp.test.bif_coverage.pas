@@ -102,7 +102,7 @@ begin
     Proc.WaitOnExit();
     Code := Proc.ExitCode
   finally
-    Proc.Free()
+    Proc.Free
   end;
 
   if Code <> 0 then

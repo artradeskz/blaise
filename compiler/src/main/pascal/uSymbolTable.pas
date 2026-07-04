@@ -14,28 +14,6 @@ uses
   Classes, SysUtils, contnrs;
 
 type
-  { Member visibility — class/record field, method, and property access scope.
-    Default (a member declared before any visibility keyword) is mvPublic, to
-    match Blaise's previous behaviour where visibility was parsed but never
-    enforced (everything was effectively public).
-      mvPublic / mvPublished — visible everywhere the type is.
-      mvPrivate              — visible only within the declaring UNIT
-                               (classic Pascal unit-scoped privacy).
-      mvProtected            — as mvPrivate plus descendant types' methods,
-                               regardless of unit.
-      mvStrictPrivate        — visible only from the declaring TYPE's methods.
-      mvStrictProtected      — declaring type plus its descendants' methods.
-    Declared here (not in uAST) so the symbol-table descriptors can carry it;
-    uAST uses uSymbolTable, so the type flows up to the AST member decls. }
-  TMemberVisibility = (
-    mvPublic,
-    mvPrivate,
-    mvProtected,
-    mvPublished,
-    mvStrictPrivate,
-    mvStrictProtected
-  );
-
   { ------------------------------------------------------------------ }
   {  Type descriptors                                                   }
   { ------------------------------------------------------------------ }
@@ -73,21 +51,6 @@ type
   public
     Kind: TTypeKind;
     Name: string;
-    { Name of the unit that declared this named type (empty for builtins and
-      program-scope types).  Set by TSymbolTable.Define when the type symbol is
-      registered.  Codegen mangles the type's storage symbols (typeinfo,
-      vtable, _FieldCleanup, itab) with this owner so two used units exporting a
-      same-named type emit distinct, non-colliding symbols. }
-    OwningUnit: string;
-    { True when this descriptor was created for a NAMED integer subrange
-      (type TIdx = lo..hi;).  Layout/Kind/RawSize remain those of the narrowest
-      fitting standard integer type — the value behaves as an ordinary unchecked
-      int — but the lo..hi bounds are retained as compile-time metadata so the
-      array-index resolver can fold array[TIdx] -> array[lo..hi].  No other path
-      (codegen, IsNumeric/IsOrdinal, assignment compatibility) consults these. }
-    IsSubrange: Boolean;
-    SubrangeLow: Int64;
-    SubrangeHigh: Int64;
     function IsNumeric: Boolean;
     function IsFloat: Boolean;
     function IsString: Boolean;
@@ -150,9 +113,8 @@ type
   end;
 
   { Enum type descriptor.  Members are ordered; ordinal values are 0..N-1.
-    Stored as QBE 'w' (same as Integer).  Members are NOT registered as bare
-    global skConstants; a bare member name resolves through the semantic
-    analyser's type-keyed reverse index (see ResolveEnumMember). }
+    Stored as QBE 'w' (same as Integer).  Each member is also registered in
+    the symbol table as a skConstant with this type descriptor. }
   TEnumTypeDesc = class(TTypeDesc)
   public
     Members: TStringList;  { owned — ordered member names }
@@ -234,13 +196,6 @@ type
                              with neither addref nor release, and field cleanup
                              does nothing.  Use only when the referent is
                              guaranteed to outlive this field. }
-    Visibility: TMemberVisibility; { access scope; default mvPublic }
-    DeclaringUnit: string; { name of the unit that declares the owning type — the
-                             privacy boundary for mvPrivate/mvProtected }
-    DeclaringType: string; { name of the class/record that DECLARED this field; for
-                             an inherited field this is the ancestor, not the
-                             subclass that copied it — protected/strict checks walk
-                             the descendant chain up to this type }
   end;
 
   { One entry in a class vtable — tracks slot index and implementing method. }
@@ -264,10 +219,6 @@ type
     IndexParamName: string;  { '' = non-indexed property }
     [Unretained] IndexTypeDesc: TTypeDesc;  { not owned; non-nil when IndexParamName <> '' }
     IsDefault:      Boolean; { declared with the `default` directive (Obj[I] sugar) }
-    IsStatic:       Boolean; { declared `static property` — accessors are static (no Self) }
-    Visibility:     TMemberVisibility; { access scope; default mvPublic }
-    DeclaringUnit:  string;  { unit that declares the owning type — privacy boundary }
-    DeclaringType:  string;  { class/record that DECLARED this property (ancestor for inherited) }
   end;
 
   { Type descriptor for zero-GUID interface types (Phase 3). }
@@ -417,16 +368,6 @@ type
                                 of the strong addref/release pattern. }
     IsGlobal:   Boolean;      { true for program-level variables; codegen uses
                                 QBE data-section storage instead of stack alloc }
-    IsClassVar: Boolean;      { true for a STATIC (class-level) variable.  Stored
-                                as a single shared global (IsGlobal is also True),
-                                under the mangled GlobalEmitName, not as a
-                                per-instance field. }
-    GlobalEmitName: string;   { when non-empty, the mangled data-label this symbol
-                                emits/loads/stores under (e.g. 'TFoo_FInstance').
-                                Lets a bare lookup key ('FInstance') and a
-                                qualified one ('TFoo.FInstance') resolve to ONE
-                                storage slot.  Mirrors ConstArrayQbe for consts.
-                                Empty = emit under Name. }
     IsThreadVar: Boolean;     { true for threadvar declarations; codegen emits
                                 TLS storage instead of plain global data }
     IsOverload:   Boolean;    { true when declared with the 'overload' directive;
@@ -442,22 +383,6 @@ type
                                 symbols owned by the unit being analysed.  Read
                                 by per-unit visibility and by unit-prefix
                                 mangling on cross-unit references. }
-    IsImplPrivate: Boolean;   { true for a symbol declared in the IMPLEMENTATION
-                                section of its owning unit.  Such a symbol is
-                                visible only inside that unit — never to a used
-                                unit (it is not in the unit's interface) — so
-                                Lookup suppresses it whenever the viewing unit is
-                                not the owner.  Prevents an impl-section class/
-                                type from leaking into an unrelated unit through
-                                the flat global scope. }
-    Visibility: TMemberVisibility; { for a STATIC (class-level) variable: the
-                                declared member visibility (private/protected/
-                                strict/public).  Default mvPublic.  Read by the
-                                qualified-access visibility checks. }
-    OwnerTypeName: string;    { for a STATIC (class-level) variable: the class/
-                                record that declared it.  Empty for non-members.
-                                Lets strict/protected checks resolve the owning
-                                type the same way TFieldInfo.DeclaringType does. }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;
@@ -485,13 +410,6 @@ type
       references through every Register* helper. }
     function SymbolCount: Integer;
     function SymbolAt(AIdx: Integer): TSymbol;
-    { Detach a directly-defined symbol from this scope WITHOUT freeing
-      it (FSymbols owns, so Extract not Remove).  Returns the detached
-      symbol, or nil if not present.  Caller takes responsibility for
-      the object's lifetime — used so a duplicate import can hand the
-      flat-scope slot to a later unit while a per-unit cache keeps the
-      original alive. }
-    function ExtractLocal(const AName: string): TSymbol;
   end;
 
   { ------------------------------------------------------------------ }
@@ -570,33 +488,11 @@ type
       retrieve the canonical TSymbol — without this flag we'd loop. }
     FBypassUsesChain: Boolean;
 
-    FInCodegen: Boolean;             { True while a backend is emitting code.
-                                       Disables the Layer-6 impl-private
-                                       suppression in Lookup: that guard exists
-                                       only to stop an implementation-section
-                                       symbol of unit A leaking into a different
-                                       unit B DURING ANALYSIS.  At codegen time a
-                                       backend legitimately resolves a unit's own
-                                       impl-section classes (to emit their
-                                       typeinfo/vtable/_FieldCleanup and the
-                                       references to them), but FDefineOwningUnit
-                                       can have drifted to a dependency unit
-                                       mid-emit, which made the suppression wrongly
-                                       fire and silently drop the class's typeinfo
-                                       — a dangling symbol the linker binds to
-                                       garbage.  Set by the QBE and native
-                                       backends around Generate/GenerateUnit. }
-
     FDefineOwningUnit: string;       { auto-applied to Sym.OwningUnit on Define
                                        when the symbol has no explicit value;
                                        set by AnalyseUnit/AnalyseUnitForExport
                                        so semantic-side Define sites don't
                                        each need to thread the unit name. }
-
-    FDefineImplPrivate: Boolean;     { when True, Define()/DefineGlobal() mark the
-                                       symbol IsImplPrivate.  Set by the analyser
-                                       around impl-section type/const registration
-                                       so those symbols stay unit-private. }
 
     function GetCurrentScope: TScope;
     function GetScopeDepth: Integer;
@@ -617,9 +513,6 @@ type
     function Define(ASymbol: TSymbol): Boolean;
     { Define in global (outermost) scope regardless of current push depth. }
     function DefineGlobal(ASymbol: TSymbol): Boolean;
-    { Detach a symbol from the current scope without freeing it (see
-      TScope.ExtractLocal).  Returns the detached symbol or nil. }
-    function ExtractLocal(const AName: string): TSymbol;
     function Lookup(const AName: string): TSymbol;
 
     { Auto-OwningUnit context.  When set, Define()/DefineGlobal() will
@@ -627,12 +520,6 @@ type
       explicit value.  Empty string clears the context. }
     property DefineOwningUnit: string read FDefineOwningUnit
                                        write FDefineOwningUnit;
-
-    { Impl-private context.  When True, Define()/DefineGlobal() mark the symbol
-      IsImplPrivate so it stays visible only to its owning unit.  Set by the
-      analyser around implementation-section type/const registration. }
-    property DefineImplPrivate: Boolean read FDefineImplPrivate
-                                         write FDefineImplPrivate;
 
     { Hook into the analyser's uses-chain lookup.  When non-nil,
       Lookup() consults the chain after pushed scopes and before the
@@ -646,9 +533,6 @@ type
       hook to break recursion. }
     property BypassUsesChain: Boolean read FBypassUsesChain
                                        write FBypassUsesChain;
-
-    { Set by a backend for the duration of code emission; see FInCodegen. }
-    property InCodegen: Boolean read FInCodegen write FInCodegen;
 
     { Type lookup — case-insensitive, returns nil if not found }
     function FindType(const AName: string): TTypeDesc;
@@ -725,14 +609,6 @@ function IsUnmangledUnit(const AUnitName: string): Boolean;
   symbol-using site (call/reference in another unit), so they always
   agree on the QBE global name. }
 function MangleUnitPrefix(const AUnitName: string): string;
-
-const
-  { Sentinel owning-unit value meaning "this global's emit name is ALREADY a
-    fully-mangled symbol — codegen must add no further unit prefix".  Used for
-    static class/record vars, whose label (Unit_Class_Field) is class-qualified
-    and complete; the module-var prefixing must not double-apply.  The leading
-    control byte can never collide with a real unit name. }
-  PreMangledGlobalOwner = #1'premangled';
 
 implementation
 
@@ -1385,17 +1261,6 @@ begin
   Result := True;
 end;
 
-function TScope.ExtractLocal(const AName: string): TSymbol;
-var
-  Idx: Integer;
-begin
-  Result := nil;
-  if not FKeys.Find(AName, Idx) then Exit;
-  Result := TSymbol(FKeys.Objects[Idx]);
-  FKeys.Delete(Idx);              { free the name }
-  FSymbols.Extract(Result);       { detach without freeing }
-end;
-
 function TScope.LookupLocal(const AName: string): TSymbol;
 var
   Idx: Integer;
@@ -1984,8 +1849,6 @@ function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;
 begin
   if (ASymbol.OwningUnit = '') and (FDefineOwningUnit <> '') then
     ASymbol.OwningUnit := FDefineOwningUnit;
-  if FDefineImplPrivate then
-    ASymbol.IsImplPrivate := True;
   Result := TScope(FScopeStack.Items[0]).Define(ASymbol);
 end;
 
@@ -2025,20 +1888,7 @@ begin
   if (ASymbol.OwningUnit = '') and (FDefineOwningUnit <> '')
      and (FScopeStack.Count = 1) then
     ASymbol.OwningUnit := FDefineOwningUnit;
-  if FDefineImplPrivate and (FScopeStack.Count = 1) then
-    ASymbol.IsImplPrivate := True;
-  { Propagate the owning unit onto the type descriptor so codegen can mangle a
-    type's storage symbols by the declaring unit even after a same-named type
-    from another used unit wins the flat slot (cross-unit type last-wins). }
-  if (ASymbol.Kind = skType) and (ASymbol.TypeDesc <> nil)
-     and (ASymbol.TypeDesc.OwningUnit = '') and (ASymbol.OwningUnit <> '') then
-    ASymbol.TypeDesc.OwningUnit := ASymbol.OwningUnit;
   Result := CurrentScope.Define(ASymbol);
-end;
-
-function TSymbolTable.ExtractLocal(const AName: string): TSymbol;
-begin
-  Result := CurrentScope.ExtractLocal(AName);
 end;
 
 function TSymbolTable.Lookup(const AName: string): TSymbol;
@@ -2107,33 +1957,7 @@ begin
   end;
 
   { Layer 6 — whatever the global walk produced earlier (builtins, or
-    flat-merged residue not yet caught above).
-
-    Suppress one specific leak: an IMPLEMENTATION-section symbol of unit A is
-    private to A and must never resolve while a DIFFERENT unit B is being
-    analysed.  Without this, a class declared in A's implementation section
-    leaks into an unrelated B through the flat global scope (the root blocker
-    for "classes in unit implementation section").  Interface symbols are left
-    untouched here so existing transitive-visibility behaviour is unchanged.
-
-    The check only runs while a unit/program is being analysed
-    (FDefineOwningUnit <> '') and the chain walker is not mid-callback; outside
-    analysis (some codegen-side lookups clear FDefineOwningUnit) the residue is
-    returned unchanged so unit-prefix mangling still resolves owned symbols.
-
-    It is also disabled during code emission (FInCodegen): the leak it guards is
-    purely an analysis-time concern, whereas a backend legitimately resolves a
-    unit's own implementation-section classes to emit their typeinfo/vtable/
-    _FieldCleanup.  FDefineOwningUnit can have drifted to a dependency unit
-    mid-emit, which would otherwise make this suppression wrongly fire and drop
-    the class's typeinfo, leaving a dangling symbol the linker binds to garbage. }
-  if (Sym <> nil) and Sym.IsImplPrivate and (FDefineOwningUnit <> '')
-     and not FBypassUsesChain and not FInCodegen
-     and not SameText(Sym.OwningUnit, FDefineOwningUnit) then
-  begin
-    Result := nil;
-    Exit;
-  end;
+    flat-merged residue not yet caught above). }
   Result := Sym;
 end;
 
@@ -2188,18 +2012,11 @@ end;
 
 function IsUnmangledUnit(const AUnitName: string): Boolean;
 begin
-  { RTL units export their runtime symbols (_SetArgs, _BlaiseGetMem, _start, …)
-    UNMANGLED — the compiler emits bare calls to them — so their unit prefix is
-    empty.  The RTL units are: System, the rtl.* platform units, and the
-    runtime.* units (dotted-flat names after the RTL-unification move; the
-    legacy blaise_* names are still accepted for any not-yet-renamed source). }
   Result := True;
   if AUnitName = '' then Exit;
   if SameText(AUnitName, 'System') then Exit;
   if (Length(AUnitName) >= 4)
      and SameText(Copy(AUnitName, 0, 4), 'rtl.') then Exit;
-  if (Length(AUnitName) >= 8)
-     and SameText(Copy(AUnitName, 0, 8), 'runtime.') then Exit;
   if (Length(AUnitName) >= 7)
      and SameText(Copy(AUnitName, 0, 7), 'blaise_') then Exit;
   Result := False;

@@ -32,8 +32,7 @@
 #   would false-positive; behavioural equivalence is the sound invariant.
 #
 # Requires: a native compiler at compiler/target/blaise (run the QBE
-# fixpoint or `pasbuild compile` first).  The RTL is source-built by the
-# driver, so no blaise_rtl.a is needed.
+# fixpoint or `pasbuild compile` first) and compiler/target/blaise_rtl.a.
 
 set -e
 
@@ -49,15 +48,18 @@ if [ ! -x "$COMPILER" ]; then
   exit 10
 fi
 
-# No RTL archive needed: the compiler driver source-builds the RTL into its
-# own object cache (EnsureRTLObjects) and links it directly.  The RTL source
-# lives in compiler/src/main/pascal (resolved automatically by the driver).
-if [ ! -f compiler/src/main/pascal/runtime.arc.pas ]; then
-  echo "RTL source not found under compiler/src/main/pascal" >&2
+if [ -f compiler/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=compiler/target/blaise_rtl.a
+elif [ -f runtime/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=runtime/target/blaise_rtl.a
+else
+  echo "blaise_rtl.a not found — build the runtime first" >&2
   exit 11
 fi
+# FindRTL looks for blaise_rtl.a beside the compiler binary.
+cp "$RTL_ARCHIVE" "$(dirname "$COMPILER")/blaise_rtl.a" 2>/dev/null || true
 
-UNIT_ARGS="--unit-path compiler/src/main/pascal --unit-path stdlib/src/main/pascal"
+UNIT_ARGS="--unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
 PROBE=/tmp/fpni_probe.pas
 
 # Representative program.  Exercises the sret-Result field-read path (a

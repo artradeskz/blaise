@@ -31,7 +31,7 @@ uses
   blaise.codegen.native.driver,
   uUnitLoader, uDebugOPDF, uDebugFacts, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
-  blaise.frontend.opts, uConfig, uToolchain;
+  blaise.frontend.opts, uConfig;
 
 type
   { Alias so existing signatures (ParseArgs out param, locals) read
@@ -40,7 +40,7 @@ type
   TBackend = TBackendKind;
 
 const
-  Version = '0.13.0-SNAPSHOT';
+  Version = '0.12.0';
   CompilerName = 'Blaise';
 
 { Build the --backend usage fragment from the registered drivers, with
@@ -93,17 +93,12 @@ begin
   WriteLn(FormatFlagLine('--output <path>', 'Output binary path'));
   WriteLn(FormatFlagLine('--unit-path <dir>',
     'Add directory to unit search path (repeatable)'));
-  WriteLn(FormatFlagLine('--rtl-src <dir>',
-    'RTL source directory (default: beside the binary; or $BLAISE_RTL_SRC).'));
-  WriteLn(FormatFlagLine('',
-    'Needed when the binary is moved away from its source tree.'));
   WriteLn(FormatFlagLine('--define <sym> | -d <sym>',
     'Define a conditional-compilation symbol (repeatable)'));
   WriteLn(FormatFlagLine('--backend <id>', BackendUsageLine()));
   WriteLn(FormatFlagLine('--target <os>-<cpu>',
-    'Cross-compile target (default: ' + TargetName(HostTarget()) + ', the host).'));
-  WriteLn(FormatFlagLine('', 'linux-x86_64, linux-i386, linux-arm64, freebsd-x86_64,'));
-  WriteLn(FormatFlagLine('', 'windows-x86_64, macos-arm64'));
+    'linux-x86_64 (default), linux-i386, linux-arm64,'));
+  WriteLn(FormatFlagLine('', 'freebsd-x86_64, windows-x86_64, macos-arm64'));
   WriteLn(FormatFlagLine('--emit-ir', 'Print QBE IR to stdout and exit'));
   WriteLn(FormatFlagLine('--emit-asm',
     'Print native assembly to stdout (requires --backend native)'));
@@ -139,10 +134,8 @@ begin
     'Emit OPDF debug info (.opdf.s companion file)'));
   WriteLn('');
   WriteLn('Configuration:');
-  WriteLn('  blaise.cfg (next to the binary, then ~/.blaise.cfg) can set, one');
-  WriteLn('  per line: unit-path=<dir> (repeatable) and rtl-src=<dir>.  A relative');
-  WriteLn('  path is resolved against the config file''s directory; --rtl-src on');
-  WriteLn('  the command line overrides rtl-src= in the config.');
+  WriteLn('  Unit search paths can also be set in blaise.cfg (one unit-path=<dir>');
+  WriteLn('  per line). Searched next to the binary, then ~/.blaise.cfg.');
 end;
 
 { Populate the two caller-constructed opts objects from the command line.
@@ -154,29 +147,11 @@ end;
   bad flag; the caller owns and frees both objects regardless. }
 { Apply each -d/--define symbol in ADefines to ALexer's conditional-compilation
   table.  No-op when ADefines is nil/empty. }
-{ True if ASym is one of the OS conditional-compilation symbols. }
-function IsOSDefine(const ASym: string): Boolean;
-var U: string;
-begin
-  U := UpperCase(ASym);
-  Result := (U = 'LINUX') or (U = 'FREEBSD') or (U = 'WINDOWS')
-         or (U = 'DARWIN') or (U = 'UNIX');
-end;
-
 procedure AddDefinesTo(ALexer: TLexer; ADefines: TStringList);
 var
   I: Integer;
-  HasOS: Boolean;
 begin
   if ADefines = nil then Exit;
-  { If the caller supplies an OS symbol (a cross --target injects the target's),
-    it REPLACES the host OS symbols the lexer seeded in SeedPredefines: drop
-    those first so an IFDEF LINUX etc. reflects the target, not the host. }
-  HasOS := False;
-  for I := 0 to ADefines.Count - 1 do
-    if IsOSDefine(ADefines.Strings[I]) then HasOS := True;
-  if HasOS then
-    ALexer.ClearOSDefines();
   for I := 0 to ADefines.Count - 1 do
     ALexer.AddDefine(ADefines.Strings[I]);
 end;
@@ -256,13 +231,6 @@ begin
       Inc(I);
       AFront.UnitCacheDir := ParamStr(I);
     end
-    else if (Arg = '--rtl-src') and (I < ParamCount()) then
-    begin
-      Inc(I);
-      AOpts.RTLSrcDir := ParamStr(I);
-    end
-    else if Arg = '--static' then
-      AOpts.Static := True
     else if Arg = '--emit-ir' then
       AFront.EmitIR := True
     else if Arg = '--emit-asm' then
@@ -469,7 +437,6 @@ var
   SourceFile, OutputFile: string;
   SearchPaths: TStringList;
   ConfigPaths: TStringList;
-  CfgRtlSrc:   string;
   EmitIR:      Boolean;
   EmitAsm:     Boolean;
   DumpAST:     Boolean;
@@ -508,7 +475,6 @@ var
   Front:     TFrontEndOpts;   { front-end-only flag bag, populated by ParseArgs }
   ToolErr:   string;          { CheckToolchain result ('' on success) }
   ValidErr:  string;          { Driver.ValidateOptions result ('' on success) }
-  RTLSrc:    string;          { RTL source dir added to the loader search path }
   PendingFlags: TStringList;  { deferred unknown flags (driver-private) }
   PendingArgs:  TStringList;  { lookahead token per pending flag ('' if none) }
   PendIdx:   Integer;         { drain cursor over the pending lists }
@@ -528,12 +494,10 @@ var
                                any ExportUnitInterface bugs against real
                                codebases. }
   I:        Integer;
-  J:        Integer;
   IR:       string;
   IRFile:   string;
   LinkErr:  string;      { Driver.LinkProgram result ('' on success) }
   UnitOPath:   string;   { per-dep .o output path in incremental mode }
-  UnitODir:    string;   { directory the per-dep .o/.bif files are written to }
   Workers:  TObjectList; { TCompileWorker threads for parallel incremental }
   Worker:   TCompileWorker;
 
@@ -556,23 +520,6 @@ begin
     PrintUsage();
     Halt(1);
   end;
-
-  { The OS conditional-compilation symbols follow the resolved --target (which
-    defaults to the host).  Inject them into Front.Defines; AddDefinesTo then
-    replaces the lexer's host-seeded OS symbols with these on every lexer (top
-    program and, via the unit loader, each dependency unit).  So an IFDEF
-    FREEBSD in compiled source reflects the TARGET, not this compiler's host,
-    which is what makes cross-compiling blaise itself for FreeBSD bake
-    HostTarget=FreeBSD into the result. }
-  case Opts.Target.OS of
-    osFreeBSD: Front.Defines.Add('FREEBSD');
-    osWindows: Front.Defines.Add('WINDOWS');
-    osMacOS:   Front.Defines.Add('DARWIN');
-  else
-    Front.Defines.Add('LINUX');
-  end;
-  if Opts.Target.OS <> osWindows then
-    Front.Defines.Add('UNIX');
 
   { Seed the working locals from the opts objects.  Keeping the locals lets
     the (large) main body read them unchanged; the parser owns the objects.
@@ -599,14 +546,7 @@ begin
 
   ConfigPaths := TStringList.Create();
   try
-    { blaise.cfg supplies extra unit-paths and, optionally, rtl-src.  A CLI
-      --rtl-src (already in Opts.RTLSrcDir) takes precedence: only let the config
-      set it when the CLI did not.  Seed CfgRtlSrc with the CLI value so the
-      config only overrides an EMPTY one. }
-    CfgRtlSrc := Opts.RTLSrcDir;
-    LoadConfigPaths(ConfigPaths, CfgRtlSrc);
-    if Opts.RTLSrcDir = '' then
-      Opts.RTLSrcDir := CfgRtlSrc;
+    LoadConfigPaths(ConfigPaths);
     for I := ConfigPaths.Count - 1 downto 0 do
       SearchPaths.Insert(0, ConfigPaths.Strings[I]);
   finally
@@ -615,24 +555,6 @@ begin
 
   if (UnitCacheDir <> '') and (SearchPaths.IndexOf(UnitCacheDir) < 0) then
     SearchPaths.Add(UnitCacheDir);
-
-  { Always make the RTL source directory discoverable to the unit loader.  The
-    RTL units (runtime.*, rtl.platform.*, system) live in the compiler's own
-    source tree after the RTL-unification move; stdlib units such as `classes`
-    explicitly `uses runtime.arc`, so a program that uses them needs the RTL
-    source on the search path — without this the loader fails with
-    "Unit 'runtime.arc' not found".  The driver already source-builds the RTL
-    from this same directory at link time; here we add it for the front-end
-    loader too.  Resolution mirrors EnsureRTLObjects: --rtl-src, then
-    $BLAISE_RTL_SRC, then the binary/CWD-relative default. }
-  RTLSrc := Opts.RTLSrcDir;
-  if RTLSrc = '' then
-    RTLSrc := GetEnvironmentVariable('BLAISE_RTL_SRC');
-  if RTLSrc = '' then
-    RTLSrc := RTLSourceDir();
-  if (RTLSrc <> '') and DirectoryExists(RTLSrc)
-     and (SearchPaths.IndexOf(RTLSrc) < 0) then
-    SearchPaths.Add(RTLSrc);
 
   { Emit-mode / backend compatibility.  --emit-ir prints QBE IR and
     --emit-asm prints native assembly; PickTopDriver routes each to the
@@ -754,17 +676,7 @@ begin
       Parser := TParser.Create(Lexer);
       IsUnitMode := Parser.IsUnitTopLevel();
       if IsUnitMode then
-      begin
-        TopUnit := Parser.ParseUnit();
-        { The loader sets SourceFile on dependency units (uUnitLoader), but a
-          unit compiled standalone via --source never had it set.  Without it
-          the exported iface carries an empty SourceHash, so a later compile
-          that depends on this unit cannot validate the cached .o and falls
-          back to recompiling from source — which re-inlines the dependency
-          body and causes duplicate-symbol link errors.  Set it from the
-          --source path. }
-        TopUnit.SourceFile := ExpandFileName(SourceFile);
-      end
+        TopUnit := Parser.ParseUnit()
       else
         Prog := Parser.Parse();
     except
@@ -913,24 +825,17 @@ begin
         WorkerDriver := GetDriver(bkQBE);
       Workers := TObjectList.Create(True);
       try
-        { Resolve the directory the per-unit .o/.bif artefacts go in.
-          Priority: an explicit --unit-cache, else the --output file's own
-          directory.  When neither yields a directory (e.g. --output is a
-          bare filename with no path component, or omitted entirely) the
-          artefacts are written to the current directory — never to the
-          filesystem root.  ExtractFilePath returns '' for a path with no
-          directory part; IncludeTrailingPathDelimiter('') would turn that
-          into '/', anchoring the unit objects at root, so only prepend a
-          delimiter when the directory is non-empty. }
-        if UnitCacheDir <> '' then
-          UnitODir := IncludeTrailingPathDelimiter(UnitCacheDir)
-        else if ExtractFilePath(OutputFile) <> '' then
-          UnitODir := IncludeTrailingPathDelimiter(ExtractFilePath(OutputFile))
-        else
-          UnitODir := '';
         for I := 0 to Units.Count - 1 do
         begin
-          UnitOPath := UnitODir + LowerCase(TUnit(Units.Items[I]).Name) + '.o';
+          UnitOPath := UnitCacheDir;
+          if UnitOPath <> '' then
+            UnitOPath := IncludeTrailingPathDelimiter(UnitOPath) +
+                         LowerCase(TUnit(Units.Items[I]).Name) + '.o'
+          else if OutputFile <> '' then
+            UnitOPath := IncludeTrailingPathDelimiter(ExtractFilePath(OutputFile)) +
+                         LowerCase(TUnit(Units.Items[I]).Name) + '.o'
+          else
+            UnitOPath := LowerCase(TUnit(Units.Items[I]).Name) + '.o';
 
           Worker := TCompileWorker.Create(True);
           Worker.WorkUnit := TUnit(Units.Items[I]);
@@ -980,27 +885,9 @@ begin
       begin
         { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }
         CG.SetSymbolTable(Semantic.GetSymbolTable());
-        { Note every dependency whose body is NOT emitted into this object so the
-          backend references its globals externally instead of re-defining them.
-          Cached (prebuilt-iface) deps are always external; source deps are
-          external only when SkipDepCodegen compiled them to their own objects.
-          Without this, a standalone unit compile re-defines an imported unit's
-          globals (e.g. GPlatformLayout), and linking the per-unit objects
-          directly — rather than via an archive whose member selection hides the
-          clash — fails with multiple-definition errors. }
-        if Loader <> nil then
-          for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
-            CG.NoteDepInitUnit(
-              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).Name,
-              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).HasInitialization);
         if (Units <> nil) and not SkipDepCodegen then
           for I := 0 to Units.Count - 1 do
-            CG.AppendUnit(TUnit(Units.Items[I]))
-        else if Units <> nil then
-          for I := 0 to Units.Count - 1 do
-            CG.NoteDepInitUnit(TUnit(Units.Items[I]).Name,
-              (TUnit(Units.Items[I]).InitStmts <> nil) and
-              (TUnit(Units.Items[I]).InitStmts.Count > 0));
+            CG.AppendUnit(TUnit(Units.Items[I]));
         CG.AppendUnit(TopUnit);
       end
       else if ((Units <> nil) and (Units.Count > 0)) or
@@ -1106,22 +993,6 @@ begin
         if PrebuiltObjPaths.IndexOf(Loader.LinkOnlyObjects.Strings[I]) < 0 then
           PrebuiltObjPaths.Add(Loader.LinkOnlyObjects.Strings[I]);
     end;
-    { Capture link-library deps (-l<name>) off the program AST and every used
-      unit's interface before Prog/Loader are freed below — the link step runs
-      after this finally block.  Unioned into Opts.LinkLibs; the driver emits one
-      -l<name> each, additive to the RTL's -lm/-lpthread. }
-    if Opts.LinkLibs = nil then Opts.LinkLibs := TStringList.Create();
-    if (Prog <> nil) and (Prog.LinkLibs <> nil) then
-      for I := 0 to Prog.LinkLibs.Count - 1 do
-        if Opts.LinkLibs.IndexOf(TLinkLibDecl(Prog.LinkLibs.Items[I]).LibName) < 0 then
-          Opts.LinkLibs.Add(TLinkLibDecl(Prog.LinkLibs.Items[I]).LibName);
-    if Loader <> nil then
-      for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
-        for J := 0 to TUnitInterface(Loader.PrebuiltIfaces.Items[I]).LinkLibs.Count - 1 do
-          if Opts.LinkLibs.IndexOf(
-               TUnitInterface(Loader.PrebuiltIfaces.Items[I]).LinkLibs.Strings[J]) < 0 then
-            Opts.LinkLibs.Add(
-              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).LinkLibs.Strings[J]);
     Units.Free();
     Loader.Free();
     SearchPaths.Free();

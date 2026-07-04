@@ -27,16 +27,6 @@ uses
 type
   ESemanticError = class(Exception);
 
-  { One entry in the enum-member reverse index: the enum type a member
-    belongs to, the member's ordinal value, and a monotonic declaration
-    rank (higher = declared later, wins the context-free ambiguity
-    fallback).  Owned by TSemanticAnalyser.FEnumMemberRefs. }
-  TEnumMemberRef = class
-    EnumDesc: TEnumTypeDesc;
-    Ordinal:  Int64;
-    Order:    Integer;
-  end;
-
   TSemanticAnalyser = class(TUsesChainProvider)
   private
     FTable:                TSymbolTable;
@@ -74,15 +64,6 @@ type
     FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
     FScopeDepth:           Integer;      { mirrors FTable scope depth; used to detect main-level globals }
     FCurrentClass:         TRecordTypeDesc;  { class being analysed (set in AnalyseMethodDecl) }
-    FCurrentMethodOwner:   TRecordTypeDesc;  { declaring type of the method body
-                                               currently being analysed — set for
-                                               BOTH instance and STATIC methods.
-                                               Unlike FCurrentClass (nil inside a
-                                               static body so implicit-Self refs
-                                               fail), this is used only by member-
-                                               visibility checks so a strict-private
-                                               member is reachable from its own
-                                               type's static methods too. }
     { Type-parameter names in scope while analysing an instantiated generic
       body (T, K, V, ...).  These are registered as skType aliases (T=Integer)
       so the body resolves, but they are NOT user-declared types, so a local
@@ -94,13 +75,6 @@ type
     FArrayConstCounter:    Integer;      { counter for generating unique array-const data labels }
     FAnonEnumCounter:      Integer;      { counter for unique anonymous-enum type names (inline 'set of (a,b,c)') }
     FCurrentUnitName:      string;       { name of the unit/program currently being analysed }
-    FMethodOwnerHint:      string;       { receiver owning-unit hint for the NEXT
-                                           ResolveMethodOverload call, consumed and
-                                           cleared at its start.  Disambiguates a
-                                           method on a cross-unit same-named type to
-                                           the receiver's actual unit.  A field, not
-                                           a parameter, to keep ResolveMethodOverload
-                                           within the 6-register call ABI. }
     FCurrentEnclosingDecl: TMethodDecl;  { the innermost standalone proc/func currently being analysed;
                                            nil at program level.  Used to set EnclosingDecl on nested procs. }
     FUnitIfaces:           TStringList;  { owned list (case-insensitive) — keys are unit
@@ -125,21 +99,6 @@ type
                                            source order.  Lookup walks this list right-to-left
                                            ("last in uses wins"); System is the final fallback.
                                            Empty during pure import phases. }
-    FEnumMemberIndex:      TStringList;  { owned (case-insensitive, dupAccept) — reverse
-                                           index of enum member names.  Strings[I] is a
-                                           member name, Objects[I] a TEnumMemberRef giving
-                                           its enum type + ordinal + declaration order.
-                                           A name may appear more than once (the same
-                                           member name in several enums); resolution
-                                           picks by context, uniqueness, or last-wins.
-                                           Replaces the old bare skConstant registration
-                                           — enum members are no longer flat globals. }
-    FEnumMemberRefs:       TObjectList;  { owns the TEnumMemberRef holders pointed at by
-                                           FEnumMemberIndex.Objects (TStringList does not
-                                           own its Objects). }
-    FEnumOrderCounter:     Integer;      { monotonic rank stamped on each member as it is
-                                           registered; higher = declared later = wins the
-                                           context-free ambiguity fallback. }
 
     { Add ADecl to FProcIndex under key AName, auto-tagging
       ADecl.OwningUnit from FCurrentUnitName if not already set.
@@ -153,36 +112,11 @@ type
       IndexOf can return a same-named decl from an imported unit. }
     function IndexOfProcInUnit(const AName, AUnitName: string): Integer;
 
-    { The emitted/imported link symbol for a standalone routine: the
-      `external name` for an external binding (defaulting to the Pascal name),
-      else ResolvedQbeName (bare name for unmangled RTL units) or the name. }
-    function EffectiveLinkName(A: TMethodDecl): string;
-
-    { True when A and B denote the SAME underlying link symbol with the same
-      arity, where AT LEAST one side is an external binding.  Covers two units
-      each declaring `external name 'strlen'` AND a binding (`external name
-      '_BlaiseGetMem'`) targeting a real function exported by an unmangled RTL
-      unit.  Used to collapse false "ambiguous overload" / "duplicate
-      identifier" errors in the multi-unit flat-merge. }
-    function SameLinkSymbol(A, B: TMethodDecl): Boolean;
-
     { True when A and B are two declarations of the SAME external C function —
       both external, same effective link name, same arity.  Used to collapse the
       false "ambiguous overload" that arises when two units each privately
       declare e.g. `external name 'strlen'`. }
     function SameExternalDecl(A, B: TMethodDecl): Boolean;
-
-    { True when every candidate in AList collapses to the same link symbol as
-      the first (per SameLinkSymbol).  Used when arg scoring is unavailable
-      (zero-arity early path). }
-    function AllSameExternalDecl(AList: TObjectList): Boolean;
-
-    { True when the global scope already holds a symbol that denotes the SAME
-      external C function as ANew — e.g. two units each declaring
-      `function _BlaiseGetMem(...): Pointer; external name '_BlaiseGetMem';`.
-      Such a re-declaration is benign (one underlying symbol), not a genuine
-      duplicate identifier.  Returns False for anything but matching externals. }
-    function BenignDuplicateExternal(ANew: TMethodDecl): Boolean;
 
     { Overload-group plumbing (see FProcGroups/FMethodGroups).  Every
       FProcIndex/FMethodIndex AddObject must go through the Add*GroupEntry
@@ -280,11 +214,7 @@ type
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
     procedure AnalyseStandaloneBodies(ABlock: TBlock);
     procedure AnalyseStandaloneDecl(ADecl: TMethodDecl);
-    procedure CollectCaptures(ADecl: TMethodDecl; AOuterDecl: TMethodDecl);
-    { Add AName to ADecl.CapturedVars if it names an enclosing variable
-      (member of AOuterVars) not already recorded. }
-    procedure MaybeCaptureName(ADecl: TMethodDecl; AOuterVars: TStringList;
-                               const AName: string);
+    procedure CollectCaptures(ADecl: TMethodDecl; AOuterBlock: TBlock);
     { Inlining: after bodies are analysed, mark each TMethodDecl whose body
       qualifies for codegen-side inlining.  Conservative: primitive params
       + return + locals only; no try/loops/raise/nested defs; small body.
@@ -307,8 +237,6 @@ type
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     function  TryAnalyseFieldElemWrite(AAssign: TFieldAssignment;
       AFldInfo: TFieldInfo): Boolean;
-    function  TryLowerDefaultPropertyWrite(AAssign: TFieldAssignment;
-      AMemberType: TTypeDesc): Boolean;
     function  FloatBuiltinArgType(const AName: string; AArgType: TTypeDesc;
       ALine, ACol: Integer): TTypeDesc;
     procedure AnalyseProcCall(ACall: TProcCall);
@@ -362,8 +290,6 @@ type
     function  AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
     function  AnalyseBinaryExpr(ABin: TBinaryExpr): TTypeDesc;
     function  AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
-    function  TryLowerDefaultPropertyIndex(AAccess: TFieldAccessExpr;
-      APropInfo: TPropertyInfo): TTypeDesc;
     function  AnalyseIsExpr(AExpr: TIsExpr): TTypeDesc;
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
     function  AnalyseSupportsExpr(AExpr: TSupportsExpr): TTypeDesc;
@@ -500,107 +426,6 @@ type
       the chain without going through the flat global. }
     function FindUnitSymbol(const AUnitName, ASymName: string): TSymbol;
 
-    { Directed lookup — "look in unit AUnit for the symbol AName".
-      This is THE single entry point for every unit-qualified reference
-      'Unit.Symbol' (idents, type names, statement targets): a unit
-      prefix means resolve against that specific unit's exports, never
-      the flat table or the uses chain.  Returns the symbol AUnit
-      exports under AName (of any kind — const/var/type/routine), or nil
-      when AUnit exports no such name.  Consults the per-unit cache
-      first, then the unit's interface as a fallback for symbols not yet
-      harvested into the cache. }
-    function ResolveQualified(const AUnit, AName: string): TSymbol;
-
-    { Define a module-scope global (interface var) with cross-unit
-      last-in-uses-wins semantics, mirroring AnalyseConstDecls.  On a
-      clean Define the symbol is registered in the per-unit cache; on a
-      cross-unit collision the prior unit's symbol is detached (kept alive
-      in the per-unit cache so a qualified Unit.Var reference still reaches
-      it) and this unit's symbol is installed as the flat winner.  Same-unit
-      redeclaration and module-name markers stay hard errors. }
-    procedure DefineGlobalLastWins(ASym: TSymbol; ALine, ACol: Integer);
-
-    { Define a type name with the same cross-unit last-found-wins rule as
-      DefineGlobalLastWins: a collision against a type owned by a DIFFERENT
-      used unit detaches the prior type (kept in the per-unit cache so a
-      qualified Unit.Type reference still reaches it) and installs this unit's
-      type as the flat winner; a same-unit redeclaration or a non-unit/module
-      collision stays the hard 'Duplicate type name' error. }
-    procedure DefineTypeLastWins(ASym: TSymbol; ATypeDecl: TTypeDecl;
-                                 ALine, ACol: Integer);
-
-    { Record one enum member in the reverse index (FEnumMemberIndex).
-      Called once per member as its enum type is analysed.  Enum members
-      are NOT registered as bare global symbols any more — a bare member
-      name resolves through ResolveEnumMember instead. }
-    procedure RegisterEnumMember(const AName: string;
-                                 AEnum: TEnumTypeDesc; AOrdinal: Int64);
-
-    { Resolve a bare enum member name to (enum type, ordinal).  Cascade:
-      AExpectedType (an enum, or set-of-enum) names the enum -> that one;
-      else a single candidate -> that one; else the latest-declared
-      candidate (last-wins).  Returns nil when no enum has the member.
-      AExpectedType may be nil (no context, e.g. Ord/const-fold). }
-    function ResolveEnumMember(const AName: string;
-                               AExpectedType: TTypeDesc): TEnumMemberRef;
-
-    { Context-directed resolution of a bare enum-member identifier.  If AExpr
-      is an unresolved TIdentExpr that is not a normal symbol and names a
-      member of (or compatible with) AExpectedType, mark it constant in place
-      and return True; the caller then reads AExpr.ResolvedType and must NOT
-      call AnalyseExpr on it again.  Returns False for anything else, leaving
-      AExpr untouched for the normal expression path. }
-    function TryResolveBareEnumIdent(AExpr: TASTExpr;
-                                     AExpectedType: TTypeDesc): Boolean;
-
-    { Analyse AExpr, first giving a bare enum-member identifier the chance to
-      resolve against AExpectedType (the known target/element/parameter type).
-      Returns the expression's resolved type.  Use this anywhere an expression
-      is analysed into a context whose enum type is already known. }
-    function AnalyseExprHinted(AExpr: TASTExpr;
-                              AExpectedType: TTypeDesc): TTypeDesc;
-
-    { How many enums declare a member of this name.  >1 means a bare,
-      context-free reference is ambiguous and must be qualified. }
-    function EnumMemberCandidateCount(const AName: string): Integer;
-
-    { Comma-separated names of every enum that declares a member AName, in
-      declaration order — used to spell out an ambiguity in diagnostics. }
-    function EnumMemberOwners(const AName: string): string;
-
-    { Enum hint for a bare member passed as call argument APos to a routine
-      named AName with AArity actuals.  Walks the overload candidates and,
-      among those whose parameter at APos is an enum (or set-of-enum) that
-      actually declares AMember, returns that enum when exactly one distinct
-      enum qualifies — so a bare shared member is steered to the only enum the
-      call could accept.  Returns nil when zero or several enums qualify (the
-      arg then falls to the context-free last-wins path). }
-    { The enum a single parameter would accept for a bare member: the param's
-      enum (or set-of-enum base) when it declares AMember and the decl can take
-      AArity actuals; nil otherwise. }
-    function EnumOfParamAccepting(ADecl: TMethodDecl; AArity, APos: Integer;
-                                 const AMember: string): TTypeDesc;
-    function EnumArgHint(const AName: string; AArity, APos: Integer;
-                         const AMember: string): TTypeDesc;
-    { Like EnumArgHint but walks the method overload set up the inheritance
-      chain of ATypeName (mirrors ResolveMethodOverload's candidate walk). }
-    function EnumMethodArgHint(const ATypeName, AMethodName: string;
-                               AArity, APos: Integer;
-                               const AMember: string): TTypeDesc;
-    { True if AArg is a bare identifier that names an enum member and is not a
-      real symbol — i.e. a candidate for context-directed enum resolution. }
-    function BareEnumArgCandidate(AArg: TASTExpr): Boolean;
-
-    { Pre-pass over a call's actuals: pin any bare, context-free enum-member
-      argument to the enum its target routine expects at that position, before
-      the args are analysed bottom-up.  Lets Foo(meVal) reach the meVal of
-      Foo's parameter enum even when meVal is shared by several enums, and
-      keeps the no-warning path for an otherwise-ambiguous bare member. }
-    procedure HintBareEnumArgs(const AName: string; AArgs: TObjectList);
-    { As HintBareEnumArgs, for a method call on a receiver of type ATypeName. }
-    procedure HintBareEnumMethodArgs(const ATypeName, AMethodName: string;
-                                     AArgs: TObjectList);
-
     { Reserve a module name in the current scope (issue #84).  Defines
       an skModule marker so any same-scope declaration of that name
       fails the normal duplicate check, matching FPC/Delphi.  A failed
@@ -661,39 +486,6 @@ type
                                   const AMemberName: string;
                                   ALine, ACol: Integer);
 
-    { Core visibility predicate.  Single source of truth applied by both
-      the unqualified uses-chain probe and the qualified member-access
-      asserts.  ADeclaringUnit / ADeclaringType identify where the member
-      was declared; AFromClass is the class whose method body we are in
-      (or nil at unit/free-routine level). }
-    function MemberVisibleTo(AVisibility: TMemberVisibility;
-                             const ADeclaringUnit, ADeclaringType: string;
-                             const AFromUnit: string;
-                             AFromClass: TRecordTypeDesc): Boolean;
-
-    { Richer qualified-access assert that carries the member's visibility
-      and declaring type.  On invisible, hard error. }
-    procedure AssertMemberVisibleV(AVisibility: TMemberVisibility;
-                                   const ADeclaringUnit, ADeclaringType: string;
-                                   const AMemberName: string;
-                                   ALine, ACol: Integer);
-
-    { Visibility enforcement for a STATIC (class-level) variable access.  Like
-      AssertMemberVisibleV but treats the current method's declaring type as the
-      "from" class even inside a static method (FCurrentClass is nil there), so a
-      strict-private static var stays reachable from its own type's static
-      methods. }
-    procedure AssertStaticVarVisible(AVisibility: TMemberVisibility;
-                                     const ADeclaringUnit, ADeclaringType: string;
-                                     const AMemberName: string;
-                                     ALine, ACol: Integer);
-
-    { Qualified instance/class method-call visibility enforcement.  AMDecl is
-      the resolved TMethodDecl (via ResolveMethodOverload or FindMethodDecl);
-      reads its Visibility / OwningUnit / OwnerTypeName.  No-op when AMDecl is
-      nil.  Constructors are exempt (always reachable for instantiation). }
-    procedure EnforceMethodVisible(AMDecl: TObject; ALine, ACol: Integer);
-
     { Uses-chain lookup for *unqualified* identifiers.  Walks
       FCurrentUsesChain right-to-left ("last in uses wins"); for
       each chain entry whose TUnitInterface advertises AName via
@@ -714,15 +506,14 @@ type
 
 implementation
 
-{ Float<->string conversion uses the RTL's pure-Pascal _DoubleToStr / _StrToDouble,
-  NOT libc's snprintf / strtod.  snprintf is a genuinely variadic function;
-  declaring it with a fixed Double parameter violates the SysV x86-64 variadic ABI
-  (the %al vector-register count is left unset), so glibc may read the double from
-  the wrong place and emit a wrong string (environment-dependent miscompilation of
-  folded float constants — passes locally, fails in CI).  Routing both directions
-  through the RTL also drops the last libc dependency in this path, so a --static
-  (libc-free) build of the compiler links without strtod. }
-function _StrToDouble(S: Pointer): Double; external name '_StrToDouble';
+{ Double->string conversion uses the RTL's pure-Pascal _DoubleToStr, NOT libc's
+  snprintf.  snprintf is a genuinely variadic function; declaring it with a fixed
+  Double parameter violates the SysV x86-64 variadic ABI (the %al vector-register
+  count is left unset), so glibc may read the double from the wrong place and emit
+  a wrong string.  The symptom is environment-dependent miscompilation of folded
+  float constants (passes locally, fails in CI).  _DoubleToStr is FormatFloat(.,15),
+  i.e. %.15g, and is ABI-safe.  strtod is NOT variadic, so it is kept as-is. }
+function _strtod(S: PChar; EndPtr: Pointer): Double; external name 'strtod';
 function _DoubleToStr(V: Double): string; external name '_DoubleToStr';
 
 function RawDoubleToStr(V: Double): string;
@@ -732,7 +523,7 @@ end;
 
 function RawStrToDouble(const S: string): Double;
 begin
-  Result := _StrToDouble(PChar(S));
+  Result := _strtod(PChar(S), nil);
 end;
 
 function TSemanticAnalyser.GetSymbolTable: TSymbolTable;
@@ -753,11 +544,6 @@ begin
   FMethodGroups         := TStringList.Create();
   FMethodGroups.CaseSensitive := False;
   FGroupKeepAlive       := TObjectList.Create(False);
-  FEnumMemberIndex      := TStringList.Create();
-  FEnumMemberIndex.CaseSensitive := False;
-  FEnumMemberIndex.Duplicates    := dupAccept;
-  FEnumMemberRefs       := TObjectList.Create(True);  { owns the holders }
-  FEnumOrderCounter     := 0;
   FGenericFuncTemplates := TStringList.Create();
   FGenericFuncTemplates.CaseSensitive := False;
   FGenericMethodTemplates := TStringList.Create();
@@ -790,8 +576,6 @@ begin
   { Releasing the keep-alive releases every group list; the group string
     lists themselves only hold raw pointers. }
   FGroupKeepAlive.Free();
-  FEnumMemberRefs.Free();    { frees the holders }
-  FEnumMemberIndex.Free();
   FProcGroups.Free();
   FMethodGroups.Free();
   FProcIndex.Free();
@@ -806,264 +590,6 @@ begin
     raise ESemanticError.Create(Format('%s at line %d col %d in %s', [AMsg, ALine, ACol, FCurrentUnitName]))
   else
     raise ESemanticError.Create(Format('%s at line %d col %d', [AMsg, ALine, ACol]));
-end;
-
-procedure TSemanticAnalyser.RegisterEnumMember(const AName: string;
-                                               AEnum: TEnumTypeDesc; AOrdinal: Int64);
-var
-  Ref: TEnumMemberRef;
-begin
-  Ref          := TEnumMemberRef.Create();
-  Ref.EnumDesc := AEnum;
-  Ref.Ordinal  := AOrdinal;
-  Inc(FEnumOrderCounter);
-  Ref.Order    := FEnumOrderCounter;
-  FEnumMemberRefs.Add(Ref);                  { owns Ref }
-  FEnumMemberIndex.AddObject(AName, Ref);    { non-owning view, dupAccept }
-end;
-
-function TSemanticAnalyser.ResolveEnumMember(const AName: string;
-                                             AExpectedType: TTypeDesc): TEnumMemberRef;
-var
-  I:        Integer;
-  Ref:      TEnumMemberRef;
-  Best:     TEnumMemberRef;
-  Count:    Integer;
-  WantEnum: TEnumTypeDesc;
-begin
-  Result := nil;
-  { An expected set-of-enum context narrows to its element enum. }
-  WantEnum := nil;
-  if AExpectedType <> nil then
-  begin
-    if AExpectedType is TEnumTypeDesc then
-      WantEnum := TEnumTypeDesc(AExpectedType)
-    else if (AExpectedType is TSetTypeDesc) and
-            (TSetTypeDesc(AExpectedType).BaseType is TEnumTypeDesc) then
-      WantEnum := TEnumTypeDesc(TSetTypeDesc(AExpectedType).BaseType);
-  end;
-
-  Best  := nil;
-  Count := 0;
-  for I := 0 to FEnumMemberIndex.Count - 1 do
-  begin
-    if not SameText(FEnumMemberIndex.Strings[I], AName) then Continue;
-    Ref := TEnumMemberRef(FEnumMemberIndex.Objects[I]);
-    { Context hit: an enum the caller asked for wins outright. }
-    if (WantEnum <> nil) and (Ref.EnumDesc = WantEnum) then
-      Exit(Ref);
-    Inc(Count);
-    { Track the latest-declared candidate for the context-free fallback. }
-    if (Best = nil) or (Ref.Order > Best.Order) then
-      Best := Ref;
-  end;
-
-  if Count = 0 then Exit(nil);   { no enum has this member }
-  { One candidate -> unambiguous; many -> last-declared wins. }
-  Result := Best;
-end;
-
-function TSemanticAnalyser.TryResolveBareEnumIdent(AExpr: TASTExpr;
-                                                   AExpectedType: TTypeDesc): Boolean;
-var
-  Ref: TEnumMemberRef;
-begin
-  Result := False;
-  if not (AExpr is TIdentExpr) then Exit;
-  { Already resolved (e.g. a set range expanded into constant members). }
-  if TIdentExpr(AExpr).IsConstant then Exit;
-  { A real symbol of that name always wins — do not shadow it with an enum. }
-  if FTable.Lookup(TIdentExpr(AExpr).Name) <> nil then Exit;
-  Ref := ResolveEnumMember(TIdentExpr(AExpr).Name, AExpectedType);
-  if Ref = nil then Exit;
-  TIdentExpr(AExpr).IsConstant   := True;
-  TIdentExpr(AExpr).ConstValue   := Ref.Ordinal;
-  TIdentExpr(AExpr).ResolvedType := Ref.EnumDesc;
-  AExpr.ResolvedType             := Ref.EnumDesc;
-  Result := True;
-end;
-
-function TSemanticAnalyser.AnalyseExprHinted(AExpr: TASTExpr;
-                                            AExpectedType: TTypeDesc): TTypeDesc;
-begin
-  if TryResolveBareEnumIdent(AExpr, AExpectedType) then
-    Result := AExpr.ResolvedType
-  else
-    Result := AnalyseExpr(AExpr);
-end;
-
-function TSemanticAnalyser.EnumMemberCandidateCount(const AName: string): Integer;
-var
-  I: Integer;
-begin
-  Result := 0;
-  for I := 0 to FEnumMemberIndex.Count - 1 do
-    if SameText(FEnumMemberIndex.Strings[I], AName) then
-      Inc(Result);
-end;
-
-function TSemanticAnalyser.EnumMemberOwners(const AName: string): string;
-var
-  I:   Integer;
-  Ref: TEnumMemberRef;
-begin
-  Result := '';
-  for I := 0 to FEnumMemberIndex.Count - 1 do
-    if SameText(FEnumMemberIndex.Strings[I], AName) then
-    begin
-      Ref := TEnumMemberRef(FEnumMemberIndex.Objects[I]);
-      if Result <> '' then
-        Result := Result + ', ';
-      Result := Result + Ref.EnumDesc.Name;
-    end;
-end;
-
-function TSemanticAnalyser.EnumOfParamAccepting(ADecl: TMethodDecl;
-  AArity, APos: Integer; const AMember: string): TTypeDesc;
-var
-  Par:  TMethodParam;
-  PT:   TTypeDesc;
-  Enum: TEnumTypeDesc;
-  M:    Integer;
-begin
-  Result := nil;
-  if (ADecl = nil) or (APos < 0) or (APos >= ADecl.Params.Count) then Exit;
-  { An overload that cannot take this many actuals is not a candidate. }
-  if ADecl.Params.Count < AArity then Exit;
-  Par := TMethodParam(ADecl.Params.Items[APos]);
-  PT  := Par.ResolvedType;
-  if PT = nil then Exit;
-  if PT is TEnumTypeDesc then
-    Enum := TEnumTypeDesc(PT)
-  else if (PT is TSetTypeDesc) and
-          (TSetTypeDesc(PT).BaseType is TEnumTypeDesc) then
-    Enum := TEnumTypeDesc(TSetTypeDesc(PT).BaseType)
-  else
-    Exit;
-  { Only an enum that actually declares the bare member can accept it. }
-  for M := 0 to Enum.Members.Count - 1 do
-    if SameText(Enum.Members.Strings[M], AMember) then
-      Exit(Enum);
-end;
-
-function TSemanticAnalyser.EnumArgHint(const AName: string;
-  AArity, APos: Integer; const AMember: string): TTypeDesc;
-var
-  I:     Integer;
-  Enum:  TTypeDesc;
-  Found: TTypeDesc;
-begin
-  Result := nil;
-  Found  := nil;
-  for I := 0 to FProcIndex.Count - 1 do
-  begin
-    if not SameText(FProcIndex.Strings[I], AName) then Continue;
-    Enum := EnumOfParamAccepting(TMethodDecl(FProcIndex.Objects[I]),
-      AArity, APos, AMember);
-    if Enum = nil then Continue;
-    if Found = nil then
-      Found := Enum
-    else if Found <> Enum then
-      Exit(nil);   { several enums could accept it — not a unique hint }
-  end;
-  Result := Found;
-end;
-
-function TSemanticAnalyser.EnumMethodArgHint(const ATypeName, AMethodName: string;
-  AArity, APos: Integer; const AMember: string): TTypeDesc;
-var
-  CurrName: string;
-  Sym:      TSymbol;
-  RT:       TRecordTypeDesc;
-  Grp:      TObjectList;
-  K:        Integer;
-  Cand:     TMethodDecl;
-  Enum:     TTypeDesc;
-  Found:    TTypeDesc;
-  SawHiding: Boolean;
-begin
-  Result   := nil;
-  Found    := nil;
-  CurrName := ATypeName;
-  { Walk the inheritance chain exactly as ResolveMethodOverload does: a
-    non-`overload` method at a level hides inherited same-named methods. }
-  while CurrName <> '' do
-  begin
-    Grp := GroupOf(FMethodGroups, CurrName + '.' + AMethodName);
-    SawHiding := False;
-    if Grp <> nil then
-      for K := 0 to Grp.Count - 1 do
-      begin
-        Cand := TMethodDecl(Grp.Items[K]);
-        if not Cand.IsOverload then SawHiding := True;
-        Enum := EnumOfParamAccepting(Cand, AArity, APos, AMember);
-        if Enum <> nil then
-        begin
-          if Found = nil then
-            Found := Enum
-          else if Found <> Enum then
-            Exit(nil);
-        end;
-      end;
-    if SawHiding then Break;
-    Sym := FTable.Lookup(CurrName);
-    if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) then
-    begin
-      RT := TRecordTypeDesc(Sym.TypeDesc);
-      if RT.Parent <> nil then CurrName := RT.Parent.Name else Break;
-    end
-    else
-      Break;
-  end;
-  Result := Found;
-end;
-
-function TSemanticAnalyser.BareEnumArgCandidate(AArg: TASTExpr): Boolean;
-begin
-  Result := False;
-  if not (AArg is TIdentExpr) then Exit;
-  if TIdentExpr(AArg).IsConstant then Exit;
-  { A real symbol of that name always wins. }
-  if FTable.Lookup(TIdentExpr(AArg).Name) <> nil then Exit;
-  { Only worth steering when the name is a known enum member. }
-  Result := EnumMemberCandidateCount(TIdentExpr(AArg).Name) > 0;
-end;
-
-procedure TSemanticAnalyser.HintBareEnumArgs(const AName: string;
-  AArgs: TObjectList);
-var
-  I:    Integer;
-  Arg:  TASTExpr;
-  Hint: TTypeDesc;
-begin
-  if AArgs = nil then Exit;
-  for I := 0 to AArgs.Count - 1 do
-  begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    if not BareEnumArgCandidate(Arg) then Continue;
-    Hint := EnumArgHint(AName, AArgs.Count, I, TIdentExpr(Arg).Name);
-    if Hint <> nil then
-      TryResolveBareEnumIdent(Arg, Hint);
-  end;
-end;
-
-procedure TSemanticAnalyser.HintBareEnumMethodArgs(const ATypeName,
-  AMethodName: string; AArgs: TObjectList);
-var
-  I:    Integer;
-  Arg:  TASTExpr;
-  Hint: TTypeDesc;
-begin
-  if AArgs = nil then Exit;
-  for I := 0 to AArgs.Count - 1 do
-  begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    if not BareEnumArgCandidate(Arg) then Continue;
-    Hint := EnumMethodArgHint(ATypeName, AMethodName, AArgs.Count, I,
-      TIdentExpr(Arg).Name);
-    if Hint <> nil then
-      TryResolveBareEnumIdent(Arg, Hint);
-  end;
 end;
 
 function TSemanticAnalyser.AttrMatches(const AAttrName, ACanonical: string): Boolean;
@@ -1498,80 +1024,23 @@ begin
   Result := -1;
 end;
 
-function TSemanticAnalyser.EffectiveLinkName(A: TMethodDecl): string;
-begin
-  if A = nil then
-  begin
-    Result := '';
-    Exit;
-  end;
-  if A.IsExternal then
-  begin
-    { External binding: link symbol is the `external name`, else Pascal name. }
-    if A.ExternalName <> '' then Result := A.ExternalName
-    else                         Result := A.Name;
-  end
-  else
-  begin
-    { Real routine: emitted symbol is ResolvedQbeName when set (bare name for
-      unmangled RTL units blaise_*/rtl.*), else the Pascal name. }
-    if A.ResolvedQbeName <> '' then Result := A.ResolvedQbeName
-    else                            Result := A.Name;
-  end;
-end;
-
-function TSemanticAnalyser.SameLinkSymbol(A, B: TMethodDecl): Boolean;
-begin
-  Result := False;
-  if (A = nil) or (B = nil) then Exit;
-  { At least one side must be an external binding — two distinct real routines
-    that merely share a name are a genuine clash, not the same symbol. }
-  if not (A.IsExternal or B.IsExternal) then Exit;
-  if A.Params.Count <> B.Params.Count then Exit;
-  Result := SameText(Self.EffectiveLinkName(A), Self.EffectiveLinkName(B));
-end;
-
 function TSemanticAnalyser.SameExternalDecl(A, B: TMethodDecl): Boolean;
+var
+  LinkA, LinkB: string;
 begin
   Result := False;
   if (A = nil) or (B = nil) then Exit;
   if not (A.IsExternal and B.IsExternal) then Exit;
-  Result := Self.SameLinkSymbol(A, B);
-end;
-
-function TSemanticAnalyser.AllSameExternalDecl(AList: TObjectList): Boolean;
-var
-  I:     Integer;
-  First: TMethodDecl;
-begin
-  Result := False;
-  if (AList = nil) or (AList.Count < 2) then Exit;
-  First := TMethodDecl(AList.Items[0]);
-  for I := 1 to AList.Count - 1 do
-    if not Self.SameLinkSymbol(First, TMethodDecl(AList.Items[I])) then
-      Exit;
-  Result := True;
-end;
-
-function TSemanticAnalyser.BenignDuplicateExternal(ANew: TMethodDecl): Boolean;
-var
-  Existing:  TSymbol;
-begin
-  Result := False;
-  if ANew = nil then Exit;
-  { Only an external binding can benignly duplicate an existing symbol. }
-  if not ANew.IsExternal then Exit;
-  { The clash was detected in the global scope (interface symbols define at
-    scope depth 1), so resolve the colliding symbol there directly — the
-    uses-chain Lookup could otherwise return a shadowing symbol from a
-    different scope. }
-  Existing := FTable.GlobalScope().LookupLocal(ANew.Name);
-  if Existing = nil then Exit;
-  if not (Existing.Kind in [skProcedure, skFunction]) then Exit;
-  if Existing.Decl = nil then Exit;
-  { Same underlying link symbol — e.g. an `external name '_BlaiseGetMem'`
-    binding targeting the real _BlaiseGetMem exported by blaise_mem. }
-  Result := Self.SameLinkSymbol(TMethodDecl(Existing.Decl), ANew);
+  if A.Params.Count <> B.Params.Count then Exit;
+  if A.ExternalName <> '' then
+    LinkA := A.ExternalName
+  else
+    LinkA := A.Name;
+  if B.ExternalName <> '' then
+    LinkB := B.ExternalName
+  else
+    LinkB := B.Name;
+  Result := SameText(LinkA, LinkB);
 end;
 
 procedure TSemanticAnalyser.BuildUsesChain(AUsedUnits: TStringList);
@@ -1608,7 +1077,7 @@ var
   I: Integer;
 begin
   FProg := AProg;
-  FlushPendingGenericInstances();
+  FlushPendingGenericInstances;
   FCurrentUnitName := AProg.Name;
   BuildUsesChain(AProg.UsedUnits);
   FTable.UsesChainProvider := Self;
@@ -1642,7 +1111,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  FlushPendingGenericInstances();
+  FlushPendingGenericInstances;
   FTable.PushScope();
   try
     { The unit's own name and the names of directly used units are
@@ -1663,7 +1132,7 @@ begin
       *before* any FindTypeOrInstantiate call can clone an instance, or the
       instance is born with nil bodies and codegen emits no function for it. }
     LinkGenericClassMethodImpls(AUnit.ImplBlock);
-    RepairEarlyGenericInstances();
+    RepairEarlyGenericInstances;
 
     { Register interface-section global variables — visible to impl bodies. }
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
@@ -1743,14 +1212,8 @@ begin
       if not FTable.Define(Sym) then
       begin
         Sym.Free();
-        { Two units may each export the same external C binding (e.g.
-          `external name '_BlaiseGetMem'`).  The flat-merge shares one
-          global scope, so the second Define collides — but it denotes ONE
-          underlying symbol, not a real duplicate.  Tolerate it; otherwise
-          report the genuine clash. }
-        if not BenignDuplicateExternal(MDecl) then
-          SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
-            MDecl.Line, MDecl.Col);
+        SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
+          MDecl.Line, MDecl.Col);
       end;
     end;
 
@@ -1890,7 +1353,6 @@ begin
       else
       begin
         { Impl-only declaration — register symbol and index it }
-        ImplDecl.IsImplOnly := True;
         if ImplDecl.IsOverload then
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
@@ -1974,7 +1436,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  FlushPendingGenericInstances();
+  FlushPendingGenericInstances;
   BuildUsesChain(AUnit.UsedUnits);
   FTable.UsesChainProvider := Self;
   { Auto-tag every global Define within this unit's analysis with the
@@ -1997,7 +1459,7 @@ begin
     the cloned instance method is born without a body and codegen emits
     no function — leaving call sites referencing an undefined symbol. }
   LinkGenericClassMethodImpls(AUnit.ImplBlock);
-  RepairEarlyGenericInstances();
+  RepairEarlyGenericInstances;
 
   { Register interface-section global variables.  Marked IsGlobal so
     codegen emits them as data-segment slots rather than stack allocs;
@@ -2016,7 +1478,12 @@ begin
       Sym := TSymbol.Create(VDecl.Names.Strings[J], skVariable, ParType);
       Sym.IsGlobal    := True;
       Sym.IsThreadVar := VDecl.IsThreadVar;
-      DefineGlobalLastWins(Sym, VDecl.Line, VDecl.Col);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free();
+        SemanticError(Format('Duplicate identifier ''%s''',
+          [VDecl.Names.Strings[J]]), VDecl.Line, VDecl.Col);
+      end;
     end;
   end;
 
@@ -2067,41 +1534,9 @@ begin
     if not FTable.Define(Sym) then
     begin
       Sym.Free();
-      { Same-external collapse — see the note on the parallel AnalyseUnit
-        path: two units exporting the same `external name 'X'` binding share
-        one underlying symbol, so a Define collision there is benign. }
-      if not BenignDuplicateExternal(MDecl) then
-        SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
-          MDecl.Line, MDecl.Col);
+      SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
+        MDecl.Line, MDecl.Col);
     end;
-  end;
-
-  { Register impl-section TYPE declarations BEFORE linking class method bodies,
-    so a class declared in the implementation section has its methods registered
-    in FMethodGroups when LinkClassMethodImpls looks them up (otherwise every
-    impl-section class method reports "not declared in class").
-
-    These are registered in the GLOBAL scope (not the pushed impl scope below)
-    so the type symbols survive to codegen — EmitClassSection / EmitUnit walk
-    the AST TypeDecls but ClassUnitPrefix's symbol Lookup must still find the
-    class to derive its unit-qualified _FieldCleanup/vtable/typeinfo names.
-    Marking them IsImplPrivate (DefineImplPrivate context) keeps them visible
-    only to THIS unit: Lookup suppresses them while any other unit is analysed,
-    so they do not leak into unrelated units through the flat global scope.
-    The unit's own bodies still resolve them via layer 3 (owner = current
-    unit); code generation resolves them by setting the emitted unit as the
-    table's viewing context.
-
-    Only TYPES are hoisted.  Impl-section consts stay in the pushed scope below
-    (layer-1 visible to the unit's own bodies, never global, so they never need
-    suppression); LinkClassMethodImpls needs only the types.  An impl-section
-    type that sizes itself on an impl-section const is not currently supported
-    and would report "Unknown type" — no codebase unit relies on it. }
-  FTable.DefineImplPrivate := True;
-  try
-    AnalyseTypeDecls(AUnit.ImplBlock);
-  finally
-    FTable.DefineImplPrivate := False;
   end;
 
   { Link class method bodies from ImplBlock to the class type method decls
@@ -2112,14 +1547,13 @@ begin
   { --- Implementation section -------------------------------------------
     Push a scope so impl-only standalone symbols don't leak globally.
     Class method bodies are analysed inside this scope so they can call
-    impl-only helpers (e.g. TStringList.SetText -> SplitIntoList).
-    (Impl-section type decls were already processed above.) }
+    impl-only helpers (e.g. TStringList.SetText -> SplitIntoList). }
   FTable.PushScope();
   try
-    { Register impl-section consts + global variables.  Consts stay in this
-      pushed scope (layer-1 visible to the unit's own bodies); globals are
-      marked IsGlobal so codegen emits them as data-segment slots. }
+    { Register impl-section global variables — marked IsGlobal so codegen
+      emits them as data-segment slots rather than stack allocations. }
     AnalyseConstDecls(AUnit.ImplBlock);
+    AnalyseTypeDecls(AUnit.ImplBlock);
     AnalyseArrayConstDecls(AUnit.ImplBlock);
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
     begin
@@ -2228,7 +1662,6 @@ begin
       else
       begin
         { Impl-only declaration — register in impl scope (does not persist) }
-        ImplDecl.IsImplOnly := True;
         if ImplDecl.IsOverload then
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
@@ -2249,13 +1682,8 @@ begin
       end;
     end;
 
-    { Analyse class method bodies — impl-only helpers now visible above.
-      ImplBlock is analysed too so a class declared in the implementation
-      section has its method bodies type-checked (otherwise field/param
-      references inside them carry no ResolvedType and codegen aborts with
-      "no resolved type"). }
+    { Analyse class method bodies — impl-only helpers now visible above }
     AnalyseMethodBodies(AUnit.IntfBlock);
-    AnalyseMethodBodies(AUnit.ImplBlock);
 
     { Verify every interface declaration has a matching implementation }
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
@@ -2398,35 +1826,6 @@ begin
     Result := nil;
 end;
 
-function TSemanticAnalyser.ResolveQualified(const AUnit,
-                                            AName: string): TSymbol;
-begin
-  Result := nil;
-  if (AUnit = '') or (FTable = nil) then Exit;
-
-  { 1. Per-unit cache: direct keyed retrieval — the symbol AUnit defined.
-       This is what disambiguates two units exporting the same name (a
-       collision winner is evicted from the flat table but kept here). }
-  Result := FindUnitSymbol(AUnit, AName);
-  if Result <> nil then Exit;
-
-  { 2. Flat-table fallback: covers paths/harnesses that populate the flat
-       global but not the per-unit cache (the cache is only filled by the
-       driver's RegisterUnitIface loop; the in-process test harness skips
-       it).  Accept the symbol unless it demonstrably belongs to a DIFFERENT
-       unit — same leniency as the LookupViaUsesChain fallback: an empty
-       OwningUnit is treated as a match, a non-empty mismatch is rejected. }
-  FTable.BypassUsesChain := True;
-  try
-    Result := FTable.Lookup(AName);
-  finally
-    FTable.BypassUsesChain := False;
-  end;
-  if (Result <> nil) and (Result.OwningUnit <> '')
-     and not SameText(Result.OwningUnit, AUnit) then
-    Result := nil;
-end;
-
 function TSemanticAnalyser.LookupViaUsesChain(const AName: string): TSymbol;
 var
   I:        Integer;
@@ -2482,10 +1881,13 @@ function TSemanticAnalyser.IsVisibleFromUnit(ASym: TSymbol;
                                              const AFromUnit: string;
                                              AFromClass: TRecordTypeDesc): Boolean;
 begin
-  { Free (non-member) symbols default to public — the symbol carries no
-    per-member visibility, so the uses-chain probe never rejects on this
-    path.  Class/record member visibility is enforced at the qualified- and
-    unqualified-member access sites via MemberVisibleTo / AssertMemberVisibleV. }
+  { Stub — see declaration in interface section.  When private/
+    protected modifiers arrive on class members:
+      - private:   Result := (AFromUnit = ASym.OwningUnit);
+      - protected: Result := (AFromUnit = ASym.OwningUnit)
+                          or (AFromClass <> nil)
+                             and AFromClassDescendsFromDeclarer(...);
+    Free symbols default to public so AFromClass is ignored for them. }
   Result := True;
 end;
 
@@ -2493,68 +1895,9 @@ function TSemanticAnalyser.IsVisibleFromUnit(const AMemberOwningUnit: string;
                                              const AFromUnit: string;
                                              AFromClass: TRecordTypeDesc): Boolean;
 begin
-  { String-flavor — same rationale as the TSymbol form. }
+  { String-flavor stub.  Same future logic as the TSymbol form,
+    keyed on the AMemberOwningUnit string directly. }
   Result := True;
-end;
-
-function TSemanticAnalyser.MemberVisibleTo(AVisibility: TMemberVisibility;
-                                           const ADeclaringUnit, ADeclaringType: string;
-                                           const AFromUnit: string;
-                                           AFromClass: TRecordTypeDesc): Boolean;
-var
-  C: TRecordTypeDesc;
-begin
-  case AVisibility of
-    mvPublic, mvPublished:
-      Result := True;
-
-    mvPrivate:
-      { Unit-scoped: visible to any code in the declaring unit.  A member
-        whose declaring unit is unknown (empty) is treated as same-unit —
-        program-scope types and pre-visibility imports must not be locked out. }
-      Result := (ADeclaringUnit = '') or SameText(ADeclaringUnit, AFromUnit);
-
-    mvProtected:
-      begin
-        { Same unit OR AFromClass is the declaring type or a descendant of it. }
-        Result := (ADeclaringUnit = '') or SameText(ADeclaringUnit, AFromUnit);
-        if not Result then
-        begin
-          C := AFromClass;
-          while C <> nil do
-          begin
-            if SameText(C.Name, ADeclaringType) then
-            begin
-              Result := True;
-              Break;
-            end;
-            C := C.Parent;
-          end;
-        end;
-      end;
-
-    mvStrictPrivate:
-      { Visible only from the declaring TYPE's own methods. }
-      Result := (AFromClass <> nil) and SameText(AFromClass.Name, ADeclaringType);
-
-    mvStrictProtected:
-      begin
-        { Declaring type or any descendant's methods, regardless of unit. }
-        Result := False;
-        C := AFromClass;
-        while C <> nil do
-        begin
-          if SameText(C.Name, ADeclaringType) then
-          begin
-            Result := True;
-            Break;
-          end;
-          C := C.Parent;
-        end;
-      end;
-  else
-    Result := True;
-  end;
 end;
 
 procedure TSemanticAnalyser.AssertMemberVisible(const AMemberOwningUnit: string;
@@ -2562,61 +1905,10 @@ procedure TSemanticAnalyser.AssertMemberVisible(const AMemberOwningUnit: string;
                                                 const AMemberName: string;
                                                 ALine, ACol: Integer);
 begin
-  { Legacy unit-only assert — no per-member visibility available here, so it
-    never rejects.  Retained for call sites that lack the descriptor; the
-    visibility-bearing AssertMemberVisibleV does the real enforcement. }
   if not IsVisibleFromUnit(AMemberOwningUnit, FCurrentUnitName, AClassContext) then
     SemanticError(
       Format('Identifier ''%s'' is not accessible from this context',
         [AMemberName]),
-      ALine, ACol);
-end;
-
-procedure TSemanticAnalyser.EnforceMethodVisible(AMDecl: TObject;
-                                                 ALine, ACol: Integer);
-var
-  M: TMethodDecl;
-begin
-  if AMDecl = nil then Exit;
-  M := TMethodDecl(AMDecl);
-  { A constructor is always reachable (you must be able to instantiate the
-    type); enforcing visibility on Create would block legitimate construction. }
-  if SameText(M.Name, 'Create') then Exit;
-  AssertMemberVisibleV(M.Visibility, M.OwningUnit, M.OwnerTypeName,
-                       M.Name, ALine, ACol);
-end;
-
-procedure TSemanticAnalyser.AssertMemberVisibleV(AVisibility: TMemberVisibility;
-                                                 const ADeclaringUnit, ADeclaringType: string;
-                                                 const AMemberName: string;
-                                                 ALine, ACol: Integer);
-begin
-  if not MemberVisibleTo(AVisibility, ADeclaringUnit, ADeclaringType,
-                         FCurrentUnitName, FCurrentClass) then
-    SemanticError(
-      Format('''%s'' is not accessible from here', [AMemberName]),
-      ALine, ACol);
-end;
-
-procedure TSemanticAnalyser.AssertStaticVarVisible(AVisibility: TMemberVisibility;
-                                                   const ADeclaringUnit, ADeclaringType: string;
-                                                   const AMemberName: string;
-                                                   ALine, ACol: Integer);
-var
-  FromClass: TRecordTypeDesc;
-begin
-  { Static-var access uses the declaring type of the CURRENT METHOD as the
-    "from" class, so a strict-private static var is reachable from its own
-    type's STATIC methods too (those leave FCurrentClass nil to suppress
-    implicit Self, but FCurrentMethodOwner still names the owner). }
-  if FCurrentClass <> nil then
-    FromClass := FCurrentClass
-  else
-    FromClass := FCurrentMethodOwner;
-  if not MemberVisibleTo(AVisibility, ADeclaringUnit, ADeclaringType,
-                         FCurrentUnitName, FromClass) then
-    SemanticError(
-      Format('''%s'' is not accessible from here', [AMemberName]),
       ALine, ACol);
 end;
 
@@ -2673,16 +1965,9 @@ begin
     Match := nil;
     Grp   := GroupOf(FMethodGroups, Key);
     if Grp <> nil then
-    begin
-      { Prefer a declaration owned by the unit whose impl body this is: with
-        cross-unit type last-wins the group can also hold a same-named method
-        on another used unit's same-named type. }
       for K := 0 to Grp.Count - 1 do
       begin
         CD := TMethodDecl(Grp.Items[K]);
-        if (CD.OwningUnit <> '') and (FCurrentUnitName <> '') and
-           not SameText(CD.OwningUnit, FCurrentUnitName) then
-          Continue;
         if CD.IsOverload then
         begin
           if MangleParamSig(CD) = ImplSig then
@@ -2698,28 +1983,6 @@ begin
           Break;
         end;
       end;
-      { Fallback: no declaration is owned by the current unit — e.g. a generic
-        instance whose template (and method decls) live in another unit.  Match
-        by signature regardless of owner, preserving the pre-last-wins behaviour. }
-      if Match = nil then
-        for K := 0 to Grp.Count - 1 do
-        begin
-          CD := TMethodDecl(Grp.Items[K]);
-          if CD.IsOverload then
-          begin
-            if MangleParamSig(CD) = ImplSig then
-            begin
-              Match := CD;
-              Break;
-            end;
-          end
-          else
-          begin
-            Match := CD;
-            Break;
-          end;
-        end;
-    end;
     if Match = nil then
       SemanticError(
         Format('Method ''%s'' is not declared in class ''%s''',
@@ -3143,10 +2406,10 @@ function TSemanticAnalyser.SynthAnonEnum(const AMemberList: string): TEnumTypeDe
 var
   Inner:   string;
   Members: TStringList;
+  ExistSym: TSymbol;
   EnumName: string;
-  Cand:    TEnumTypeDesc;
-  Matches: Boolean;
-  K, CPos, IxI: Integer;
+  MSym:    TSymbol;
+  K, CPos: Integer;
 begin
   { Strip the surrounding parentheses and split on commas. }
   Inner := AMemberList;
@@ -3174,25 +2437,19 @@ begin
       SemanticError(Format(
         'Anonymous enumeration has %d members; set types support at most 256',
         [Members.Count]), 0, 0);
-    { Reuse an already-synthesised identical enum: scan the reverse index for an
-      enum (named or anonymous) whose member list matches exactly, so the same
-      inline `set of (a,b,c)` written twice yields one compatible set type.
-      Sharing a member name with an unrelated enum is no longer a collision. }
-    for IxI := 0 to FEnumMemberIndex.Count - 1 do
+    { Reuse an already-synthesised identical enum: if the first member is a
+      defined enum constant whose enum has exactly these members, return it. }
+    ExistSym := FTable.Lookup(Members.Strings[0]);
+    if (ExistSym <> nil) and (ExistSym.Kind = skConstant) and
+       (ExistSym.TypeDesc <> nil) and (ExistSym.TypeDesc.Kind = tyEnum) and
+       (TEnumTypeDesc(ExistSym.TypeDesc).Members.Count = Members.Count) then
     begin
-      if not SameText(FEnumMemberIndex.Strings[IxI], Members.Strings[0]) then
-        Continue;
-      Cand := TEnumMemberRef(FEnumMemberIndex.Objects[IxI]).EnumDesc;
-      if Cand.Members.Count <> Members.Count then Continue;
-      Matches := True;
+      Result := TEnumTypeDesc(ExistSym.TypeDesc);
       for K := 0 to Members.Count - 1 do
-        if not SameText(Cand.Members.Strings[K], Members.Strings[K]) then
-        begin
-          Matches := False;
-          Break;
-        end;
-      if Matches then
-        Exit(Cand);
+        if not SameText(Result.Members.Strings[K], Members.Strings[K]) then
+          SemanticError(Format('Duplicate identifier ''%s''',
+            [Members.Strings[K]]), 0, 0);
+      Exit;
     end;
     Inc(FAnonEnumCounter);
     EnumName := Format('$anonenum_%d', [FAnonEnumCounter]);
@@ -3200,7 +2457,14 @@ begin
     for K := 0 to Members.Count - 1 do
     begin
       Result.Members.Add(Members.Strings[K]);
-      RegisterEnumMember(Members.Strings[K], Result, K);
+      MSym            := TSymbol.Create(Members.Strings[K], skConstant, Result);
+      MSym.ConstValue := K;
+      if not FTable.Define(MSym) then
+      begin
+        MSym.Free();
+        SemanticError(Format('Duplicate identifier ''%s''',
+          [Members.Strings[K]]), 0, 0);
+      end;
     end;
     FTable.DefineGlobal(TSymbol.Create(EnumName, skType, Result));
   finally
@@ -3224,24 +2488,6 @@ var
   DAT: TDynArrayTypeDesc;
   I, LtPos, DotPos: Integer;
 begin
-  { Unit-qualified type 'Unit.TypeName' — resolve against that specific unit's
-    own exports FIRST, before the flat FindType below (which strips the
-    qualifier and binds the tail through the uses chain, i.e. to the cross-unit
-    last-wins winner).  Only short-circuits on a directed hit; a miss (the
-    common single-definition case, or a dotted stdlib qualifier the per-unit
-    cache has not harvested) falls through to the existing resolution. }
-  LtPos := StrPos('<', AName);
-  if LtPos < 0 then LtPos := Length(AName);
-  DotPos := -1;
-  for I := 0 to LtPos - 1 do
-    if StrAt(AName, I) = Ord('.') then DotPos := I;
-  if DotPos >= 0 then
-  begin
-    Sym := ResolveQualified(Copy(AName, 0, DotPos),
-                            StrCopyTail(AName, DotPos + 1));
-    if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc <> nil) then
-      Exit(Sym.TypeDesc);
-  end;
   Result := FTable.FindType(AName);
   if Result <> nil then Exit;
   { Dynamic array: 'array of TypeName' — create on demand.  Key cache by
@@ -3288,26 +2534,9 @@ begin
         Result := SAT;
       end;
     end
-    else if (IdxTD <> nil) and IdxTD.IsSubrange and (BaseType <> nil) then
-    begin
-      { Named integer subrange index (type TIdx = lo..hi; array[TIdx] of T):
-        the subrange supplies the index range; fold to array[lo..hi] of T,
-        exactly parallel to the enum branch's array[0..N-1]. }
-      LVal := IdxTD.SubrangeLow;
-      HVal := IdxTD.SubrangeHigh;
-      CanonName := Format('array[%d..%d] of %s', [LVal, HVal, BaseType.Name]);
-      Result    := FTable.FindType(CanonName);
-      if Result = nil then
-      begin
-        SAT := FTable.NewStaticArrayType(BaseType, LVal, HVal);
-        Sym := TSymbol.Create(CanonName, skType, SAT);
-        FTable.DefineGlobal(Sym);
-        Result := SAT;
-      end;
-    end
     else if IdxTD = nil then
       SemanticError(Format('Unknown index type ''%s''', [IdxName]), 0, 0)
-    else if (IdxTD.Kind <> tyEnum) and (not IdxTD.IsSubrange) then
+    else if IdxTD.Kind <> tyEnum then
       SemanticError(Format('''%s'' is not an enumeration type', [IdxName]), 0, 0);
     Exit;
   end;
@@ -3461,16 +2690,6 @@ begin
       DotPos := I;
   if DotPos >= 0 then
   begin
-    { Unit-qualified type 'Unit.TypeName' — directed lookup against that
-      unit's own exports first, so two units declaring the same type name
-      are disambiguated.  Falls back to bare-tail resolution via the uses
-      chain when that unit's per-unit cache has no such type (covers dotted
-      stdlib qualifiers like System.SysUtils.TFoo whose iface key differs
-      from the dotted prefix, and qualified generic instances). }
-    Sym := ResolveQualified(Copy(AName, 0, DotPos),
-                            StrCopyTail(AName, DotPos + 1));
-    if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc <> nil) then
-      Exit(Sym.TypeDesc);
     Result := FindTypeOrInstantiate(StrCopyTail(AName, DotPos + 1));
     Exit;
   end;
@@ -3694,7 +2913,6 @@ begin
       for J := 0 to FDecl.Names.Count - 1 do
         NewFDecl.Names.Add(FDecl.Names.Strings[J]);
       NewFDecl.TypeName := SubstTypeParam(FDecl.TypeName, Templ.ParamNames, Args);
-      NewFDecl.Visibility := FDecl.Visibility;
       ClonedCD.Fields.Add(NewFDecl);
     end;
 
@@ -3711,7 +2929,6 @@ begin
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsVirtual     := MDecl.IsVirtual;
       NewMDecl.IsOverride    := MDecl.IsOverride;
-      NewMDecl.Visibility    := MDecl.Visibility;
       if (MDecl.Body <> nil) and (not DeferBodies) then
       begin
         NewMDecl.Body    := CloneBlock(MDecl.Body);
@@ -3754,7 +2971,6 @@ begin
       NewPDecl.IndexParamName := PDecl.IndexParamName;
       NewPDecl.IndexTypeName  := SubstTypeParam(PDecl.IndexTypeName, Templ.ParamNames, Args);
       NewPDecl.IsDefault      := PDecl.IsDefault;
-      NewPDecl.Visibility     := PDecl.Visibility;
       ClonedCD.Properties.Add(NewPDecl);
     end;
 
@@ -3778,9 +2994,6 @@ begin
           RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
           RT.FindField(FldInfo.Name).IsUnretained := FldInfo.IsUnretained;
           RT.FindField(FldInfo.Name).IsWeak       := FldInfo.IsWeak;
-          RT.FindField(FldInfo.Name).Visibility    := FldInfo.Visibility;
-          RT.FindField(FldInfo.Name).DeclaringUnit := FldInfo.DeclaringUnit;
-          RT.FindField(FldInfo.Name).DeclaringType := FldInfo.DeclaringType;
         end;
       end;
     end
@@ -3831,9 +3044,6 @@ begin
       begin
         FldName := NewFDecl.Names.Strings[K];
         RT.AddField(FldName, FldType);
-        RT.FindField(FldName).Visibility    := NewFDecl.Visibility;
-        RT.FindField(FldName).DeclaringUnit := FCurrentUnitName;
-        RT.FindField(FldName).DeclaringType := ATypeName;
       end;
     end;
 
@@ -3924,10 +3134,6 @@ begin
       if NewPDecl.IndexTypeName <> '' then
         PropInfo.IndexTypeDesc := FindTypeOrInstantiate(NewPDecl.IndexTypeName);
       PropInfo.IsDefault := NewPDecl.IsDefault;
-      PropInfo.IsStatic := NewPDecl.IsStatic;
-      PropInfo.Visibility    := NewPDecl.Visibility;
-      PropInfo.DeclaringUnit := FCurrentUnitName;
-      PropInfo.DeclaringType := ATypeName;
       RT.AddProperty(PropInfo);
     end;
 
@@ -4069,7 +3275,6 @@ begin
       for J := 0 to FDecl.Names.Count - 1 do
         NewFDecl.Names.Add(FDecl.Names.Strings[J]);
       NewFDecl.TypeName := SubstTypeParam(FDecl.TypeName, Templ.ParamNames, Args);
-      NewFDecl.Visibility := FDecl.Visibility;
       ClonedRD.Fields.Add(NewFDecl);
     end;
 
@@ -4080,7 +3285,6 @@ begin
       NewMDecl.Name          := MDecl.Name;
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsRecordMethod := True;
-      NewMDecl.Visibility    := MDecl.Visibility;
       if (MDecl.Body <> nil) and (not DeferBodies) then
       begin
         NewMDecl.Body    := CloneBlock(MDecl.Body);
@@ -4123,9 +3327,6 @@ begin
       begin
         FldName := NewFDecl.Names.Strings[K];
         RT.AddField(FldName, FldType);
-        RT.FindField(FldName).Visibility    := NewFDecl.Visibility;
-        RT.FindField(FldName).DeclaringUnit := FCurrentUnitName;
-        RT.FindField(FldName).DeclaringType := ATypeName;
       end;
     end;
 
@@ -4633,7 +3834,7 @@ begin
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
   LinkGenericClassMethodImpls(ABlock);
-  RepairEarlyGenericInstances();
+  RepairEarlyGenericInstances;
   { Register standalone proc/func signatures before class method bodies so that
     methods can call free functions declared in the same block. }
   AnalyseStandaloneDecls(ABlock);
@@ -4723,10 +3924,9 @@ end;
 function TSemanticAnalyser.EvalConstIntExpr(AExpr: TASTExpr;
                                             ALine, ACol: Integer): Int64;
 var
-  Bin:     TBinaryExpr;
-  IdSym:   TSymbol;
-  EnumRef: TEnumMemberRef;
-  L, R:    Int64;
+  Bin:    TBinaryExpr;
+  IdSym:  TSymbol;
+  L, R:   Int64;
 begin
   Result := 0;
   if AExpr = nil then Exit;
@@ -4742,23 +3942,6 @@ begin
     IdSym := FTable.Lookup(TIdentExpr(AExpr).Name);
     if (IdSym = nil) or (IdSym.Kind <> skConstant) then
     begin
-      { Bare enum member used in a constant expression (e.g. an array
-        bound or set range).  No type context here: a member declared by a
-        single enum resolves; one shared by several is ambiguous and must be
-        qualified (TEnum.Member). }
-      EnumRef := ResolveEnumMember(TIdentExpr(AExpr).Name, nil);
-      if EnumRef <> nil then
-      begin
-        if EnumMemberCandidateCount(TIdentExpr(AExpr).Name) > 1 then
-          SemanticError(Format(
-            'cannot determine which enum ''%s'' refers to: it is declared by ' +
-            '%s, and there is no type context here to choose. Qualify it as ' +
-            '<EnumType>.%s',
-            [TIdentExpr(AExpr).Name, EnumMemberOwners(TIdentExpr(AExpr).Name),
-             TIdentExpr(AExpr).Name]),
-            ALine, ACol);
-        Exit(EnumRef.Ordinal);
-      end;
       SemanticError(Format(
         'Constant expression references ''%s'', which is not a constant',
         [TIdentExpr(AExpr).Name]), ALine, ACol);
@@ -5020,8 +4203,7 @@ function TSemanticAnalyser.ResolveConstArrayElem(const AElem: string;
   enum members, and named integer/boolean constants — to their ordinal value.
   Numeric and float literals (and already-folded integers) pass through. }
 var
-  Sym:     TSymbol;
-  EnumRef: TEnumMemberRef;
+  Sym: TSymbol;
 begin
   Result := AElem;
   if AElem = '' then Exit;
@@ -5044,15 +4226,11 @@ begin
   { Boolean literals. }
   if SameText(AElem, 'True') then Exit('1');
   if SameText(AElem, 'False') then Exit('0');
-  { Named constant carrying its value in ConstValue. }
+  { Named constant or enum member — both are skConstant symbols carrying their
+    ordinal/value in ConstValue. }
   Sym := FTable.Lookup(AElem);
   if (Sym <> nil) and (Sym.Kind = skConstant) then
     Exit(IntToStr(Sym.ConstValue));
-  { Bare enum member (no longer a global symbol) — resolve via the reverse
-    index, using the array's element type as context when it is an enum. }
-  EnumRef := ResolveEnumMember(AElem, AElemType);
-  if EnumRef <> nil then
-    Exit(IntToStr(EnumRef.Ordinal));
   { Unresolved identifier in a numeric/boolean/enum array — a real error;
     leaving it would emit an undefined symbol reference at link time. }
   SemanticError(Format(
@@ -5068,32 +4246,28 @@ function TSemanticAnalyser.ResolveSetMemberOrd(const AMember: string;
   type then comes from the declared TypeName, e.g. set of Byte). }
 var
   Sym: TSymbol;
-  Ref: TEnumMemberRef;
 begin
   if IsPlainInt(AMember) then
     Exit(Integer(StrToInt(AMember)));
-  { A named integer/ordinal constant (enum members are no longer symbols). }
   Sym := FTable.Lookup(AMember);
-  if (Sym <> nil) and (Sym.Kind = skConstant) then
-    Exit(Integer(Sym.ConstValue));
-  { Bare enum member via the reverse index.  The first enum member seen pins
-    the set's base enum; later members resolve against it (so an ambiguous
-    name follows the set), and a member outside it is a genuine mix error. }
-  Ref := ResolveEnumMember(AMember, AEnumDesc);
-  if Ref = nil then
+  if (Sym = nil) or (Sym.Kind <> skConstant) then
   begin
     SemanticError(Format(
       'Set constant ''%s'' member ''%s'' is not a constant value',
       [ACD.Name, AMember]), ACD.Line, ACD.Col);
     Exit(0);
   end;
-  if AEnumDesc = nil then
-    AEnumDesc := Ref.EnumDesc
-  else if Ref.EnumDesc <> AEnumDesc then
-    SemanticError(Format(
-      'Set constant ''%s'' mixes members of ''%s'' and ''%s''',
-      [ACD.Name, AEnumDesc.Name, Ref.EnumDesc.Name]), ACD.Line, ACD.Col);
-  Result := Integer(Ref.Ordinal);
+  { Enum member: pin / check the shared base enum. }
+  if (Sym.TypeDesc <> nil) and (Sym.TypeDesc.Kind = tyEnum) then
+  begin
+    if AEnumDesc = nil then
+      AEnumDesc := TEnumTypeDesc(Sym.TypeDesc)
+    else if Sym.TypeDesc <> AEnumDesc then
+      SemanticError(Format(
+        'Set constant ''%s'' mixes members of ''%s'' and ''%s''',
+        [ACD.Name, AEnumDesc.Name, Sym.TypeDesc.Name]), ACD.Line, ACD.Col);
+  end;
+  Result := Integer(Sym.ConstValue);
 end;
 
 procedure TSemanticAnalyser.AnalyseSetConstDecl(ACD: TConstDecl);
@@ -5238,7 +4412,6 @@ var
   CD:     TConstDecl;
   Sym:    TSymbol;
   RefSym: TSymbol;
-  Prev:   TSymbol;
   TD:     TTypeDesc;
   Resolved: string;
   IsSameBlockDup: Boolean;
@@ -5315,17 +4488,17 @@ begin
     Sym.ConstString  := CD.StrVal;
     if not FTable.Define(Sym) then
     begin
+      Sym.Free();
       { A module-name marker blocking the Define is always a hard error
-        (issue #84). }
+        (issue #84) — without this check the const would be silently
+        dropped by the cross-unit shadowing tolerance below. }
       RefSym := FTable.CurrentScope.LookupLocal(CD.Name);
       if (RefSym <> nil) and (RefSym.Kind = skModule) then
-      begin
-        Sym.Free();
         SemanticError(Format('Duplicate identifier ''%s''', [CD.Name]),
           CD.Line, CD.Col);
-      end;
-      { Same-block duplicate (the unit declares the name twice itself) is a
-        hard error. }
+      { Only error for same-block duplicates.  Cross-unit const shadowing
+        (e.g. a unit redefining a system.pas constant) is silently accepted,
+        matching FPC behaviour and preserving the existing test coverage. }
       IsSameBlockDup := False;
       for J := 0 to I - 1 do
         if SameText(TConstDecl(ABlock.ConstDecls.Items[J]).Name, CD.Name) then
@@ -5334,105 +4507,9 @@ begin
           Break;
         end;
       if IsSameBlockDup then
-      begin
-        Sym.Free();
         SemanticError(Format('Duplicate identifier ''%s''', [CD.Name]), CD.Line, CD.Col);
-      end;
-      { Cross-unit collision: last-in-uses wins.  Detach the prior unit's
-        const and stash it in the per-unit cache so a qualified reference
-        (Unit.Const) can still reach the shadowed value; install this unit's
-        const as the flat winner.  Mirrors RegisterConsts on the prebuilt-
-        import path so source-loaded and prebuilt deps behave identically. }
-      Prev := FTable.ExtractLocal(CD.Name);
-      if (Prev <> nil) and (Prev.OwningUnit <> '') then
-        RegisterUnitSymbol(Prev.OwningUnit, Prev);
-      FTable.Define(Sym);
     end;
-    { Register every interface const in the per-unit cache keyed by its owning
-      unit, so a qualified reference resolves against the declaring unit's own
-      value regardless of which unit won the bare (flat) slot. }
-    if Sym.OwningUnit <> '' then
-      RegisterUnitSymbol(Sym.OwningUnit, Sym);
   end;
-end;
-
-procedure TSemanticAnalyser.DefineGlobalLastWins(ASym: TSymbol;
-  ALine, ACol: Integer);
-var
-  RefSym: TSymbol;
-  Prev:   TSymbol;
-begin
-  if not FTable.Define(ASym) then
-  begin
-    RefSym := FTable.CurrentScope.LookupLocal(ASym.Name);
-    { A module-name marker (issue #84), a non-unit symbol (builtin /
-      program-scope, OwningUnit = ''), or a same-unit redeclaration
-      blocking the Define is a hard error — only a genuine cross-unit
-      collision (two used units exporting the same name) gets last-wins. }
-    if (RefSym = nil) or (RefSym.Kind = skModule) or
-       (RefSym.OwningUnit = '') or
-       SameText(RefSym.OwningUnit, ASym.OwningUnit) then
-    begin
-      ASym.Free();
-      SemanticError(Format('Duplicate identifier ''%s''', [ASym.Name]),
-        ALine, ACol);
-      Exit;
-    end;
-    { Cross-unit collision: last-in-uses wins.  Detach the prior unit's
-      var and stash it in the per-unit cache so a qualified reference
-      (Unit.Var) can still reach the shadowed slot; install this unit's
-      var as the flat winner.  Mirrors AnalyseConstDecls and RegisterVars. }
-    Prev := FTable.ExtractLocal(ASym.Name);
-    if (Prev <> nil) and (Prev.OwningUnit <> '') then
-      RegisterUnitSymbol(Prev.OwningUnit, Prev);
-    FTable.Define(ASym);
-  end;
-  { Register every interface var in the per-unit cache keyed by its owning
-    unit, so a qualified reference resolves against the declaring unit's own
-    slot regardless of which unit won the bare (flat) slot. }
-  if ASym.OwningUnit <> '' then
-    RegisterUnitSymbol(ASym.OwningUnit, ASym);
-end;
-
-procedure TSemanticAnalyser.DefineTypeLastWins(ASym: TSymbol;
-  ATypeDecl: TTypeDecl; ALine, ACol: Integer);
-var
-  RefSym: TSymbol;
-  Prev:   TSymbol;
-  AName:  string;
-begin
-  AName := ATypeDecl.Name;
-  { Record the descriptor created for THIS decl so codegen can emit this unit's
-    own type even after a same-named type from another used unit wins the flat
-    slot (extracted below). }
-  ATypeDecl.ResolvedDesc := ASym.TypeDesc;
-  if not FTable.Define(ASym) then
-  begin
-    RefSym := FTable.CurrentScope.LookupLocal(AName);
-    { Only a genuine cross-unit collision (two used units exporting the same
-      type name) gets last-wins; a module marker, a non-unit symbol, or a
-      same-unit redeclaration stays a hard error. }
-    if (RefSym = nil) or (RefSym.Kind = skModule) or
-       (RefSym.OwningUnit = '') or
-       SameText(RefSym.OwningUnit, ASym.OwningUnit) then
-    begin
-      ASym.Free();
-      SemanticError(Format('Duplicate type name ''%s''', [AName]), ALine, ACol);
-      Exit;
-    end;
-    { Detach the prior unit's type and stash it in the per-unit cache so a
-      qualified reference (Unit.Type) still resolves against it; install this
-      unit's type as the flat winner. }
-    Prev := FTable.ExtractLocal(AName);
-    if (Prev <> nil) and (Prev.OwningUnit <> '') then
-      RegisterUnitSymbol(Prev.OwningUnit, Prev);
-    FTable.Define(ASym);
-  end;
-  { Register every type in the per-unit cache keyed by its owning unit, so a
-    qualified reference resolves against the declaring unit regardless of which
-    unit won the bare (flat) slot. }
-  if ASym.OwningUnit <> '' then
-    RegisterUnitSymbol(ASym.OwningUnit, ASym);
 end;
 
 function TSemanticAnalyser.NewArrayConstLabel(const AName: string): string;
@@ -5625,7 +4702,6 @@ var
   MethodList: TObjectList;
   Grp:        TObjectList;
   FDecl:      TFieldDecl;
-  ClassVarEmit: string;
   MDecl:      TMethodDecl;
   Par:        TMethodParam;
   ParType:    TTypeDesc;
@@ -5655,6 +4731,7 @@ var
   Resolved:   string;
   BaseSym:    TSymbol;
   MName:      string;
+  MSym:       TSymbol;
   Slot:       Integer;
   CD:         TConstDecl;
   AliasDef:   TTypeAliasDef;
@@ -5668,16 +4745,7 @@ var
   IdxTD:      TTypeDesc;
   ArrTD:      TStaticArrayTypeDesc;
   Expected:   Integer;
-  ForwardDecls: TStringList;  { names of bare forward class/interface decls still
-                               awaiting their completing full declaration }
-  FwdIdx:     Integer;
 begin
-  { Forward declarations (`TFoo = class;` / `IFoo = interface;`) register a
-    placeholder type in pass 1 and are completed by a later full declaration of
-    the same name in this scope.  Track the pending ones so a never-completed
-    forward is reported as an error. }
-  ForwardDecls := TStringList.Create();
-  ForwardDecls.CaseSensitive := False;
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
   for I := 0 to ABlock.TypeDecls.Count - 1 do
@@ -5689,37 +4757,7 @@ begin
       RT.IsPacked := TRecordTypeDef(TD.Def).IsPacked;
     end
     else if TD.Def is TClassTypeDef then
-    begin
-      if TClassTypeDef(TD.Def).IsForward then
-      begin
-        { Forward class: register a placeholder class type so intervening
-          declarations can name it.  A name already in the table — including a
-          prior forward — is a redeclaration. }
-        if FTable.Lookup(TD.Name) <> nil then
-        begin
-          if ForwardDecls.IndexOf(TD.Name) >= 0 then
-            SemanticError(Format('Duplicate forward type declaration ''%s''',
-              [TD.Name]), TD.Line, TD.Col)
-          else
-            SemanticError(Format('Duplicate type name ''%s''', [TD.Name]),
-              TD.Line, TD.Col);
-        end;
-        Sym := TSymbol.Create(TD.Name, skType, FTable.NewClassType(TD.Name));
-        FTable.Define(Sym);
-        ForwardDecls.AddObject(TD.Name, TD);
-        Continue;
-      end;
-      { Full class declaration completing a pending forward: reuse the
-        placeholder descriptor (pass 2 re-derives it by name) — skip the
-        re-registration below. }
-      FwdIdx := ForwardDecls.IndexOf(TD.Name);
-      if FwdIdx >= 0 then
-      begin
-        ForwardDecls.Delete(FwdIdx);
-        Continue;
-      end;
-      RT := FTable.NewClassType(TD.Name);
-    end
+      RT := FTable.NewClassType(TD.Name)
     else if TD.Def is TGenericTypeDef then
     begin
       { Register as template — no concrete type symbol; instantiated on demand.
@@ -5742,52 +4780,35 @@ begin
     end
     else if TD.Def is TInterfaceTypeDef then
     begin
-      if TInterfaceTypeDef(TD.Def).IsForward then
-      begin
-        { Forward interface: placeholder, completed later in scope. }
-        if FTable.Lookup(TD.Name) <> nil then
-        begin
-          if ForwardDecls.IndexOf(TD.Name) >= 0 then
-            SemanticError(Format('Duplicate forward type declaration ''%s''',
-              [TD.Name]), TD.Line, TD.Col)
-          else
-            SemanticError(Format('Duplicate type name ''%s''', [TD.Name]),
-              TD.Line, TD.Col);
-        end;
-        Sym := TSymbol.Create(TD.Name, skType, FTable.NewInterfaceType(TD.Name));
-        FTable.Define(Sym);
-        ForwardDecls.AddObject(TD.Name, TD);
-        Continue;
-      end;
-      { Full interface completing a pending forward: reuse the placeholder. }
-      FwdIdx := ForwardDecls.IndexOf(TD.Name);
-      if FwdIdx >= 0 then
-      begin
-        ForwardDecls.Delete(FwdIdx);
-        Continue;
-      end;
       IntfDesc := FTable.NewInterfaceType(TD.Name);
       Sym      := TSymbol.Create(TD.Name, skType, IntfDesc);
-      DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free();
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
       Continue;
     end
     else if TD.Def is TEnumTypeDef then
     begin
-      { Enum type: register the type, and record each member in the reverse
-        index keyed by name.  Members are NOT registered as bare global
-        skConstants — a bare member name resolves through ResolveEnumMember
-        (by context type, uniqueness, or last-wins), so two enums in scope
-        may legitimately share a member name without colliding. }
+      { Enum type: register the type AND each member as a skConstant }
       EnumDef  := TEnumTypeDef(TD.Def);
       EnumDesc := FTable.NewEnumType(TD.Name);
       for K := 0 to EnumDef.Members.Count - 1 do
       begin
-        MName := EnumDef.Members.Strings[K];
+        MName           := EnumDef.Members.Strings[K];
         EnumDesc.Members.Add(MName);
-        RegisterEnumMember(MName, EnumDesc, EnumDef.OrdinalAt(K));
+        MSym            := TSymbol.Create(MName, skConstant, EnumDesc);
+        MSym.ConstValue := EnumDef.OrdinalAt(K);
+        if not FTable.Define(MSym) then
+          MSym.Free();
       end;
       Sym := TSymbol.Create(TD.Name, skType, EnumDesc);
-      DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free();
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
       Continue;
     end
     else if TD.Def is TSetTypeDef then
@@ -5802,7 +4823,12 @@ begin
         SetDesc := FTable.NewOrdinalSetType(TD.Name, SetSubDesc.BaseType,
                                             SetSubDesc.BitCount);
         Sym := TSymbol.Create(TD.Name, skType, SetDesc);
-        DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+        if not FTable.Define(Sym) then
+        begin
+          Sym.Free();
+          SemanticError(Format('Duplicate type name ''%s''', [TD.Name]),
+            TD.Line, TD.Col);
+        end;
         Continue;
       end;
       BaseSym  := FTable.Lookup(SetDef.BaseTypeName);
@@ -5832,7 +4858,11 @@ begin
         SetDesc := nil;
       end;
       Sym := TSymbol.Create(TD.Name, skType, SetDesc);
-      DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free();
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
       Continue;
     end
     else if TD.Def is TProceduralTypeDef then
@@ -5841,7 +4871,11 @@ begin
         resolution happens in pass 2. }
       Sym := TSymbol.Create(TD.Name, skType,
                             FTable.NewProceduralType(TD.Name));
-      DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free();
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
       Continue;
     end
     else if TD.Def is TTypeAliasDef then
@@ -5877,26 +4911,6 @@ begin
           Continue;
         end;
       end
-      else if AliasDef.IsSubrange then
-      begin
-        { Named integer subrange: type TIdx = lo..hi;  AliasName is the
-          narrowest fitting standard integer type (e.g. 'Byte').  Create a
-          DISTINCT descriptor that copies the underlying int's Kind (so layout,
-          QBE type, IsNumeric/IsOrdinal and assignment all treat it as that
-          int), but carries IsSubrange + the lo..hi bounds so the array-index
-          resolver can fold array[TIdx] -> array[lo..hi]. }
-        BaseSym := FTable.Lookup(AliasName);
-        if (BaseSym = nil) or (BaseSym.Kind <> skType) or (BaseSym.TypeDesc = nil) then
-        begin
-          SemanticError(Format('Unknown base type ''%s'' for subrange', [AliasName]),
-            TD.Line, TD.Col);
-          Continue;
-        end;
-        AliasDesc := FTable.NewType(BaseSym.TypeDesc.Kind, TD.Name);
-        AliasDesc.IsSubrange := True;
-        AliasDesc.SubrangeLow := AliasDef.SubrangeLow;
-        AliasDesc.SubrangeHigh := AliasDef.SubrangeHigh;
-      end
       else
       begin
         { Simple alias or constructed alias (array[L..H] of T, etc.).
@@ -5918,7 +4932,11 @@ begin
         end;
       end;
       Sym := TSymbol.Create(TD.Name, skType, AliasDesc);
-      DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free();
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
       Continue;
     end
     else
@@ -5928,7 +4946,11 @@ begin
       Continue;
     end;
     Sym := TSymbol.Create(TD.Name, skType, RT);
-    DefineTypeLastWins(Sym, TD, TD.Line, TD.Col);
+    if not FTable.Define(Sym) then
+    begin
+      Sym.Free();
+      SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+    end;
   end;
 
   { Pass 2 — resolve parent, fields, and method signatures for each type. }
@@ -5943,11 +4965,6 @@ begin
     if TD.Def is TEnumTypeDef then Continue;
     if TD.Def is TSetTypeDef then Continue;
     if TD.Def is TTypeAliasDef then Continue;
-
-    { Forward stub: the completing full declaration (same name, later) carries
-      the body and does all pass-2 work. }
-    if (TD.Def is TClassTypeDef) and TClassTypeDef(TD.Def).IsForward then Continue;
-    if (TD.Def is TInterfaceTypeDef) and TInterfaceTypeDef(TD.Def).IsForward then Continue;
 
     { Procedural types: resolve param + return types now that all
       type names are registered. }
@@ -6113,14 +5130,10 @@ begin
         end;
         if TClassTypeDef(TD.Def).ParentName <> '' then
         begin
-          { Resolve through the type machinery (not a literal FTable.Lookup) so
-            a unit-qualified ancestor 'Unit.TParent' binds to that unit's type
-            and disambiguates a same-named class in another unit.
-            FindTypeOrInstantiate handles both bare and dotted names. }
-          GenParentDesc := FindTypeOrInstantiate(TClassTypeDef(TD.Def).ParentName);
+          ParentSym := FTable.Lookup(TClassTypeDef(TD.Def).ParentName);
           { If the first name in class(...) is an interface, not a class,
             treat it as an implements entry — TObject becomes the implicit parent. }
-          if (GenParentDesc <> nil) and (GenParentDesc is TInterfaceTypeDesc) then
+          if (ParentSym <> nil) and (ParentSym.TypeDesc is TInterfaceTypeDesc) then
           begin
             TClassTypeDef(TD.Def).ImplementsNames.Insert(
               0, TClassTypeDef(TD.Def).ParentName);
@@ -6128,12 +5141,12 @@ begin
           end
           else
           begin
-            if (GenParentDesc = nil) or not (GenParentDesc is TRecordTypeDesc) then
+            if (ParentSym = nil) or not (ParentSym.TypeDesc is TRecordTypeDesc) then
               SemanticError(
                 Format('Unknown parent class ''%s'' for ''%s''',
                   [TClassTypeDef(TD.Def).ParentName, TD.Name]),
                 TD.Line, TD.Col);
-            ParentRT     := TRecordTypeDesc(GenParentDesc);
+            ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
             RT.Parent    := ParentRT;
             RT.CopyVTableFrom(ParentRT);
             for K := 0 to ParentRT.Fields.Count - 1 do
@@ -6142,12 +5155,6 @@ begin
               RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
               RT.FindField(FldInfo.Name).IsUnretained := FldInfo.IsUnretained;
               RT.FindField(FldInfo.Name).IsWeak       := FldInfo.IsWeak;
-              { An inherited field keeps the ANCESTOR's visibility + declaring
-                origin — protected/strict checks must resolve against where the
-                field was actually declared, not the subclass that copied it. }
-              RT.FindField(FldInfo.Name).Visibility    := FldInfo.Visibility;
-              RT.FindField(FldInfo.Name).DeclaringUnit := FldInfo.DeclaringUnit;
-              RT.FindField(FldInfo.Name).DeclaringType := FldInfo.DeclaringType;
             end;
           end;
         end;
@@ -6311,63 +5318,14 @@ begin
       for K := 0 to FDecl.Names.Count - 1 do
       begin
         FldName := FDecl.Names.Strings[K];
-        if FDecl.IsClassVar then
-        begin
-          { STATIC (class-level) variable: not an instance field — do NOT call
-            AddField (that would advance the instance layout).  Register a single
-            shared global instead, under a mangled emit label, reachable by both
-            the bare name (inside methods) and the qualified 'TFoo.Name' form.
-            Class- and interface-typed static vars ARE supported: they are a
-            single shared pointer slot, zero-initialised to nil, and assignment
-            goes through the normal managed-global store ARC (retain new /
-            release old).  String and dynamic-array static vars remain deferred
-            (their exit-time release story is not yet wired). }
-          if (FldType.Kind = tyString) or (FldType.Kind = tyDynArray) then
-            SemanticError(Format(
-              'static var ''%s'': string and dynamic-array static fields are ' +
-              'not yet supported (class and interface are)', [FldName]),
-              FDecl.Line, FDecl.Col);
-          ClassVarEmit := CurrentUnitPrefix() + TD.Name + '_' + FldName;
-          { Single source of truth for codegen: stash the mangled label on the
-            field decl (used by both backends to emit the data slot, even for a
-            read-only static var that no assignment auto-registers). }
-          if FDecl.Names.Count = 1 then
-            FDecl.ClassVarEmitName := ClassVarEmit;
-          { Bare name — usable unqualified inside the class's own methods. }
-          Sym := TSymbol.Create(FldName, skVariable, FldType);
-          Sym.IsGlobal       := True;
-          Sym.IsClassVar     := True;
-          Sym.GlobalEmitName := ClassVarEmit;
-          Sym.Visibility     := FDecl.Visibility;
-          Sym.OwnerTypeName  := TD.Name;
-          if not FTable.Define(Sym) then Sym.Free();
-          { Qualified name — usable as TFoo.Name from anywhere. }
-          Sym := TSymbol.Create(TD.Name + '.' + FldName, skVariable, FldType);
-          Sym.IsGlobal       := True;
-          Sym.IsClassVar     := True;
-          Sym.GlobalEmitName := ClassVarEmit;
-          Sym.Visibility     := FDecl.Visibility;
-          Sym.OwnerTypeName  := TD.Name;
-          if not FTable.Define(Sym) then Sym.Free();
-        end
-        else
-        begin
-          RT.AddField(FldName, FldType);
-          { Propagate the weak/unretained flags to the just-added field info so
-            codegen and the field cleanup emitter can consult them without
-            walking back to the AST. }
-          if FDecl.IsWeak then
-            RT.FindField(FldName).IsWeak := True;
-          if FDecl.IsUnretained then
-            RT.FindField(FldName).IsUnretained := True;
-          { Carry visibility + declaring origin so member-access checks can be
-            applied without re-walking the AST.  DeclaringType is this class
-            (the one that declares the field); inherited fields copy the
-            ancestor's metadata at the copy site above. }
-          RT.FindField(FldName).Visibility    := FDecl.Visibility;
-          RT.FindField(FldName).DeclaringUnit := FCurrentUnitName;
-          RT.FindField(FldName).DeclaringType := TD.Name;
-        end;
+        RT.AddField(FldName, FldType);
+        { Propagate the weak/unretained flags to the just-added field info so
+          codegen and the field cleanup emitter can consult them without
+          walking back to the AST. }
+        if FDecl.IsWeak then
+          RT.FindField(FldName).IsWeak := True;
+        if FDecl.IsUnretained then
+          RT.FindField(FldName).IsUnretained := True;
       end;
     end;
 
@@ -6377,11 +5335,6 @@ begin
       begin
         MDecl               := TMethodDecl(MethodList.Items[J]);
         MDecl.OwnerTypeName := TD.Name;
-        { Stamp the declaring unit so member-visibility (private/protected) can
-          enforce the unit privacy boundary.  Only set when empty so a value
-          carried from an imported .bif is not overwritten. }
-        if MDecl.OwningUnit = '' then
-          MDecl.OwningUnit := FCurrentUnitName;
 
         { Compute mangled key and ResolvedQbeName for overloaded methods.
           Non-overloaded methods keep their plain name throughout. }
@@ -6394,20 +5347,11 @@ begin
           existing FMethodIndex entries for this (TypeName.Name) — if
           any sibling has IsOverload=False or the new MDecl lacks
           IsOverload, this is a duplicate-identifier error. }
-        if (MDecl.OwningUnit = '') and (FCurrentUnitName <> '') then
-          MDecl.OwningUnit := FCurrentUnitName;
         Key := TD.Name + '.' + MDecl.Name;
         Grp := GroupOf(FMethodGroups, Key);
         if Grp <> nil then
           for K := 0 to Grp.Count - 1 do
           begin
-            { A same-named method on a same-named type owned by a DIFFERENT
-              used unit is a distinct method (it carries its own unit-prefixed
-              ResolvedQbeName), not a missing-overload duplicate — the two
-              types coexist under cross-unit last-wins. }
-            if not SameText(TMethodDecl(Grp.Items[K]).OwningUnit,
-                            MDecl.OwningUnit) then
-              Continue;
             if (not MDecl.IsOverload) or
                (not TMethodDecl(Grp.Items[K]).IsOverload) then
               SemanticError(
@@ -6476,10 +5420,6 @@ begin
         if PropDecl.IndexTypeName <> '' then
           PropInfo.IndexTypeDesc := FTable.FindType(PropDecl.IndexTypeName);
         PropInfo.IsDefault := PropDecl.IsDefault;
-        PropInfo.IsStatic := PropDecl.IsStatic;
-        PropInfo.Visibility    := PropDecl.Visibility;
-        PropInfo.DeclaringUnit := FCurrentUnitName;
-        PropInfo.DeclaringType := TD.Name;
         RT.AddProperty(PropInfo);
       end;
 
@@ -6619,26 +5559,6 @@ begin
     if (Sym <> nil) and (Sym.Kind = skType) then
       TPointerTypeDesc(BaseSym.TypeDesc).BaseType := Sym.TypeDesc;
   end;
-
-  { A forward declaration never completed in this scope is an error. }
-  if ForwardDecls.Count > 0 then
-  begin
-    TD := TTypeDecl(ForwardDecls.Objects[0]);
-    SemanticError(Format('Forward type not resolved ''%s''',
-      [ForwardDecls.Strings[0]]), TD.Line, TD.Col);
-  end;
-
-  { Drop the now-redundant forward stubs from the AST so later phases (codegen
-    iterates ABlock.TypeDecls) never see two declarations of the same type. }
-  for I := ABlock.TypeDecls.Count - 1 downto 0 do
-  begin
-    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
-    if ((TD.Def is TClassTypeDef) and TClassTypeDef(TD.Def).IsForward) or
-       ((TD.Def is TInterfaceTypeDef) and TInterfaceTypeDef(TD.Def).IsForward) then
-      ABlock.TypeDecls.Delete(I);
-  end;
-
-  ForwardDecls.Free();
 end;
 
 procedure TSemanticAnalyser.AnalyseMethodBodies(ABlock: TBlock);
@@ -6686,7 +5606,6 @@ var
   Par:        TMethodParam;
   Sym:        TSymbol;
   SavedClass: TRecordTypeDesc;
-  SavedMethodOwner: TRecordTypeDesc;
   TKey:       string;
 begin
   { Generic method (method-level <T>): its params/body reference the method's
@@ -6703,34 +5622,18 @@ begin
     Exit;
   end;
   SavedClass    := FCurrentClass;
-  SavedMethodOwner := FCurrentMethodOwner;
-  { A STATIC (class-level) method has no instance receiver.  Leave FCurrentClass
-    at its saved value (do NOT bind it to AClassType) so that an implicit
-    instance-member reference inside the body resolves as an undeclared
-    identifier rather than silently binding to a non-existent Self.  Static
-    members of the same type remain reachable through their registered bare
-    global symbols. }
-  if not AMethod.IsStatic then
-    FCurrentClass := AClassType;
-  { Visibility context: the declaring type of THIS method body, set for static
-    and instance methods alike, so a strict-private member is reachable from its
-    own type's methods regardless of static-ness. }
-  FCurrentMethodOwner := AClassType;
+  FCurrentClass := AClassType;
   FTable.PushScope();
   Inc(FScopeDepth);
   try
     { Record methods receive the record by pointer (like a var param); class
       methods receive the object pointer as a value.  Declaring Self as
-      skVarParameter for records makes the codegen dereference it correctly.
-      A static method receives NO Self. }
-    if not AMethod.IsStatic then
-    begin
-      if AMethod.IsRecordMethod then
-        Sym := TSymbol.Create('Self', skVarParameter, AClassType)
-      else
-        Sym := TSymbol.Create('Self', skVariable, AClassType);
-      FTable.Define(Sym);
-    end;
+      skVarParameter for records makes the codegen dereference it correctly. }
+    if AMethod.IsRecordMethod then
+      Sym := TSymbol.Create('Self', skVarParameter, AClassType)
+    else
+      Sym := TSymbol.Create('Self', skVariable, AClassType);
+    FTable.Define(Sym);
 
     { For function methods, define Result as a writable variable }
     if AMethod.ResolvedReturnType <> nil then
@@ -6774,7 +5677,6 @@ begin
     Dec(FScopeDepth);
     FTable.PopScope();
     FCurrentClass := SavedClass;
-    FCurrentMethodOwner := SavedMethodOwner;
   end;
 end;
 
@@ -6782,12 +5684,11 @@ function TSemanticAnalyser.FindMethodDecl(
   const ATypeName, AMethodName: string): TMethodDecl;
 var
   CurrName: string;
-  Idx, K:   Integer;
+  Idx:      Integer;
   Key:      string;
   Sym:      TSymbol;
   RT:       TRecordTypeDesc;
   OwnerUnit: string;
-  Grp:      TObjectList;
 begin
   CurrName := ATypeName;
   while CurrName <> '' do
@@ -6797,29 +5698,13 @@ begin
     if Idx >= 0 then
     begin
       Result := TMethodDecl(FMethodIndex.Objects[Idx]);
-      { Visibility is NOT enforced here: FindMethodDecl is also used to resolve
-        property getters/setters, Free/Create existence probes, and inherited
-        lookups, where the access is legitimate regardless of the member's
-        declared visibility.  Enforcement happens at the user-written call /
-        member-access sites (EnforceMethodVisible / AssertMemberVisibleV). }
-      { Cross-unit last-wins: two used units may export a same-named type, so
-        the group holds both their methods under one key.  FMethodIndex returns
-        the first-registered, which may belong to the OTHER unit; bind instead
-        to the method on the type that actually resolved (its owning unit). }
+      { Visibility seam: treat the class's owning unit as the member's
+        effective owner.  Currently a no-op (returns True); activates
+        without call-site work when class members gain private/protected. }
       OwnerUnit := '';
       Sym := FTable.Lookup(CurrName);
       if Sym <> nil then OwnerUnit := Sym.OwningUnit;
-      if (OwnerUnit <> '') and not SameText(Result.OwningUnit, OwnerUnit) then
-      begin
-        Grp := GroupOf(FMethodGroups, Key);
-        if Grp <> nil then
-          for K := 0 to Grp.Count - 1 do
-            if SameText(TMethodDecl(Grp.Items[K]).OwningUnit, OwnerUnit) then
-            begin
-              Result := TMethodDecl(Grp.Items[K]);
-              Break;
-            end;
-      end;
+      AssertMemberVisible(OwnerUnit, FCurrentClass, AMethodName, 0, 0);
       Exit;
     end;
     { Walk to parent }
@@ -6887,7 +5772,6 @@ var
   Sym:         TSymbol;
   RT:          TRecordTypeDesc;
   Key:         string;
-  OwnerHint:   string;
   Cand:        TMethodDecl;
   Grp:         TObjectList;
   ArityMatch:  TObjectList;
@@ -6906,9 +5790,6 @@ var
   SawHiding:   Boolean;
 begin
   Result    := nil;
-  { Consume the one-shot receiver owner hint set by the caller. }
-  OwnerHint := FMethodOwnerHint;
-  FMethodOwnerHint := '';
   if AArgs <> nil then Arity := AArgs.Count else Arity := -1;
   TotalCnt  := 0;
   ArityMatch := TObjectList.Create(False);
@@ -6922,16 +5803,8 @@ begin
       if Grp <> nil then
         for K := 0 to Grp.Count - 1 do
         begin
-          Cand := TMethodDecl(Grp.Items[K]);
-          { Cross-unit last-wins: at the receiver's OWN type level the group can
-            also hold a same-named method on another used unit's same-named type.
-            Bind to the receiver's actual unit (the hint) — a name re-lookup
-            would pick the flat-table winner instead. }
-          if (OwnerHint <> '') and SameText(CurrName, ATypeName) and
-             (Cand.OwningUnit <> '') and
-             not SameText(Cand.OwningUnit, OwnerHint) then
-            Continue;
           Inc(TotalCnt);
+          Cand := TMethodDecl(Grp.Items[K]);
           { A method declared WITHOUT `overload` hides all inherited methods of
             the same name — once seen at this (more-derived) level, the parent
             chain is not consulted.  Methods WITH `overload` merge with the
@@ -7113,14 +5986,11 @@ begin
       ADecl.ResolvedQbeName := ADecl.Name;
 
     { Index for call resolution — overloaded names appear multiple times.
-      Nested procs (those inside another routine's body) are resolved via the
+      Nested procs (those inside another proc's body) are resolved via the
       scoped symbol table only; adding them to the global FProcIndex would
-      make same-named nested procs in different outer routines appear as
-      ambiguous overloads of each other.  A proc is nested when it sits
-      inside a standalone routine (FCurrentEnclosingDecl set) OR inside a
-      method body (FCurrentMethodOwner set) — both cases must be excluded
-      from the global index. }
-    if (FCurrentEnclosingDecl = nil) and (FCurrentMethodOwner = nil) then
+      make same-named nested procs in different outer procs appear as
+      ambiguous overloads of each other. }
+    if FCurrentEnclosingDecl = nil then
       RegisterProcDecl(ADecl.Name, ADecl);
 
     { Register in symbol table }
@@ -7184,7 +6054,7 @@ begin
       { After analysing the body, determine which outer-scope variables are
         captured by any nested proc declared inside this one. }
       if ADecl.EnclosingDecl <> nil then
-        CollectCaptures(ADecl, ADecl.EnclosingDecl);
+        CollectCaptures(ADecl, ADecl.EnclosingDecl.Body);
     end;
   finally
     Dec(FScopeDepth);
@@ -7211,24 +6081,11 @@ begin
   end;
 end;
 
-procedure TSemanticAnalyser.MaybeCaptureName(ADecl: TMethodDecl;
-  AOuterVars: TStringList; const AName: string);
-begin
-  if AName = '' then Exit;
-  if AOuterVars.IndexOf(AName) < 0 then Exit;
-  if (ADecl.CapturedVars <> nil) and (ADecl.CapturedVars.IndexOf(AName) >= 0) then
-    Exit;
-  if ADecl.CapturedVars = nil then
-    ADecl.CapturedVars := TStringList.Create();
-  ADecl.CapturedVars.Add(AName);
-end;
-
-procedure TSemanticAnalyser.CollectCaptures(ADecl: TMethodDecl; AOuterDecl: TMethodDecl);
-{ Walk ADecl's body statements/expressions to find every reference to a variable
-  belonging to the enclosing proc AOuterDecl — its locals AND its parameters
-  (a `var` record parameter captured by a nested proc is the case that broke
-  before).  Each such name is "captured": ADecl receives an implicit hidden
-  var-by-pointer parameter, and the call site passes the variable's address. }
+procedure TSemanticAnalyser.CollectCaptures(ADecl: TMethodDecl; AOuterBlock: TBlock);
+{ Walk ADecl's body statements/expressions to find all TIdentExpr nodes whose
+  name matches a variable declared in AOuterBlock (the enclosing proc's locals).
+  Each such variable is "captured": ADecl will receive an implicit hidden
+  var-by-pointer parameter, and the call site will pass the variable's address. }
 var
   OuterVars: TStringList;
   I, J:      Integer;
@@ -7240,31 +6097,21 @@ var
   CurStmt:   TASTStmt;
 begin
   if ADecl.Body = nil then Exit;
-  if AOuterDecl = nil then Exit;
 
   OuterVars := TStringList.Create();
   TodoExprs := TObjectList.Create(False);
   TodoStmts := TObjectList.Create(False);
   try
-    { Build the set of enclosing names: the outer proc's local var decls ... }
-    if AOuterDecl.Body <> nil then
-      for I := 0 to AOuterDecl.Body.Decls.Count - 1 do
-      begin
-        VDecl := TVarDecl(AOuterDecl.Body.Decls.Items[I]);
-        for J := 0 to VDecl.Names.Count - 1 do
-        begin
-          VName := VDecl.Names.Strings[J];
-          if OuterVars.IndexOf(VName) < 0 then
-            OuterVars.Add(VName);
-        end;
-      end;
-    { ... and the outer proc's PARAMETERS (value, var, out — all capturable;
-      a captured var-param carries a pointer, handled by codegen). }
-    for I := 0 to AOuterDecl.Params.Count - 1 do
+    { Build set of outer-block local variable names }
+    for I := 0 to AOuterBlock.Decls.Count - 1 do
     begin
-      VName := TMethodParam(AOuterDecl.Params.Items[I]).ParamName;
-      if OuterVars.IndexOf(VName) < 0 then
-        OuterVars.Add(VName);
+      VDecl := TVarDecl(AOuterBlock.Decls.Items[I]);
+      for J := 0 to VDecl.Names.Count - 1 do
+      begin
+        VName := VDecl.Names.Strings[J];
+        if OuterVars.IndexOf(VName) < 0 then
+          OuterVars.Add(VName);
+      end;
     end;
     if OuterVars.Count = 0 then Exit;
 
@@ -7286,29 +6133,18 @@ begin
         begin
           { LHS name — check if it's an outer var (direct assign) }
           if TAssignment(CurStmt).ImplicitSelfField = nil then
-            MaybeCaptureName(ADecl, OuterVars, TAssignment(CurStmt).Name);
+          begin
+            VName := TAssignment(CurStmt).Name;
+            if (OuterVars.IndexOf(VName) >= 0) and
+               ((ADecl.CapturedVars = nil) or
+                (ADecl.CapturedVars.IndexOf(VName) < 0)) then
+            begin
+              if ADecl.CapturedVars = nil then
+                ADecl.CapturedVars := TStringList.Create();
+              ADecl.CapturedVars.Add(VName);
+            end;
+          end;
           TodoExprs.Add(TAssignment(CurStmt).Expr);
-        end
-        else if CurStmt is TFieldAssignment then
-        begin
-          { 'R.Field := ...' — the receiver R may be an outer var/var-param.
-            (Implicit-Self writes have RecordName naming a field of Self, not an
-            outer var; those resolve through Self, never captured.) }
-          if not TFieldAssignment(CurStmt).IsImplicitSelf then
-            MaybeCaptureName(ADecl, OuterVars, TFieldAssignment(CurStmt).RecordName);
-          TodoExprs.Add(TFieldAssignment(CurStmt).ObjExpr);
-          TodoExprs.Add(TFieldAssignment(CurStmt).PropIndexExpr);
-          TodoExprs.Add(TFieldAssignment(CurStmt).Expr);
-        end
-        else if CurStmt is TStaticSubscriptAssign then
-        begin
-          { 'A[i] := ...' — the array A may be an outer var/var-param.
-            (Implicit-Self array writes resolve through Self.) }
-          if not TStaticSubscriptAssign(CurStmt).IsImplicitSelf then
-            MaybeCaptureName(ADecl, OuterVars, TStaticSubscriptAssign(CurStmt).ArrayName);
-          TodoExprs.Add(TStaticSubscriptAssign(CurStmt).BaseExpr);
-          TodoExprs.Add(TStaticSubscriptAssign(CurStmt).IndexExpr);
-          TodoExprs.Add(TStaticSubscriptAssign(CurStmt).ValueExpr);
         end
         else if CurStmt is TProcCall then
         begin
@@ -7358,22 +6194,16 @@ begin
         if CurExpr = nil then Continue;
 
         if CurExpr is TIdentExpr then
-          MaybeCaptureName(ADecl, OuterVars, TIdentExpr(CurExpr).Name)
-        else if CurExpr is TFieldAccessExpr then
         begin
-          { 'R.Field' read — the base R may be an outer var/var-param.  When the
-            base is a sub-expression (chain), descend; when it is a bare name,
-            capture it. }
-          if TFieldAccessExpr(CurExpr).Base <> nil then
-            TodoExprs.Add(TFieldAccessExpr(CurExpr).Base)
-          else
-            MaybeCaptureName(ADecl, OuterVars, TFieldAccessExpr(CurExpr).RecordName);
-          TodoExprs.Add(TFieldAccessExpr(CurExpr).PropIndexExpr);
-        end
-        else if CurExpr is TStringSubscriptExpr then
-        begin
-          TodoExprs.Add(TStringSubscriptExpr(CurExpr).StrExpr);
-          TodoExprs.Add(TStringSubscriptExpr(CurExpr).IndexExpr);
+          VName := TIdentExpr(CurExpr).Name;
+          if (OuterVars.IndexOf(VName) >= 0) and
+             ((ADecl.CapturedVars = nil) or
+              (ADecl.CapturedVars.IndexOf(VName) < 0)) then
+          begin
+            if ADecl.CapturedVars = nil then
+              ADecl.CapturedVars := TStringList.Create();
+            ADecl.CapturedVars.Add(VName);
+          end;
         end
         else if CurExpr is TBinaryExpr then
         begin
@@ -7919,10 +6749,6 @@ var
   L:            Integer;
   DupLocal:     Boolean;
 begin
-  { Inline-assembler block: opaque to the front end — its content is assembly,
-    not Pascal, so no statement/type/ARC analysis runs over it. }
-  if AStmt is TAsmStmt then
-    Exit;
   if AStmt is TForStmt then
   begin
     ForS := TForStmt(AStmt);
@@ -7942,17 +6768,10 @@ begin
         Format('Loop variable ''%s'' must be an ordinal type, got ''%s''',
           [ForS.VarName, VarSym.TypeDesc.Name]),
         ForS.Line, ForS.Col);
-    { A bare enum-member bound is steered to the loop variable's enum. }
-    if TryResolveBareEnumIdent(ForS.StartExpr, VarSym.TypeDesc) then
-      StartType := ForS.StartExpr.ResolvedType
-    else
-      StartType := AnalyseExpr(ForS.StartExpr);
+    StartType := AnalyseExpr(ForS.StartExpr);
     CheckTypesMatch(VarSym.TypeDesc, StartType,
       'for-loop start expression', ForS.Line, ForS.Col);
-    if TryResolveBareEnumIdent(ForS.EndExpr, VarSym.TypeDesc) then
-      EndType := ForS.EndExpr.ResolvedType
-    else
-      EndType := AnalyseExpr(ForS.EndExpr);
+    EndType := AnalyseExpr(ForS.EndExpr);
     CheckTypesMatch(VarSym.TypeDesc, EndType,
       'for-loop end expression', ForS.Line, ForS.Col);
     Inc(FLoopDepth);
@@ -8503,7 +7322,6 @@ begin
       ACall.ResolvedMethod    := nil;
       Exit;
     end;
-    HintBareEnumMethodArgs(RT.Name, ACall.Name, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
       AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
     MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
@@ -8528,43 +7346,10 @@ begin
     AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
     ACall.ResolvedClassType := RT;
     ACall.ResolvedMethod    := MDecl;
-    if (MDecl.ResolvedReturnType <> nil) and
-       (MDecl.ResolvedReturnType.Kind = tyRecord) then
-      ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
     Exit;
   end;
 
   ObjSym := FTable.Lookup(ACall.ObjectName);
-  { TypeName.StaticMethod() — a static (class-level) method called through the
-    class name in statement position.  Resolve the method on the class; it must
-    be declared static.  Lowered with NO Self. }
-  if (ObjSym <> nil) and (ObjSym.Kind = skType) and (ObjSym.TypeDesc <> nil) and
-     (ObjSym.TypeDesc.Kind = tyClass) then
-  begin
-    RT := TRecordTypeDesc(ObjSym.TypeDesc);
-    for I := 0 to ACall.Args.Count - 1 do
-      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-    MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
-      ACall.Line, ACall.Col);
-    if MDecl = nil then
-      SemanticError(
-        Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
-        ACall.Line, ACall.Col);
-    if not MDecl.IsStatic then
-      SemanticError(
-        Format('''%s.%s'' is not a static method — call it on an instance',
-          [RT.Name, ACall.Name]),
-        ACall.Line, ACall.Col);
-    AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
-    EnforceMethodVisible(MDecl, ACall.Line, ACall.Col);
-    ACall.ResolvedClassType := RT;
-    ACall.ResolvedMethod    := MDecl;
-    ACall.IsStaticCall      := True;
-    if (MDecl.ResolvedReturnType <> nil) and
-       (MDecl.ResolvedReturnType.Kind = tyRecord) then
-      ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
-    Exit;
-  end;
   { Inside a method, class fields shadow same-named globals.  Try the
     implicit Self.Field path when there is no match (ObjSym=nil) OR when
     the only match is a global variable that a class field should shadow. }
@@ -8602,7 +7387,6 @@ begin
         ACall.ResolvedMethod    := nil;
         Exit;
       end;
-      HintBareEnumMethodArgs(RT.Name, ACall.Name, ACall.Args);
       for I := 0 to ACall.Args.Count - 1 do
         AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
       MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
@@ -8614,9 +7398,6 @@ begin
       AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
       ACall.ResolvedClassType := RT;
       ACall.ResolvedMethod    := MDecl;
-      if (MDecl.ResolvedReturnType <> nil) and
-         (MDecl.ResolvedReturnType.Kind = tyRecord) then
-        ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
       Exit;
     end;
   end;
@@ -8636,7 +7417,6 @@ begin
      (SameText(ACall.Name, 'Create') or (StrPos('Create', ACall.Name) = 0)) then
   begin
     RT := TRecordTypeDesc(TMetaClassTypeDesc(ObjSym.TypeDesc).BaseClass);
-    HintBareEnumMethodArgs(RT.Name, ACall.Name, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
       AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
     MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
@@ -8695,7 +7475,6 @@ begin
     Exit;
   end;
 
-  HintBareEnumMethodArgs(RT.Name, ACall.Name, ACall.Args);
   for I := 0 to ACall.Args.Count - 1 do
     AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
 
@@ -8727,14 +7506,10 @@ begin
       ACall.Line, ACall.Col);
 
   AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
-  EnforceMethodVisible(MDecl, ACall.Line, ACall.Col);
   ACall.ResolvedClassType := RT;
   ACall.ResolvedMethod    := MDecl;
   ACall.IsGlobal          := ObjSym.IsGlobal;
   ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
-  if (MDecl.ResolvedReturnType <> nil) and
-     (MDecl.ResolvedReturnType.Kind = tyRecord) then
-    ACall.ResolvedReturnTypeDesc := MDecl.ResolvedReturnType;
 end;
 
 { If AExpr is a diamond constructor call (RecordName ends with '<>'), replace
@@ -8788,11 +7563,7 @@ begin
       AAssign.ImplicitSelfField := FldInfo;
       AAssign.ResolvedLhsType   := FldInfo.TypeDesc;
       ResolveDiamond(AAssign.Expr, FldInfo.TypeDesc);
-      { Bare enum member on the RHS resolves against the field's type. }
-      if TryResolveBareEnumIdent(AAssign.Expr, FldInfo.TypeDesc) then
-        ExprType := AAssign.Expr.ResolvedType
-      else
-        ExprType := AnalyseExpr(AAssign.Expr);
+      ExprType := AnalyseExpr(AAssign.Expr);
       CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
       Exit;
     end;
@@ -8809,36 +7580,11 @@ begin
       AAssign.Line, AAssign.Col);
 
   AAssign.Name            := VarSym.Name;  { normalise to declared casing }
-  { Static (class-level) var: the assignment target is the single shared global
-    emitted under the mangled GlobalEmitName, so the LHS name must be that label
-    (matches the read path in AnalyseIdentExpr).  Enforce member visibility on
-    the bare form too: a strict-private static var is reachable only from its
-    declaring type's own methods, so writing it from another type, or from the
-    unit initialization/finalization section (FCurrentClass = nil), is rejected. }
-  if VarSym.IsClassVar and (VarSym.GlobalEmitName <> '') then
-  begin
-    AssertStaticVarVisible(VarSym.Visibility, VarSym.OwningUnit,
-                           VarSym.OwnerTypeName, VarSym.Name,
-                         AAssign.Line, AAssign.Col);
-    AAssign.Name := VarSym.GlobalEmitName;
-  end;
   AAssign.IsVarParam      := (VarSym.Kind = skVarParameter);
   AAssign.ResolvedLhsType := VarSym.TypeDesc;
   AAssign.IsWeakLhs       := VarSym.IsWeak;
   AAssign.IsGlobal        := VarSym.IsGlobal;
   AAssign.IsThreadVar     := VarSym.IsThreadVar;
-  { Owning unit of a module-scope global target, so the store address is
-    mangled with the unit that won resolution — keeps a bare write to a
-    cross-unit last-wins var hitting the same slot a bare read sees.  A static
-    class/record var's name is its already fully-mangled GlobalEmitName, so flag
-    it pre-mangled to keep codegen's module-var prefixing from double-applying. }
-  if VarSym.IsGlobal and (VarSym.Kind = skVariable) then
-  begin
-    if VarSym.IsClassVar then
-      AAssign.ResolvedOwnerUnit := PreMangledGlobalOwner
-    else
-      AAssign.ResolvedOwnerUnit := VarSym.OwningUnit;
-  end;
 
   ResolveDiamond(AAssign.Expr, VarSym.TypeDesc);
 
@@ -8858,12 +7604,7 @@ begin
       'Empty set literal ''[]'' cannot be assigned to non-set variable ''%s'' of type ''%s''',
       [AAssign.Name, VarSym.TypeDesc.Name]), AAssign.Line, AAssign.Col);
 
-  { Bare enum member on the RHS resolves against the variable's type, so a
-    member name shared by several enums picks the one the LHS expects. }
-  if TryResolveBareEnumIdent(AAssign.Expr, VarSym.TypeDesc) then
-    ExprType := AAssign.Expr.ResolvedType
-  else
-    ExprType := AnalyseExpr(AAssign.Expr);
+  ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(VarSym.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
 end;
 
@@ -9058,14 +7799,6 @@ begin
     ElemT := TStaticArrayTypeDesc(AFldInfo.TypeDesc).ElementType
   else
   begin
-    { A class field carrying a default array property: the subscript is a write
-      through that default property, Recv.Field[I] := V → (Recv.Field).Default[I]
-      := V.  Otherwise the subscript is meaningless on this field. }
-    if TryLowerDefaultPropertyWrite(AAssign, AFldInfo.TypeDesc) then
-    begin
-      Result := True;
-      Exit;
-    end;
     SemanticError(
       Format('Field ''%s'' is not an array — cannot assign to a subscript',
         [AAssign.FieldName]),
@@ -9082,60 +7815,6 @@ begin
   Result := True;
 end;
 
-{ Write through a default array property on a member result:
-  Recv.Member[idx] := V where Member (a field or property) yields a class that
-  carries a writable `default` indexed property — lower to
-  (Recv.Member).Default[idx] := V.  Reads the member into an inner object
-  expression (the new ObjExpr receiver) and re-targets the assignment at the
-  default property's setter.  Class members only (a record getter result is a
-  by-value temp, so a write through it would be discarded).  Returns False when
-  no lowering applies (no trailing index, not a class, or no writable default
-  property), leaving the caller to handle the member as before. }
-function TSemanticAnalyser.TryLowerDefaultPropertyWrite(
-  AAssign: TFieldAssignment; AMemberType: TTypeDesc): Boolean;
-var
-  DefProp: TPropertyInfo;
-  DefRT:   TRecordTypeDesc;
-  Inner:   TFieldAccessExpr;
-  IdxType: TTypeDesc;
-  ValType: TTypeDesc;
-begin
-  Result := False;
-  if AAssign.PropIndexExpr = nil then
-    Exit;
-  if (AMemberType = nil) or (AMemberType.Kind <> tyClass) then
-    Exit;
-  DefRT   := TRecordTypeDesc(AMemberType);
-  DefProp := DefRT.FindDefaultProperty();
-  if (DefProp = nil) or (DefProp.WriteMethod = '') then
-    Exit;
-  { Inner = the member read (the getter / field access), the receiver of the
-    setter call.  Carries the original receiver (RecordName form, or the ObjExpr
-    receiver if one was already present). }
-  Inner := TFieldAccessExpr.Create();
-  Inner.Line       := AAssign.Line;
-  Inner.Col        := AAssign.Col;
-  Inner.Base       := AAssign.ObjExpr;     { transfer (nil for the RecordName form) }
-  Inner.RecordName := AAssign.RecordName;
-  Inner.FieldName  := AAssign.FieldName;
-  AnalyseExpr(Inner);
-  { Re-target the assignment at the default property setter on that result. }
-  AAssign.ObjExpr           := Inner;
-  AAssign.RecordName        := '';
-  AAssign.FieldName         := DefProp.Name;
-  AAssign.PropWriteInfo     := DefProp;
-  AAssign.PropOwnerType     := PropAccessorOwner(DefRT.Name, DefProp.WriteMethod);
-  AAssign.PropAccessorVSlot := PropAccessorVSlot(DefRT.Name, DefProp.WriteMethod);
-  IdxType := AnalyseExpr(AAssign.PropIndexExpr);
-  if DefProp.IndexTypeDesc <> nil then
-    CheckTypesMatch(DefProp.IndexTypeDesc, IdxType, 'default property index',
-      AAssign.Line, AAssign.Col);
-  ValType := AnalyseExpr(AAssign.Expr);
-  CheckTypesMatch(DefProp.TypeDesc, ValType, 'default property assignment',
-    AAssign.Line, AAssign.Col);
-  Result := True;
-end;
-
 procedure TSemanticAnalyser.AnalyseFieldAssignment(AAssign: TFieldAssignment);
 var
   RecSym:   TSymbol;
@@ -9147,7 +7826,6 @@ var
   ExprType: TTypeDesc;
   ObjType:  TTypeDesc;
   IntfDesc: TInterfaceTypeDesc;
-  VarSym:   TSymbol;
 begin
   { ObjExpr path: receiver is an arbitrary expression (e.g. typecast result) }
   if AAssign.ObjExpr <> nil then
@@ -9163,10 +7841,6 @@ begin
     if FldInfo = nil then
     begin
       PropInfo := RT.FindProperty(AAssign.FieldName);
-      if PropInfo <> nil then
-        AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
-                             PropInfo.DeclaringType, AAssign.FieldName,
-                             AAssign.Line, AAssign.Col);
       if (PropInfo <> nil) and (PropInfo.WriteField <> '') then
       begin
         AAssign.FieldName := PropInfo.WriteField;
@@ -9176,11 +7850,7 @@ begin
         SemanticError(
           Format('Type ''%s'' has no field ''%s''', [ObjType.Name, AAssign.FieldName]),
           AAssign.Line, AAssign.Col);
-    end
-    else
-      AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
-                           FldInfo.DeclaringType, AAssign.FieldName,
-                           AAssign.Line, AAssign.Col);
+    end;
     AAssign.IsClassAccess := ObjType.Kind = tyClass;
     AAssign.FieldInfo     := FldInfo;
     if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
@@ -9262,38 +7932,6 @@ begin
       Format('Undeclared variable ''%s''', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
   end;
-  { Qualified STATIC (class-level) variable write: 'TFoo.StaticVar := V'.
-    RecordName is a class/record TYPE, not a variable; the static var was
-    registered under the combined key 'TFoo.StaticVar'.  Enforce member
-    visibility (a strict/private static var written from another type is
-    rejected with a "not accessible" diagnostic), then mark the node so codegen
-    lowers it as a plain store to the shared global slot — identical to the bare
-    'StaticVar := V' form a static method writes. }
-  if RecSym.Kind = skType then
-  begin
-    VarSym := FTable.Lookup(AAssign.RecordName + '.' + AAssign.FieldName);
-    if (VarSym <> nil) and (VarSym.Kind = skVariable) and VarSym.IsClassVar then
-    begin
-      AssertStaticVarVisible(VarSym.Visibility, VarSym.OwningUnit,
-                             VarSym.OwnerTypeName, AAssign.FieldName,
-                           AAssign.Line, AAssign.Col);
-      AAssign.IsClassVarWrite  := True;
-      AAssign.ClassVarEmitName := VarSym.GlobalEmitName;
-      AAssign.ClassVarLhsType  := VarSym.TypeDesc;
-      AAssign.IsGlobal         := True;
-      if (VarSym.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then
-      begin
-        AnalyseSetLiteralExpr(TArrayLiteralExpr(AAssign.Expr),
-          TSetTypeDesc(VarSym.TypeDesc));
-        Exit;
-      end;
-      ResolveDiamond(AAssign.Expr, VarSym.TypeDesc);
-      ExprType := AnalyseExpr(AAssign.Expr);
-      CheckTypesMatch(VarSym.TypeDesc, ExprType, 'static var assignment',
-        AAssign.Line, AAssign.Col);
-      Exit;
-    end;
-  end;
   if not (RecSym.Kind in [skVariable, skParameter, skVarParameter]) then
     SemanticError(
       Format('''%s'' is not a variable', [AAssign.RecordName]),
@@ -9320,10 +7958,7 @@ begin
     AAssign.IntfWriteDesc := IntfDesc;
     AAssign.IsGlobal      := RecSym.IsGlobal;
     AAssign.IsVarParam    := RecSym.Kind = skVarParameter;
-    if TryResolveBareEnumIdent(AAssign.Expr, PropInfo.TypeDesc) then
-      ExprType := AAssign.Expr.ResolvedType
-    else
-      ExprType := AnalyseExpr(AAssign.Expr);
+    ExprType := AnalyseExpr(AAssign.Expr);
     CheckTypesMatch(PropInfo.TypeDesc, ExprType, 'property assignment',
       AAssign.Line, AAssign.Col);
     Exit;
@@ -9350,9 +7985,6 @@ begin
     PropInfo := RT.FindProperty(AAssign.FieldName);
     if PropInfo <> nil then
     begin
-      AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
-                           PropInfo.DeclaringType, AAssign.FieldName,
-                           AAssign.Line, AAssign.Col);
       if PropInfo.WriteField <> '' then
       begin
         { Field-backed write: redirect to the backing field }
@@ -9381,8 +8013,6 @@ begin
           AAssign.Line, AAssign.Col);
         Exit;
       end
-      else if TryLowerDefaultPropertyWrite(AAssign, PropInfo.TypeDesc) then
-        Exit
       else
         SemanticError(
           Format('Property ''%s'' is read-only', [AAssign.FieldName]),
@@ -9393,12 +8023,7 @@ begin
         Format('Type ''%s'' has no field ''%s''',
           [AAssign.RecordName, AAssign.FieldName]),
         AAssign.Line, AAssign.Col);
-  end
-  else
-    { Field write via variable.Field — enforce visibility. }
-    AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
-                         FldInfo.DeclaringType, AAssign.FieldName,
-                         AAssign.Line, AAssign.Col);
+  end;
 
   AAssign.FieldInfo := FldInfo;
   if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
@@ -9410,10 +8035,7 @@ begin
       TSetTypeDesc(FldInfo.TypeDesc));
     Exit;
   end;
-  if TryResolveBareEnumIdent(AAssign.Expr, FldInfo.TypeDesc) then
-    ExprType := AAssign.Expr.ResolvedType
-  else
-    ExprType := AnalyseExpr(AAssign.Expr);
+  ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'field assignment',
     AAssign.Line, AAssign.Col);
 end;
@@ -9684,7 +8306,7 @@ function TSemanticAnalyser.SetLiteralBaseEnum(AExpr: TArrayLiteralExpr): TTypeDe
 var
   I:    Integer;
   Elem: TASTExpr;
-  Ref:  TEnumMemberRef;
+  Sym:  TSymbol;
 begin
   Result := nil;
   if AExpr.Elements.Count = 0 then Exit;
@@ -9692,15 +8314,18 @@ begin
   begin
     Elem := TASTExpr(AExpr.Elements.Items[I]);
     if not (Elem is TIdentExpr) then
+    begin
       Exit(nil);
-    { Resolve each element against the enum pinned by the first one, so a
-      member name shared by several enums follows the rest of the literal. }
-    Ref := ResolveEnumMember(TIdentExpr(Elem).Name, Result);
-    if Ref = nil then
+    end;
+    Sym := FTable.Lookup(TIdentExpr(Elem).Name);
+    if (Sym = nil) or (Sym.Kind <> skConstant) or (Sym.TypeDesc = nil) or
+       (Sym.TypeDesc.Kind <> tyEnum) then
+    begin
       Exit(nil);
+    end;
     if Result = nil then
-      Result := Ref.EnumDesc
-    else if Ref.EnumDesc <> Result then
+      Result := Sym.TypeDesc
+    else if Sym.TypeDesc <> Result then
     begin
       Result := nil;   { mixed enums — not a clean set constructor }
       Exit;
@@ -9848,19 +8473,8 @@ begin
     if Grp <> nil then
       for I := 0 to Grp.Count - 1 do
       begin
-        Cand := TMethodDecl(Grp.Items[I]);
-        { Impl-only (implementation-section) routines are PRIVATE to their
-          unit.  When several units each declare a same-named private helper
-          (e.g. DiagAbort in both blaise_arc and blaise_exc), only the one
-          owned by the unit currently being analysed is a valid candidate —
-          the others are not visible here and must not count toward
-          ambiguity.  Routines exported from an interface (IsImplOnly=False)
-          remain globally visible as before. }
-        if Cand.IsImplOnly and (Cand.OwningUnit <> '') and
-           (FCurrentUnitName <> '') and
-           not SameText(Cand.OwningUnit, FCurrentUnitName) then
-          Continue;
         Inc(TotalCnt);
+        Cand := TMethodDecl(Grp.Items[I]);
         if (AArity >= MinArity(Cand)) and (AArity <= Cand.Params.Count) then
           ArityMatch.Add(Cand);
       end;
@@ -9882,17 +8496,8 @@ begin
       begin
         Exit(TMethodDecl(ArityMatch.Items[0]));
       end;
-      { Two units may each privately declare the SAME external C function
-        (e.g. a parameterless `external name 'abort'`).  Both land in the
-        global overload group with identical arity, but they denote ONE
-        function — not an ambiguous overload.  Collapse the duplicates: if
-        every arity match is the same external decl as the first, accept it
-        rather than erroring.  Mirrors the arg-scoring collapse below. }
-      if AllSameExternalDecl(ArityMatch) then
-        Exit(TMethodDecl(ArityMatch.Items[0]));
-      { zero-arg ambiguity is impossible for non-external decls — same name
-        + zero params would have been rejected by the symbol-table chain,
-        but be defensive. }
+      { zero-arg ambiguity is impossible — same name + zero params would
+        have been rejected by the symbol-table chain, but be defensive. }
       if AArity = 0 then
         SemanticError(
           Format('Ambiguous overload of ''%s''', [AName]),
@@ -9956,13 +8561,11 @@ begin
         end
         else if ExactNew = ExactBest then
         begin
-          { Two candidates may denote the SAME underlying link symbol: two
-            units each declaring `external name 'strlen'`, or an
-            `external name '_BlaiseGetMem'` binding alongside the real
-            _BlaiseGetMem exported by blaise_mem.  They score identically but
-            are ONE function — not an ambiguous overload.  Collapse instead of
-            erroring. }
-          if not SameLinkSymbol(Cand, Best) then
+          { Two units may each privately declare the SAME external C function
+            (e.g. `external name 'strlen'`).  Both land in the global overload
+            group and score identically, but they denote ONE function — not an
+            ambiguous overload.  Collapse the duplicate instead of erroring. }
+          if not SameExternalDecl(Cand, Best) then
             Inc(BestCount);
         end;
       end;
@@ -9994,7 +8597,6 @@ var
   I:       Integer;
   PT:      TProceduralTypeDesc;
   PPar:    TProcParamInfo;
-  FldInfo: TFieldInfo;
 begin
   { Resolution order matches Delphi/FPC:
       1. Local variables / parameters / var-parameters — a `var Run:
@@ -10015,7 +8617,6 @@ begin
     if MDecl <> nil then
     begin
       { Analyse args first so overload resolution can score by type. }
-      HintBareEnumMethodArgs(FCurrentClass.Name, ACall.Name, ACall.Args);
       for I := 0 to ACall.Args.Count - 1 do
         AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
       { Use overload resolution so the correct variant is chosen when
@@ -10046,38 +8647,6 @@ begin
       ACall.IsImplicitSelfMethod := True;
       Exit;
     end;
-    { No method of that name — an unqualified procedural-typed field of the
-      current class (implicit Self.Field) dispatches through its stored
-      pointer, mirroring the explicit Self.Field() path. }
-    FldInfo := FCurrentClass.FindField(ACall.Name);
-    if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
-       (FldInfo.TypeDesc.Kind = tyProcedural) then
-    begin
-      PT := TProceduralTypeDesc(FldInfo.TypeDesc);
-      if ACall.Args.Count <> PT.Params.Count then
-        SemanticError(Format(
-          'Indirect call ''%s'' expects %d argument(s), got %d',
-          [ACall.Name, PT.Params.Count, ACall.Args.Count]),
-          ACall.Line, ACall.Col);
-      for I := 0 to ACall.Args.Count - 1 do
-      begin
-        PPar    := TProcParamInfo(PT.Params.Items[I]);
-        ArgType := AnalyseExprHinted(TASTExpr(ACall.Args.Items[I]), PPar.TypeDesc);
-        if PPar.IsVarParam and
-           not IsVarArgLValue(TASTExpr(ACall.Args.Items[I])) then
-          SemanticError(
-            Format('var argument %d of ''%s'' must be a variable',
-              [I + 1, ACall.Name]),
-            ACall.Line, ACall.Col);
-        CheckTypesMatch(PPar.TypeDesc, ArgType,
-          Format('argument %d of ''%s''', [I + 1, ACall.Name]),
-          ACall.Line, ACall.Col);
-      end;
-      ACall.IsProcFieldCall  := True;
-      ACall.ProcFieldInfo    := FldInfo;
-      ACall.ResolvedProcType := FldInfo.TypeDesc;
-      Exit;
-    end;
   end;
   { Try on-demand instantiation of a generic function }
   if StrPos('<', ACall.Name) >= 0 then
@@ -10106,8 +8675,8 @@ begin
         ACall.Line, ACall.Col);
     for I := 0 to ACall.Args.Count - 1 do
     begin
+      ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
       PPar    := TProcParamInfo(PT.Params.Items[I]);
-      ArgType := AnalyseExprHinted(TASTExpr(ACall.Args.Items[I]), PPar.TypeDesc);
       { Var-param actual must be an L-value; check before the type match
         so the diagnostic matches the regular-call path. }
       if PPar.IsVarParam and
@@ -10154,9 +8723,6 @@ begin
   Idx := FProcIndex.IndexOf(ACall.Name);
   if Idx >= 0 then
   begin
-    { Steer a bare shared enum member to the enum this proc expects before
-      bottom-up analysis pins it by last-wins. }
-    HintBareEnumArgs(ACall.Name, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
       AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
 
@@ -10333,7 +8899,6 @@ var
   I:       Integer;
   PT:      TProceduralTypeDesc;
   PPar:    TProcParamInfo;
-  FldInfo: TFieldInfo;
 begin
   { HasClassAttribute(AClass, AAttrClass): Boolean — runtime query of the custom
     attribute RTTI stored in slot 7 of the class's typeinfo.  Both arguments
@@ -10525,7 +9090,6 @@ begin
     if MDecl <> nil then
     begin
       { Analyse args first so overload resolution can score by type. }
-      HintBareEnumMethodArgs(FCurrentClass.Name, AExpr.Name, AExpr.Args);
       for I := 0 to AExpr.Args.Count - 1 do
         AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
       MDecl := ResolveMethodOverload(FCurrentClass.Name, AExpr.Name,
@@ -10550,40 +9114,6 @@ begin
       AExpr.ResolvedDecl         := MDecl;
       AExpr.IsImplicitSelfMethod := True;
       Result := MDecl.ResolvedReturnType;
-      AExpr.ResolvedType := Result;
-      Exit;
-    end;
-    { No method of that name — an unqualified procedural-typed field of the
-      current class (implicit Self.Field) called as an expression dispatches
-      through its stored pointer and yields the signature's return type. }
-    FldInfo := FCurrentClass.FindField(AExpr.Name);
-    if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
-       (FldInfo.TypeDesc.Kind = tyProcedural) then
-    begin
-      PT := TProceduralTypeDesc(FldInfo.TypeDesc);
-      if AExpr.Args.Count <> PT.Params.Count then
-        SemanticError(Format(
-          'Indirect call ''%s'' expects %d argument(s), got %d',
-          [AExpr.Name, PT.Params.Count, AExpr.Args.Count]),
-          AExpr.Line, AExpr.Col);
-      for I := 0 to AExpr.Args.Count - 1 do
-      begin
-        PPar    := TProcParamInfo(PT.Params.Items[I]);
-        ArgType := AnalyseExprHinted(TASTExpr(AExpr.Args.Items[I]), PPar.TypeDesc);
-        if PPar.IsVarParam and
-           not IsVarArgLValue(TASTExpr(AExpr.Args.Items[I])) then
-          SemanticError(
-            Format('var argument %d of ''%s'' must be a variable',
-              [I + 1, AExpr.Name]),
-            AExpr.Line, AExpr.Col);
-        CheckTypesMatch(PPar.TypeDesc, ArgType,
-          Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
-          AExpr.Line, AExpr.Col);
-      end;
-      AExpr.IsProcFieldCall  := True;
-      AExpr.ProcFieldInfo    := FldInfo;
-      AExpr.ResolvedProcType := FldInfo.TypeDesc;
-      Result := PT.ReturnType;
       AExpr.ResolvedType := Result;
       Exit;
     end;
@@ -10630,8 +9160,8 @@ begin
         AExpr.Line, AExpr.Col);
     for I := 0 to AExpr.Args.Count - 1 do
     begin
+      ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
       PPar    := TProcParamInfo(PT.Params.Items[I]);
-      ArgType := AnalyseExprHinted(TASTExpr(AExpr.Args.Items[I]), PPar.TypeDesc);
       if PPar.IsVarParam and
          not IsVarArgLValue(TASTExpr(AExpr.Args.Items[I])) then
         SemanticError(
@@ -11262,53 +9792,13 @@ begin
     Exit;
   end;
 
-  { Scoped nested routine: a function declared inside another routine's body
-    is registered in the symbol table only, never in the global FProcIndex /
-    FProcGroups (so same-named nested procs in sibling outer routines do not
-    collide as ambiguous overloads).  When the call name misses the global
-    index but the scoped Sym carries its backing decl, resolve directly
-    against that single decl rather than the overload group. }
-  if (FProcIndex.IndexOf(AExpr.Name) < 0) and (Sym <> nil) and
-     (Sym.Decl <> nil) and (Sym.Decl is TMethodDecl) then
-  begin
-    MDecl := TMethodDecl(Sym.Decl);
-    HintBareEnumArgs(AExpr.Name, AExpr.Args);
-    for I := 0 to AExpr.Args.Count - 1 do
-      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-    if (AExpr.Args.Count < MinArity(MDecl)) or
-       (AExpr.Args.Count > MDecl.Params.Count) then
-      SemanticError(
-        Format('''%s'' expects %d argument(s), got %d',
-          [AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
-        AExpr.Line, AExpr.Col);
-    for I := 0 to AExpr.Args.Count - 1 do
-    begin
-      Par := TMethodParam(MDecl.Params.Items[I]);
-      if Par.IsVarParam then
-      begin
-        ArgType := TASTExpr(AExpr.Args.Items[I]).ResolvedType;
-        CheckTypesMatch(Par.ResolvedType, ArgType,
-          Format('var argument %d of ''%s''', [I + 1, AExpr.Name]),
-          AExpr.Line, AExpr.Col);
-      end;
-    end;
-    RetypeSetLiteralArgs(AExpr.Args, MDecl);
-    AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
-    AExpr.ResolvedDecl := MDecl;
-    Result := MDecl.ResolvedReturnType;
-    Exit;
-  end;
-
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
     SemanticError(
       Format('Cannot find declaration for function ''%s''', [AExpr.Name]),
       AExpr.Line, AExpr.Col);
 
-  { Phase B: analyse args first, then score overloads by argument type.
-    A bare shared enum member is first steered to the enum the target expects
-    at its position, so the right ordinal is pinned before bottom-up analysis. }
-  HintBareEnumArgs(AExpr.Name, AExpr.Args);
+  { Phase B: analyse args first, then score overloads by argument type. }
   for I := 0 to AExpr.Args.Count - 1 do
     AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
 
@@ -11379,7 +9869,6 @@ begin
     end;
     RT := TRecordTypeDesc(ObjType);
     { Analyse args first so overload resolution can score by type. }
-    HintBareEnumMethodArgs(RT.Name, AExpr.Name, AExpr.Args);
     for I := 0 to AExpr.Args.Count - 1 do
       AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
     { Built-in TObject.ToString: virtual dispatch via vtable slot 1.
@@ -11395,9 +9884,8 @@ begin
       AExpr.ResolvedType := Result;
       Exit;
     end;
-    FMethodOwnerHint := RT.OwningUnit;
-      MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
-        AExpr.Line, AExpr.Col);
+    MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
+      AExpr.Line, AExpr.Col);
     if MDecl = nil then
     begin
       FldInfo := RT.FindField(AExpr.Name);
@@ -11409,10 +9897,7 @@ begin
         AExpr.ResolvedProcType  := FldInfo.TypeDesc;
         AExpr.ResolvedClassType := RT;
         AExpr.ResolvedMethod    := nil;
-        { Calling a function-pointer field yields the field signature's return
-          type — not nil — so the call can be used as an expression. }
-        AExpr.ResolvedType      := TProceduralTypeDesc(FldInfo.TypeDesc).ReturnType;
-        Result                  := AExpr.ResolvedType;
+        AExpr.ResolvedType      := nil;
         Exit;
       end;
       SemanticError(
@@ -11427,15 +9912,7 @@ begin
     Exit;
   end;
 
-  { A unit-qualified receiver type 'Unit.Type.Method' resolves against that
-    specific unit's exports (directed lookup), so a constructor on a cross-unit
-    same-named type binds to the named unit rather than the flat last-wins
-    winner.  Falls back to the normal lookup on a miss. }
-  ObjSym := nil;
-  if AExpr.QualifierUnit <> '' then
-    ObjSym := ResolveQualified(AExpr.QualifierUnit, AExpr.ObjectName);
-  if ObjSym = nil then
-    ObjSym := FTable.Lookup(AExpr.ObjectName);
+  ObjSym := FTable.Lookup(AExpr.ObjectName);
   { If the name contains '<' and wasn't found, resolve scope-bound type params
     (e.g. 'TListEnumerator<T>' → 'TListEnumerator<Integer>' when T=Integer is
     in scope) and trigger on-demand instantiation.  Mirrors the field-access
@@ -11501,12 +9978,10 @@ begin
       end;
       RT := TRecordTypeDesc(ObjType);
       { Analyse args first so overload resolution can score by type. }
-      HintBareEnumMethodArgs(RT.Name, AExpr.Name, AExpr.Args);
       for I := 0 to AExpr.Args.Count - 1 do
         AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-      FMethodOwnerHint := RT.OwningUnit;
-        MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
-          AExpr.Line, AExpr.Col);
+      MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
+        AExpr.Line, AExpr.Col);
       if MDecl = nil then
       begin
         FldInfo := RT.FindField(AExpr.Name);
@@ -11518,9 +9993,7 @@ begin
           AExpr.ResolvedProcType  := FldInfo.TypeDesc;
           AExpr.ResolvedClassType := RT;
           AExpr.ResolvedMethod    := nil;
-          { Function-pointer field call yields the signature's return type. }
-          AExpr.ResolvedType      := TProceduralTypeDesc(FldInfo.TypeDesc).ReturnType;
-          Result                  := AExpr.ResolvedType;
+          AExpr.ResolvedType      := nil;
           Exit;
         end;
         SemanticError(
@@ -11562,39 +10035,6 @@ begin
   if SameText(ObjSym.Name, AExpr.ObjectName) then
     AExpr.ObjectName := ObjSym.Name;
 
-  { TypeName.StaticFunction(args) in expression position — a static (class-level)
-    method reached through the class name.  Must be declared static; lowered with
-    NO Self.  Checked before the Create-constructor branch so a non-Create static
-    method resolves here rather than falling through to "is not a variable". }
-  if (ObjSym.Kind = skType) and (ObjSym.TypeDesc <> nil) and
-     (ObjSym.TypeDesc.Kind in [tyClass, tyRecord]) and
-     not (SameText(AExpr.Name, 'Create') or (StrPos('Create', AExpr.Name) = 0)) then
-  begin
-    for I := 0 to AExpr.Args.Count - 1 do
-      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-    MDecl := ResolveMethodOverload(ObjSym.Name, AExpr.Name, AExpr.Args,
-      AExpr.Line, AExpr.Col);
-    if MDecl = nil then
-      MDecl := FindMethodDecl(ObjSym.Name, AExpr.Name);
-    if MDecl = nil then
-      SemanticError(
-        Format('Type ''%s'' has no method ''%s''', [ObjSym.Name, AExpr.Name]),
-        AExpr.Line, AExpr.Col);
-    if not MDecl.IsStatic then
-      SemanticError(
-        Format('''%s.%s'' is not a static method — call it on an instance',
-          [ObjSym.Name, AExpr.Name]),
-        AExpr.Line, AExpr.Col);
-    AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
-    EnforceMethodVisible(MDecl, AExpr.Line, AExpr.Col);
-    AExpr.ResolvedMethod    := MDecl;
-    AExpr.ResolvedClassType := ObjSym.TypeDesc;
-    AExpr.IsStaticCall      := True;
-    Result := MDecl.ResolvedReturnType;
-    AExpr.ResolvedType := Result;
-    Exit;
-  end;
-
   { Constructor call with args: TypeName.Create(arg1, arg2, ...) or any
     method on a class type starting with Create (e.g. CreateFmt). }
   if (ObjSym.Kind = skType) and
@@ -11609,7 +10049,6 @@ begin
       SemanticError(
         Format('Cannot instantiate abstract class ''%s''', [ObjSym.Name]),
         AExpr.Line, AExpr.Col);
-    HintBareEnumMethodArgs(ObjSym.Name, AExpr.Name, AExpr.Args);
     for I := 0 to AExpr.Args.Count - 1 do
       AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
     { Try to find a user-defined constructor method for type checking.
@@ -11660,7 +10099,6 @@ begin
      (SameText(AExpr.Name, 'Create') or (StrPos('Create', AExpr.Name) = 0)) then
   begin
     RT := TRecordTypeDesc(TMetaClassTypeDesc(ObjSym.TypeDesc).BaseClass);
-    HintBareEnumMethodArgs(RT.Name, AExpr.Name, AExpr.Args);
     for I := 0 to AExpr.Args.Count - 1 do
       AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
     MDecl := ResolveMethodOverload(RT.Name, AExpr.Name,
@@ -11750,9 +10188,8 @@ begin
     AExpr.ResolvedType := Result;
     Exit;
   end;
-  FMethodOwnerHint := RT.OwningUnit;
-    MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
-      AExpr.Line, AExpr.Col);
+  MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
+    AExpr.Line, AExpr.Col);
   if MDecl = nil then
     MDecl := FindMethodDecl(RT.Name, AExpr.Name);
   { Built-in TObject.ToString: virtual dispatch yielding string.
@@ -11788,9 +10225,7 @@ begin
         (ObjSym.Kind = skVarParameter) or
         ((ObjSym.Kind = skParameter) and (ObjSym.TypeDesc <> nil) and
          (ObjSym.TypeDesc.Kind in [tyRecord, tyStaticArray]));
-      { Function-pointer field call yields the signature's return type. }
-      AExpr.ResolvedType      := TProceduralTypeDesc(FldInfo.TypeDesc).ReturnType;
-      Result                  := AExpr.ResolvedType;
+      AExpr.ResolvedType      := nil;
       Exit;
     end;
     SemanticError(
@@ -11818,7 +10253,6 @@ begin
       AExpr.Line, AExpr.Col);
   end;
 
-  EnforceMethodVisible(MDecl, AExpr.Line, AExpr.Col);
   AExpr.ResolvedClassType := RT;
   AExpr.ResolvedMethod    := MDecl;
   AExpr.IsGlobal          := ObjSym.IsGlobal;
@@ -11834,7 +10268,6 @@ var
   Sym:       TSymbol;
   FldInfo:   TFieldInfo;
   PropInfo:  TPropertyInfo;
-  EnumRef:   TEnumMemberRef;
 begin
   if AExpr is TNilLiteral then
     Result := FTable.TypeNil
@@ -11852,32 +10285,6 @@ begin
     Result := FTable.TypeString
   else if AExpr is TIdentExpr then
   begin
-    { Already resolved to a constant (e.g. a bare enum member pinned in place
-      by a context-directed site such as an assignment, case label or 'in'
-      operand).  Re-returning the type keeps resolution idempotent and avoids
-      a spurious second ambiguity warning. }
-    if TIdentExpr(AExpr).IsConstant and (AExpr.ResolvedType <> nil) then
-      Exit(AExpr.ResolvedType);
-    { Unit-qualified reference 'Unit.Symbol' (parser preserved the unit in
-      QualifierUnit).  Resolve via the directed-lookup primitive against
-      that specific unit's exports: a same-named symbol in another used
-      unit cannot shadow it, the uses-chain last-wins rule does not apply,
-      and an explicit qualifier is never shadowed by a class field.  An
-      absent member is a hard error at the qualification site.  No const/
-      var/type special-casing here — it falls through to the shared symbol
-      normalisation below, dispatched on Sym.Kind like any other symbol. }
-    if TIdentExpr(AExpr).QualifierUnit <> '' then
-    begin
-      Sym := ResolveQualified(TIdentExpr(AExpr).QualifierUnit,
-                              TIdentExpr(AExpr).Name);
-      if Sym = nil then
-        SemanticError(Format(
-          'Identifier ''%s'' not declared in unit ''%s''',
-          [TIdentExpr(AExpr).Name, TIdentExpr(AExpr).QualifierUnit]),
-          AExpr.Line, AExpr.Col);
-    end
-    else
-    begin
     { Resolution order (matches AnalyseProcCall / AnalyseFuncCall):
       local vars/params > implicit Self.member > unit-level.  Without
       this priority, a bare identifier inside a method binds to the
@@ -11938,53 +10345,13 @@ begin
       end;
     end;
     if Sym = nil then
-    begin
-      { Not a normal symbol — try a bare enum member.  No expected-type
-        context flows into the generic expression path, so this resolves a
-        member declared by a single enum directly; a member shared by several
-        enums is ambiguous here and is rejected — qualify it (TEnum.Member).
-        Context-sensitive sites (assignment, case, call args, set elements,
-        for bounds) inject a hint before reaching here. }
-      EnumRef := ResolveEnumMember(TIdentExpr(AExpr).Name, nil);
-      if EnumRef <> nil then
-      begin
-        if EnumMemberCandidateCount(TIdentExpr(AExpr).Name) > 1 then
-          SemanticError(Format(
-            'cannot determine which enum ''%s'' refers to: it is declared by ' +
-            '%s, and there is no type context here to choose. Qualify it as ' +
-            '<EnumType>.%s',
-            [TIdentExpr(AExpr).Name, EnumMemberOwners(TIdentExpr(AExpr).Name),
-             TIdentExpr(AExpr).Name]),
-            AExpr.Line, AExpr.Col);
-        TIdentExpr(AExpr).IsConstant := True;
-        TIdentExpr(AExpr).ConstValue := EnumRef.Ordinal;
-        Result := EnumRef.EnumDesc;
-        AExpr.ResolvedType := Result;
-        Exit;
-      end;
       SemanticError(
         Format('Undeclared identifier ''%s''', [TIdentExpr(AExpr).Name]),
         AExpr.Line, AExpr.Col);
-    end;
-    end;  { end else: unqualified resolution (qualified set Sym above) }
     { Var-params and value-record/array params are both passed by reference at
       the QBE ABI level: the local slot holds a pointer, not the aggregate
       bytes.  Codegen must dereference the slot before reading fields. }
     TIdentExpr(AExpr).Name      := Sym.Name;  { normalise to declared casing }
-    { A static (class-level) variable resolves to a single shared global whose
-      emit label is the mangled GlobalEmitName, distinct from the lookup key
-      ('FInstance' or 'TFoo.FInstance' both reach the one slot).  Rewrite the
-      node's emitted name to that label so codegen lowers $TFoo_FInstance.
-      Enforce member visibility on the bare form: a strict-private static var is
-      reachable only from its declaring type's own methods (FCurrentClass = the
-      declaring type), not from another type or the unit init/final section. }
-    if Sym.IsClassVar and (Sym.GlobalEmitName <> '') then
-    begin
-      AssertStaticVarVisible(Sym.Visibility, Sym.OwningUnit,
-                             Sym.OwnerTypeName, Sym.Name,
-                           AExpr.Line, AExpr.Col);
-      TIdentExpr(AExpr).Name := Sym.GlobalEmitName;
-    end;
     if Sym.Kind = skVarParameter then
       TIdentExpr(AExpr).ParamMode := pmVar
     else if (Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
@@ -12000,22 +10367,6 @@ begin
       TIdentExpr(AExpr).ParamMode := pmNone;
     TIdentExpr(AExpr).IsGlobal    := Sym.IsGlobal;
     TIdentExpr(AExpr).IsThreadVar := Sym.IsThreadVar;
-    { Record the owning unit of a module-scope global so codegen mangles
-      the storage symbol with the unit that actually won resolution (the
-      uses-chain last-wins winner for a bare ref, the named unit for a
-      qualified ref).  Without this, two used units exporting the same var
-      name both resolve to one slot. }
-    if Sym.IsGlobal and (Sym.Kind = skVariable) then
-    begin
-      { A static class/record var's Name was rewritten above to its already
-        fully-mangled GlobalEmitName (Unit_Class_Field); flag it so codegen's
-        module-var prefixing does not double-apply.  Plain module globals carry
-        their owning unit for owner-based mangling. }
-      if Sym.IsClassVar then
-        TIdentExpr(AExpr).ResolvedOwnerUnit := PreMangledGlobalOwner
-      else
-        TIdentExpr(AExpr).ResolvedOwnerUnit := Sym.OwningUnit;
-    end;
     if Sym.Kind = skConstant then
     begin
       TIdentExpr(AExpr).IsConstant  := True;
@@ -12106,45 +10457,6 @@ begin
   AExpr.ResolvedType := Result;
 end;
 
-{ Default array property on a property-read result.  The parser folds the
-  trailing '[idx]' of 'Recv.Prop[idx]' into AAccess.PropIndexExpr, so when Prop
-  is a (non-indexed) property whose type has a `default` indexed property, the
-  read above would resolve Recv.Prop and drop the index.  Rewrite it as
-  '(Recv.Prop).Default[idx]': move the property read into a fresh inner
-  field-access (the getter, no index) and re-point AAccess at the default
-  property, then re-analyse — which lands on the chained indexed-property path.
-  Returns the resolved element type, or nil when no lowering applies (the
-  caller then handles Prop as before).  APropInfo is the already-resolved read
-  property. }
-function TSemanticAnalyser.TryLowerDefaultPropertyIndex(
-  AAccess: TFieldAccessExpr; APropInfo: TPropertyInfo): TTypeDesc;
-var
-  Inner:   TFieldAccessExpr;
-  DefProp: TPropertyInfo;
-begin
-  Result := nil;
-  if (APropInfo.IndexParamName <> '') or (AAccess.PropIndexExpr = nil) then
-    Exit;
-  if not (APropInfo.TypeDesc.Kind in [tyRecord, tyClass]) then
-    Exit;
-  DefProp := TRecordTypeDesc(APropInfo.TypeDesc).FindDefaultProperty();
-  if (DefProp = nil) or (DefProp.ReadMethod = '') then
-    Exit;
-  { Inner = the property getter without the index; carries the receiver. }
-  Inner := TFieldAccessExpr.Create();
-  Inner.Line       := AAccess.Line;
-  Inner.Col        := AAccess.Col;
-  Inner.Base       := AAccess.Base;        { transfer ownership (may be nil) }
-  Inner.RecordName := AAccess.RecordName;
-  Inner.FieldName  := AAccess.FieldName;
-  { Re-point AAccess at the default property on that getter result; the
-    PropIndexExpr ('[idx]') is left in place as its index. }
-  AAccess.Base       := Inner;
-  AAccess.RecordName := '';
-  AAccess.FieldName  := DefProp.Name;
-  Result := AnalyseFieldAccess(AAccess);
-end;
-
 function TSemanticAnalyser.AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
 var
   RecSym:   TSymbol;
@@ -12154,8 +10466,6 @@ var
   PropInfo: TPropertyInfo;
   BaseType: TTypeDesc;
   IntfDesc: TInterfaceTypeDesc;
-  MDecl:    TMethodDecl;
-  EnumOrd:  Integer;
 begin
   { Chained access: A.B.C — base is another expression whose type must be
     a record or class.  Leaf lookup uses Base.ResolvedType; RecordName path
@@ -12163,53 +10473,6 @@ begin
   if AAccess.Base <> nil then
   begin
     BaseType := AnalyseExpr(AAccess.Base);
-    { Metaclass base: 'TypeName.StaticVar' or 'TypeName.StaticProp' arriving as
-      a chained access (Base is the bare class-name ident resolving to
-      'class of TypeName') rather than the simple RecordName form.  This is how
-      the parser shapes a qualified static-var/property used as the BASE of a
-      further chain on an l-value, e.g. 'TFoo.GObj.V := x' or 'TFoo.GObj.M()'.
-      Resolve it exactly like the RecordName static-var/static-prop read below,
-      so the result type feeds the outer chain. }
-    if BaseType.Kind = tyMetaClass then
-    begin
-      RT  := TRecordTypeDesc(TMetaClassTypeDesc(BaseType).BaseClass);
-      Sym := FTable.Lookup(RT.Name + '.' + AAccess.FieldName);
-      if (Sym <> nil) and (Sym.Kind = skVariable) and Sym.IsClassVar then
-      begin
-        AssertStaticVarVisible(Sym.Visibility, Sym.OwningUnit,
-                               Sym.OwnerTypeName, AAccess.FieldName,
-                               AAccess.Line, AAccess.Col);
-        AAccess.IsClassVarRead   := True;
-        AAccess.IsGlobal         := True;
-        AAccess.ClassVarEmitName := Sym.GlobalEmitName;
-        AAccess.ResolvedType     := Sym.TypeDesc;
-        Exit(Sym.TypeDesc);
-      end;
-      PropInfo := RT.FindProperty(AAccess.FieldName);
-      if (PropInfo <> nil) and PropInfo.IsStatic then
-      begin
-        if PropInfo.ReadMethod = '' then
-          SemanticError(
-            Format('Static property ''%s.%s'' has no readable static getter',
-              [RT.Name, AAccess.FieldName]),
-            AAccess.Line, AAccess.Col);
-        MDecl := FindMethodDecl(RT.Name, PropInfo.ReadMethod);
-        if (MDecl = nil) or not MDecl.IsStatic then
-          SemanticError(
-            Format('Static property ''%s.%s'' getter ''%s'' is not a static method',
-              [RT.Name, AAccess.FieldName, PropInfo.ReadMethod]),
-            AAccess.Line, AAccess.Col);
-        AAccess.IsStaticPropGet   := True;
-        AAccess.ResolvedMethod    := MDecl;
-        AAccess.ResolvedClassType := BaseType;
-        AAccess.ResolvedType      := MDecl.ResolvedReturnType;
-        Exit(MDecl.ResolvedReturnType);
-      end;
-      SemanticError(
-        Format('Unknown static member ''%s'' on type ''%s''',
-          [AAccess.FieldName, RT.Name]),
-        AAccess.Line, AAccess.Col);
-    end;
     if not (BaseType.Kind in [tyRecord, tyClass]) then
       SemanticError(
         Format('Field access ''.%s'' requires a record or class base, got ''%s''',
@@ -12234,27 +10497,16 @@ begin
     if FldInfo = nil then
     begin
       PropInfo := RT.FindProperty(AAccess.FieldName);
-      if PropInfo <> nil then
-        AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
-                             PropInfo.DeclaringType, AAccess.FieldName,
-                             AAccess.Line, AAccess.Col);
       if (PropInfo <> nil) and (PropInfo.ReadField <> '') then
       begin
-        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
-        if Result <> nil then
-          Exit;
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
-        AAccess.BackingFieldRedirect := True;
         Exit(PropInfo.TypeDesc);
       end;
       { Method-backed property (including indexed: the parser attaches the
         '[idx]' to AAccess.PropIndexExpr when it parses 'Base.Prop[idx]'). }
       if (PropInfo <> nil) and (PropInfo.ReadMethod <> '') then
       begin
-        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
-        if Result <> nil then
-          Exit;
         if PropInfo.IndexParamName <> '' then
         begin
           if AAccess.PropIndexExpr = nil then
@@ -12306,12 +10558,6 @@ begin
           [BaseType.Name, AAccess.FieldName]),
         AAccess.Line, AAccess.Col);
     end;
-    { Field found via qualified access (Base.Field) — enforce visibility unless
-      this node is a property→backing-field redirect already checked. }
-    if not AAccess.BackingFieldRedirect then
-      AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
-                           FldInfo.DeclaringType, AAccess.FieldName,
-                           AAccess.Line, AAccess.Col);
     AAccess.FieldInfo := FldInfo;
     Result := FldInfo.TypeDesc;
     if AAccess.PropIndexExpr <> nil then
@@ -12365,15 +10611,7 @@ begin
     Exit;
   end;
 
-  { A unit-qualified base type 'Unit.TEnum.Member' / 'Unit.TFoo.StaticVar'
-    resolves the base against that specific unit's exports (directed lookup), so
-    it binds to the named unit rather than the flat cross-unit last-wins winner.
-    Falls back to the normal lookup on a miss. }
-  RecSym := nil;
-  if AAccess.QualifierUnit <> '' then
-    RecSym := ResolveQualified(AAccess.QualifierUnit, AAccess.RecordName);
-  if RecSym = nil then
-    RecSym := FTable.Lookup(AAccess.RecordName);
+  RecSym := FTable.Lookup(AAccess.RecordName);
   { If the name contains '<' and wasn't found, resolve scope-bound type params
     (e.g. 'TGenEnum<T>' → 'TGenEnum<Integer>' when T=Integer is in scope)
     and update AAccess.RecordName so codegen sees the concrete instantiation. }
@@ -12405,9 +10643,6 @@ begin
           begin
             if PropInfo.ReadField <> '' then
             begin
-              Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
-              if Result <> nil then
-                Exit;
               AAccess.FieldName := PropInfo.ReadField;
               AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
               Result := PropInfo.TypeDesc;
@@ -12417,9 +10652,6 @@ begin
             else if PropInfo.ReadMethod <> '' then
             begin
               { Method-backed read (includes indexed properties) }
-              Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
-              if Result <> nil then
-                Exit;
               if PropInfo.IndexParamName <> '' then
               begin
                 if AAccess.PropIndexExpr = nil then
@@ -12509,26 +10741,6 @@ begin
 
   AAccess.RecordName := RecSym.Name;  { normalise to declared casing }
 
-  { Type-qualified enum member: TMyEnum.meValue.  Resolve the member straight
-    from the named enum's own member list, so the reference is unambiguous even
-    when another enum in scope declares a member of the same name (the bare name
-    resolves to whichever enum claimed the global slot; the qualified form
-    always names this one). }
-  if (RecSym.Kind = skType) and (RecSym.TypeDesc <> nil) and
-     (RecSym.TypeDesc.Kind = tyEnum) then
-  begin
-    EnumOrd := TEnumTypeDesc(RecSym.TypeDesc).OrdinalOf(AAccess.FieldName);
-    if EnumOrd < 0 then
-      SemanticError(
-        Format('Enum ''%s'' has no member ''%s''',
-          [AAccess.RecordName, AAccess.FieldName]),
-        AAccess.Line, AAccess.Col);
-    AAccess.IsConstant   := True;
-    AAccess.ConstValue   := EnumOrd;
-    AAccess.ResolvedType := RecSym.TypeDesc;
-    Exit(RecSym.TypeDesc);
-  end;
-
   { Constructor call: TypeName.Create }
   if RecSym.Kind = skType then
   begin
@@ -12559,46 +10771,6 @@ begin
         end;
         AAccess.ResolvedType := Sym.TypeDesc;
         Exit(Sym.TypeDesc);
-      end;
-      { Static (class-level) variable read: TypeName.StaticVar.  The qualified
-        symbol carries the mangled GlobalEmitName; rewrite the access to a plain
-        global read of that label (codegen lowers it like a global ident).
-        Enforce member visibility — a strict/private static var read through the
-        qualified form from a context that may not see it is rejected. }
-      if (Sym <> nil) and (Sym.Kind = skVariable) and Sym.IsClassVar then
-      begin
-        AssertStaticVarVisible(Sym.Visibility, Sym.OwningUnit,
-                               Sym.OwnerTypeName, AAccess.FieldName,
-                             AAccess.Line, AAccess.Col);
-        AAccess.IsClassVarRead := True;
-        AAccess.IsGlobal       := True;
-        AAccess.ClassVarEmitName := Sym.GlobalEmitName;
-        AAccess.ResolvedType   := Sym.TypeDesc;
-        Exit(Sym.TypeDesc);
-      end;
-      { Static property read: TypeName.StaticProp.  Resolve to its (static)
-        getter and lower as a static getter call.  Only method-backed static
-        getters are supported (a field-backed static property would resolve to
-        the static var directly). }
-      PropInfo := TRecordTypeDesc(RecSym.TypeDesc).FindProperty(AAccess.FieldName);
-      if (PropInfo <> nil) and PropInfo.IsStatic then
-      begin
-        if PropInfo.ReadMethod = '' then
-          SemanticError(
-            Format('Static property ''%s.%s'' has no readable static getter',
-              [AAccess.RecordName, AAccess.FieldName]),
-            AAccess.Line, AAccess.Col);
-        MDecl := FindMethodDecl(TRecordTypeDesc(RecSym.TypeDesc).Name, PropInfo.ReadMethod);
-        if (MDecl = nil) or not MDecl.IsStatic then
-          SemanticError(
-            Format('Static property ''%s.%s'' getter ''%s'' is not a static method',
-              [AAccess.RecordName, AAccess.FieldName, PropInfo.ReadMethod]),
-            AAccess.Line, AAccess.Col);
-        AAccess.IsStaticPropGet := True;
-        AAccess.ResolvedMethod  := MDecl;
-        AAccess.ResolvedClassType := RecSym.TypeDesc;
-        AAccess.ResolvedType    := MDecl.ResolvedReturnType;
-        Exit(MDecl.ResolvedReturnType);
       end;
       SemanticError(
         Format('Unknown class method ''%s'' on type ''%s''',
@@ -12653,27 +10825,6 @@ begin
     Exit;
   end;
 
-  { Metaclass variable: a bare 'C.Create' / 'C.Method' (no parens) reaching
-    field-access analysis is a constructor/method call written without the
-    mandatory parentheses — the parenthesised form is a TMethodCallExpr and
-    never lands here.  Emit the parens diagnostic rather than the misleading
-    'is not a record or class' error. }
-  if RecSym.TypeDesc.Kind = tyMetaClass then
-  begin
-    RT := TRecordTypeDesc(TMetaClassTypeDesc(RecSym.TypeDesc).BaseClass);
-    if (RT <> nil) and
-       (SameText(AAccess.FieldName, 'Create') or
-        (FindMethodDecl(RT.Name, AAccess.FieldName) <> nil)) then
-      SemanticError(
-        Format('Bare reference to ''%s'' requires () for a call',
-          [AAccess.FieldName]),
-        AAccess.Line, AAccess.Col);
-    SemanticError(
-      Format('Metaclass ''%s'' has no method ''%s''',
-        [RecSym.TypeDesc.Name, AAccess.FieldName]),
-      AAccess.Line, AAccess.Col);
-  end;
-
   if not (RecSym.TypeDesc.Kind in [tyRecord, tyClass]) then
     SemanticError(
       Format('''%s'' is not a record or class', [AAccess.RecordName]),
@@ -12724,18 +10875,11 @@ begin
     PropInfo := RT.FindProperty(AAccess.FieldName);
     if PropInfo <> nil then
     begin
-      AssertMemberVisibleV(PropInfo.Visibility, PropInfo.DeclaringUnit,
-                           PropInfo.DeclaringType, AAccess.FieldName,
-                           AAccess.Line, AAccess.Col);
       if PropInfo.ReadField <> '' then
       begin
         { Field-backed read: redirect to the backing field }
-        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
-        if Result <> nil then
-          Exit;
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
-        AAccess.BackingFieldRedirect := True;
         Result := PropInfo.TypeDesc;
         AAccess.ResolvedType := Result;
         Exit;
@@ -12743,9 +10887,6 @@ begin
       else if PropInfo.ReadMethod <> '' then
       begin
         { Method-backed read (includes indexed properties) }
-        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
-        if Result <> nil then
-          Exit;
         if PropInfo.IndexParamName <> '' then
         begin
           if AAccess.PropIndexExpr = nil then
@@ -12792,12 +10933,6 @@ begin
       AAccess.Line, AAccess.Col);
   end;
 
-  { Field found via variable.Field qualified access — enforce visibility unless
-    this node is a property→backing-field redirect already checked. }
-  if not AAccess.BackingFieldRedirect then
-    AssertMemberVisibleV(FldInfo.Visibility, FldInfo.DeclaringUnit,
-                         FldInfo.DeclaringType, AAccess.FieldName,
-                         AAccess.Line, AAccess.Col);
   AAccess.FieldInfo := FldInfo;
   Result := FldInfo.TypeDesc;
   if AAccess.PropIndexExpr <> nil then
@@ -12853,25 +10988,8 @@ var
   LType, RType: TTypeDesc;
   TmpSet: TSetTypeDesc;
 begin
-  { Set membership with a bare enum-member left operand and a real set (not a
-    literal) on the right: the set's element type disambiguates the member, so
-    resolve the right first and pin the left against it.  Done before the eager
-    analysis below, which would otherwise pick a context-free last-wins
-    candidate (and warn) for a shared member name. }
-  if (ABin.Op = boIn) and (ABin.Left is TIdentExpr) and
-     not TIdentExpr(ABin.Left).IsConstant and
-     not (ABin.Right is TArrayLiteralExpr) then
-  begin
-    RType := AnalyseExpr(ABin.Right);
-    if (RType <> nil) and (RType.Kind = tySet) then
-      TryResolveBareEnumIdent(ABin.Left, TSetTypeDesc(RType).BaseType);
-    LType := AnalyseExpr(ABin.Left);
-  end
-  else
-  begin
-    LType := AnalyseExpr(ABin.Left);
-    RType := AnalyseExpr(ABin.Right);
-  end;
+  LType := AnalyseExpr(ABin.Left);
+  RType := AnalyseExpr(ABin.Right);
 
   { Set membership: elem in SetVar — left is base enum, right is set type }
   if ABin.Op = boIn then
@@ -13406,15 +11524,6 @@ var
   DefProp:   TPropertyInfo;
   DefFA:     TFieldAccessExpr;
 begin
-  { Idempotency guard: this node rewrites itself in place on the default-property
-    and indexed-property paths (StrExpr is swapped for a synthesised field-access,
-    IndexExpr is cleared).  A second analysis of an already-resolved node would
-    re-walk the mutated children and recurse without bound — which happens when a
-    typecast operand is itself a default-property subscript, e.g.
-    TStringList(OL[0])[1] (the outer subscript re-analyses its typecast base,
-    which re-analyses the inner OL[0]).  Once resolved, return the cached type. }
-  if AExpr.ResolvedType <> nil then
-    Exit(AExpr.ResolvedType);
   StrType := AnalyseExpr(AExpr.StrExpr);
   { Indexed property read: Obj.Prop[I] where Prop is a method-backed indexed property }
   if AExpr.StrExpr is TFieldAccessExpr then
@@ -13514,7 +11623,6 @@ begin
       Format('String subscript index must be numeric, got ''%s''', [IdxType.Name]),
       AExpr.Line, AExpr.Col);
   Result := FTable.TypeInteger;
-  AExpr.ResolvedType := Result;
 end;
 
 function TSemanticAnalyser.AnalyseIndirectFuncCallExpr(AExpr: TIndirectFuncCallExpr): TTypeDesc;
@@ -13580,24 +11688,14 @@ begin
         if AStmt.IsStringCase then
           SemanticError('case range labels are not allowed for a string selector',
             AStmt.Line, AStmt.Col);
-        if not TryResolveBareEnumIdent(TSetRangeExpr(Branch.Values.Items[J]).LowExpr, SelType) then
-          ValType := AnalyseExpr(TSetRangeExpr(Branch.Values.Items[J]).LowExpr)
-        else
-          ValType := TSetRangeExpr(Branch.Values.Items[J]).LowExpr.ResolvedType;
+        ValType := AnalyseExpr(TSetRangeExpr(Branch.Values.Items[J]).LowExpr);
         CheckTypesMatch(SelType, ValType, 'case range low', AStmt.Line, AStmt.Col);
-        if not TryResolveBareEnumIdent(TSetRangeExpr(Branch.Values.Items[J]).HighExpr, SelType) then
-          ValType := AnalyseExpr(TSetRangeExpr(Branch.Values.Items[J]).HighExpr)
-        else
-          ValType := TSetRangeExpr(Branch.Values.Items[J]).HighExpr.ResolvedType;
+        ValType := AnalyseExpr(TSetRangeExpr(Branch.Values.Items[J]).HighExpr);
         CheckTypesMatch(SelType, ValType, 'case range high', AStmt.Line, AStmt.Col);
       end
       else
       begin
-        { A bare enum member label resolves against the selector's type. }
-        if TryResolveBareEnumIdent(TASTExpr(Branch.Values.Items[J]), SelType) then
-          ValType := TASTExpr(Branch.Values.Items[J]).ResolvedType
-        else
-          ValType := AnalyseExpr(TASTExpr(Branch.Values.Items[J]));
+        ValType := AnalyseExpr(TASTExpr(Branch.Values.Items[J]));
         CheckTypesMatch(SelType, ValType, 'case value', AStmt.Line, AStmt.Col);
       end;
     end;
@@ -13622,7 +11720,7 @@ begin
       'Cannot write through untyped ''Pointer'' — use a typed pointer (e.g. ^Integer)',
       AStmt.Line, AStmt.Col);
   AStmt.BaseTy := TPointerTypeDesc(PtrType).BaseType;
-  ValType := AnalyseExprHinted(AStmt.ValExpr, AStmt.BaseTy);
+  ValType := AnalyseExpr(AStmt.ValExpr);
   CheckTypesMatch(AStmt.BaseTy, ValType, 'pointer write', AStmt.Line, AStmt.Col);
 end;
 
@@ -13655,7 +11753,7 @@ begin
     IdxType := AnalyseExpr(AStmt.IndexExpr);
     if not IdxType.IsNumeric() then
       SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
-    ValType := AnalyseExprHinted(AStmt.ValueExpr, ElemT);
+    ValType := AnalyseExpr(AStmt.ValueExpr);
     CheckTypesMatch(ElemT, ValType,
       Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
     Exit;
@@ -13682,35 +11780,10 @@ begin
         IdxType := AnalyseExpr(AStmt.IndexExpr);
         if not IdxType.IsNumeric() then
           SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
-        ValType := AnalyseExprHinted(AStmt.ValueExpr, ElemT);
+        ValType := AnalyseExpr(AStmt.ValueExpr);
         CheckTypesMatch(ElemT, ValType,
           Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
         Exit;
-      end;
-      { Implicit Self.Field[I] := V where Field is a class with a writable
-        default array property — lower to its setter on the field's object. }
-      if (BaseInfo <> nil) and (BaseInfo.TypeDesc <> nil) and
-         (BaseInfo.TypeDesc.Kind = tyClass) then
-      begin
-        DefProp := TRecordTypeDesc(BaseInfo.TypeDesc).FindDefaultProperty();
-        if (DefProp <> nil) and (DefProp.WriteMethod <> '') then
-        begin
-          AStmt.IsImplicitSelf    := True;
-          AStmt.ImplicitFieldInfo := BaseInfo;
-          AStmt.PropWriteInfo     := DefProp;
-          AStmt.PropOwnerType     := PropAccessorOwner(
-            TRecordTypeDesc(BaseInfo.TypeDesc).Name, DefProp.WriteMethod);
-          AStmt.PropAccessorVSlot := PropAccessorVSlot(
-            TRecordTypeDesc(BaseInfo.TypeDesc).Name, DefProp.WriteMethod);
-          IdxType := AnalyseExpr(AStmt.IndexExpr);
-          if DefProp.IndexTypeDesc <> nil then
-            CheckTypesMatch(DefProp.IndexTypeDesc, IdxType, 'default property index',
-              AStmt.Line, AStmt.Col);
-          ValType := AnalyseExprHinted(AStmt.ValueExpr, DefProp.TypeDesc);
-          CheckTypesMatch(DefProp.TypeDesc, ValType, 'default property assignment',
-            AStmt.Line, AStmt.Col);
-          Exit;
-        end;
       end;
     end;
     SemanticError(
@@ -13736,7 +11809,7 @@ begin
       if (DefProp.IndexTypeDesc <> nil) then
         CheckTypesMatch(DefProp.IndexTypeDesc, IdxType, 'default property index',
           AStmt.Line, AStmt.Col);
-      ValType := AnalyseExprHinted(AStmt.ValueExpr, DefProp.TypeDesc);
+      ValType := AnalyseExpr(AStmt.ValueExpr);
       CheckTypesMatch(DefProp.TypeDesc, ValType, 'default property assignment',
         AStmt.Line, AStmt.Col);
       Exit;
@@ -13790,8 +11863,7 @@ begin
     IdxType := AnalyseExpr(AStmt.IndexExpr);
     if not IdxType.IsNumeric() then
       SemanticError('Dynamic array index must be numeric', AStmt.Line, AStmt.Col);
-    ValType := AnalyseExprHinted(AStmt.ValueExpr,
-      TDynArrayTypeDesc(Sym.TypeDesc).ElementType);
+    ValType := AnalyseExpr(AStmt.ValueExpr);
     CheckTypesMatch(TDynArrayTypeDesc(Sym.TypeDesc).ElementType, ValType,
       Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
     Exit;
@@ -13813,8 +11885,7 @@ begin
     IdxType := AnalyseExpr(AStmt.IndexExpr);
     if not IdxType.IsNumeric() then
       SemanticError('Open array index must be numeric', AStmt.Line, AStmt.Col);
-    ValType := AnalyseExprHinted(AStmt.ValueExpr,
-      TOpenArrayTypeDesc(Sym.TypeDesc).ElementType);
+    ValType := AnalyseExpr(AStmt.ValueExpr);
     CheckTypesMatch(TOpenArrayTypeDesc(Sym.TypeDesc).ElementType, ValType,
       Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
     Exit;
@@ -13830,7 +11901,7 @@ begin
   IdxType := AnalyseExpr(AStmt.IndexExpr);
   if not IdxType.IsNumeric() then
     SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
-  ValType := AnalyseExprHinted(AStmt.ValueExpr, ArrType.ElementType);
+  ValType := AnalyseExpr(AStmt.ValueExpr);
   CheckTypesMatch(ArrType.ElementType, ValType,
     Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
 end;
@@ -13906,13 +11977,9 @@ function TSemanticAnalyser.SetRangeBoundOrdinal(ABound: TASTExpr;
   base enum.  Rejects non-constant and wrong-type bounds.  Issue #105. }
 var
   BType: TTypeDesc;
+  Sym:   TSymbol;
 begin
-  { Resolve a bare enum-member bound against the base enum so a member name
-    shared by several enums binds to this set's enum, not last-wins. }
-  if TryResolveBareEnumIdent(ABound, ABaseEnum) then
-    BType := ABound.ResolvedType
-  else
-    BType := AnalyseExpr(ABound);
+  BType := AnalyseExpr(ABound);
   if BType <> ABaseEnum then
     SemanticError(
       Format('Set range %s bound has type ''%s''; expected ''%s''',
@@ -13920,10 +11987,15 @@ begin
       ABound.Line, ABound.Col);
   if not ((ABound is TIdentExpr) and TIdentExpr(ABound).IsConstant) then
     SemanticError(
+      Format('Set range %s bound must be a constant', [AWhich]),
+      ABound.Line, ABound.Col);
+  Sym := FTable.Lookup(TIdentExpr(ABound).Name);
+  if (Sym = nil) or (Sym.Kind <> skConstant) then
+    SemanticError(
       Format('Set range %s bound ''%s'' is not a constant',
         [AWhich, TIdentExpr(ABound).Name]),
       ABound.Line, ABound.Col);
-  Result := TIdentExpr(ABound).ConstValue;
+  Result := Sym.ConstValue;
 end;
 
 procedure TSemanticAnalyser.ExpandSetRanges(AExpr: TArrayLiteralExpr;
@@ -14086,12 +12158,7 @@ begin
     ExpandSetRanges(AExpr, nil);
   for I := 0 to AExpr.Elements.Count - 1 do
   begin
-    { A bare enum member element resolves against the set's element type, so a
-      member name shared by several enums picks this set's enum. }
-    if TryResolveBareEnumIdent(TASTExpr(AExpr.Elements.Items[I]), ASetType.BaseType) then
-      ElemType := TASTExpr(AExpr.Elements.Items[I]).ResolvedType
-    else
-      ElemType := AnalyseExpr(TASTExpr(AExpr.Elements.Items[I]));
+    ElemType := AnalyseExpr(TASTExpr(AExpr.Elements.Items[I]));
     if IsOrdBase then
     begin
       if (not ElemType.IsNumeric()) and (ElemType <> ASetType.BaseType) then

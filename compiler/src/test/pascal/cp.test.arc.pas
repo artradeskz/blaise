@@ -687,7 +687,7 @@ begin
           f := TFoo.Create()
         end;
         begin
-          DoIt()
+          DoIt
         end.
         ''');
   FnPos := Pos('function $DoIt', IR);
@@ -725,7 +725,7 @@ begin
           f := TFoo.Create()
         end;
         begin
-          DoIt()
+          DoIt
         end.
         ''');
   FnPos  := Pos('function $DoIt', IR);
@@ -759,7 +759,7 @@ begin
           f := TFoo.Create()
         end;
         begin
-          DoIt()
+          DoIt
         end.
         ''');
   FnPos  := Pos('function $DoIt', IR);
@@ -800,7 +800,7 @@ begin
           F := TFoo(P)
         end;
         begin
-          DoIt()
+          DoIt
         end.
         ''');
   FnPos  := Pos('function $DoIt', IR);
@@ -832,7 +832,7 @@ const
           r := Make()
         end;
         begin
-          Run()
+          Run
         end.
         ''';
 
@@ -848,7 +848,7 @@ const
           b := a
         end;
         begin
-          Run()
+          Run
         end.
         ''';
 
@@ -868,7 +868,7 @@ const
           r := Make()
         end;
         begin
-          Run()
+          Run
         end.
         ''';
 
@@ -883,7 +883,7 @@ const
           b := a
         end;
         begin
-          Run()
+          Run
         end.
         ''';
 

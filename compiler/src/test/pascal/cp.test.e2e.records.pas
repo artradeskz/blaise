@@ -27,7 +27,6 @@ type
     procedure TestRun_Record_PassByVar;
     procedure TestRun_Record_AssignToVarParam;
     procedure TestRun_Record_StringField_ARC;
-    procedure TestRun_Record_VarToVarCopy_StringField_ARC;
     procedure TestRun_Record_NestedRecord;
     procedure TestRun_Record_FourByteFields_PackedAndRoundTrip;
     procedure TestRun_Record_ByteThenInteger_RoundTrip;
@@ -645,42 +644,6 @@ begin
   AssertEquals('Ada Lovelace', 'Ada Lovelace' + LE, Output);
 end;
 
-const
-  { Copying a record with a managed (string) field var-to-var (B := A) must
-    field-copy with ARC: AddRef the source's string so the copy owns its own
-    reference, and Release the destination's prior string.  A bare memcpy left
-    both records sharing one buffer at refcount 1 — mutating/churning the source
-    then dropped it to 0 and freed it, so the copy held a dangling pointer
-    (use-after-free → '_StringRelease double-free' abort).  This is the same
-    record-copy path TList<TRec>.Get uses (Result := Src^), so it also fixes the
-    generic-container crash. }
-  SrcRecordVarToVarCopy = '''
-    program Prg;
-    type
-      TPerson = record Name: string; Age: Integer; end;
-    var
-      A, B: TPerson;
-      I: Integer;
-    begin
-      A.Name := 'Alice-' + IntToStr(42);
-      A.Age := 30;
-      B := A;
-      A.Name := 'Bob';
-      for I := 0 to 200 do
-        A.Name := 'churn-' + IntToStr(I);
-      WriteLn(B.Name, ' ', B.Age)
-    end.
-    ''';
-
-procedure TE2ERecordsTests.TestRun_Record_VarToVarCopy_StringField_ARC;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRunWithRTL(SrcRecordVarToVarCopy, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('copy retained own string', 'Alice-42 30' + LE, Output);
-end;
-
 procedure TE2ERecordsTests.TestRun_Record_NestedRecord;
 var Output: string; RCode: Integer;
 begin
@@ -967,7 +930,7 @@ const
     var c: TC;
     begin
       c := TC.Create();
-      c.Fill();
+      c.Fill;
       writeln(c.A[0]);
       writeln(c.A[1]);
       writeln(c.A[2]);

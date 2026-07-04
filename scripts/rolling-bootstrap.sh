@@ -202,7 +202,7 @@ build_step() {
 }
 
 # ---------------------------------------------------------------------------
-# smoke_test <compiler-binary> <rtl-archive> <worktree>
+# smoke_test <compiler-binary> <rtl-archive>
 #   Compiles + runs a trivial program to prove the freshly-built binary is
 #   functional (source -> native backend -> internal assembler + linker ->
 #   runs -> correct stdout). Kept deliberately feature-agnostic: it must pass
@@ -210,7 +210,7 @@ build_step() {
 #   not any specific later feature.
 # ---------------------------------------------------------------------------
 smoke_test() {
-  local cc="$1" rtl="$2" wt="$3"
+  local cc="$1" rtl="$2"
   local d; d="$(mktemp -d)"
   cat > "$d/s.pas" <<'PAS'
 program P;
@@ -220,19 +220,11 @@ begin
   WriteLn(X)
 end.
 PAS
-  # Pre-source-build commits link the RTL archive (FindRTL beside the binary);
-  # later commits source-build the RTL.  Provide BOTH so this probe works across
-  # the whole range: copy the archive beside the binary AND point the source
-  # build at the RTL source in the worktree ($BLAISE_RTL_SRC short-circuits
-  # RTLSourceDir, which is binary-relative and would otherwise miss because the
-  # carried binary is not beside its compiler/ tree).
+  # FindRTL looks beside the compiler binary; ensure the matching archive is
+  # there so the internal linker finds it.
   cp "$rtl" "$(dirname "$cc")/blaise_rtl.a" 2>/dev/null || true
   local ok=1
-  if BLAISE_RTL_SRC="$wt/compiler/src/main/pascal" \
-     "$cc" --source "$d/s.pas" \
-           --unit-path "$wt/compiler/src/main/pascal" \
-           --unit-path "$wt/stdlib/src/main/pascal" \
-           --output "$d/s" 2>"$d/s.err"; then
+  if "$cc" --source "$d/s.pas" --output "$d/s" 2>"$d/s.err"; then
     [ "$("$d/s" 2>/dev/null)" = "42" ] && ok=0
   fi
   rm -rf "$d"
@@ -263,7 +255,7 @@ for sha in "${COMMITS[@]}"; do
     exit 2
   fi
 
-  if ! smoke_test "$WT/_boot/blaise" "$WT/_boot/blaise_rtl.a" "$WT"; then
+  if ! smoke_test "$WT/_boot/blaise" "$WT/_boot/blaise_rtl.a"; then
     echo
     echo "SMOKE_FAILED at $short ($subj)"
     echo "  The binary built but produced wrong output for the local-const-array"

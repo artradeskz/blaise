@@ -75,14 +75,6 @@ type
     procedure TestCodegen_IntegerPlusDouble_UsesIntSSE;
     procedure TestCodegen_DoublePlusInt64_UsesSSEInt;
     procedure TestCodegen_Int64PlusDouble_UsesIntSSE;
-    { Self-assigned record method (M := M.Method(...)): the sret destination must
-      NOT be the receiver variable — the call writes into a fresh temp buffer
-      that is then memcpy'd into the destination, so the callee sees an intact
-      Self while constructing Result. }
-    procedure TestCodegen_SelfAssignRecordMethod_RoutesThroughTemp;
-    { `Result := inherited M()` returning an sret record threads the sret
-      pointer (the Result slot) + Self and dispatches statically to the parent. }
-    procedure TestCodegen_InheritedRecordReturn_ThreadsSret;
   end;
 
 implementation
@@ -716,9 +708,9 @@ begin
         begin
         end.
         ''');
-  { 16 bytes, all-float — rcSSE2 with aggregate [ s, 4B pad, d ]. }
+  { 16 bytes, all-float — rcSSE2 with aggregate [ s, d ]. }
   AssertContains('function :_ffi_TM $MakeIt', IR);
-  AssertContains('type :_ffi_TM = align 8 { s, b, b, b, b, d }', IR);
+  AssertContains('type :_ffi_TM = align 8 { s, d }', IR);
 end;
 
 procedure TRecordReturnTests.TestCodegen_IntegerPlusDouble_UsesIntSSE;
@@ -742,7 +734,7 @@ begin
     Eightbyte 1 = Double -> SSE class.
     QBE returns in (rax, xmm0). }
   AssertContains('function :_ffi_TM $MakeIt', IR);
-  AssertContains('type :_ffi_TM = align 8 { w, b, b, b, b, d }', IR);
+  AssertContains('type :_ffi_TM = align 8 { w, d }', IR);
   AssertContains('=:_ffi_TM call $MakeIt', IR);
   AssertContains('call $memcpy(', IR);
 end;
@@ -785,59 +777,6 @@ begin
         ''');
   AssertContains('function :_ffi_TM $MakeIt', IR);
   AssertContains('type :_ffi_TM = align 8 { l, d }', IR);
-end;
-
-procedure TRecordReturnTests.TestCodegen_SelfAssignRecordMethod_RoutesThroughTemp;
-var IR: string;
-begin
-  IR := GenIR(
-    '''
-        program P;
-        type
-          TR = record
-            S: string;
-            function Up(const X: TR): TR;
-          end;
-        function TR.Up(const X: TR): TR;
-        begin Result.S := Self.S + X.S end;
-        var A, B: TR;
-        begin
-          A.S := 'a'; B.S := 'b';
-          A := A.Up(B)
-        end.
-        ''');
-  { The sret call must target a fresh temp (%_t...), not the destination $A —
-    otherwise the sret buffer aliases Self. }
-  AssertFalse('sret call aliases receiver $A',
-    Pos('call $TR_Up(l $A,', IR) <> -1);
-  { The constructed result is then moved into the destination. }
-  AssertContains('call $memcpy(l $A,', IR);
-end;
-
-procedure TRecordReturnTests.TestCodegen_InheritedRecordReturn_ThreadsSret;
-var IR: string;
-begin
-  { `Result := inherited Next()` returning an sret record must thread the
-    hidden destination pointer (the override's own Result slot) as the FIRST
-    argument and Self as the second, dispatched STATICALLY to the parent's
-    symbol — never the scalar `=l call` shape that passes Self into the sret
-    slot. }
-  IR := GenIR(
-    '''
-        program P;
-        type
-          TTok = record Kind: Integer; Value: string; end;
-          TBase = class function Next: TTok; virtual; end;
-          TDeriv = class(TBase) function Next: TTok; override; end;
-        function TBase.Next: TTok;
-        begin Result.Kind := 7; Result.Value := 'x' end;
-        function TDeriv.Next: TTok;
-        begin Result := inherited Next() end;
-        begin
-        end.
-        ''');
-  { sret pointer (Result slot) first, Self second, static call to the parent. }
-  AssertContains('call $TBase_Next(l %_var_Result, l', IR);
 end;
 
 initialization

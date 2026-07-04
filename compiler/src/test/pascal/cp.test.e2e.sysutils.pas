@@ -45,7 +45,6 @@ type
     procedure TestRun_SetCurrentDir_ChangesDir;
     procedure TestRun_ExtractFileExt_ReturnsExt;
     procedure TestRun_BoolToStr_TrueAndFalse;
-    procedure TestRun_SameFileName_ExactMatch;
     procedure TestRun_PlatformConstants;
     procedure TestRun_GetCurrentDir_ReturnsNonEmpty;
     procedure TestRun_FileAge_ReturnsTimestamp;
@@ -535,16 +534,6 @@ const
         end.
         ''';
 
-  SrcSameFileName =
-    '''
-        program P;
-        uses SysUtils;
-        begin
-          WriteLn(SameFileName('a/b.pas', 'a/b.pas'));
-          WriteLn(SameFileName('a/b.pas', 'a/c.pas'))
-        end.
-        ''';
-
   SrcPlatformConstants =
     '''
         program P;
@@ -665,25 +654,6 @@ begin
     Lines.Text := Trim(Output);
     AssertEquals('BoolToStr(True)',  'True',  Lines.Strings[0]);
     AssertEquals('BoolToStr(False)', 'False', Lines.Strings[1]);
-  finally
-    Lines.Free();
-  end;
-end;
-
-procedure TE2ESysUtilsTests.TestRun_SameFileName_ExactMatch;
-var
-  Output: string;
-  RCode: Integer;
-  Lines: TStringList;
-begin
-  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRunWithRTL(SrcSameFileName, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  Lines := TStringList.Create();
-  try
-    Lines.Text := Trim(Output);
-    AssertEquals('identical names match',   'True',  Lines.Strings[0]);
-    AssertEquals('different names differ',  'False', Lines.Strings[1]);
   finally
     Lines.Free();
   end;

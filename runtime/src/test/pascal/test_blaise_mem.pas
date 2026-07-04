@@ -12,18 +12,20 @@
   the string and ARC subsystems.  punit is the correct framework here
   because blaise_mem has zero dependency on stdlib or ARC.
 
-  Build (the compiler source-builds and links the RTL — no blaise_rtl.a):
+  Build:
     blaise --source runtime/src/test/pascal/test_blaise_mem.pas \
-           --unit-path compiler/src/main/pascal \
+           --unit-path runtime/src/main/pascal \
            --unit-path runtime/src/test/pascal \
-           --output /tmp/test_mem
+           --emit-ir > /tmp/test_mem.ssa
+    vendor/qbe/qbe -o /tmp/test_mem.s /tmp/test_mem.ssa
+    gcc -o /tmp/test_mem /tmp/test_mem.s compiler/target/blaise_rtl.a
     /tmp/test_mem -v
 }
 
 program test_blaise_mem;
 
 uses
-  punit, runtime.mem;
+  punit, blaise_mem;
 
 { ------------------------------------------------------------------ }
 { Test: basic GetMem returns non-nil                                   }

@@ -269,17 +269,13 @@ IntSubrange
  * enum-bounded subranges (TLow..THigh, red..blue) are not a named-type form. *)
 
 RecordDef
-    = [ PACKED ] RECORD { VisibilitySection | FieldDecl | MethodDecl | ConstSection } END
+    = [ PACKED ] RECORD { FieldDecl | MethodDecl } END
     ;
 
 (* Records may declare methods alongside fields.  Method bodies are written
- * out-of-line as TRecordName.MethodName, identical to classes.  An ordinary
- * record method receives the receiver by pointer (`Self` is a `var` parameter
- * under the hood); the language gives normal value semantics — assignments
- * copy the record.  A method declared STATIC (see VisibilitySection /
- * MethodDecl) receives no `Self` and is the record's factory / namespaced
- * function form, called as TRecordName.Method(...).  Records may also carry
- * STATIC VAR / STATIC CONST members.
+ * out-of-line as TRecordName.MethodName, identical to classes.  The
+ * receiver is passed by pointer (`Self` is a `var` parameter under the hood);
+ * the language gives normal value semantics — assignments copy the record.
  * No constructors, destructors, or virtual methods are allowed in records.
  *
  * `packed` is permitted only in front of `record`.  It disables natural
@@ -293,41 +289,10 @@ RecordDef
 
 ClassDef
     = CLASS [ LPAREN GenericName { COMMA GenericName } RPAREN ]
-             { VisibilitySection | ConstSection | FieldList | MethodDeclList }
+             { ConstSection | FieldList }
+             MethodDeclList
              END
     ;
-
-(* A class body is a sequence of members in any order, optionally grouped under
- * visibility / storage sections.  A VisibilitySection keyword sets the current
- * visibility (and, with STATIC, the current member-association) for every
- * member that follows until the next such keyword. *)
-
-VisibilitySection
-    = [ STRICT ] ( PRIVATE | PROTECTED ) [ STATIC ]
-    | ( PUBLIC | PUBLISHED ) [ STATIC ]
-    | STATIC                                   (* STATIC alone keeps current visibility *)
-    ;
-
-(* STATIC as a section qualifier (e.g. `private static`, or a bare `static`
- * continuing the current visibility) makes every field, const, method, and
- * property declared until the next section keyword a type-associated (class-
- * level) member: no implicit Self, a single shared storage slot for vars/
- * consts.  STATIC may equally be written as a per-member prefix on a single
- * method or property (see MethodDecl / PropertyDecl).  `private static var`
- * and `private static const` are the section forms for static fields and
- * static constants.  There is no `class var` / `class function` /
- * `class property` — the word `class` is never a member qualifier in Blaise.
- *
- * Visibility keywords (PRIVATE/PROTECTED/PUBLIC/PUBLISHED), STRICT and STATIC
- * are contextual: outside a class/record body they remain usable as
- * identifiers, except those already reserved elsewhere.  STRICT is only a
- * keyword immediately before PRIVATE or PROTECTED at the start of a member
- * section; `strict public`, `strict published` and a bare `strict` are
- * errors.  Visibility is ENFORCED: PRIVATE is visible only within the
- * declaring unit; PROTECTED additionally within descendant types; STRICT
- * PRIVATE only within the declaring type's own methods; STRICT PROTECTED
- * within the declaring type and its descendants; PUBLIC/PUBLISHED everywhere.
- * Visibility composes orthogonally with STATIC. *)
 
 GenericName
     = IDENT [ LESS TypeArgList GREATER ]   (* plain name or generic specialisation *)
@@ -398,38 +363,21 @@ MethodDeclList
     ;
 
 MethodDecl
-    = [ STATIC ]                          (* per-member static prefix (no implicit Self) *)
-      ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
+    = ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
       [ LESS TypeParamList GREATER ]      (* optional generic type params *)
       [ LPAREN ParamList RPAREN ]
       [ COLON TypeName ]                  (* return type for functions *)
       SEMICOLON
       { MethodDirective SEMICOLON }
-      [ ( Block | AsmBlock ) SEMICOLON ]  (* body absent for forward, external, or abstract decls *)
+      [ Block SEMICOLON ]                 (* body absent for forward, external, or abstract decls *)
     ;
-
-(* A STATIC method (whether via the per-member prefix here or an enclosing
- * STATIC VisibilitySection) takes no implicit Self.  CONSTRUCTOR / DESTRUCTOR
- * may NOT be declared STATIC: Blaise has no type-initialiser construct (no
- * `class constructor`); eager one-time setup belongs in the unit
- * initialization / finalization sections.  See language-rationale.adoc. *)
 
 MethodDirective
     = VIRTUAL
     | OVERRIDE
     | ExternalDirective
     | "overload"                          (* required on every overload of a same-named proc/func/method *)
-    | "nostackframe"                      (* asm body owns the frame; no compiler prologue/epilogue *)
-    | IDENT                               (* inline, stdcall, cdecl, abstract, reintroduce, assembler, … *)
-    ;
-
-(* Inline-assembler body.  The lexer captures everything between ASM and the
- * matching END as one opaque token (verbatim GNU/AT&T assembly text); the front
- * end never tokenises the contents.  Used for the runtime's startup/setjmp/
- * atomic routines.  Requires the native backend.  See
- * docs/inline-asm-design.adoc. *)
-AsmBlock
-    = ASM (* verbatim assembly text *) END
+    | IDENT                               (* inline, stdcall, cdecl, abstract, reintroduce, … *)
     ;
 
 (* Calling-convention directives (cdecl, stdcall, register, pascal, safecall)
@@ -443,13 +391,9 @@ ExternalDirective
     = EXTERNAL [ NAME StrLit ]
     ;
 
-(* Standalone procedure/function/constructor/destructor — top-level or within a block.
- * A leading STATIC marks an out-of-line static-method implementation
- * (`static function TName.Method ...`); it must agree with the in-class
- * declaration's static-ness and takes no implicit Self. *)
+(* Standalone procedure/function/constructor/destructor — top-level or within a block. *)
 StandaloneDecl
-    = [ STATIC ]
-      ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
+    = ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
       [ DOT IDENT ]                                          (* TTypeName.MethodName — non-generic class impl *)
       [ LESS TypeParamList GREATER DOT IDENT ]               (* TName<T>.MethodName  — generic class impl    *)
       [ LESS TypeParamList GREATER ]                         (* function Identity<T> — generic standalone    *)
@@ -483,8 +427,7 @@ MethodSignatureList
     ;
 
 PropertyDecl
-    = [ STATIC ]                                    (* per-member static prefix *)
-      "property" IDENT
+    = "property" IDENT
       [ LBRACKET IDENT COLON TypeName RBRACKET ]   (* optional index parameter *)
       COLON TypeName
       [ "read"  IDENT ]
@@ -492,10 +435,6 @@ PropertyDecl
       SEMICOLON
       [ "default" SEMICOLON ]                      (* default array property *)
     ;
-
-(* A STATIC property (via the prefix here or an enclosing STATIC section) is
- * sugar over a STATIC getter/setter: it occupies no slot and dispatches with
- * no Self.  A static property's accessors must themselves be static. *)
 
 (* If the index parameter is present, the property is indexed:
  *   property Items[Index: Integer]: Pointer read Get write Put;
@@ -738,17 +677,8 @@ QualIdent
 ArrayType
     = ARRAY LBRACKET ArrayBound DOTDOT ArrayBound
             { COMMA ArrayBound DOTDOT ArrayBound } RBRACKET OF TypeName
-    | ARRAY LBRACKET IDENT RBRACKET OF TypeName   (* ordinal-indexed *)
+    | ARRAY LBRACKET IDENT RBRACKET OF TypeName   (* ordinal/enum-indexed *)
     ;
-
-(* The IDENT form names an ORDINAL index type.  Two ordinal kinds are admitted:
- *   - an enumeration type (array[TColor] of T folds to array[0..N-1] of T,
- *     where N is the member count), and
- *   - a NAMED integer subrange (type TIdx = lo..hi;  array[TIdx] of T folds to
- *     array[lo..hi] of T).  The subrange supplies only the index range; the
- *     values it yields remain ordinary unchecked integers of the subrange's
- *     underlying storage type.
- * See language-rationale.adoc "Array index types". *)
 
 ArrayBound
     = ConstArithExpr
@@ -914,7 +844,7 @@ StaticSubscriptAssign
  * assignment (SubscriptFieldAssign) or a method call on the element
  * (SubscriptMethodCall).  Examples:
  *   a[0].Name := 'x';        a[i].Inner.N := 5;
- *   a[0].Bump();             a[i].Items.Add(x);
+ *   a[0].Bump;               a[i].Items.Add(x);
  *   a[i].Arr[j] := v;        — element write into an array-typed field
  * A terminating subscript directly over another subscript (a[i][j] := v, or
  * the comma form a[i, j] := v) is a multi-dimensional element write — see
@@ -926,7 +856,7 @@ SubscriptFieldAssign
 
 SubscriptMethodCall
     = IDENT LBRACKET Expr RBRACKET { SubscriptSuffix }
-      DOT IDENT LPAREN [ ArgList ] RPAREN
+      DOT IDENT [ LPAREN [ ArgList ] RPAREN ]
     ;
 
 (* A subscript suffix indexes one or more dimensions.  The comma form
@@ -1096,7 +1026,7 @@ Factor
     | ArrayLiteral
     | AddrOf
     | NOT Factor                                       (* Boolean or bitwise NOT *)
-    | INHERITED IDENT LPAREN [ ArgList ] RPAREN        (* inherited function call in expr position; parens mandatory *)
+    | INHERITED IDENT [ LPAREN [ ArgList ] RPAREN ]    (* inherited function call in expr position *)
     | "Supports" LPAREN Expr COMMA IDENT [ COMMA IDENT ] RPAREN  (* compiler intrinsic *)
     | IDENT DOT IDENT [ LBRACKET Expr RBRACKET ]      (* indexed property read *)
                LPAREN [ ArgList ] RPAREN               (* constructor/method call *)
