@@ -10,7 +10,11 @@ unit uLexer;
 
 { Compiler lexer — wraps uPasTokeniser and converts its flat token stream
   into the compiler's specific token kinds. Skips whitespace, line endings,
-  comments, and compiler directives. Unescapes string literal values. }
+  comments, and compiler directives. Unescapes string literal values.
+
+  UTF-8 aware: identifiers may contain Latin (A-Z, a-z) and Cyrillic
+  (А-Я, а-я, Ё, ё) letters plus underscore and digits.  Russian keyword
+  synonyms are recognised through MapKeyword. }
 
 interface
 
@@ -218,6 +222,7 @@ end;
 
 function TLexer.MapKeyword(const AUpper: string): TTokenKind;
 begin
+  { Английские ключевые слова }
   if AUpper = 'PROGRAM' then Result := tkProgram
   else if AUpper = 'USES'    then Result := tkUses
   else if AUpper = 'VAR'     then Result := tkVar
@@ -276,6 +281,66 @@ begin
   else if AUpper = 'INHERITED'     then Result := tkInherited
   else if AUpper = 'INITIALIZATION' then Result := tkInitialization
   else if AUpper = 'FINALIZATION'   then Result := tkFinalization
+
+  { Русские синонимы ключевых слов }
+  else if AUpper = 'ПРОГРАММА' then Result := tkProgram
+  else if AUpper = 'ИСПОЛЬЗУЕТ' then Result := tkUses
+  else if AUpper = 'ПЕРЕМ' then Result := tkVar
+  else if AUpper = 'ПОТОКПЕРЕМ' then Result := tkThreadVar
+  else if AUpper = 'НАЧАЛО' then Result := tkBegin
+  else if AUpper = 'КОНЕЦ' then Result := tkEnd
+  else if AUpper = 'ТИП' then Result := tkType
+  else if AUpper = 'ЗАПИСЬ' then Result := tkRecord
+  else if AUpper = 'УПАКОВАН' then Result := tkPacked
+  else if AUpper = 'КЛАСС' then Result := tkClass
+  else if AUpper = 'ПРОЦЕДУРА' then Result := tkProcedure
+  else if AUpper = 'ФУНКЦИЯ' then Result := tkFunction
+  else if AUpper = 'ЦЕЛДЕЛ' then Result := tkDiv
+  else if AUpper = 'ОСТАТОК' then Result := tkMod
+  else if AUpper = 'ЕСЛИ' then Result := tkIf
+  else if AUpper = 'ТОГДА' then Result := tkThen
+  else if AUpper = 'ИНАЧЕ' then Result := tkElse
+  else if AUpper = 'ПОКА' then Result := tkWhile
+  else if AUpper = 'ВЫПОЛНИТЬ' then Result := tkDo
+  else if AUpper = 'ДЛЯ' then Result := tkFor
+  else if AUpper = 'К' then Result := tkTo
+  else if AUpper = 'ДО' then Result := tkDownto
+  else if AUpper = 'ПОВТОРЯТЬ' then Result := tkRepeat
+  else if AUpper = 'ДО_ТЕХ_ПОР' then Result := tkUntil
+  else if AUpper = 'ПОПЫТАТЬСЯ' then Result := tkTry
+  else if AUpper = 'НАКОНЕЦ' then Result := tkFinally
+  else if AUpper = 'ИСКЛЮЧЕНИЕ' then Result := tkExcept
+  else if AUpper = 'ВОЗБУДИТЬ' then Result := tkRaise
+  else if AUpper = 'НИЧТО' then Result := tkNil
+  else if AUpper = 'МОДУЛЬ' then Result := tkUnit
+  else if AUpper = 'ИНТЕРФЕЙС' then Result := tkIntf
+  else if AUpper = 'РЕАЛИЗАЦИЯ' then Result := tkImplementation
+  else if AUpper = 'ВИРТУАЛЬНЫЙ' then Result := tkVirtual
+  else if AUpper = 'ПЕРЕОПРЕДЕЛИТЬ' then Result := tkOverride
+  else if AUpper = 'ЭТО' then Result := tkIs
+  else if AUpper = 'КАК' then Result := tkAs
+  else if AUpper = 'И' then Result := tkAnd
+  else if AUpper = 'ИЛИ' then Result := tkOr
+  else if AUpper = 'НЕ' then Result := tkNot
+  else if AUpper = 'ВЫХОД' then Result := tkExit
+  else if AUpper = 'ПРЕРВАТЬ' then Result := tkBreak
+  else if AUpper = 'ПРОДОЛЖИТЬ' then Result := tkContinue
+  else if AUpper = 'ВЫБОР' then Result := tkCase
+  else if AUpper = 'ИЗ' then Result := tkOf
+  else if AUpper = 'МАССИВ' then Result := tkArray
+  else if AUpper = 'МНОЖЕСТВО' then Result := tkSet
+  else if AUpper = 'В' then Result := tkIn
+  else if AUpper = 'СДВИГВЛЕВО' then Result := tkShl
+  else if AUpper = 'СДВИГВПРАВО' then Result := tkShr
+  else if AUpper = 'АРИФСДВИГ' then Result := tkSar
+  else if AUpper = 'ИСКЛ_ИЛИ' then Result := tkXor
+  else if AUpper = 'КОНСТ' then Result := tkConst
+  else if AUpper = 'ВЫВОД' then Result := tkOut
+  else if AUpper = 'СОЗДАТЕЛЬ' then Result := tkConstructor
+  else if AUpper = 'УНИЧТОЖИТЕЛЬ' then Result := tkDestructor
+  else if AUpper = 'НАСЛЕДОВАН' then Result := tkInherited
+  else if AUpper = 'ИНИЦИАЛИЗАЦИЯ' then Result := tkInitialization
+  else if AUpper = 'ФИНАЛИЗАЦИЯ' then Result := tkFinalization
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;
@@ -284,7 +349,10 @@ function TLexer.UnescapeString(const ARaw: string): string;
 { ARaw is the full source span. Handles: 'text' with '' → ' escaping,
   #nn numeric char literals (decimal), and concatenated runs like
   'abc'#13#10'def'. Uses OrdAt (0-based) so the body parses under both
-  FPC and the self-hosted Blaise compiler. }
+  FPC and the self-hosted Blaise compiler.
+
+  UTF-8 note: Cyrillic characters inside quoted strings are preserved
+  as-is since string content is opaque to the tokeniser. }
 var
   I, Len, N, C: Integer;
 begin
@@ -339,6 +407,13 @@ begin
 end;
 
 function TLexer.ProcessTextBlock(const ARaw: string): string;
+{ Process a triple-quoted text block (''' ... ''').  Strips the opening and
+  closing delimiters, normalises CRLF→LF, and removes leading whitespace
+  margin (determined by the indentation of the closing delimiter).
+
+  UTF-8 note: multi-byte characters inside text blocks are preserved
+  correctly since the margin calculation operates on bytes (spaces are
+  ASCII 0x20, never part of a multi-byte sequence). }
 var
   Len, I, C, Margin, LineStart, LineLen, Skip: Integer;
   Body: string;
@@ -601,6 +676,19 @@ begin
         else if text = 'OF'       then Result.Kind := tkOf
         else if text = 'CONST'    then Result.Kind := tkConst
         else if text = 'OUT'      then Result.Kind := tkOut
+        { Русские синонимы для идентификаторов-ключевых слов }
+        else if text = 'ВИРТУАЛЬНЫЙ'      then Result.Kind := tkVirtual
+        else if text = 'ПЕРЕОПРЕДЕЛИТЬ'   then Result.Kind := tkOverride
+        else if text = 'ВНЕШНИЙ'          then Result.Kind := tkExternal
+        else if text = 'ВЫХОД'            then Result.Kind := tkExit
+        else if text = 'ПРЕРВАТЬ'         then Result.Kind := tkBreak
+        else if text = 'ПРОДОЛЖИТЬ'       then Result.Kind := tkContinue
+        else if text = 'ИНИЦИАЛИЗАЦИЯ'    then Result.Kind := tkInitialization
+        else if text = 'ФИНАЛИЗАЦИЯ'      then Result.Kind := tkFinalization
+        else if text = 'ВЫБОР'     then Result.Kind := tkCase
+        else if text = 'ИЗ'        then Result.Kind := tkOf
+        else if text = 'КОНСТ'     then Result.Kind := tkConst
+        else if text = 'ВЫВОД'     then Result.Kind := tkOut
         else                           Result.Kind := tkIdent;
         Result.Value := FTok.TokenText();
       end;
